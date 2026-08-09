@@ -70,12 +70,36 @@ RANK = 0                 # 0 = front month
 # Earliest date GLBX.MDP3 has any data at all.
 DATASET_START = "2010-06-06"
 
-# Which lake tf= folder each schema lands in.
+# Which lake tf= folder each bar schema lands in.
 SCHEMA_TO_TF = {
     "ohlcv-1m": "1m",
     "ohlcv-1h": "1h",
     "ohlcv-1d": "1d",
 }
+
+# Non-bar schemas. These have completely different shapes to OHLCV, so they
+# get their own destinations and are stored as-received rather than forced
+# into the canonical bar schema.
+#
+#   statistics  open interest, settlement prices, session stats.
+#               Open interest matters at swing horizons - it separates new
+#               positioning from position closing. L0, small.
+#   definition  contract specs: tick size, multiplier, expiry, contract month.
+#               Needed for correct position sizing and cost modelling across
+#               a multi-symbol universe. L0, small.
+#   bbo-1m      bid/ask sampled once per minute. Gives spread as a per-minute
+#               liquidity feature. THIS IS L1 - the Standard plan includes
+#               only 1 year, beyond which it is billed per byte and is not
+#               cheap. Always check the cost preview before pulling.
+NON_BAR_SCHEMAS = {
+    "statistics": ("lake/futures/statistics", "yearly"),
+    "definition": ("reference/futures/definitions", "flat"),
+    "bbo-1m": ("lake/futures/bbo", "monthly"),
+}
+
+L1_SCHEMAS = {"bbo-1m"}
+
+ALL_SCHEMAS = list(SCHEMA_TO_TF) + list(NON_BAR_SCHEMAS)
 
 
 def log(msg: str) -> None:
@@ -213,9 +237,17 @@ def preview_cost(client, symbols: list[str], start: str, end: str,
     print(f"  Symbols : {len(csyms)} -> {', '.join(csyms)}")
     print(f"  Range   : {start} -> {end}")
     for schema, c in per_schema.items():
-        print(f"  {schema:<10}: ${c:,.2f}")
-    print(f"  {'TOTAL':<10}: ${total:,.2f}")
+        flag = "  <-- L1, billed beyond 1yr" if schema in L1_SCHEMAS else ""
+        print(f"  {schema:<12}: ${c:,.2f}{flag}")
+    print(f"  {'TOTAL':<12}: ${total:,.2f}")
     print()
+
+    if any(s in L1_SCHEMAS for s in schemas) and total > 0:
+        print("  ** This request includes L1 data. The Standard plan covers")
+        print("     only 1 year of L1; the rest is billed per byte. Check the")
+        print("     figure above against your credit balance before confirming.")
+        print()
+
     return total
 
 
@@ -279,6 +311,52 @@ def write_parquet(df: pd.DataFrame, sym: str, tf: str = "1m") -> int:
 
 
 # --------------------------------------------------------------------------
+def write_non_bar(df: pd.DataFrame, sym: str, schema: str, year: int) -> int:
+    """
+    Write a non-OHLCV schema as received, with only the timestamp normalised.
+
+    These schemas have vendor-specific columns that would be lost by forcing
+    them into the bar schema. Store faithfully now, interpret later.
+    """
+    base, style = NON_BAR_SCHEMAS[schema]
+    root = Path("/mnt/backtest") / base
+
+    out = df.reset_index()
+    for c in ("ts_event", "ts_recv", "ts_ref"):
+        if c in out.columns:
+            out[c] = pd.to_datetime(out[c], utc=True, errors="coerce")
+    if "ts_event" in out.columns:
+        out = out.rename(columns={"ts_event": "ts"}).sort_values("ts")
+    out["symbol"] = sym
+
+    if style == "flat":
+        dest_dir = root / f"symbol={sym}"
+        name = f"{year}.parquet"
+    elif style == "yearly":
+        dest_dir = root / f"symbol={sym}" / f"year={year}"
+        name = "data.parquet"
+    else:  # monthly
+        dest_dir = root / f"symbol={sym}" / f"year={year}"
+        name = "data.parquet"
+
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / name
+
+    SCRATCH.mkdir(parents=True, exist_ok=True)
+    tmp = SCRATCH / f"{sym}_{schema}_{year}.parquet"
+    out.to_parquet(tmp, engine="pyarrow", compression="zstd", index=False)
+    shutil.move(str(tmp), str(dest))
+    return len(out)
+
+
+def already_have_non_bar(sym: str, schema: str, year: int) -> bool:
+    base, style = NON_BAR_SCHEMAS[schema]
+    root = Path("/mnt/backtest") / base
+    if style == "flat":
+        return (root / f"symbol={sym}" / f"{year}.parquet").exists()
+    return (root / f"symbol={sym}" / f"year={year}" / "data.parquet").exists()
+
+
 def already_have(sym: str, year: int, tf: str) -> bool:
     """
     True if this symbol-year-timeframe is already in the lake.
@@ -296,11 +374,15 @@ def pull_symbol_year(client, sym: str, year: int, schema: str = SCHEMA,
                      force: bool = False) -> int:
     """Download one symbol-year for one schema. Returns rows written."""
     csym = continuous_symbol(sym)
+    is_bar = schema in SCHEMA_TO_TF
     tf = SCHEMA_TO_TF.get(schema, schema)
 
-    if not force and already_have(sym, year, tf):
-        log(f"{sym} {year} [{tf}]: already in lake, skipping")
-        return 0
+    if not force:
+        have = already_have(sym, year, tf) if is_bar \
+            else already_have_non_bar(sym, schema, year)
+        if have:
+            log(f"{sym} {year} [{tf}]: already in lake, skipping")
+            return 0
 
     # Clamp to the dataset's true start. Requesting 2010-01-01 when the
     # dataset begins 2010-06-06 returns a 422 and silently loses that year.
@@ -338,8 +420,11 @@ def pull_symbol_year(client, sym: str, year: int, schema: str = SCHEMA,
         warn(f"{sym} {year} [{tf}]: no rows returned")
         return 0
 
-    norm = normalize(df, sym)
-    n = write_parquet(norm, sym, tf=tf)
+    if is_bar:
+        n = write_parquet(normalize(df, sym), sym, tf=tf)
+    else:
+        n = write_non_bar(df, sym, schema, year)
+
     log(f"{sym} {year} [{tf}]: {n:,} rows written")
     return n
 
@@ -405,10 +490,11 @@ def main() -> None:
                    help=f"Ignore --start and pull from {DATASET_START}, the "
                         f"earliest date {DATASET} has any data.")
     p.add_argument("--schemas", nargs="+", default=["ohlcv-1m", "ohlcv-1d"],
-                   choices=list(SCHEMA_TO_TF.keys()),
-                   help="Which bar schemas to pull. Default: ohlcv-1m ohlcv-1d. "
-                        "Native ohlcv-1d uses exchange session boundaries, which "
-                        "is more correct than resampling 1m on UTC days.")
+                   choices=ALL_SCHEMAS,
+                   help="Bar schemas: ohlcv-1m, ohlcv-1h, ohlcv-1d. "
+                        "Other: statistics (open interest, settlement), "
+                        "definition (contract specs), bbo-1m (L1 bid/ask - "
+                        "BILLED, only 1yr included on Standard).")
     p.add_argument("--force", action="store_true",
                    help="Re-download symbol-years already present in the lake.")
     p.add_argument("--skip-daily", action="store_true",
