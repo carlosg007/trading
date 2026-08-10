@@ -117,46 +117,88 @@ def yearly_profile(sym: str) -> pd.DataFrame:
     return df
 
 
-def find_plateau(profile: pd.DataFrame, tolerance: float = 0.90) -> int | None:
+def find_intraday_start(profile: pd.DataFrame,
+                        jump_ratio: float = 1.35,
+                        floor_frac: float = 0.45) -> tuple[int | None, str]:
     """
-    First year from which intraday density stays above `tolerance` of the
-    symbol's typical mature level.
+    First year from which the intraday data is dense enough to trust.
 
-    "Mature level" is the median bars/day across the most recent five years,
-    which avoids letting one unusual year set the bar.
+    Returns (year, reason).
+
+    The problem with threshold detection
+    ------------------------------------
+    Comparing each year against a recent median works for symbols whose
+    density is flat once mature, but it fails badly for symbols whose
+    liquidity trends upward. 6S runs 942 bars/day in 2010 and 963 in 2025 -
+    essentially flat - yet a median-based test flagged 2020, because one dip
+    in 2015 broke the run. PL climbs steadily from 432 to ~1000 with no
+    discontinuity anywhere, and got flagged at 2022.
+
+    What actually matters is a STEP CHANGE - a year where density jumps
+    sharply and never returns. That signals a change in what the data
+    captures, not a change in how much the contract trades. Gradual growth
+    is real market evolution and does not invalidate the earlier years.
+
+    Method
+    ------
+    1. Walk the series looking for the LAST year-over-year jump of at least
+       `jump_ratio` that is sustained afterwards. Everything before that jump
+       is a different data regime; the start is the jump year.
+    2. If no such discontinuity exists, the series is continuous - fall back
+       to the first year clearing `floor_frac` of mature density, which
+       catches genuinely thin opening years without penalising growth.
     """
     if profile.empty or len(profile) < 3:
-        return None
+        return None, "too few years"
 
-    recent = profile.tail(5)
-    mature = recent["bars_per_day"].median()
+    prof = profile.sort_values("year").reset_index(drop=True)
+    bpd = prof["bars_per_day"].astype(float)
+    years = prof["year"].astype(int).tolist()
+    mature = float(bpd.tail(5).median())
+
     if not mature or np.isnan(mature):
-        return None
+        return None, "no mature density"
 
-    threshold = mature * tolerance
-    qualifying = profile[profile["bars_per_day"] >= threshold]
+    # 1. Look for a sustained step change.
+    jump_year, jump_desc = None, ""
+    for i in range(1, len(bpd)):
+        prev, cur = bpd.iloc[i - 1], bpd.iloc[i]
+        if prev <= 0 or np.isnan(prev) or np.isnan(cur):
+            continue
+        if cur / prev < jump_ratio:
+            continue
+        # Sustained? Everything after must stay near or above the new level.
+        after = bpd.iloc[i:]
+        if after.min() >= cur * 0.80:
+            jump_year = years[i]
+            jump_desc = f"step {prev:.0f} -> {cur:.0f} bars/day"
+
+    if jump_year is not None:
+        return jump_year, jump_desc
+
+    # 2. No discontinuity - series is continuous. Use a low floor so that
+    #    steady growth does not push the start date artificially late.
+    floor = mature * floor_frac
+    qualifying = prof[bpd >= floor]
     if qualifying.empty:
-        return None
+        return years[0], "continuous, no year clears floor"
 
-    # Walk back from the end to find the start of the unbroken run.
-    years = profile["year"].tolist()
-    ok = set(qualifying["year"])
-    start = years[-1]
-    for y in reversed(years):
-        if y in ok:
-            start = y
-        else:
-            break
-    return int(start)
+    start = int(qualifying["year"].iloc[0])
+    if start == years[0]:
+        return start, "continuous throughout"
+    return start, f"continuous, first year above {floor:.0f} bars/day"
 
 
 # --------------------------------------------------------------------------
 def main() -> None:
     p = argparse.ArgumentParser(description="Per-symbol coverage summary.")
     p.add_argument("--symbols", nargs="+", default=None)
-    p.add_argument("--plateau-tolerance", type=float, default=0.90,
-                   help="Fraction of mature density a year must reach to count "
-                        "as dense. Default 0.90.")
+    p.add_argument("--jump-ratio", type=float, default=1.35,
+                   help="Year-over-year density increase that counts as a step "
+                        "change in what the data captures. Default 1.35.")
+    p.add_argument("--floor-frac", type=float, default=0.45,
+                   help="For symbols with no step change, the fraction of mature "
+                        "density a year must reach. Default 0.45.")
     p.add_argument("--out-dir", default=str(REF))
     args = p.parse_args()
 
@@ -172,7 +214,7 @@ def main() -> None:
             continue
         all_years.append(prof)
 
-        plateau = find_plateau(prof, args.plateau_tolerance)
+        plateau, reason = find_intraday_start(prof, args.jump_ratio, args.floor_frac)
         mature = prof.tail(5)["bars_per_day"].median()
 
         # Any year where 1m and 1d volume disagree
@@ -189,6 +231,7 @@ def main() -> None:
             "sessions": int(prof["sessions"].sum()),
             "mature_bars_per_day": round(mature, 1) if mature else np.nan,
             "intraday_start_year": plateau,
+            "start_reason": reason,
             "median_daily_volume": int(prof.tail(5)["median_daily_volume"].median()),
             "volume_mismatch_years": len(bad_ratio),
         })
@@ -211,8 +254,8 @@ def main() -> None:
     print("COVERAGE SUMMARY  (sorted by liquidity)")
     print("=" * 100)
     show = cov[["symbol", "first_date", "last_date", "n_years",
-                "mature_bars_per_day", "intraday_start_year",
-                "median_daily_volume", "volume_mismatch_years"]]
+                "mature_bars_per_day", "intraday_start_year", "start_reason",
+                "median_daily_volume"]]
     print(show.to_string(index=False))
 
     print()
