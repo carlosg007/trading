@@ -462,16 +462,15 @@ def build_daily(sym: str) -> None:
     )
     daily["symbol"] = sym
 
-    dest_dir = LAKE / f"symbol={sym}" / "tf=1d"
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / "data.parquet"
-
-    SCRATCH.mkdir(parents=True, exist_ok=True)
-    tmp = SCRATCH / f"{sym}_1d.parquet"
-    daily.to_parquet(tmp, engine="pyarrow", compression="zstd", index=False)
-    shutil.move(str(tmp), str(dest))
-
-    log(f"{sym}: {len(daily):,} daily bars -> {dest}")
+    # Write through the SAME partitioned writer the native pull uses.
+    #
+    # An earlier version wrote a single flat file at tf=1d/data.parquet. That
+    # sits alongside the year=/month= directories, so reading the tf=1d
+    # directory returned BOTH the flat file and the partitions - every daily
+    # bar appeared twice. Doubled volume, distorted indicators, and a backtest
+    # that looks fine. Never write above the partition level.
+    n = write_parquet(daily, sym, tf="1d")
+    log(f"{sym}: {n:,} derived daily bars written (partitioned)")
 
 
 # --------------------------------------------------------------------------
