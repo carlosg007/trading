@@ -32,10 +32,21 @@ judged on identical terms.
 
 Structure
 ---------
-The vectorbt call is isolated in `_simulate`. Everything around it - signal
-preparation, session handling, cost computation, result formatting, the
-drawdown check - is plain pandas, so it can be tested without vectorbt and
-swapped if the engine ever changes.
+The vectorbt call is isolated in `_simulate`, which is a single
+`vbt.Portfolio.from_signals` call. Everything around it - signal preparation,
+session handling, cost computation, result formatting, the drawdown check - is
+plain pandas, so it can be tested without vectorbt and swapped if the engine
+ever changes.
+
+Costs are passed into the simulation as per-bar arrays (`slippage` as a
+fraction of price, `fees` as a fraction of order value) rather than subtracted
+afterwards, so they broadcast across the index inside the compiled simulation
+with no Python-level iteration. The unit conversions are fiddly and are
+documented in `_cost_arrays` - in particular slippage is built from tick SIZE,
+not tick VALUE.
+
+The loop this replaced is kept as `_simulate_legacy` and is the oracle in
+tests/test_engine_vbt.py: the two must agree trade-for-trade.
 """
 
 from __future__ import annotations
@@ -47,6 +58,15 @@ import numpy as np
 import pandas as pd
 
 from .specs import get_spec
+
+# Imported lazily-ish: everything in this module except _simulate is plain
+# pandas and stays importable (and testable) without vectorbt installed.
+try:
+    import vectorbtpro as vbt
+    _VBT_IMPORT_ERROR: Exception | None = None
+except ImportError as e:      # pragma: no cover - depends on the environment
+    vbt = None
+    _VBT_IMPORT_ERROR = e
 
 
 # --------------------------------------------------------------------------
@@ -205,21 +225,168 @@ def round_turn_cost(symbol: str, cfg: BacktestConfig) -> float:
 # --------------------------------------------------------------------------
 # Simulation
 # --------------------------------------------------------------------------
+TRADE_COLUMNS = ["entry_time", "exit_time", "symbol", "direction",
+                 "entry_price", "exit_price", "gross_pnl", "costs", "pnl"]
+
+
+def _cost_arrays(bars: pd.DataFrame,
+                 entries: np.ndarray,
+                 exits: np.ndarray,
+                 symbol: str,
+                 cfg: BacktestConfig) -> tuple[np.ndarray, np.ndarray, float]:
+    """
+    Per-bar slippage and fee arrays for vectorbt, plus the position size.
+
+    Both are expressed the way from_signals wants them, which is not the way
+    they are quoted:
+
+    slippage - a fraction of PRICE. vectorbt fills at price*(1+s) to buy and
+        price*(1-s) to sell, so s must move the price by `ticks` ticks:
+
+            s = ticks * tick_size / price
+
+        tick_size, not tick_value. tick_value is dollars (multiplier *
+        tick_size); dividing it by price would move the fill by `multiplier`
+        ticks - 50x on ES, 1000x on ZN. The multiplier enters through `size`
+        below and cancels, so it must not appear here as well.
+
+    fees - a fraction of order value, and order value is size*fill_price. Our
+        commission is a flat dollar amount per contract per side, so:
+
+            f = commission * contracts / (size * fill_price)
+
+        Dividing by the FILL price rather than the raw price is what makes the
+        charge come out at exactly `commission` per side; the fill is a tick
+        away from the raw price and vectorbt bills against the fill.
+
+    tick_size is looked up per bar, so a contract whose tick changed mid-
+    history (ZT, 2019-01-13) is charged the tick that was actually in force.
+    """
+    spec = get_spec(symbol)
+    px = bars["open"].to_numpy(dtype=float)
+    ts = pd.to_datetime(bars["ts"], utc=True)
+
+    size = float(spec.multiplier) * cfg.contracts
+
+    tick_size = spec.tick_size_array(ts)
+    slippage = cfg.slippage_ticks * tick_size / px
+
+    commission = (cfg.commission_per_side
+                  if cfg.commission_per_side is not None else spec.commission)
+    fill = np.where(entries, px * (1 + slippage),
+                    np.where(exits, px * (1 - slippage), px))
+    fees = (commission * cfg.contracts) / (size * fill)
+
+    return slippage, fees, size
+
+
 def _simulate(bars: pd.DataFrame,
               entries: pd.Series,
               exits: pd.Series,
               symbol: str,
               cfg: BacktestConfig) -> pd.DataFrame:
     """
-    Walk the bars and produce a trade list.
+    Produce a trade list with vectorbt Pro.
 
-    Deliberately simple and explicit rather than vectorised: entries and exits
-    fill at the NEXT bar's open, never the signal bar's close. Acting on the
-    bar that produced the signal is lookahead bias, and it is the single most
-    common way a backtest lies.
+    Entries and exits fill at the NEXT bar's open, never the signal bar's
+    close. Acting on the bar that produced the signal is lookahead bias, and
+    it is the single most common way a backtest lies. from_signals fills on
+    the bar it sees a signal, so the signals are shifted forward one bar and
+    `price` is that bar's open. A signal on the final bar has no next bar and
+    is dropped, as it cannot be executed.
+
+    Costs are handed to vectorbt as per-bar arrays rather than applied
+    afterwards, so they broadcast across the index inside the compiled
+    simulation. See _cost_arrays for the unit conversions.
 
     Returns: entry_time, exit_time, symbol, direction, entry_price,
              exit_price, gross_pnl, costs, pnl
+    """
+    if vbt is None:
+        raise ImportError(
+            "vectorbtpro is required by backtest.engine._simulate. "
+            f"Import failed with: {_VBT_IMPORT_ERROR}"
+        ) from _VBT_IMPORT_ERROR
+
+    spec = get_spec(symbol)
+    px = bars["open"].to_numpy(dtype=float)
+    index = pd.DatetimeIndex(pd.to_datetime(bars["ts"], utc=True))
+
+    # Shift signals one bar forward: signal on bar i executes on bar i+1.
+    # np.roll wraps the last element to the front, where it is cleared - which
+    # is exactly the "no next bar to fill on" case.
+    ent = np.roll(entries.to_numpy(dtype=bool), 1)
+    exi = np.roll(exits.to_numpy(dtype=bool), 1)
+    ent[0] = False
+    exi[0] = False
+
+    if not ent.any():
+        return pd.DataFrame(columns=TRADE_COLUMNS)
+
+    slippage, fees, size = _cost_arrays(bars, ent, exi, symbol, cfg)
+    price = pd.Series(px, index=index)
+
+    pf = vbt.Portfolio.from_signals(
+        close=price,
+        entries=pd.Series(ent, index=index),
+        exits=pd.Series(exi, index=index),
+        price=price,
+        size=size,
+        size_type="amount",
+        fees=pd.Series(fees, index=index),
+        slippage=pd.Series(slippage, index=index),
+        # Futures are margined, not paid for in full. Cash is not the binding
+        # constraint here and the account curve is built from realised P&L in
+        # _daily_returns, so an unbounded balance keeps vectorbt from
+        # rejecting an order whose notional exceeds the account.
+        init_cash=np.inf,
+        direction="longonly",
+        accumulate=False,
+    )
+
+    rec = pf.trades.records
+    rec = rec[rec["status"] == 1]        # closed only; an open position at the
+    if rec.empty:                        # end of the data never realised a P&L
+        return pd.DataFrame(columns=TRADE_COLUMNS)
+
+    entry_i = rec["entry_idx"].to_numpy()
+    exit_i = rec["exit_idx"].to_numpy()
+
+    # Report the raw open prices and carry the cost separately, so the trade
+    # list stays comparable across cost assumptions. vectorbt's own
+    # entry/exit prices are slippage-adjusted; the difference IS the cost.
+    entry_px = px[entry_i]
+    exit_px = px[exit_i]
+    gross = (exit_px - entry_px) * spec.multiplier * cfg.contracts
+    pnl = rec["pnl"].to_numpy()
+
+    return pd.DataFrame({
+        "entry_time": index[entry_i],
+        "exit_time": index[exit_i],
+        "symbol": symbol,
+        "direction": "long",
+        "entry_price": entry_px,
+        "exit_price": exit_px,
+        "gross_pnl": gross,
+        "costs": gross - pnl,
+        "pnl": pnl,
+    })
+
+
+def _simulate_legacy(bars: pd.DataFrame,
+                     entries: pd.Series,
+                     exits: pd.Series,
+                     symbol: str,
+                     cfg: BacktestConfig) -> pd.DataFrame:
+    """
+    The pre-vectorbt loop, kept as the reference implementation.
+
+    Not used in a run. It is the oracle the vectorbt path is tested against -
+    slow but obviously correct, which is what makes it worth keeping. See
+    tests/test_engine_vbt.py.
+
+    Note it charges a single scalar tick value for every bar, so it cannot
+    reproduce the vectorbt path on a contract whose tick changed mid-history.
     """
     spec = get_spec(symbol)
     cost = round_turn_cost(symbol, cfg) * cfg.contracts
@@ -253,7 +420,7 @@ def _simulate(bars: pd.DataFrame,
             })
             in_pos = False
 
-    return pd.DataFrame(trades)
+    return pd.DataFrame(trades, columns=TRADE_COLUMNS if not trades else None)
 
 
 def _daily_returns(trades: pd.DataFrame,
