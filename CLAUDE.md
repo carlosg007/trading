@@ -41,6 +41,19 @@ rules to "see if the strategy works" are things to flag rather than do. Being
 useful here means being a skeptic.
 
 ---
+## Token Efficiency & Context Management
+
+**Be concise.** Prefer executing commands and writing code over generating long, conversational explanations in the terminal. 
+**Targeted code edits.** When modifying a file, make surgical edits. Do not output the entire file into the chat unless explicitly requested. 
+**Never read raw data files.** Do not attempt to `cat`, `head`, or ingest any `.parquet`, `.csv`, or large log files from `/mnt/backtest` into the context window. Use Python scripts to aggregate or print summaries instead.
+**Search before reading.** Use `grep` or `rg` (ripgrep) to find specific functions, classes, or variables across the repository instead of reading multiple whole files into context.
+**No unprompted refactoring.** Do not refactor working code or reformat files as a side effect of completing a task. Keep the scope of changes as small as possible.
+
+## Library & Execution Discipline
+
+**The Vectorbt Pro Guardrail:** You are using `vectorbtpro`, which is a private, paid library. Its API differs significantly from the free, open-source `vectorbt`. **Do not hallucinate functions.** If you are unsure of a Vectorbt Pro method, write a temporary script to run `dir()`, `help()`, or inspect the library's docstrings via the terminal before writing the implementation.
+**Atomic Git Commits:** Make granular, single-purpose commits. If you fix a data bug, commit it. If you then optimize a loop, commit it separately. If a machine learning strategy generation script breaks the server, we must be able to roll back just that script without losing the data fixes.
+**Test-Driven Edits:** When refactoring critical engine components (like `backtest/engine.py`), do not modify the main file immediately. Write a minimal reproducible test script (e.g., `test_vbt_array.py`) to prove your multidimensional array logic works on a small slice of data first.
 
 ## Environment & Infrastructure
 
@@ -136,10 +149,13 @@ when a column per symbol is needed.
 `run_backtest(bars, entries, exits, cfg)` → `BacktestResult(returns, trades,
 equity, breach, stats)`.
 
-- **Vectorized Execution (TARGET):** should use Vectorbt Pro's Numba-compiled
-  multidimensional arrays. Do NOT add pandas/numpy `for` loops for massive grid
-  searches. *Current state: `_simulate` is still a plain numpy loop and the
-  module imports no vectorbt — see Open Tasks.*
+- **Vectorized Execution:** `_simulate` is a single `vbt.Portfolio.from_signals`
+  call. Do NOT add pandas/numpy `for` loops for massive grid searches. Costs go
+  in as per-bar arrays (`slippage` as a fraction of price, `fees` as a fraction
+  of order value) so they broadcast inside the compiled simulation — see
+  `_cost_arrays`, and note slippage is built from tick **size**, not tick
+  **value**. The old loop is kept as `_simulate_legacy`, the oracle in
+  `tests/test_engine_vbt.py`.
 - **Fills are at the next bar's open, never the signal bar's close.** Acting on
   the bar that produced the signal is lookahead bias.
 - **Costs are mandatory:** slippage and commissions applied at this layer.
@@ -228,12 +244,18 @@ phases 1-7 are clean or every exception is documented).
 
 ## Open Tasks & Discrepancies (For Claude to Fix Opportunistically)
 
-- `verify_specs()` in `backtest/specs.py` needs to be run to reconcile contract
-  multipliers. A wrong multiplier silently scales every P&L figure.
-- `backtest/engine.py` needs its legacy numpy/pandas loop fully replaced by
-  Vectorbt Pro portfolio configuration to handle the massive multi-strategy AI
-  sweeps. Its module docstring already claims "the vectorbt call is isolated in
-  `_simulate`" — that is not true today and should be corrected or made true.
+- ~~`verify_specs()` in `backtest/specs.py` needs to be run to reconcile
+  contract multipliers.~~ Done 2026-08-13 (`python -m backtest.specs`). All
+  multipliers confirmed; ZT tick corrected 1/128 → 1/256. Still open: 17
+  symbols (PL, grains, LE, FX, crypto, micros) have no definition data
+  downloaded and remain UNVERIFIED — pull their definitions before backtesting
+  them.
+- ~~`backtest/engine.py` needs its legacy numpy/pandas loop replaced by Vectorbt
+  Pro.~~ Done 2026-08-13; the docstring claim is now true. Still open: the pull
+  of full-history `definition` data for the 17 symbols added that day (only 2026
+  was downloaded, so a mid-history spec change would be invisible in their
+  definition files — `TICK_HISTORY` for FX came from the lake price grid
+  instead). SI definitions stop at 2016, CL at 2025-12.
 - Establish the `nt8` data directory structure within `/mnt/backtest/lake/` and
   update `mdlib/lake.py` to route the data source flag seamlessly.
 - Build the `agents/` tier structure described above.
