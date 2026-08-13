@@ -226,15 +226,14 @@ def test_date_aware_tick_zt() -> None:
 def test_end_to_end() -> None:
     """run_backtest still returns a coherent result through the new engine."""
     print("\n[5] end-to-end run_backtest")
-    from mdlib.lake import get_bars
 
-    bars = get_bars(["ES"], "1d", "2022-01-01", "2024-01-01").reset_index(drop=True)
-    close = bars["close"]
-    fast, slow = close.rolling(10).mean(), close.rolling(30).mean()
-    entries = (fast > slow) & (fast.shift(1) <= slow.shift(1))
-    exits = (fast < slow) & (fast.shift(1) >= slow.shift(1))
+    def crossover(bars: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+        close = bars["close"]
+        fast, slow = close.rolling(10).mean(), close.rolling(30).mean()
+        return (((fast > slow) & (fast.shift(1) <= slow.shift(1))).fillna(False),
+                ((fast < slow) & (fast.shift(1) >= slow.shift(1))).fillna(False))
 
-    res = run_backtest(bars, entries.fillna(False), exits.fillna(False),
+    res = run_backtest(["ES"], "1d", crossover, "2022-01-01", "2024-01-01",
                        BacktestConfig(contracts=1, trailing_drawdown_pct=5.0))
 
     check("trades produced", len(res.trades) > 0, f"{len(res.trades)} trades")

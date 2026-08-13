@@ -307,10 +307,10 @@ def iter_bars(symbols: str | list[str],
         + sort_values(["ts", "symbol"])        15.7 GiB
 
     The concat and the global chronological sort are the expensive part, and
-    a backtest does not want either: `run_backtest` immediately splits the
-    frame back up by symbol, so it pays to interleave 110M rows only to undo
-    it. The largest single symbol is 5.6M rows, so iterating costs a fraction
-    of the peak.
+    a backtest wants neither - its work is per symbol, so interleaving 110M
+    rows by timestamp only has to be undone again. The largest single symbol
+    is 5.6M rows, so iterating costs a fraction of the peak.
+    `backtest.engine.run_backtest` is built on this function.
 
     Use `get_bars` when a single chronological frame across symbols is
     genuinely needed - correlation work, `wide()`, anything cross-sectional

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-test_streaming_lake.py - does reading one symbol at a time change anything?
+test_streaming_lake.py - the per-symbol reader and the engine built on it.
 
 Location:  ~/src/trading/tests/test_streaming_lake.py
 
@@ -11,40 +11,36 @@ non-zero on failure.
 
 What is being proved
 --------------------
-`get_bars` materialises every symbol, concatenates them and sorts the result
-by timestamp. On the full 1-minute lake that peaks around 20 GiB, and most of
-it is not the data:
+`run_backtest` reads bars itself, one symbol at a time, and calls the strategy
+on each. There is no longer a version that accepts a pre-built multi-symbol
+frame with signals already computed - that signature was removed because it
+was a trap. `get_bars` returns rows sorted by (ts, symbol), so the frame
+INTERLEAVES instruments; a strategy computing `close.rolling(200).mean()` on
+it averaged across 27 different contracts and produced noise, while returning
+signals of exactly the right length and dtype and an equity curve that looked
+fine. On this lake that mistake gave 608,079 trades against 86,035 for the
+correct per-symbol signals.
 
-    holding all 27 per-symbol frames        7.1 GiB
-    + pd.concat into one frame             12.0 GiB
-    + sort_values(["ts", "symbol"])        15.7 GiB
+So the properties worth pinning are:
 
-`iter_bars` yields the same bars one symbol at a time, and
-`run_backtest_streaming` consumes them that way. Two claims follow and both
-are checked here:
+1. `iter_bars` returns EXACTLY what `get_bars` returns once reassembled. The
+   reader underneath the engine must not drop or reorder bars.
+2. The strategy is called with ONE symbol per call, always. This is the
+   structural guarantee that replaced the trap, so it is asserted directly
+   from inside the strategy rather than inferred.
+3. Running N symbols together equals running each alone and pooling. Symbols
+   must not influence each other through the engine.
+4. The pooled result does not depend on the order symbols were requested in.
+5. A mis-sized signal is rejected loudly rather than silently misaligned.
+6. Peak memory does not scale with the number of symbols requested - the
+   whole point of reading one at a time.
 
-1. `iter_bars` returns EXACTLY what `get_bars` returns, once reassembled -
-   same rows, same columns, same dtypes, same order. If the streaming reader
-   quietly dropped or reordered bars, every downstream number would move.
-2. `run_backtest_streaming` produces the same trades, equity and stats as
-   `run_backtest`, given the same per-symbol signals.
-
-Point 2 has a trap worth naming. `get_bars` returns a frame interleaved by
-timestamp, so a strategy computing `close.rolling(200)` on it is averaging
-across 27 different instruments - the windows bleed between symbols and the
-signals are nonsense. `run_backtest_streaming` calls the strategy once per
-symbol, which cannot do that. So the reference path here deliberately applies
-the SAME strategy per symbol before calling `run_backtest`; comparing against
-the naive whole-frame version would be comparing against a bug.
-
-Memory is measured rather than asserted in the abstract: peak RSS for both
-paths over the same symbols, in separate processes so neither inherits the
-other's high-water mark.
+Nothing here compares against the deleted function; it is gone, and a test
+that resurrected it would defeat the purpose.
 """
 
 from __future__ import annotations
 
-import gc
 import subprocess
 import sys
 import warnings
@@ -57,8 +53,8 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 warnings.filterwarnings("ignore")
 
-from backtest.engine import (BacktestConfig, run_backtest,
-                             run_backtest_streaming)
+from backtest.engine import (BacktestConfig, apply_flat_by_close,
+                             run_backtest)
 from mdlib.lake import get_bars, iter_bars
 
 FAILURES: list[str] = []
@@ -74,12 +70,7 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 
 
 def stats_equal(a: dict, b: dict) -> bool:
-    """
-    Compare two stats dicts treating NaN as equal to NaN.
-
-    `sharpe` is NaN whenever the return series has no variance, so a plain
-    `a == b` reports two identical results as different.
-    """
+    """Compare stats dicts treating NaN as equal to NaN (sharpe can be NaN)."""
     if a.keys() != b.keys():
         return False
     return all(x == y or (isinstance(x, float) and isinstance(y, float)
@@ -87,13 +78,19 @@ def stats_equal(a: dict, b: dict) -> bool:
                for x, y in ((a[k], b[k]) for k in a))
 
 
+SEEN_SYMBOL_COUNTS: list[int] = []
+
+
 def strategy(bars: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
     """
-    A 200/800 SMA crossover. The strategies/ contract: bars in, signals out.
+    A 200/800 SMA crossover - the `strategies/` contract: bars in, signals out.
 
-    Deliberately uses a long lookback, because a long window is what makes
-    cross-symbol bleed visible if it ever happens.
+    The long lookback is deliberate: a 800-bar window is what would make
+    cross-symbol bleed obvious if the engine ever handed over more than one
+    symbol. Every call records how many symbols it actually saw, which test 2
+    then checks.
     """
+    SEEN_SYMBOL_COUNTS.append(bars["symbol"].nunique())
     close = bars["close"]
     fast, slow = close.rolling(200).mean(), close.rolling(800).mean()
     entries = ((fast > slow) & (fast.shift(1) <= slow.shift(1))).fillna(False)
@@ -101,27 +98,9 @@ def strategy(bars: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
     return entries, exits
 
 
-def signals_per_symbol(bars: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
-    """
-    Apply `strategy` to each symbol of a long frame and reassemble.
-
-    This is what the streaming path does internally, done by hand so
-    run_backtest can be given identical inputs. Anything else would compare
-    the streaming engine against a strategy that bleeds across symbols.
-    """
-    entries = pd.Series(False, index=bars.index)
-    exits = pd.Series(False, index=bars.index)
-    for _, idx in bars.groupby("symbol", sort=True).groups.items():
-        g = bars.loc[idx]
-        e, x = strategy(g.reset_index(drop=True))
-        entries.loc[idx] = e.to_numpy()
-        exits.loc[idx] = x.to_numpy()
-    return entries, exits
-
-
 # --------------------------------------------------------------------------
 def test_iter_bars_matches_get_bars() -> None:
-    """Reassembled iter_bars output must be byte-identical to get_bars."""
+    """Reassembled iter_bars output must be identical to get_bars."""
     print(f"\n[1] iter_bars vs get_bars, {START}..{END}")
 
     for tf, kwargs in (("1m", {}),
@@ -138,23 +117,13 @@ def test_iter_bars_matches_get_bars() -> None:
                      .sort_values(["ts", "symbol"])
                      .reset_index(drop=True))
 
-        check(f"{label}: same shape", whole.shape == rebuilt.shape,
-              f"{whole.shape} vs {rebuilt.shape}")
-        check(f"{label}: same columns", list(whole.columns) == list(rebuilt.columns))
-        check(f"{label}: same dtypes",
-              whole.dtypes.equals(rebuilt.dtypes),
-              "" if whole.dtypes.equals(rebuilt.dtypes) else
-              f"{dict(whole.dtypes)} vs {dict(rebuilt.dtypes)}")
         try:
             pd.testing.assert_frame_equal(whole, rebuilt, check_exact=True)
-            same = True
-            detail = f"{len(whole):,} rows"
+            same, detail = True, f"{len(whole):,} rows"
         except AssertionError as exc:                    # noqa: BLE001
-            same = False
-            detail = str(exc).splitlines()[0]
+            same, detail = False, str(exc).splitlines()[0]
         check(f"{label}: frames identical", same, detail)
 
-        # One symbol per yield, in the order requested, none empty.
         check(f"{label}: one frame per symbol",
               [s for s, _ in parts] == [s for s in SYMS
                                         if s in set(whole["symbol"])],
@@ -165,64 +134,87 @@ def test_iter_bars_matches_get_bars() -> None:
               all(d["ts"].is_monotonic_increasing for _, d in parts))
 
 
-def test_streaming_backtest_matches() -> None:
-    """Streaming vs in-memory, same signals, trade for trade."""
-    print(f"\n[2] run_backtest_streaming vs run_backtest, 1m {START}..{END}")
+def test_strategy_always_sees_one_symbol() -> None:
+    """
+    The structural guarantee that replaced the removed signature.
 
-    cfg = lambda: BacktestConfig(contracts=1, trailing_drawdown_pct=5.0)
+    If the strategy is ever handed more than one symbol, a rolling window can
+    bleed across instruments and the signals are meaningless. Checked from
+    inside the strategy itself, not inferred from the results.
+    """
+    print("\n[2] the strategy is called once per symbol")
+    SEEN_SYMBOL_COUNTS.clear()
 
-    bars = get_bars(SYMS, "1m", START, END)
-    entries, exits = signals_per_symbol(bars)
-    print(f"    {len(bars):,} bars, {int(entries.sum()):,} raw entry signals")
-    whole = run_backtest(bars, entries, exits, cfg())
-    del bars, entries, exits
-    gc.collect()
+    res = run_backtest(SYMS, "1h", strategy, START, END,
+                       BacktestConfig(contracts=1))
 
-    streamed = run_backtest_streaming(SYMS, "1m", strategy, START, END, cfg())
+    check("strategy was called once per symbol",
+          len(SEEN_SYMBOL_COUNTS) == len(SYMS),
+          f"{len(SEEN_SYMBOL_COUNTS)} calls for {len(SYMS)} symbols")
+    check("every call saw exactly one symbol",
+          SEEN_SYMBOL_COUNTS and set(SEEN_SYMBOL_COUNTS) == {1},
+          f"symbol counts per call: {SEEN_SYMBOL_COUNTS}")
+    check("trades produced", len(res.trades) > 0, f"{len(res.trades)} trades")
+    check("all requested symbols traded",
+          set(res.trades["symbol"]) <= set(SYMS), str(set(res.trades["symbol"])))
 
-    check("trades produced", len(whole.trades) > 0, f"{len(whole.trades)} trades")
-    check("same trade count", len(streamed.trades) == len(whole.trades),
-          f"streaming {len(streamed.trades)} vs whole {len(whole.trades)}")
+    # No pre-built-frame entry point should have survived the teardown.
+    import backtest.engine as eng
+    check("no run_backtest_streaming alias left",
+          not hasattr(eng, "run_backtest_streaming"))
+    try:
+        bars = get_bars(["ES"], "1d", START, END)
+        run_backtest(bars, pd.Series([True]), pd.Series([False]))
+        check("a bars frame is not accepted as `symbols`", False,
+              "call unexpectedly succeeded")
+    except Exception as exc:                             # noqa: BLE001
+        check("a bars frame is not accepted as `symbols`", True,
+              f"{type(exc).__name__}")
 
-    if len(streamed.trades) == len(whole.trades) and not whole.trades.empty:
-        for col in ("entry_time", "exit_time", "symbol", "direction"):
-            eq = bool((streamed.trades[col].to_numpy()
-                       == whole.trades[col].to_numpy()).all())
-            check(f"{col} identical", eq)
+
+def test_symbols_are_independent() -> None:
+    """
+    Running N symbols together == running each alone and pooling.
+
+    This is what "each symbol is simulated independently" has to mean. If
+    anything leaked between symbols - a carried position, a shared cost array,
+    a cash balance - these would diverge.
+    """
+    print("\n[3] N symbols together == each alone, pooled")
+    cfg = lambda: BacktestConfig(contracts=1)
+
+    together = run_backtest(SYMS, "1h", strategy, START, END, cfg())
+    singly = [run_backtest([s], "1h", strategy, START, END, cfg()) for s in SYMS]
+
+    pooled = (pd.concat([r.trades for r in singly], ignore_index=True)
+                .sort_values(["exit_time", "symbol", "entry_time"], kind="stable")
+                .reset_index(drop=True))
+
+    check("same trade count", len(together.trades) == len(pooled),
+          f"together {len(together.trades)} vs pooled {len(pooled)}")
+    if len(together.trades) == len(pooled) and not pooled.empty:
+        for col in ("entry_time", "exit_time", "symbol"):
+            check(f"{col} identical",
+                  bool((together.trades[col].to_numpy()
+                        == pooled[col].to_numpy()).all()))
         for col in ("entry_price", "exit_price", "gross_pnl", "costs", "pnl"):
-            diff = float(np.abs(streamed.trades[col].to_numpy()
-                                - whole.trades[col].to_numpy()).max())
+            diff = float(np.abs(together.trades[col].to_numpy()
+                                - pooled[col].to_numpy()).max())
             check(f"{col} identical", diff == 0.0, f"max diff {diff:.12g}")
 
-    for k in ("n_trades", "total_return_pct", "sharpe", "max_dd_pct",
-              "total_costs", "gross_pnl", "net_pnl"):
-        a, b = streamed.stats[k], whole.stats[k]
-        check(f"stat {k} identical", a == b or (a != a and b != b), f"{a} vs {b}")
-
-    check("equity curve identical",
-          bool((streamed.equity.to_numpy() == whole.equity.to_numpy()).all()))
-    check("returns index identical",
-          streamed.returns.index.equals(whole.returns.index))
-    check("breach verdict identical", streamed.breach == whole.breach,
-          str(streamed.breach))
-
-    print("\n" + streamed.summary())
+    check("net P&L is the sum of the singles",
+          abs(together.stats["net_pnl"]
+              - sum(r.stats["net_pnl"] for r in singly)) < 1e-6,
+          f"{together.stats['net_pnl']:,.2f}")
 
 
 def test_symbol_order_does_not_matter() -> None:
-    """
-    Streaming walks symbols in the order requested; run_backtest walks them
-    sorted. The pooled result must not depend on either.
-    """
-    print("\n[3] result is independent of symbol order")
+    """The pooled result must not depend on the order symbols were requested."""
+    print("\n[4] result is independent of symbol order")
     cfg = BacktestConfig(contracts=1)
 
-    # 1h, not 1d: a 200/800 SMA needs 800 bars, and two years of daily bars is
-    # only ~520, so a daily run here produces no trades at all and would prove
-    # nothing about ordering.
-    a = run_backtest_streaming(SYMS, "1h", strategy, START, END, cfg)
-    b = run_backtest_streaming(list(reversed(SYMS)), "1h", strategy,
-                               START, END, cfg)
+    a = run_backtest(SYMS, "1h", strategy, START, END, cfg)
+    b = run_backtest(list(reversed(SYMS)), "1h", strategy, START, END, cfg)
 
     check("trades produced", len(a.trades) > 0, f"{len(a.trades)} trades")
     check("same trade count", len(a.trades) == len(b.trades),
@@ -234,134 +226,176 @@ def test_symbol_order_does_not_matter() -> None:
     check("stats identical", stats_equal(a.stats, b.stats))
 
 
-def test_flat_by_close_path() -> None:
-    """The Portfolio A constraint path also has to agree."""
-    print("\n[4] flat_by_close through both paths")
-    cfg = lambda: BacktestConfig(contracts=1, flat_by_close=True)
+def _session_id(ts, close_utc: str = "20:00") -> pd.DatetimeIndex:
+    """
+    The session each timestamp belongs to, as a DatetimeIndex.
 
-    bars = get_bars(SYMS, "1h", START, END)
-    entries, exits = signals_per_symbol(bars)
-    whole = run_backtest(bars, entries, exits, cfg())
-    del bars, entries, exits
-    gc.collect()
+    Bars at or after the close belong to the NEXT session, so shifting forward
+    by (24h - close) and flooring to the day gives the session it trades in.
+    """
+    h, m = (int(v) for v in close_utc.split(":"))
+    off = pd.Timedelta(hours=24 - h, minutes=-m)
+    return pd.DatetimeIndex(pd.to_datetime(ts, utc=True)).__add__(off).normalize()
 
-    streamed = run_backtest_streaming(SYMS, "1h", strategy, START, END, cfg())
 
-    check("same trade count", len(streamed.trades) == len(whole.trades),
-          f"{len(streamed.trades)} vs {len(whole.trades)}")
-    check("net P&L identical",
-          streamed.stats["net_pnl"] == whole.stats["net_pnl"],
-          f"{streamed.stats['net_pnl']} vs {whole.stats['net_pnl']}")
+def test_flat_by_close() -> None:
+    """
+    The Portfolio A constraint, checked at both levels.
+
+    First on a hand-built frame where the answer is known, then end to end.
+
+    The end-to-end check counts SESSIONS, not calendar days. Two things make
+    days the wrong unit: the exit signal lands on the session's last bar and
+    fills on the next one - which is the 20:00 boundary bar itself, so a
+    correctly closed trade still shows an exit timestamp in the following
+    session - and weekends mean Friday to Monday is three calendar days but
+    one session step. Asserting on days flags 32 of 33 correct trades.
+    """
+    print("\n[5] flat_by_close")
+
+    # -- known answer: two sessions of 1h bars, close at 20:00 UTC ----------
+    idx = pd.date_range("2024-01-02 17:00", periods=8, freq="h", tz="UTC")
+    bars = pd.DataFrame({"ts": idx, "symbol": "ES",
+                         "open": 1.0, "high": 1.0, "low": 1.0,
+                         "close": 1.0, "volume": 1.0})
+    # Sessions: 17,18,19 -> Jan 2 | 20,21,22,23,00 -> Jan 3.
+    # Last bar of session 1 is index 2 (19:00); of session 2 is index 7.
+    e_in = pd.Series([True] * 8)
+    x_in = pd.Series([False] * 8)
+    e_out, x_out = apply_flat_by_close(bars, e_in, x_in, "20:00")
+
+    check("exit forced on each session's last bar",
+          bool(x_out.iloc[2]) and bool(x_out.iloc[7]),
+          f"forced at {list(np.flatnonzero(x_out.to_numpy()))}")
+    check("no other exit invented",
+          int(x_out.sum()) == 2, f"{int(x_out.sum())} exits")
+    check("entry blocked on those bars",
+          not bool(e_out.iloc[2]) and not bool(e_out.iloc[7]))
+    check("entries elsewhere untouched",
+          int(e_out.sum()) == 6, f"{int(e_out.sum())} entries")
+
+    # -- end to end: no position survives a whole session ------------------
+    cfg = BacktestConfig(contracts=1, flat_by_close=True)
+    res = run_backtest(SYMS, "1h", strategy, START, END, cfg)
+    check("trades produced", len(res.trades) > 0, f"{len(res.trades)} trades")
+    if res.trades.empty:
+        return
+
+    # Rank the sessions each symbol actually has, so weekends and holidays
+    # count as one step rather than three.
+    ranks = {sym: pd.Index(np.unique(_session_id(d["ts"]).to_numpy()))
+             for sym, d in iter_bars(SYMS, "1h", START, END)}
+
+    ent_s = _session_id(res.trades["entry_time"])
+    ext_s = _session_id(res.trades["exit_time"])
+
+    gaps = []
+    for sym, r_in, r_out in zip(res.trades["symbol"], ent_s, ext_s):
+        u = ranks[sym]
+        gaps.append(u.get_indexer([r_out])[0] - u.get_indexer([r_in])[0])
+
+    gaps = np.array(gaps)
+    check("no trade is held through a whole session", bool((gaps <= 1).all()),
+          f"max session gap {int(gaps.max())}, "
+          f"{int((gaps > 1).sum())} of {len(gaps)} exceed 1")
 
 
 def test_bad_signal_length_is_rejected() -> None:
-    """A strategy returning the wrong length must fail loudly, not silently."""
-    print("\n[5] a mis-sized signal is rejected")
+    """A strategy returning the wrong length must fail loudly."""
+    print("\n[6] a mis-sized signal is rejected")
 
     def bad(bars):
         e, x = strategy(bars)
         return e.iloc[:-5], x
 
     try:
-        run_backtest_streaming(["ES"], "1d", bad, START, END, BacktestConfig())
+        run_backtest(["ES"], "1d", bad, START, END, BacktestConfig())
         check("raises on length mismatch", False, "no exception")
     except ValueError as exc:
         check("raises on length mismatch", True, str(exc)[:70])
 
+    try:
+        run_backtest(["NOSUCHSYM"], "1d", strategy, START, END, BacktestConfig())
+        check("raises when no bars are found", False, "no exception")
+    except ValueError as exc:
+        check("raises when no bars are found", True, str(exc)[:70])
 
-def test_peak_memory() -> None:
+
+def test_peak_memory_does_not_scale_with_symbols() -> None:
     """
-    Peak RSS of both paths, each in its own process.
+    Peak RSS must track the largest single symbol, not the symbol count.
 
-    Separate processes matter: peak RSS is a per-process high-water mark, so
-    running both in one would let the first path's peak mask the second's.
+    That is the whole point of reading one at a time, and it is the property
+    that has to keep holding as NT8 lands. Measured as 4 symbols vs 12 over
+    FULL history, in separate processes.
+
+    Two measurement traps, both hit for real while writing this:
+      - Imports cost ~0.4 GiB and vectorbt's numba kernels ~1.2 GiB more on
+        first use. Both paths pay it, and at small scale it hides everything.
+        So the JIT is warmed first and the baseline taken after.
+      - ru_maxrss is a high-water mark that cannot be reset, so the peak is
+        sampled live from /proc/self/statm instead.
     """
-    print("\n[6] peak RSS above baseline, streaming vs whole-frame")
+    print("\n[7] peak RSS vs number of symbols (full history)")
 
-    # Two measurement traps, both hit on the first attempt at this test:
-    #
-    #  - Interpreter and library imports cost 0.357 GiB, and vectorbt's numba
-    #    kernels cost ~1.2 GiB more the first time from_signals runs. That is
-    #    a fixed cost both paths pay. Measured naively at a small scale it
-    #    swamps the data entirely and both paths report an identical peak.
-    #    So the JIT is warmed on a 5-bar backtest first, and the baseline is
-    #    taken after it.
-    #  - ru_maxrss is a high-water mark that cannot be reset, so the baseline
-    #    is subtracted from a peak sampled live from /proc/self/statm instead.
-    #
-    # Full history rather than the 2-year window used elsewhere, so the data
-    # is large enough for the difference to be the thing being measured.
     prog = r'''
 import gc, sys, threading, time, warnings
 sys.path.insert(0, %r)
 warnings.filterwarnings("ignore")
-import numpy as np, pandas as pd
-from backtest.engine import BacktestConfig, run_backtest, run_backtest_streaming
-from mdlib.lake import get_bars
+import pandas as pd
+from backtest.engine import (BacktestConfig, apply_flat_by_close,
+                             run_backtest)
 sys.path.insert(0, %r)
-from test_streaming_lake import strategy, signals_per_symbol
+from test_streaming_lake import strategy
 
 def live():
     with open("/proc/self/statm") as f:
         return int(f.read().split()[1]) * 4096 / 1024**3
 
-# Warm the vectorbt JIT so its one-off compilation is inside the baseline.
-_w = pd.DataFrame({"ts": pd.date_range("2024-01-02", periods=5, freq="D", tz="UTC"),
-                   "symbol": "ES", "open": [1.,2.,3.,4.,5.],
-                   "high": [1.,2.,3.,4.,5.], "low": [1.,2.,3.,4.,5.],
-                   "close": [1.,2.,3.,4.,5.], "volume": [1.]*5})
-run_backtest(_w, pd.Series([True,False,False,False,False]),
-             pd.Series([False,False,True,False,False]), BacktestConfig())
-del _w
+# Warm the vectorbt JIT so its one-off compilation sits in the baseline.
+run_backtest(["ES"], "1d", strategy, "2023-01-01", "2023-03-01", BacktestConfig())
 gc.collect()
 
-BASE = live()
-PEAK = BASE
+BASE = live(); PEAK = BASE
 def watch():
     global PEAK
     while True:
         PEAK = max(PEAK, live()); time.sleep(0.02)
 threading.Thread(target=watch, daemon=True).start()
 
-SYMS, START, END = %r, %r, %r
-mode = sys.argv[1]
-if mode == "stream":
-    r = run_backtest_streaming(SYMS, "1m", strategy, START, END, BacktestConfig())
-else:
-    b = get_bars(SYMS, "1m", START, END)
-    e, x = signals_per_symbol(b)
-    r = run_backtest(b, e, x, BacktestConfig())
-print(f"{PEAK-BASE:.3f} {BASE:.3f} {r.stats['net_pnl']:.6f} {r.stats['n_trades']}")
-''' % (str(REPO), str(REPO / "tests"), SYMS, None, END)
+syms = sys.argv[1].split(",")
+r = run_backtest(syms, "1m", strategy, None, None, BacktestConfig())
+print(f"{PEAK-BASE:.3f} {BASE:.3f} {r.stats['n_trades']} {r.stats['net_pnl']:.6f}")
+''' % (str(REPO), str(REPO / "tests"))
+
+    few = ["ES", "NQ", "GC", "ZN"]
+    many = few + ["6E", "6J", "6A", "6B", "SI", "ZB", "ZF", "CL"]
 
     out = {}
-    for mode in ("stream", "whole"):
-        r = subprocess.run([sys.executable, "-c", prog, mode],
+    for label, syms in (("4 symbols", few), ("12 symbols", many)):
+        r = subprocess.run([sys.executable, "-c", prog, ",".join(syms)],
                            capture_output=True, text=True, cwd=str(REPO))
         if r.returncode != 0:
-            check(f"{mode} subprocess ran", False, r.stderr.strip()[-400:])
+            check(f"{label} subprocess ran", False, r.stderr.strip()[-400:])
             return
-        d, base, pnl, n = r.stdout.strip().split()
-        out[mode] = (float(d), float(pnl), int(n))
-        print(f"    {mode:<7} peak +{float(d):6.3f} GiB above a {float(base):.3f} GiB "
-              f"baseline   net P&L {float(pnl):,.2f}   {int(n):,} trades")
+        d, base, n, pnl = r.stdout.strip().split()
+        out[label] = float(d)
+        print(f"    {label:<11} peak +{float(d):6.3f} GiB above {float(base):.3f} "
+              f"baseline   {int(n):,} trades")
 
-    check("both paths agree on net P&L", out["stream"][1] == out["whole"][1],
-          f"{out['stream'][1]} vs {out['whole'][1]}")
-    check("both paths agree on trade count", out["stream"][2] == out["whole"][2],
-          f"{out['stream'][2]:,} vs {out['whole'][2]:,}")
-    check("streaming peak is lower", out["stream"][0] < out["whole"][0],
-          f"+{out['stream'][0]:.3f} vs +{out['whole'][0]:.3f} GiB "
-          f"({out['whole'][0]/max(out['stream'][0], 1e-9):.1f}x less)")
+    ratio = out["12 symbols"] / max(out["4 symbols"], 1e-9)
+    check("3x the symbols does not cost 3x the memory", ratio < 1.5,
+          f"12sym/4sym = {ratio:.2f}x (linear growth would be ~3x)")
 
 
 if __name__ == "__main__":
     test_iter_bars_matches_get_bars()
-    test_streaming_backtest_matches()
+    test_strategy_always_sees_one_symbol()
+    test_symbols_are_independent()
     test_symbol_order_does_not_matter()
-    test_flat_by_close_path()
+    test_flat_by_close()
     test_bad_signal_length_is_rejected()
-    test_peak_memory()
+    test_peak_memory_does_not_scale_with_symbols()
 
     print("\n" + "=" * 60)
     if FAILURES:

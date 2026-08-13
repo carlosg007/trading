@@ -175,27 +175,22 @@ def test_trade_straddling_a_boundary() -> None:
 def test_run_backtest_end_to_end() -> None:
     """Multi-symbol, through the public entry point, chunked vs unchunked."""
     print(f"\n[3] run_backtest multi-symbol, 1m {START}..{END}")
-    from mdlib.lake import get_bars
 
     syms = ["ES", "NQ", "GC"]
-    bars = get_bars(syms, "1m", START, END).reset_index(drop=True)
-    if bars.empty:
-        check("bars loaded", False, "empty")
-        return
-    print(f"    {len(bars):,} bars across {bars['symbol'].nunique()} symbols")
 
-    close = bars["close"]
-    fast = close.rolling(200).mean()
-    slow = close.rolling(800).mean()
-    entries = ((fast > slow) & (fast.shift(1) <= slow.shift(1))).fillna(False)
-    exits = ((fast < slow) & (fast.shift(1) >= slow.shift(1))).fillna(False)
+    def crossover(bars: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+        close = bars["close"]
+        fast, slow = close.rolling(200).mean(), close.rolling(800).mean()
+        return (((fast > slow) & (fast.shift(1) <= slow.shift(1))).fillna(False),
+                ((fast < slow) & (fast.shift(1) >= slow.shift(1))).fillna(False))
 
-    whole = run_backtest(bars, entries, exits,
-                         BacktestConfig(contracts=1, trailing_drawdown_pct=5.0,
-                                        chunk_size=0))
-    chunked = run_backtest(bars, entries, exits,
-                           BacktestConfig(contracts=1, trailing_drawdown_pct=5.0,
-                                          chunk_size=50_000))
+    def run(chunk_size: int):
+        return run_backtest(syms, "1m", crossover, START, END,
+                            BacktestConfig(contracts=1, trailing_drawdown_pct=5.0,
+                                           chunk_size=chunk_size))
+
+    whole = run(0)
+    chunked = run(50_000)
 
     check("trades produced", len(whole.trades) > 0, f"{len(whole.trades)} trades")
     same_trades(chunked.trades, whole.trades, "run_backtest")

@@ -6,15 +6,20 @@ Location:  ~/src/trading/backtest/engine.py
 A strategy says when to be long, short, or flat. This says what that would
 have cost and whether the account would have survived.
 
-    from mdlib.lake import get_bars
     from backtest.engine import BacktestConfig, run_backtest
 
-    bars = get_bars("ES", tf="1h", start="2013-01-01")
-    entries, exits = my_strategy(bars)
+    def my_strategy(bars):          # one symbol's bars, positionally indexed
+        fast = bars["close"].rolling(20).mean()
+        slow = bars["close"].rolling(50).mean()
+        return fast > slow, fast < slow
 
     cfg = BacktestConfig(flat_by_close=True, trailing_drawdown_pct=5.0)
-    res = run_backtest(bars, entries, exits, cfg)
+    res = run_backtest(["ES", "NQ", "GC"], "1h", my_strategy,
+                       start="2013-01-01", cfg=cfg)
     res.save("/mnt/backtest/artifacts/strat1")
+
+The engine reads the bars. You pass the strategy, not the signals - see
+`run_backtest` for why that is enforced rather than merely encouraged.
 
 Then:
 
@@ -40,16 +45,13 @@ ever changes.
 
 Memory
 ------
-The full 1-minute lake is 109.8M rows across 27 symbols. At that size the
-numeric columns of a long frame are ~4.1 GiB of consolidated pandas blocks
-(OHLC as one float64 block, volume as a uint64 one), so anything that copies
-the frame costs 4 GiB a time. Two things follow, and both are load-bearing on
-a 26 GB box:
+The full 1-minute lake is 110M rows across 27 symbols, and on a 26 GB box
+nothing may hold it all at once. Two levels of streaming keep that true:
 
-  - `run_backtest` never materialises a per-symbol copy of the whole frame. It
-    takes the two columns the simulation reads (ts, open) through Categorical
-    codes, so the big block is never duplicated. The old
-    `groupby("symbol")` did duplicate it, which is what used to OOM.
+  - `run_backtest` reads ONE symbol at a time via `mdlib.lake.iter_bars` and
+    frees it before the next, so peak tracks the largest single symbol (5.6M
+    rows) rather than the lake. Building the whole frame first cost 20.54 GiB
+    before any simulation started; the per-symbol path peaks at 2.90 GiB.
   - `_simulate` feeds vectorbt `cfg.chunk_size` bars at a time and drops each
     batch's intermediates before starting the next, so peak RAM tracks the
     chunk rather than the symbol.
@@ -692,117 +694,19 @@ def check_trailing_drawdown(equity: pd.Series, limit_pct: float) -> dict:
     }
 
 
-# --------------------------------------------------------------------------
-# Entry point
-# --------------------------------------------------------------------------
-def run_backtest(bars: pd.DataFrame,
-                 entries: pd.Series,
-                 exits: pd.Series,
-                 cfg: BacktestConfig | None = None) -> BacktestResult:
-    """
-    Run one strategy over one or more symbols.
-
-    `bars` is long format from mdlib.lake.get_bars. `entries` and `exits` are
-    boolean Series aligned to it. For multiple symbols, signals must be
-    aligned to the same long frame - each symbol is simulated independently
-    and the results are pooled.
-    """
-    cfg = cfg or BacktestConfig()
-
-    if bars.empty:
-        raise ValueError("No bars supplied.")
-    if len(entries) != len(bars) or len(exits) != len(bars):
-        raise ValueError(
-            f"Signal length mismatch: bars={len(bars)}, "
-            f"entries={len(entries)}, exits={len(exits)}"
-        )
-
-    entries = pd.Series(entries).reset_index(drop=True)
-    exits = pd.Series(exits).reset_index(drop=True)
-
-    # Per-symbol work carries only the two columns the simulation reads (ts
-    # and open), not the whole OHLCV frame.
-    #
-    # This is where a full-lake run used to die. get_bars returns long format
-    # sorted by (ts, symbol), so its numeric columns sit in consolidated
-    # pandas blocks - ~4.1 GiB at 109.8M rows. A groupby("symbol") that
-    # materialises each group duplicates all of that before the first
-    # simulation starts, which is what exceeded the 26 GB box. Taking two
-    # columns instead of seven cuts each per-symbol copy by ~70%, and nothing
-    # ever holds a second copy of the full frame.
-    #
-    # Three details matter at 110M rows and are easy to get wrong:
-    #   - Symbols are matched through Categorical codes (int8 for 27 symbols),
-    #     not by comparing 110M Python strings per symbol.
-    #   - `categories` is passed explicitly sorted, preserving the symbol
-    #     order the old groupby(sort=True) produced.
-    #   - Timestamps stay in a DatetimeIndex. Series.to_numpy() on a tz-aware
-    #     column returns dtype=object - 110M Timestamp objects - which is far
-    #     worse than the copy this is trying to avoid.
-    ts_all = pd.DatetimeIndex(pd.to_datetime(bars["ts"], utc=True))
-    open_all = bars["open"].to_numpy(dtype=float)
-    ent_all = entries.to_numpy(dtype=bool)
-    exi_all = exits.to_numpy(dtype=bool)
-
-    symbols = sorted(pd.unique(bars["symbol"]))
-    codes = pd.Categorical(bars["symbol"], categories=symbols).codes
-
-    all_trades = []
-    day_parts: list[np.ndarray] = []
-
-    for code, sym in enumerate(symbols):
-        rows = np.flatnonzero(codes == code)
-
-        sym_ts = ts_all[rows]
-        g = pd.DataFrame({"ts": sym_ts, "open": open_all[rows]})
-        e = pd.Series(ent_all[rows])
-        x = pd.Series(exi_all[rows])
-
-        # Session dates for this symbol, collected here so the whole-lake
-        # timestamp column is never normalised in one go. .values on a
-        # tz-aware DatetimeIndex gives UTC-naive datetime64, so flooring to
-        # [D] is the same day boundary .dt.normalize() would have picked.
-        day_parts.append(np.unique(sym_ts.values.astype("datetime64[D]")))
-
-        if cfg.flat_by_close:
-            e, x = apply_flat_by_close(g, e, x, cfg.session_close_utc)
-
-        e, x = clean_signals(e, x)
-        t = _simulate(g, e, x, sym, cfg)
-        if not t.empty:
-            all_trades.append(t)
-
-        del g, e, x, t, rows, sym_ts
-        gc.collect()
-
-    days = pd.DatetimeIndex(np.unique(np.concatenate(day_parts))).tz_localize("UTC")
-    del ts_all, open_all, ent_all, exi_all, codes, day_parts
-    gc.collect()
-
-    return _assemble_result(all_trades, days, cfg)
-
-
 def _assemble_result(all_trades: list[pd.DataFrame],
                      days: pd.DatetimeIndex,
                      cfg: BacktestConfig) -> BacktestResult:
-    """
-    Pool per-symbol trade lists into the standard result.
-
-    Shared by `run_backtest` and `run_backtest_streaming` rather than written
-    out twice. The two differ only in how they get the bars; if they also each
-    computed their own Sharpe and drawdown, the numbers could drift apart and
-    the streaming path would stop being a drop-in replacement.
-    """
+    """Pool per-symbol trade lists into the standard result."""
     trades = (pd.concat(all_trades, ignore_index=True)
               if all_trades else
               pd.DataFrame(columns=TRADE_COLUMNS))
     if not trades.empty:
         # Sorted on more than exit_time, and stably, so the row order does not
-        # depend on which order the symbols happened to be simulated in. Many
-        # trades share an exit timestamp once several symbols are in play, and
-        # run_backtest walks symbols in sorted order while the streaming path
-        # walks them in the order requested - without this the two produce the
-        # same trades in a different order.
+        # depend on the order the symbols were requested in. Many trades share
+        # an exit timestamp once several symbols are in play, and a single-key
+        # unstable sort would leave their relative order down to the caller's
+        # symbol list.
         trades = (trades.sort_values(["exit_time", "symbol", "entry_time"],
                                      kind="stable")
                         .reset_index(drop=True))
@@ -828,39 +732,70 @@ def _assemble_result(all_trades: list[pd.DataFrame],
                           config=cfg, breach=breach, stats=stats)
 
 
-def run_backtest_streaming(symbols: str | list[str],
-                           tf: str,
-                           signal_fn,
-                           start: str | None = None,
-                           end: str | None = None,
-                           cfg: BacktestConfig | None = None,
-                           **lake_kwargs) -> BacktestResult:
+# --------------------------------------------------------------------------
+# Entry point
+# --------------------------------------------------------------------------
+def run_backtest(symbols: str | list[str],
+                 tf: str,
+                 signal_fn,
+                 start: str | None = None,
+                 end: str | None = None,
+                 cfg: BacktestConfig | None = None,
+                 **lake_kwargs) -> BacktestResult:
     """
-    Same backtest as `run_backtest`, without ever holding the whole lake.
+    Run one strategy over one or more symbols.
 
-    `run_backtest` takes a long frame that already exists, so the caller has
-    to build it first - and on the full 1-minute lake `get_bars` peaks around
-    20 GiB doing so, most of it concatenating 27 symbols into one frame and
-    sorting it by timestamp, only for `run_backtest` to split it back apart.
-    This reads one symbol, runs it, keeps its trades, and frees it before
-    touching the next. Peak memory tracks the largest single symbol (5.6M
-    rows) rather than the lake.
+    The engine reads the bars itself, one symbol at a time, and calls the
+    strategy on each. It is deliberately not possible to hand it a
+    multi-symbol frame with signals already computed - see below.
 
-    `signal_fn(bars) -> (entries, exits)` is the strategy interface from
-    `strategies/`: it receives ONE symbol's bars, positionally indexed, and
-    returns two boolean Series aligned to them.
+    Parameters
+    ----------
+    symbols
+        One symbol or a list. A list is the normal case: a daily strategy on
+        ES alone over 16 years is ~100-200 trades, too thin to separate skill
+        from luck.
+    tf
+        Any timeframe `mdlib.lake` serves - "1m", "1d" natively, the rest
+        derived.
+    signal_fn
+        `signal_fn(bars) -> (entries, exits)`, the `strategies/` contract. It
+        receives ONE symbol's bars, positionally indexed from 0, and returns
+        two boolean Series aligned to them.
+    **lake_kwargs
+        Passed to `iter_bars`: session_merge, exclude_degraded,
+        exclude_rolls, respect_coverage.
 
-    That per-symbol call is a correctness improvement, not just a memory one.
-    A strategy written against `get_bars` output sees a frame interleaved by
-    timestamp, so `close.rolling(200).mean()` there silently averages across
-    27 different instruments. Here each call sees one symbol, and a rolling
-    window cannot bleed across the boundary.
+    Why the strategy is a callable and not precomputed signals
+    ----------------------------------------------------------
+    This engine used to take `(bars, entries, exits)`, where `bars` was a long
+    frame from `get_bars`. That frame is sorted by (ts, symbol), so it
+    INTERLEAVES symbols: row i is ES, row i+1 is NQ, row i+2 is GC. A strategy
+    computing `close.rolling(200).mean()` over it was therefore averaging
+    across 27 different instruments, and the resulting signals were noise. The
+    engine could not detect this - the signals were the right length and the
+    right dtype, and the backtest returned a plausible-looking equity curve.
+    On this lake it produced 608,079 trades where the correct per-symbol
+    signals give 86,035.
 
-    `**lake_kwargs` are passed to `iter_bars` (session_merge,
-    exclude_degraded, exclude_rolls, respect_coverage).
+    A signal_fn cannot express that mistake. It is handed one symbol at a
+    time, so a rolling window has nothing to bleed into. The old signature was
+    removed rather than deprecated because a trap that only misleads - never
+    raises - is not one to leave lying around for the next person or agent to
+    find.
 
-    Results are identical to `run_backtest` given the same per-symbol signals
-    - tests/test_streaming_lake.py checks that trade-for-trade.
+    Memory
+    ------
+    Reading one symbol at a time also means the whole lake is never resident.
+    Measured on all 27 symbols of 1-minute data (110M rows), against the old
+    build-the-frame-then-split approach:
+
+        whole-frame   peak 15.82 GiB   150s
+        per-symbol    peak  2.90 GiB   110s
+
+    and the frame the old path built cost 20.54 GiB to assemble before any
+    simulation started. Peak now tracks the largest single symbol (5.6M rows),
+    not the number of symbols requested.
     """
     # Imported here rather than at module scope: everything else in this
     # module works on bars it is handed, and only this function needs the

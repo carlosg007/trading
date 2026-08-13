@@ -126,11 +126,17 @@ AI Agent orchestration scripts:
 - `system_monitor.py`: Automated circuit breaker tracking RAM and runaway
   execution loops.
 
-**`mdlib/lake.py`** — The single reader. Every strategy goes through
-`get_bars(symbols, tf, start, end, ...)`, which returns **long format**
-(`ts, symbol, open, high, low, close, volume`, UTC). `wide(df, field)` pivots
-when a column per symbol is needed.
+**`mdlib/lake.py`** — The single reader. Two entry points over the same bars,
+both returning **long format** (`ts, symbol, open, high, low, close, volume`,
+UTC). `wide(df, field)` pivots when a column per symbol is needed.
 
+- **`iter_bars(symbols, tf, start, end, ...)`** yields `(symbol, df)` one symbol
+  at a time. **This is what backtests use** — it never builds the monolith, and
+  a rolling window on a single-symbol frame cannot bleed across instruments.
+- **`get_bars(...)`** concatenates those same frames and sorts by
+  `(ts, symbol)`. Use it only when a single cross-sectional frame is genuinely
+  needed (correlation work, `wide()`); on the full 1m lake it costs ~15 GiB,
+  and the result interleaves symbols — see the engine note below.
 - **Dual-Dataset Logic:** must support switching between `databento` (16-20 years
   In-Sample training) and `nt8` (10 years Out-of-Sample stress testing).
   *Not implemented — see Open Tasks. `get_bars` currently has no source
@@ -146,16 +152,35 @@ when a column per symbol is needed.
   `/mnt/backtest/reference/futures/` and are `lru_cache`d.
 
 **`backtest/engine.py`** — Runs the simulations.
-`run_backtest(bars, entries, exits, cfg)` → `BacktestResult(returns, trades,
-equity, breach, stats)`.
+`run_backtest(symbols, tf, signal_fn, start, end, cfg)` → `BacktestResult(returns,
+trades, equity, breach, stats)`.
 
-- **Vectorized Execution:** `_simulate` is a single `vbt.Portfolio.from_signals`
-  call. Do NOT add pandas/numpy `for` loops for massive grid searches. Costs go
+- **The engine reads the bars; you pass the strategy, not the signals.**
+  `signal_fn(bars) -> (entries, exits)` is called once per symbol with that
+  symbol's bars alone. There is deliberately no way to hand it a pre-built
+  multi-symbol frame with signals already computed. That signature existed
+  until 2026-08-13 and was a trap: `get_bars` returns rows sorted by
+  `(ts, symbol)`, so the frame **interleaves instruments**, and a strategy
+  doing `close.rolling(200).mean()` over it was averaging across 27 different
+  contracts. The signals were the right length and dtype, nothing raised, and
+  the equity curve looked plausible — it produced 608,079 trades where the
+  correct per-symbol signals give 86,035. Do not reintroduce a frame-in
+  entry point.
+- **Streaming by default:** bars are read one symbol at a time via
+  `mdlib.lake.iter_bars`, so peak RAM tracks the largest single symbol (5.6M
+  rows), not the lake. A full-lake run peaks at ~2.9 GiB; building the frame
+  first cost 20.5 GiB.
+- **Vectorized Execution:** `_simulate` drives `vbt.Portfolio.from_signals`.
+  Do NOT add pandas/numpy `for` loops for massive grid searches. Costs go
   in as per-bar arrays (`slippage` as a fraction of price, `fees` as a fraction
   of order value) so they broadcast inside the compiled simulation — see
   `_cost_arrays`, and note slippage is built from tick **size**, not tick
   **value**. The old loop is kept as `_simulate_legacy`, the oracle in
   `tests/test_engine_vbt.py`.
+- **Batched:** `_simulate` feeds vectorbt `cfg.chunk_size` bars at a time.
+  Boundaries are snapped into the gaps between trades, so the trade list is
+  identical at any chunk size. Never chunk by calendar year — a position open
+  on 31 December is silently dropped, which flatters results.
 - **Fills are at the next bar's open, never the signal bar's close.** Acting on
   the bar that produced the signal is lookahead bias.
 - **Costs are mandatory:** slippage and commissions applied at this layer.
