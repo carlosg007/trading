@@ -116,8 +116,11 @@ python backtest/report.py \
 One-way dependency: `agents` → `strategies` → `backtest` → `mdlib` → lake.
 `data_pull` writes the lake and is the **only** place that talks to a vendor API.
 
-**`agents/`** — *PLANNED, NOT YET BUILT. This directory does not exist.* Google
-AI Agent orchestration scripts:
+**`agents/`** — *SCAFFOLDED 2026-08-13. Interfaces and constraints are written;
+the agent logic is not.* Every function raises `NotImplementedError` rather than
+returning a placeholder — a stub that returns an empty result is how a pipeline
+starts reporting numbers nobody generated. Google AI Agent orchestration
+scripts (SDKs: `google-genai`, `mcp`):
 
 - `tier1_master.py`: CIO agent managing the global optimization goals.
 - `tier2_supervisors.py`: Prop-Firm Compliance (Max DD, Daily Loss Limits) and
@@ -283,7 +286,9 @@ phases 1-7 are clean or every exception is documented).
   instead). SI definitions stop at 2016, CL at 2025-12.
 - Establish the `nt8` data directory structure within `/mnt/backtest/lake/` and
   update `mdlib/lake.py` to route the data source flag seamlessly.
-- Build the `agents/` tier structure described above.
+- ~~Build the `agents/` tier structure described above.~~ Scaffolded 2026-08-13
+  (`agents/`, `google-genai==2.18.1` + `mcp==2.0.0` installed). Still open: all
+  four modules are interface-only and raise `NotImplementedError`.
 - `data_pull/coverage_summary.py` is a superseded copy of
   `scripts/coverage_summary.py` (its own docstring points at `scripts/`); the
   version in `scripts/` has the newer `find_intraday_start` detection. Delete the
