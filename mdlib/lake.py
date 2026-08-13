@@ -59,6 +59,7 @@ Respect it for intraday work; daily and swing can use the full history.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
@@ -276,9 +277,105 @@ def _resample(df: pd.DataFrame, rule: str) -> pd.DataFrame:
     return out
 
 
+LONG_COLUMNS = ["ts", "symbol", "open", "high", "low", "close", "volume"]
+
+
 # --------------------------------------------------------------------------
 # Public API
 # --------------------------------------------------------------------------
+def iter_bars(symbols: str | list[str],
+              tf: str = "1d",
+              start: str | pd.Timestamp | None = None,
+              end: str | pd.Timestamp | None = None,
+              session_merge: bool = True,
+              exclude_degraded: bool = False,
+              exclude_rolls: bool = False,
+              respect_coverage: bool = False) -> Iterator[tuple[str, pd.DataFrame]]:
+    """
+    Yield `(symbol, bars)` one symbol at a time, in the order requested.
+
+    Same bars as `get_bars`, same columns, same hygiene flags - but never more
+    than one symbol resident at once. Each frame is already sorted by ts.
+
+    Why this exists
+    ---------------
+    `get_bars` on the full 1-minute lake peaks at ~20 GiB, and only about a
+    third of that is the data. Measured over 27 symbols / 110M rows:
+
+        holding all 27 per-symbol frames        7.1 GiB
+        + pd.concat into one frame             12.0 GiB
+        + sort_values(["ts", "symbol"])        15.7 GiB
+
+    The concat and the global chronological sort are the expensive part, and
+    a backtest does not want either: `run_backtest` immediately splits the
+    frame back up by symbol, so it pays to interleave 110M rows only to undo
+    it. The largest single symbol is 5.6M rows, so iterating costs a fraction
+    of the peak.
+
+    Use `get_bars` when a single chronological frame across symbols is
+    genuinely needed - correlation work, `wide()`, anything cross-sectional
+    that compares symbols at the same timestamp. Use this when the work is
+    per-symbol, which a backtest's is.
+
+    Note each yielded frame covers ONE symbol, so rolling windows computed on
+    it cannot bleed across symbol boundaries. On the concatenated frame from
+    `get_bars` they silently can - it is interleaved by timestamp, so a
+    `close.rolling(200)` there mixes 27 instruments into every window.
+    """
+    if isinstance(symbols, str):
+        symbols = [symbols]
+
+    start_ts = pd.Timestamp(start, tz="UTC") if start is not None else None
+    end_ts = pd.Timestamp(end, tz="UTC") if end is not None else None
+
+    if tf in NATIVE_TFS:
+        source_tf, rule = tf, None
+    elif tf in DERIVED:
+        source_tf, rule = DERIVED[tf]
+    else:
+        raise ValueError(
+            f"Unknown timeframe {tf!r}. "
+            f"Native: {sorted(NATIVE_TFS)}. Derived: {sorted(DERIVED)}."
+        )
+
+    is_session_tf = tf in ("1d", "1w")
+
+    for sym in symbols:
+        sym_start = start_ts
+        if respect_coverage and source_tf == "1m":
+            y = intraday_start_year(sym)
+            if y is not None:
+                floor = pd.Timestamp(f"{y}-01-01", tz="UTC")
+                sym_start = floor if sym_start is None else max(sym_start, floor)
+
+        df = _read_native(sym, source_tf, sym_start, end_ts)
+        if df.empty:
+            continue
+
+        # Merge Sunday BEFORE resampling to weekly, so the weekly bar is built
+        # from whole sessions rather than fragments.
+        if session_merge and is_session_tf and source_tf == "1d":
+            df = _merge_sunday(df)
+
+        if rule is not None:
+            df = _resample(df, rule)
+
+        if exclude_degraded:
+            bad = degraded_days()
+            if bad:
+                df = df[~df["ts"].dt.date.isin(bad)]
+
+        if exclude_rolls:
+            rolls = set(roll_dates(sym))
+            if rolls:
+                df = df[~df["ts"].dt.date.isin(rolls)]
+
+        if df.empty:
+            continue
+
+        yield sym, df[LONG_COLUMNS].reset_index(drop=True)
+
+
 def get_bars(symbols: str | list[str],
              tf: str = "1d",
              start: str | pd.Timestamp | None = None,
@@ -311,65 +408,28 @@ def get_bars(symbols: str | list[str],
     respect_coverage
         Clamp the start date to each symbol's intraday_start_year. Only
         meaningful for intraday timeframes.
+
+    Memory
+    ------
+    This materialises every symbol at once and then sorts the result, which on
+    the full 1-minute lake peaks around 20 GiB - most of it the concat and the
+    sort rather than the data. For per-symbol work, `iter_bars` does the same
+    read for a fraction of that. See its docstring for the measurements.
     """
-    if isinstance(symbols, str):
-        symbols = [symbols]
-
-    start_ts = pd.Timestamp(start, tz="UTC") if start is not None else None
-    end_ts = pd.Timestamp(end, tz="UTC") if end is not None else None
-
-    if tf in NATIVE_TFS:
-        source_tf, rule = tf, None
-    elif tf in DERIVED:
-        source_tf, rule = DERIVED[tf]
-    else:
-        raise ValueError(
-            f"Unknown timeframe {tf!r}. "
-            f"Native: {sorted(NATIVE_TFS)}. Derived: {sorted(DERIVED)}."
-        )
-
-    is_session_tf = tf in ("1d", "1w")
-    frames = []
-
-    for sym in symbols:
-        sym_start = start_ts
-        if respect_coverage and source_tf == "1m":
-            y = intraday_start_year(sym)
-            if y is not None:
-                floor = pd.Timestamp(f"{y}-01-01", tz="UTC")
-                sym_start = floor if sym_start is None else max(sym_start, floor)
-
-        df = _read_native(sym, source_tf, sym_start, end_ts)
-        if df.empty:
-            continue
-
-        # Merge Sunday BEFORE resampling to weekly, so the weekly bar is built
-        # from whole sessions rather than fragments.
-        if session_merge and is_session_tf and source_tf == "1d":
-            df = _merge_sunday(df)
-
-        if rule is not None:
-            df = _resample(df, rule)
-
-        if exclude_degraded:
-            bad = degraded_days()
-            if bad:
-                df = df[~df["ts"].dt.date.isin(bad)]
-
-        if exclude_rolls:
-            rolls = set(roll_dates(sym))
-            if rolls:
-                df = df[~df["ts"].dt.date.isin(rolls)]
-
-        frames.append(df)
+    frames = [df for _, df in iter_bars(
+        symbols, tf, start, end,
+        session_merge=session_merge,
+        exclude_degraded=exclude_degraded,
+        exclude_rolls=exclude_rolls,
+        respect_coverage=respect_coverage,
+    )]
 
     if not frames:
-        return pd.DataFrame(columns=["ts", "symbol", "open", "high",
-                                     "low", "close", "volume"])
+        return pd.DataFrame(columns=LONG_COLUMNS)
 
     out = pd.concat(frames, ignore_index=True)
-    cols = ["ts", "symbol", "open", "high", "low", "close", "volume"]
-    return out[cols].sort_values(["ts", "symbol"]).reset_index(drop=True)
+    del frames
+    return out.sort_values(["ts", "symbol"]).reset_index(drop=True)
 
 
 def wide(df: pd.DataFrame, field: str = "close") -> pd.DataFrame:
