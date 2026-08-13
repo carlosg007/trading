@@ -51,6 +51,7 @@ tests/test_engine_vbt.py: the two must agree trade-for-trade.
 
 from __future__ import annotations
 
+import gc
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -424,7 +425,7 @@ def _simulate_legacy(bars: pd.DataFrame,
 
 
 def _daily_returns(trades: pd.DataFrame,
-                   bars: pd.DataFrame,
+                   days: pd.DatetimeIndex,
                    initial_capital: float) -> tuple[pd.Series, pd.Series]:
     """
     Convert a trade list into a daily return series.
@@ -433,9 +434,12 @@ def _daily_returns(trades: pd.DataFrame,
     calendar day in the backtest window appears, including flat days - a
     strategy that trades rarely should show that in its return series rather
     than compressing time.
+
+    `days` is the sorted set of session dates covered by the bars. It is
+    accumulated per symbol in run_backtest rather than derived here, so
+    normalising 110 million timestamps at once never happens.
     """
-    idx = pd.to_datetime(bars["ts"], utc=True).dt.normalize().drop_duplicates()
-    idx = pd.DatetimeIndex(sorted(idx))
+    idx = pd.DatetimeIndex(days)
 
     daily_pnl = pd.Series(0.0, index=idx)
     if not trades.empty:
@@ -494,17 +498,52 @@ def run_backtest(bars: pd.DataFrame,
             f"entries={len(entries)}, exits={len(exits)}"
         )
 
-    bars = bars.reset_index(drop=True)
     entries = pd.Series(entries).reset_index(drop=True)
     exits = pd.Series(exits).reset_index(drop=True)
 
-    all_trades = []
+    # Per-symbol work carries only the two columns the simulation reads (ts
+    # and open), not the whole OHLCV frame.
+    #
+    # This is where a full-lake run used to die. get_bars returns long format
+    # sorted by (ts, symbol), so its numeric columns sit in consolidated
+    # pandas blocks - ~4.1 GiB at 109.8M rows. A groupby("symbol") that
+    # materialises each group duplicates all of that before the first
+    # simulation starts, which is what exceeded the 26 GB box. Taking two
+    # columns instead of seven cuts each per-symbol copy by ~70%, and nothing
+    # ever holds a second copy of the full frame.
+    #
+    # Three details matter at 110M rows and are easy to get wrong:
+    #   - Symbols are matched through Categorical codes (int8 for 27 symbols),
+    #     not by comparing 110M Python strings per symbol.
+    #   - `categories` is passed explicitly sorted, preserving the symbol
+    #     order the old groupby(sort=True) produced.
+    #   - Timestamps stay in a DatetimeIndex. Series.to_numpy() on a tz-aware
+    #     column returns dtype=object - 110M Timestamp objects - which is far
+    #     worse than the copy this is trying to avoid.
+    ts_all = pd.DatetimeIndex(pd.to_datetime(bars["ts"], utc=True))
+    open_all = bars["open"].to_numpy(dtype=float)
+    ent_all = entries.to_numpy(dtype=bool)
+    exi_all = exits.to_numpy(dtype=bool)
 
-    for sym, g in bars.groupby("symbol", sort=True):
-        idx = g.index
-        g = g.reset_index(drop=True)
-        e = entries.loc[idx].reset_index(drop=True)
-        x = exits.loc[idx].reset_index(drop=True)
+    symbols = sorted(pd.unique(bars["symbol"]))
+    codes = pd.Categorical(bars["symbol"], categories=symbols).codes
+
+    all_trades = []
+    day_parts: list[np.ndarray] = []
+
+    for code, sym in enumerate(symbols):
+        rows = np.flatnonzero(codes == code)
+
+        sym_ts = ts_all[rows]
+        g = pd.DataFrame({"ts": sym_ts, "open": open_all[rows]})
+        e = pd.Series(ent_all[rows])
+        x = pd.Series(exi_all[rows])
+
+        # Session dates for this symbol, collected here so the whole-lake
+        # timestamp column is never normalised in one go. .values on a
+        # tz-aware DatetimeIndex gives UTC-naive datetime64, so flooring to
+        # [D] is the same day boundary .dt.normalize() would have picked.
+        day_parts.append(np.unique(sym_ts.values.astype("datetime64[D]")))
 
         if cfg.flat_by_close:
             e, x = apply_flat_by_close(g, e, x, cfg.session_close_utc)
@@ -514,6 +553,13 @@ def run_backtest(bars: pd.DataFrame,
         if not t.empty:
             all_trades.append(t)
 
+        del g, e, x, t, rows, sym_ts
+        gc.collect()
+
+    days = pd.DatetimeIndex(np.unique(np.concatenate(day_parts))).tz_localize("UTC")
+    del ts_all, open_all, ent_all, exi_all, codes, day_parts
+    gc.collect()
+
     trades = (pd.concat(all_trades, ignore_index=True)
               if all_trades else
               pd.DataFrame(columns=["entry_time", "exit_time", "symbol",
@@ -522,7 +568,7 @@ def run_backtest(bars: pd.DataFrame,
     if not trades.empty:
         trades = trades.sort_values("exit_time").reset_index(drop=True)
 
-    returns, equity = _daily_returns(trades, bars, cfg.initial_capital)
+    returns, equity = _daily_returns(trades, days, cfg.initial_capital)
 
     breach = (check_trailing_drawdown(equity, cfg.trailing_drawdown_pct)
               if cfg.trailing_drawdown_pct else {})
