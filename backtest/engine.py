@@ -32,11 +32,33 @@ judged on identical terms.
 
 Structure
 ---------
-The vectorbt call is isolated in `_simulate`, which is a single
-`vbt.Portfolio.from_signals` call. Everything around it - signal preparation,
+The vectorbt call is isolated in `_simulate`, which drives
+`vbt.Portfolio.from_signals`. Everything around it - signal preparation,
 session handling, cost computation, result formatting, the drawdown check - is
 plain pandas, so it can be tested without vectorbt and swapped if the engine
 ever changes.
+
+Memory
+------
+The full 1-minute lake is 109.8M rows across 27 symbols. At that size the
+numeric columns of a long frame are ~4.1 GiB of consolidated pandas blocks
+(OHLC as one float64 block, volume as a uint64 one), so anything that copies
+the frame costs 4 GiB a time. Two things follow, and both are load-bearing on
+a 26 GB box:
+
+  - `run_backtest` never materialises a per-symbol copy of the whole frame. It
+    takes the two columns the simulation reads (ts, open) through Categorical
+    codes, so the big block is never duplicated. The old
+    `groupby("symbol")` did duplicate it, which is what used to OOM.
+  - `_simulate` feeds vectorbt `cfg.chunk_size` bars at a time and drops each
+    batch's intermediates before starting the next, so peak RAM tracks the
+    chunk rather than the symbol.
+
+Chunk boundaries are placed only where the strategy is flat, so batching
+cannot drop a trade that spans a boundary - slicing by calendar year would,
+and would quietly flatter the results. The trade list is identical at any
+chunk size; tests/test_engine_batching.py asserts that against the unchunked
+engine.
 
 Costs are passed into the simulation as per-bar arrays (`slippage` as a
 fraction of price, `fees` as a fraction of order value) rather than subtracted
@@ -98,6 +120,14 @@ class BacktestConfig:
     # Data hygiene
     exclude_degraded: bool = True
     exclude_rolls: bool = True
+
+    # Execution. Bars are handed to vectorbt this many at a time so a
+    # full-lake run does not have to hold the whole simulation in RAM. This is
+    # a memory knob ONLY: boundaries are snapped into the gaps between trades,
+    # so the trade list is identical whatever it is set to (0 disables
+    # chunking). See _chunk_bounds. 1m bars are ~5.6M rows per symbol at the
+    # moment, so the default runs the largest symbol in three passes.
+    chunk_size: int = 2_000_000
 
     # Bookkeeping - carried into the result so a number is never read without
     # the context needed to judge it.
@@ -281,13 +311,105 @@ def _cost_arrays(bars: pd.DataFrame,
     return slippage, fees, size
 
 
+def _pair_trades(ent: np.ndarray, exi: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Resolve fill-bar signals into (entry_bar, exit_bar) pairs.
+
+    Same rule the simulation uses: from the first entry, take the first exit
+    STRICTLY after it, then look for the next entry after that. An exit on the
+    entry bar itself does not close the position, matching `_simulate_legacy`.
+
+    This is not used to compute P&L - vectorbt does that. It is used only to
+    find bars where the strategy is flat, which is where a chunk may be cut.
+    The loop runs once per trade, not once per bar, so it stays cheap on a
+    multi-million-bar symbol.
+
+    A final entry with no matching exit is left out: that position never
+    closes, so it never realises a P&L and no chunk boundary needs to protect
+    it.
+    """
+    e_pos = np.flatnonzero(ent)
+    x_pos = np.flatnonzero(exi)
+    if e_pos.size == 0 or x_pos.size == 0:
+        return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64)
+
+    e_out: list[int] = []
+    x_out: list[int] = []
+    cursor = 0
+    while True:
+        i = np.searchsorted(e_pos, cursor, side="left")
+        if i >= e_pos.size:
+            break
+        e = int(e_pos[i])
+        j = np.searchsorted(x_pos, e, side="right")   # first exit after entry
+        if j >= x_pos.size:
+            break                                     # never closes
+        x = int(x_pos[j])
+        e_out.append(e)
+        x_out.append(x)
+        cursor = x + 1
+
+    return (np.asarray(e_out, dtype=np.int64),
+            np.asarray(x_out, dtype=np.int64))
+
+
+def _chunk_bounds(n: int,
+                  chunk_size: int,
+                  e_idx: np.ndarray,
+                  x_idx: np.ndarray) -> list[tuple[int, int]]:
+    """
+    Split [0, n) into slices that never cut through a trade.
+
+    Chunking exists so a 110-million-bar run does not have to hold the whole
+    simulation in RAM. The naive way to do that - slice by calendar year - is
+    silently wrong: a position open on 31 December is never closed, so the
+    trade is dropped from the results entirely. Dropped trades are not
+    neutral. They remove losers as readily as winners and the equity curve
+    still looks plausible, which is precisely the kind of quietly flattering
+    backtest this engine is supposed to make impossible.
+
+    So a boundary is only ever placed where the strategy is flat. A target
+    boundary that falls inside a trade is pushed forward to the bar after that
+    trade's exit. Trades are non-overlapping and sorted, so the only trade
+    that can straddle `target` is the first one whose exit is at or after it.
+
+    The result is that chunking is a pure memory optimisation: the trade list
+    is bit-identical to the unchunked run at any chunk size. That equivalence
+    is what tests/test_engine_batching.py asserts.
+
+    Chunks come out at roughly `chunk_size` bars, longer only where a single
+    trade is longer than that. A very small chunk_size is correct but slow -
+    each chunk is a separate compiled vectorbt call with fixed overhead.
+    """
+    if chunk_size <= 0 or n <= chunk_size:
+        return [(0, n)]
+
+    bounds: list[tuple[int, int]] = []
+    lo = 0
+    while lo < n:
+        target = lo + chunk_size
+        if target >= n:
+            bounds.append((lo, n))
+            break
+
+        j = np.searchsorted(x_idx, target, side="left")
+        hi = target
+        if j < x_idx.size and e_idx[j] < target:
+            hi = int(x_idx[j]) + 1        # carry the straddling trade whole
+
+        bounds.append((lo, hi))
+        lo = hi
+
+    return bounds
+
+
 def _simulate(bars: pd.DataFrame,
               entries: pd.Series,
               exits: pd.Series,
               symbol: str,
               cfg: BacktestConfig) -> pd.DataFrame:
     """
-    Produce a trade list with vectorbt Pro.
+    Produce a trade list with vectorbt Pro, one batch of bars at a time.
 
     Entries and exits fill at the NEXT bar's open, never the signal bar's
     close. Acting on the bar that produced the signal is lookahead bias, and
@@ -299,6 +421,15 @@ def _simulate(bars: pd.DataFrame,
     Costs are handed to vectorbt as per-bar arrays rather than applied
     afterwards, so they broadcast across the index inside the compiled
     simulation. See _cost_arrays for the unit conversions.
+
+    Batching
+    --------
+    vectorbt allocates several full-length float64 arrays per call (cash,
+    position, value, the order and trade records), so peak RAM scales with the
+    number of bars in one call. Bars are therefore fed in `cfg.chunk_size`
+    slices, and each slice's intermediates are dropped before the next one
+    starts. Boundaries are placed only where the strategy is flat, so the
+    output does not depend on the chunk size - see _chunk_bounds.
 
     Returns: entry_time, exit_time, symbol, direction, entry_price,
              exit_price, gross_pnl, costs, pnl
@@ -324,54 +455,82 @@ def _simulate(bars: pd.DataFrame,
     if not ent.any():
         return pd.DataFrame(columns=TRADE_COLUMNS)
 
-    slippage, fees, size = _cost_arrays(bars, ent, exi, symbol, cfg)
-    price = pd.Series(px, index=index)
+    e_idx, x_idx = _pair_trades(ent, exi)
+    bounds = _chunk_bounds(len(px), cfg.chunk_size, e_idx, x_idx)
+    del e_idx, x_idx
 
-    pf = vbt.Portfolio.from_signals(
-        close=price,
-        entries=pd.Series(ent, index=index),
-        exits=pd.Series(exi, index=index),
-        price=price,
-        size=size,
-        size_type="amount",
-        fees=pd.Series(fees, index=index),
-        slippage=pd.Series(slippage, index=index),
-        # Futures are margined, not paid for in full. Cash is not the binding
-        # constraint here and the account curve is built from realised P&L in
-        # _daily_returns, so an unbounded balance keeps vectorbt from
-        # rejecting an order whose notional exceeds the account.
-        init_cash=np.inf,
-        direction="longonly",
-        accumulate=False,
-    )
+    frames: list[pd.DataFrame] = []
 
-    rec = pf.trades.records
-    rec = rec[rec["status"] == 1]        # closed only; an open position at the
-    if rec.empty:                        # end of the data never realised a P&L
+    for lo, hi in bounds:
+        ent_c = ent[lo:hi]
+        if not ent_c.any():           # no trade can start here; skip the call
+            continue
+        exi_c = exi[lo:hi]
+        px_c = px[lo:hi]
+        index_c = index[lo:hi]
+
+        slippage, fees, size = _cost_arrays(bars.iloc[lo:hi], ent_c, exi_c,
+                                            symbol, cfg)
+        price = pd.Series(px_c, index=index_c)
+
+        pf = vbt.Portfolio.from_signals(
+            close=price,
+            entries=pd.Series(ent_c, index=index_c),
+            exits=pd.Series(exi_c, index=index_c),
+            price=price,
+            size=size,
+            size_type="amount",
+            fees=pd.Series(fees, index=index_c),
+            slippage=pd.Series(slippage, index=index_c),
+            # Futures are margined, not paid for in full. Cash is not the
+            # binding constraint here and the account curve is built from
+            # realised P&L in _daily_returns, so an unbounded balance keeps
+            # vectorbt from rejecting an order whose notional exceeds the
+            # account. It also makes chunks independent: no cash balance
+            # carries across a boundary to change later position sizing.
+            init_cash=np.inf,
+            direction="longonly",
+            accumulate=False,
+        )
+
+        rec = pf.trades.records
+        rec = rec[rec["status"] == 1]    # closed only; an open position at the
+        if not rec.empty:                # end of the data never realised a P&L
+            entry_i = rec["entry_idx"].to_numpy()
+            exit_i = rec["exit_idx"].to_numpy()
+
+            # Report the raw open prices and carry the cost separately, so the
+            # trade list stays comparable across cost assumptions. vectorbt's
+            # own entry/exit prices are slippage-adjusted; the difference IS
+            # the cost.
+            entry_px = px_c[entry_i]
+            exit_px = px_c[exit_i]
+            gross = (exit_px - entry_px) * spec.multiplier * cfg.contracts
+            pnl = rec["pnl"].to_numpy()
+
+            frames.append(pd.DataFrame({
+                "entry_time": index_c[entry_i],
+                "exit_time": index_c[exit_i],
+                "symbol": symbol,
+                "direction": "long",
+                "entry_price": entry_px,
+                "exit_price": exit_px,
+                "gross_pnl": gross,
+                "costs": gross - pnl,
+                "pnl": pnl,
+            }))
+
+        # The portfolio holds the whole simulation. Drop it before building
+        # the next one rather than letting two coexist at the peak.
+        del pf, rec, price, slippage, fees, ent_c, exi_c, px_c, index_c
+        if len(bounds) > 1:
+            gc.collect()
+
+    if not frames:
         return pd.DataFrame(columns=TRADE_COLUMNS)
-
-    entry_i = rec["entry_idx"].to_numpy()
-    exit_i = rec["exit_idx"].to_numpy()
-
-    # Report the raw open prices and carry the cost separately, so the trade
-    # list stays comparable across cost assumptions. vectorbt's own
-    # entry/exit prices are slippage-adjusted; the difference IS the cost.
-    entry_px = px[entry_i]
-    exit_px = px[exit_i]
-    gross = (exit_px - entry_px) * spec.multiplier * cfg.contracts
-    pnl = rec["pnl"].to_numpy()
-
-    return pd.DataFrame({
-        "entry_time": index[entry_i],
-        "exit_time": index[exit_i],
-        "symbol": symbol,
-        "direction": "long",
-        "entry_price": entry_px,
-        "exit_price": exit_px,
-        "gross_pnl": gross,
-        "costs": gross - pnl,
-        "pnl": pnl,
-    })
+    if len(frames) == 1:
+        return frames[0]
+    return pd.concat(frames, ignore_index=True)
 
 
 def _simulate_legacy(bars: pd.DataFrame,
