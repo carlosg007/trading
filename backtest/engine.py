@@ -779,13 +779,33 @@ def run_backtest(bars: pd.DataFrame,
     del ts_all, open_all, ent_all, exi_all, codes, day_parts
     gc.collect()
 
+    return _assemble_result(all_trades, days, cfg)
+
+
+def _assemble_result(all_trades: list[pd.DataFrame],
+                     days: pd.DatetimeIndex,
+                     cfg: BacktestConfig) -> BacktestResult:
+    """
+    Pool per-symbol trade lists into the standard result.
+
+    Shared by `run_backtest` and `run_backtest_streaming` rather than written
+    out twice. The two differ only in how they get the bars; if they also each
+    computed their own Sharpe and drawdown, the numbers could drift apart and
+    the streaming path would stop being a drop-in replacement.
+    """
     trades = (pd.concat(all_trades, ignore_index=True)
               if all_trades else
-              pd.DataFrame(columns=["entry_time", "exit_time", "symbol",
-                                    "direction", "entry_price", "exit_price",
-                                    "gross_pnl", "costs", "pnl"]))
+              pd.DataFrame(columns=TRADE_COLUMNS))
     if not trades.empty:
-        trades = trades.sort_values("exit_time").reset_index(drop=True)
+        # Sorted on more than exit_time, and stably, so the row order does not
+        # depend on which order the symbols happened to be simulated in. Many
+        # trades share an exit timestamp once several symbols are in play, and
+        # run_backtest walks symbols in sorted order while the streaming path
+        # walks them in the order requested - without this the two produce the
+        # same trades in a different order.
+        trades = (trades.sort_values(["exit_time", "symbol", "entry_time"],
+                                     kind="stable")
+                        .reset_index(drop=True))
 
     returns, equity = _daily_returns(trades, days, cfg.initial_capital)
 
@@ -806,3 +826,85 @@ def run_backtest(bars: pd.DataFrame,
 
     return BacktestResult(returns=returns, trades=trades, equity=equity,
                           config=cfg, breach=breach, stats=stats)
+
+
+def run_backtest_streaming(symbols: str | list[str],
+                           tf: str,
+                           signal_fn,
+                           start: str | None = None,
+                           end: str | None = None,
+                           cfg: BacktestConfig | None = None,
+                           **lake_kwargs) -> BacktestResult:
+    """
+    Same backtest as `run_backtest`, without ever holding the whole lake.
+
+    `run_backtest` takes a long frame that already exists, so the caller has
+    to build it first - and on the full 1-minute lake `get_bars` peaks around
+    20 GiB doing so, most of it concatenating 27 symbols into one frame and
+    sorting it by timestamp, only for `run_backtest` to split it back apart.
+    This reads one symbol, runs it, keeps its trades, and frees it before
+    touching the next. Peak memory tracks the largest single symbol (5.6M
+    rows) rather than the lake.
+
+    `signal_fn(bars) -> (entries, exits)` is the strategy interface from
+    `strategies/`: it receives ONE symbol's bars, positionally indexed, and
+    returns two boolean Series aligned to them.
+
+    That per-symbol call is a correctness improvement, not just a memory one.
+    A strategy written against `get_bars` output sees a frame interleaved by
+    timestamp, so `close.rolling(200).mean()` there silently averages across
+    27 different instruments. Here each call sees one symbol, and a rolling
+    window cannot bleed across the boundary.
+
+    `**lake_kwargs` are passed to `iter_bars` (session_merge,
+    exclude_degraded, exclude_rolls, respect_coverage).
+
+    Results are identical to `run_backtest` given the same per-symbol signals
+    - tests/test_streaming_lake.py checks that trade-for-trade.
+    """
+    # Imported here rather than at module scope: everything else in this
+    # module works on bars it is handed, and only this function needs the
+    # reader. Keeps `import backtest.engine` free of an NFS-backed dependency.
+    from mdlib.lake import iter_bars
+
+    cfg = cfg or BacktestConfig()
+
+    all_trades: list[pd.DataFrame] = []
+    day_parts: list[np.ndarray] = []
+    n_symbols = 0
+
+    for sym, g in iter_bars(symbols, tf, start, end, **lake_kwargs):
+        n_symbols += 1
+        e, x = signal_fn(g)
+
+        if len(e) != len(g) or len(x) != len(g):
+            raise ValueError(
+                f"{sym}: signal_fn returned {len(e)}/{len(x)} signals "
+                f"for {len(g)} bars."
+            )
+
+        e = pd.Series(e).reset_index(drop=True)
+        x = pd.Series(x).reset_index(drop=True)
+
+        day_parts.append(
+            np.unique(pd.DatetimeIndex(g["ts"]).values.astype("datetime64[D]")))
+
+        if cfg.flat_by_close:
+            e, x = apply_flat_by_close(g, e, x, cfg.session_close_utc)
+
+        e, x = clean_signals(e, x)
+        t = _simulate(g, e, x, sym, cfg)
+        if not t.empty:
+            all_trades.append(t)
+
+        del g, e, x, t
+        gc.collect()
+
+    if n_symbols == 0:
+        raise ValueError("No bars supplied.")
+
+    days = pd.DatetimeIndex(np.unique(np.concatenate(day_parts))).tz_localize("UTC")
+    del day_parts
+    gc.collect()
+
+    return _assemble_result(all_trades, days, cfg)
