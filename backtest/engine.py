@@ -91,6 +91,17 @@ except ImportError as e:      # pragma: no cover - depends on the environment
     vbt = None
     _VBT_IMPORT_ERROR = e
 
+# numba is pinned in requirements.txt and is a transitive dependency of
+# vectorbt anyway, but clean_signals stays usable without it - see below. The
+# fallback is silent and only costs speed, so _NUMBA_IMPORT_ERROR is the thing
+# to inspect if a run is unexpectedly slow.
+try:
+    from numba import njit
+    _NUMBA_IMPORT_ERROR: Exception | None = None
+except ImportError as e:      # pragma: no cover - depends on the environment
+    njit = None
+    _NUMBA_IMPORT_ERROR = e
+
 
 # --------------------------------------------------------------------------
 @dataclass
@@ -210,25 +221,74 @@ def apply_flat_by_close(bars: pd.DataFrame,
     return entries, exits
 
 
-def clean_signals(entries: pd.Series, exits: pd.Series) -> tuple[pd.Series, pd.Series]:
+def _clean_signals_loop(e: np.ndarray, x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """
-    Remove signals that cannot execute: an entry with no prior exit, and an
-    exit with no open position. Prevents double-counting.
+    Walk the signals as a two-state machine: flat, or long.
+
+    From flat, the first entry opens a position. From long, the first exit
+    closes it. Everything else is dropped - an entry while already long would
+    double-count the position, and an exit while flat would book a trade that
+    was never opened. Note the `elif`: an exit on the same bar as the entry
+    does not close it, which is what `_simulate_legacy` and `_pair_trades`
+    also assume.
+
+    This stays a bar-by-bar loop because the decision at bar i depends on the
+    state left by bar i-1, so there is nothing to vectorise - numpy has no
+    primitive for a sequential two-state scan. The searchsorted alternative
+    (jump entry-to-exit-to-entry) is only a win when trades are rare: measured
+    on 5.6M rows it beat this loop 46x at 1-in-10,000 density, but at 50% it
+    was 9x SLOWER than even this interpreted loop, because it degenerates into
+    a Python loop per trade.
+
+    So the loop is kept and compiled instead - see _clean_signals_fast.
     """
-    e = entries.fillna(False).astype(bool).to_numpy()
-    x = exits.fillna(False).astype(bool).to_numpy()
+    n = e.shape[0]
+    ke = np.zeros(n, dtype=np.bool_)
+    kx = np.zeros(n, dtype=np.bool_)
 
     in_pos = False
-    ke = np.zeros(len(e), dtype=bool)
-    kx = np.zeros(len(x), dtype=bool)
-
-    for i in range(len(e)):
+    for i in range(n):
         if not in_pos and e[i]:
             ke[i] = True
             in_pos = True
         elif in_pos and x[i]:
             kx[i] = True
             in_pos = False
+
+    return ke, kx
+
+
+# The compiled path is the SAME function object handed to numba, not a
+# reimplementation of it. That is deliberate: two hand-written copies of a
+# state machine are two things that can drift apart, and a drift here would
+# silently add or remove trades from every backtest rather than raise. This
+# way the pure-Python oracle in tests/test_clean_signals.py is checking the
+# exact source that runs in production.
+#
+# Falls back to the interpreted function if numba is missing, so this module
+# stays importable and correct - just slower - in an environment without it.
+_clean_signals_fast = (njit(cache=True, nogil=True)(_clean_signals_loop)
+                       if njit is not None else _clean_signals_loop)
+
+
+def clean_signals(entries: pd.Series, exits: pd.Series) -> tuple[pd.Series, pd.Series]:
+    """
+    Remove signals that cannot execute: an entry with no prior exit, and an
+    exit with no open position. Prevents double-counting.
+
+    Every trade in every backtest passes through here, and a full-lake run
+    calls it on 109.8M bars, so the scan is compiled - 12-44x faster than the
+    interpreted loop depending on signal density, and unlike a searchsorted
+    rewrite it does not degrade as signals get denser.
+    tests/test_clean_signals.py proves the equivalence exhaustively for every
+    input up to length 10, and at full scale beyond it.
+
+    NaN counts as no signal.
+    """
+    e = np.ascontiguousarray(entries.fillna(False).astype(bool).to_numpy())
+    x = np.ascontiguousarray(exits.fillna(False).astype(bool).to_numpy())
+
+    ke, kx = _clean_signals_fast(e, x)
 
     return (pd.Series(ke, index=entries.index),
             pd.Series(kx, index=exits.index))
