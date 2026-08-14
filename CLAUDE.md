@@ -36,7 +36,7 @@ matches.
 for code.
 
 **Push back on requests that would compromise a result.** Removing a cost model,
-bypassing the Out-of-Sample (OOS) NT8 data test, or relaxing prop-firm drawdown
+bypassing the Out-of-Sample (OOS) holdout test, or relaxing prop-firm drawdown
 rules to "see if the strategy works" are things to flag rather than do. Being
 useful here means being a skeptic.
 
@@ -82,6 +82,13 @@ There is no test suite, linter config, or build step. Scripts are run directly.
 Run from the repo root.
 
 ```bash
+# Data manifest: path, size, SHA-256, row count, ts range per file.
+# Answers "have the bytes changed?"; validate_lake.py answers "is it sane?".
+# Both must pass. --verify exits 1 on drift, so it gates a pipeline.
+python scripts/generate_manifest.py                 # rebuild manifest.json
+python scripts/generate_manifest.py --verify        # detect drift or corruption
+python scripts/generate_manifest.py --verify --quick  # size/mtime only, no hashing
+
 # Validate the lake (phases 1-4: inventory, row counts, structure, price sanity)
 python scripts/validate_lake.py                     # all symbols
 python scripts/validate_lake.py --symbols ES NQ --tf 1d
@@ -140,8 +147,9 @@ UTC). `wide(df, field)` pivots when a column per symbol is needed.
   `(ts, symbol)`. Use it only when a single cross-sectional frame is genuinely
   needed (correlation work, `wide()`); on the full 1m lake it costs ~15 GiB,
   and the result interleaves symbols — see the engine note below.
-- **Dual-Dataset Logic:** must support switching between `databento` (16-20 years
-  In-Sample training) and `nt8` (10 years Out-of-Sample stress testing).
+- **Dual-Dataset Logic:** must support switching between `databento` (16-20 years,
+  the research dataset — with its final 3 years held back as the OOS split) and
+  `nt8` (a thin cross-feed sanity check, **not** an OOS gate — see Data Layout).
   *Not implemented — see Open Tasks. `get_bars` currently has no source
   parameter and the lake has no source partition.*
 - **Only `1m` and `1d` are stored.** `5m/15m/30m/1h/2h/4h` derive from 1m, `1w`
@@ -226,8 +234,11 @@ cost handling, no session logic, no data access. Currently empty.
 - **Databento (In-Sample):** 16-20 years of historical Globex data. Used for
   Phase 1 & 2 optimization. Continuous contracts are NOT back-adjusted (real
   price gaps exist on roll dates).
-- **NinjaTrader 8 (Out-of-Sample):** 10 years of broker-specific data. Used
-  strictly for Phase 3 stress testing. *Not yet landed in the lake.*
+- **NinjaTrader 8 (cross-feed only, NOT out-of-sample):** broker-specific data
+  in `lake/futures_nt8/`. Genuine out-of-sample (OOS) validation is achieved by
+  holding back the final 3 years of the Databento dataset. NT8 export data
+  (which only contains ~420 daily bars) is fundamentally incompatible for
+  cross-source validation due to continuous contract roll discrepancies.
 - **No flat files above `year=`:** never write a parquet file above the partition
   level, or DuckDB will duplicate bars. `validate_lake.py` checks for this.
 - `raw/` is immutable so the lake can be rebuilt after a parser bug without
@@ -239,9 +250,16 @@ cost handling, no session logic, no data access. Currently empty.
 
 ## Research Discipline
 
-**A strategy is only valid if it survives Phase 3.** If a strategy performs well
-on Databento data but its Sharpe ratio collapses on NT8 data, it is overfitted
-and must be discarded.
+**A strategy is only valid if it survives Phase 3.** Phase 3 is the **held-back
+final 3 years of the Databento dataset**, untouched during optimization. If a
+strategy performs well in-sample but its Sharpe ratio collapses on the holdout,
+it is overfitted and must be discarded.
+
+**The NT8 tree is not that gate.** It holds ~420 daily bars per symbol and is
+spliced on NinjaTrader's own roll rules, so a divergence against Databento
+mostly measures the difference in continuous contract construction rather than
+strategy decay. Treat it as a thin cross-feed sanity check, never as OOS
+validation.
 
 **Costs in every test, from the first one.** The ranking of variants changes once
 commissions and slippage (default 1 tick each way) are applied.
@@ -284,8 +302,25 @@ phases 1-7 are clean or every exception is documented).
   was downloaded, so a mid-history spec change would be invisible in their
   definition files — `TICK_HISTORY` for FX came from the lake price grid
   instead). SI definitions stop at 2016, CL at 2025-12.
-- Establish the `nt8` data directory structure within `/mnt/backtest/lake/` and
-  update `mdlib/lake.py` to route the data source flag seamlessly.
+- ~~Establish the `nt8` data directory structure within `/mnt/backtest/lake/`~~
+  Done — `lake/futures_nt8/bars/symbol=<SYM>/tf=1d/year=/month=/` exists (27
+  symbols, 563 files), written by `data_pull/ingest_nt8.py`. Still open: update
+  `mdlib/lake.py` to route the data source flag — `get_bars` has no `source`
+  parameter, so the NT8 tree is currently unreachable through the reader.
+- **`classify_regime.py` has never been run**, so
+  `reference/futures/regimes.parquet` does not exist. `report.py` now warns
+  loudly instead of silently omitting the section, but the regime breakdown is
+  unavailable until this is run: `python scripts/classify_regime.py
+  --threshold 10.0`.
+- **Two 1d partition gaps in the lake, found 2026-08-14.** `ZS` is missing
+  `year=2020` and `year=2021` (505 daily bars) and `HO` is missing `year=2012`
+  (312 bars). `raw/futures/` has no `ZS_ohlcv-1d_2020/2021` or
+  `HO_ohlcv-1d_2012`, so these cannot be rebuilt from raw — but the
+  corresponding `tf=1m` years ARE present in the lake, so 1d can be derived.
+  The only surviving 1d copy is the un-partitioned
+  `lake/futures/bars/symbol={ZS,HO}/tf=1d/data.parquet`, deliberately retained
+  for that reason (the other 22 stray flat files were verified redundant and
+  deleted 2026-08-14). Resolve before daily backtests on ZS or HO.
 - ~~Build the `agents/` tier structure described above.~~ Scaffolded 2026-08-13
   (`agents/`, `google-genai==2.18.1` + `mcp==2.0.0` installed). Still open: all
   four modules are interface-only and raise `NotImplementedError`.
@@ -293,7 +328,5 @@ phases 1-7 are clean or every exception is documented).
   `scripts/coverage_summary.py` (its own docstring points at `scripts/`); the
   version in `scripts/` has the newer `find_intraday_start` detection. Delete the
   stale copy or make the duplication explicit.
-- `classify_regime.py` has never been run — `reference/futures/regimes.parquet`
-  does not exist, so `report.py`'s regime join currently finds nothing.
 - LightGBM is referenced by the Dual-Version Mandate but is not pinned in
   `requirements.txt`.
