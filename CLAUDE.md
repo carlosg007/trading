@@ -85,6 +85,10 @@ Run from the repo root.
 # CIO Command Center dashboard (frontend scaffold; agent backend is mocked)
 streamlit run dashboard/app.py
 
+# Tests. No pytest config - each is a script that exits non-zero on failure.
+python tests/test_tier3_workers.py      # worker tools, metrics, RAM ceiling
+python tests/test_engine_batching.py    # chunked == unchunked, trade for trade
+
 # Data manifest: path, size, SHA-256, row count, ts range per file.
 # Answers "have the bytes changed?"; validate_lake.py answers "is it sane?".
 # Both must pass. --verify exits 1 on drift, so it gates a pipeline.
@@ -135,7 +139,12 @@ scripts (SDKs: `google-genai`, `mcp`):
 - `tier1_master.py`: CIO agent managing the global optimization goals.
 - `tier2_supervisors.py`: Prop-Firm Compliance (Max DD, Daily Loss Limits) and
   OOS Validation supervisors.
-- `tier3_workers.py`: Backtest execution wrappers and ML-generation scripts.
+- `tier3_workers.py`: Backtest execution and quantitative testing.
+  **Implemented:** `run_strategy_backtest`, `run_walk_forward_analysis`,
+  `run_parameter_sensitivity`, `run_monte_carlo_simulation`,
+  `generate_strategy_boilerplate`, `load_strategy`. Still scaffold:
+  `run_variant`, `run_dual_version`, `generate_ml_filter`, `main`.
+  Tested by `tests/test_tier3_workers.py`.
 - `system_monitor.py`: Automated circuit breaker tracking RAM and runaway
   execution loops.
 
