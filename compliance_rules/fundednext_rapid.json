@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "ruleset_id": "fundednext_rapid",
+  "display_name": "FundedNext Futures — Rapid Challenge",
+  "provider": "FundedNext",
+  "program": "Futures Rapid",
+  "description": "Constraint set for a FundedNext Futures Rapid challenge account. Consumed by backtest.engine.BacktestConfig and the Tier 2 Prop-Firm Compliance supervisor.",
+
+  "account": {
+    "initial_balance": 100000.0,
+    "currency": "USD",
+    "note": "Percentage rules below resolve against this balance unless a rule names a different basis. Override per account size; the percentages are the authoritative figures."
+  },
+
+  "rules": {
+    "max_daily_loss": {
+      "value": 5.0,
+      "unit": "percent",
+      "basis": "initial_balance",
+      "resolved_usd": 5000.0,
+      "comparison": "loss_exceeds_limit_fails",
+      "description": "Largest permitted realized loss within a single trading day.",
+      "enforcement": {
+        "status": "NOT_ENFORCED",
+        "engine_field": "BacktestConfig.daily_loss_limit",
+        "detail": "The field exists but is dead code — nothing in backtest/engine.py reads it. It is also declared in DOLLARS, not percent, so writing 5.0 into it would set a $5 limit rather than 5%. Use resolved_usd when the check is implemented."
+      }
+    },
+
+    "max_trailing_drawdown": {
+      "value": 8.0,
+      "unit": "percent",
+      "basis": "high_water_mark",
+      "resolved_usd_at_start": 8000.0,
+      "comparison": "equity_below_floor_fails",
+      "description": "Drawdown limit trailing the peak account equity. The floor rises with new highs, so the PATH of returns decides the account, not the final total.",
+      "enforcement": {
+        "status": "ENFORCED",
+        "engine_field": "BacktestConfig.trailing_drawdown_pct",
+        "detail": "Implemented by backtest.engine.check_trailing_drawdown as peak * (1 - limit/100), evaluated on the daily equity curve.",
+        "modelling_caveat": "The engine trails the high water mark for the entire run. Many prop programs stop trailing once the buffer is cleared, locking the floor at the initial balance (or at balance + target). If FundedNext locks, this model is STRICTER than the real account and will reject strategies the firm would pass. Confirm against the current agreement before treating a breach as final."
+      }
+    },
+
+    "profit_target": {
+      "value": 8.0,
+      "unit": "percent",
+      "basis": "initial_balance",
+      "resolved_usd": 8000.0,
+      "comparison": "profit_at_or_above_target_passes",
+      "description": "Account profit required to complete the challenge phase.",
+      "enforcement": {
+        "status": "NOT_ENFORCED",
+        "engine_field": null,
+        "detail": "No profit target field exists in BacktestConfig and nothing computes it. A backtest that returns without a breach has NOT been shown to reach this target."
+      }
+    },
+
+    "consistency": {
+      "value": 30.0,
+      "unit": "percent",
+      "basis": "total_profit",
+      "comparison": "share_above_limit_fails",
+      "description": "No single trading day may account for more than 30% of total profit. Targets accounts carried by one outlier session rather than a repeatable edge.",
+      "evaluation_notes": [
+        "Computed over PROFITABLE days against total NET profit at the point of evaluation.",
+        "Undefined when total profit is zero or negative — treat as not-yet-assessable rather than passing.",
+        "This is the rule most likely to fail a strategy that already passes drawdown: a single gap-driven session can carry an entire backtest."
+      ],
+      "enforcement": {
+        "status": "NOT_ENFORCED",
+        "engine_field": null,
+        "detail": "No consistency check exists in backtest/engine.py. agents/tier2_supervisors.py names it in its module docstring but every method raises NotImplementedError."
+      }
+    }
+  },
+
+  "enforcement_summary": {
+    "enforced": ["max_trailing_drawdown"],
+    "not_enforced": ["max_daily_loss", "profit_target", "consistency"],
+    "warning": "1 of 4 rules is actually checked today. A backtest whose BacktestResult.breach is empty is NOT evidence of compliance with this ruleset — it means only the trailing drawdown was evaluated. Any UI or agent reporting a compliance verdict must state which rules were checked, not just the outcome."
+  },
+
+  "provenance": {
+    "created": "2026-08-14",
+    "source": "Figures supplied by the account owner for the Rapid challenge.",
+    "verification_status": "UNVERIFIED_AGAINST_PROVIDER",
+    "note": "These values have not been reconciled against FundedNext's published rules or the signed agreement. Prop programs change terms and vary them by account size and promotion. Verify before a strategy is deployed against real evaluation capital."
+  }
+}
