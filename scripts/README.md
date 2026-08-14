@@ -76,10 +76,11 @@ read alongside the partitions by anything that globs the directory, and every
 bar it contains appears twice — doubled volume, distorted indicators, and a
 backtest that looks perfectly fine.
 
-**It currently reports 2 such files**, for `ZS` and `HO`. These are deliberately
-retained: they hold daily years missing from the partitions and absent from
-`raw/`, so they are the only surviving 1d copy. The other 22 were deleted on
-2026-08-14 after verification. See `/mnt/backtest/lake/futures/README.md`.
+**It currently reports zero.** All 24 stray files were removed on 2026-08-14:
+22 after verifying their timestamps were a strict subset of the partitions, and
+the last two (`ZS`, `HO`) once the daily years they uniquely held were
+re-pulled from Databento into `raw/` and partitioned properly. See
+`/mnt/backtest/lake/futures/README.md`.
 
 ## `coverage_summary.py`
 

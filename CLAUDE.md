@@ -312,15 +312,14 @@ phases 1-7 are clean or every exception is documented).
   loudly instead of silently omitting the section, but the regime breakdown is
   unavailable until this is run: `python scripts/classify_regime.py
   --threshold 10.0`.
-- **Two 1d partition gaps in the lake, found 2026-08-14.** `ZS` is missing
-  `year=2020` and `year=2021` (505 daily bars) and `HO` is missing `year=2012`
-  (312 bars). `raw/futures/` has no `ZS_ohlcv-1d_2020/2021` or
-  `HO_ohlcv-1d_2012`, so these cannot be rebuilt from raw — but the
-  corresponding `tf=1m` years ARE present in the lake, so 1d can be derived.
-  The only surviving 1d copy is the un-partitioned
-  `lake/futures/bars/symbol={ZS,HO}/tf=1d/data.parquet`, deliberately retained
-  for that reason (the other 22 stray flat files were verified redundant and
-  deleted 2026-08-14). Resolve before daily backtests on ZS or HO.
+- ~~Two 1d partition gaps in the lake (`ZS` 2020-2021, `HO` 2012) surviving only
+  in un-partitioned stray files.~~ Resolved 2026-08-14. The 3 missing
+  symbol-years were re-pulled from Databento ($0.00), restoring
+  `raw/futures/{ZS_ohlcv-1d_2020,ZS_ohlcv-1d_2021,HO_ohlcv-1d_2012}.dbn.zst`
+  and their lake partitions (505 and 312 rows, matching exactly what was
+  missing). All 24 stray flat files are now deleted and the lake has **zero**
+  files above the `year=` partition level. `validate_lake.py` reports no
+  structural or price issues.
 - ~~Build the `agents/` tier structure described above.~~ Scaffolded 2026-08-13
   (`agents/`, `google-genai==2.18.1` + `mcp==2.0.0` installed). Still open: all
   four modules are interface-only and raise `NotImplementedError`.
@@ -328,5 +327,12 @@ phases 1-7 are clean or every exception is documented).
   `scripts/coverage_summary.py` (its own docstring points at `scripts/`); the
   version in `scripts/` has the newer `find_intraday_start` detection. Delete the
   stale copy or make the duplication explicit.
+- ~~`save_roll_calendar` in `data_pull/pull_futures.py` overwrote
+  `roll_calendar_<SYM>.json` with only the pulled date range, so a narrow pull
+  silently discarded the rest of a symbol's roll history.~~ Fixed 2026-08-14;
+  the resolved range now widens to cover any calendar already on disk. Six
+  truncated calendars (HO, ZS, LE, PL, ZC, ZW) were re-resolved over full
+  history; all 27 now span their data. **Re-run the calendar-vs-coverage audit
+  after any narrow pull.**
 - LightGBM is referenced by the Dual-Version Mandate but is not pinned in
   `requirements.txt`.

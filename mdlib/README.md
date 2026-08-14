@@ -78,24 +78,22 @@ Returned frames: `ts` (`datetime64[ns, UTC]`), `open`/`high`/`low`/`close`
   lives here, in the reader — one function to change if it is ever wrong.
 - **Partition pruning on `year`** happens before any file is opened; at ~1 ms of
   NFS latency per file this dominates read time. Only `year=*` directories are
-  read, which cuts both ways: the two remaining stray flat files (`ZS`, `HO`)
-  do not corrupt reads through this module, but their contents are also
-  **invisible** to it. ZS `2020`-`2021` and HO `2012` exist only in those flat
-  files, so the reader silently returns a gapped series — and the gap is not
-  marked. Verified:
+  read, so anything written above that level is invisible to this module.
+
+  That property once hid a real gap. Until 2026-08-14, ZS `2020`-`2021` and HO
+  `2012` existed only in un-partitioned stray files, and the reader returned a
+  gapped series with **no marker** — `iter_bars(["ZS"], "1d", "2019-01-01",
+  "2022-12-31")` gave 503 bars with 2019-12-31 and 2022-01-03 adjacent, so a
+  `pct_change()` booked a two-year move as one day's return. Both gaps are now
+  backfilled from Databento and the series are contiguous:
 
   ```
   iter_bars(["ZS"], "1d", "2019-01-01", "2022-12-31")
-      -> 503 bars: {2019: 252, 2022: 251}
+      -> 1008 bars: {2019: 252, 2020: 253, 2021: 252, 2022: 251}
   ```
 
-  2019-12-31 and 2022-01-03 come back as **adjacent rows**. A
-  `close.pct_change()` books a two-year price move as a single day's return,
-  and any rolling window spanning the join is computed across a two-year hole.
-  Nothing raises. Same for HO across 2011 → 2013.
-
-  **Do not run daily backtests on ZS or HO until this is resolved.**
-  See `/mnt/backtest/lake/futures/README.md`.
+  The lesson survives the fix: **a missing `year=` directory produces a silent
+  hole, not an error.** Check coverage before trusting a span.
 
 ## Hygiene Flags
 
