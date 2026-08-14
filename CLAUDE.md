@@ -82,6 +82,9 @@ There is no test suite, linter config, or build step. Scripts are run directly.
 Run from the repo root.
 
 ```bash
+# CIO Command Center dashboard (frontend scaffold; agent backend is mocked)
+streamlit run dashboard/app.py
+
 # Data manifest: path, size, SHA-256, row count, ts range per file.
 # Answers "have the bytes changed?"; validate_lake.py answers "is it sane?".
 # Both must pass. --verify exits 1 on drift, so it gates a pipeline.
@@ -212,8 +215,24 @@ many variants it was selected from.
 
 **`scripts/`** — lake validation, coverage, and regime-labelling utilities.
 
+**`compliance_rules/`** — Prop-firm constraint sets as JSON, one per program
+(`fundednext_rapid.json`). Each rule carries its unit, its basis, and an
+`enforcement` block recording whether the engine actually checks it. Today only
+`max_trailing_drawdown` is enforced; daily loss, profit target, and consistency
+are declared but unimplemented, so **an empty `BacktestResult.breach` is not
+evidence of compliance**. Note `BacktestConfig.daily_loss_limit` is in dollars
+and is currently dead code — nothing reads it.
+
+**`dashboard/`** — Streamlit CIO Command Center (`streamlit run
+dashboard/app.py`). Frontend scaffold only: ruleset discovery, the strategy
+vault, and error handling are real; the agent backend is mocked and labelled as
+such in the UI. Pinned at `streamlit==1.59.1` deliberately — the current release
+resolves `pyarrow` down to 24.0.0, and 25.0.1 is what the lake reader is pinned
+to.
+
 **`strategies/`** — Signal logic only: take bars, return `(entries, exits)`. No
-cost handling, no session logic, no data access. Currently empty.
+cost handling, no session logic, no data access. `approved_incubator/` stages
+strategies under evaluation; see its README for the required `meta.json`.
 
 - **Dual-Version Mandate:** every strategy must output two versions.
   - **Version A:** pure rule-based baseline (e.g. standard SMA crossover).
