@@ -251,6 +251,19 @@ such in the UI. Pinned at `streamlit==1.59.1` deliberately — the current relea
 resolves `pyarrow` down to 24.0.0, and 25.0.1 is what the lake reader is pinned
 to.
 
+**`live/`** — the Windows incubator bridge. `dispatcher.py` is the **only** module
+that sends an order anywhere: `format_crosstrade_payload` (validated — an unknown
+action, a non-positive or fractional quantity, and price-bearing order types all
+raise rather than being forwarded), `send_execution_signal` (POST with a hard
+2.0s timeout; failures are RETURNED as `ok=False` result dicts with latency and
+reason, never raised, so the attempt is always on the record), and
+`evaluate_incubator_sync` (parses NT8 fill logs from
+`/mnt/backtest/artifacts/incubator_logs/`, reporting realised slippage in **ticks**
+— tick size read from `backtest/specs.py`, never assumed — and the fill rate).
+Connection profile in `live/config.json`; the shipped webhook URL is a
+placeholder and the dispatcher refuses to POST to it. Tested by
+`tests/test_dispatcher.py`.
+
 **`strategies/`** — Signal logic only: take bars, return `(entries, exits)`. No
 cost handling, no session logic, no data access. `approved_incubator/` stages
 strategies under evaluation; see its README for the required `meta.json`.
