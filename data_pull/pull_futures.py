@@ -126,12 +126,45 @@ def continuous_symbol(sym: str) -> str:
 
 
 # --------------------------------------------------------------------------
+def _existing_calendar_span(sym: str, csym: str) -> tuple[str, str] | None:
+    """Date span already recorded in this symbol's roll calendar, if any."""
+    out = REFERENCE / f"roll_calendar_{sym}.json"
+    if not out.exists():
+        return None
+    try:
+        intervals = json.loads(out.read_text()).get("result", {}).get(csym, [])
+        dates = [i[k] for i in intervals for k in ("d0", "d1") if i.get(k)]
+        return (min(dates), max(dates)) if dates else None
+    except Exception:
+        return None
+
+
 def save_roll_calendar(client, sym: str, start: str, end: str) -> None:
     """
     Record which physical contract the continuous symbol pointed at, and when.
     Lets a backtest exclude roll days instead of trading the price gap.
+
+    The resolved range is widened to cover any calendar already on disk. This
+    file is overwritten wholesale, so without that widening a narrow pull
+    silently discards the rest of the symbol's history: pulling one year of HO
+    replaced a 216-interval calendar with 13. Nothing raises, and the damage
+    only shows up as roll gaps being booked as P&L for every year that fell
+    out of the file.
     """
     csym = continuous_symbol(sym)
+
+    prior = _existing_calendar_span(sym, csym)
+    if prior:
+        # Clamp to the dataset's availability: an existing calendar's first
+        # interval can open a day or two before DATASET_START, and asking for
+        # that range makes the API 422 and skip the refresh entirely.
+        widened_start = max(min(start, prior[0]), DATASET_START)
+        widened_end = max(end, prior[1])
+        if (widened_start, widened_end) != (start, end):
+            log(f"  widening roll calendar range to cover existing file: "
+                f"{widened_start} -> {widened_end}")
+            start, end = widened_start, widened_end
+
     log(f"Resolving roll calendar for {csym}")
     try:
         res = client.symbology.resolve(
