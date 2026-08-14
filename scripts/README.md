@@ -74,8 +74,12 @@ Phases 1–4: inventory, row counts, structure, price sanity. Writes
 Its stray-file check exists because a flat `data.parquet` at the `tf=` root is
 read alongside the partitions by anything that globs the directory, and every
 bar it contains appears twice — doubled volume, distorted indicators, and a
-backtest that looks perfectly fine. **It currently reports 24 such files** in
-`lake/futures/bars/symbol=<SYM>/tf=1d/`.
+backtest that looks perfectly fine.
+
+**It currently reports 2 such files**, for `ZS` and `HO`. These are deliberately
+retained: they hold daily years missing from the partitions and absent from
+`raw/`, so they are the only surviving 1d copy. The other 22 were deleted on
+2026-08-14 after verification. See `/mnt/backtest/lake/futures/README.md`.
 
 ## `coverage_summary.py`
 

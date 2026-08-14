@@ -78,9 +78,24 @@ Returned frames: `ts` (`datetime64[ns, UTC]`), `open`/`high`/`low`/`close`
   lives here, in the reader — one function to change if it is ever wrong.
 - **Partition pruning on `year`** happens before any file is opened; at ~1 ms of
   NFS latency per file this dominates read time. Only `year=*` directories are
-  read, which is why the 24 stray flat files in `lake/futures/bars` do not
-  currently corrupt reads through this module — but they still break any tool
-  that globs the directory.
+  read, which cuts both ways: the two remaining stray flat files (`ZS`, `HO`)
+  do not corrupt reads through this module, but their contents are also
+  **invisible** to it. ZS `2020`-`2021` and HO `2012` exist only in those flat
+  files, so the reader silently returns a gapped series — and the gap is not
+  marked. Verified:
+
+  ```
+  iter_bars(["ZS"], "1d", "2019-01-01", "2022-12-31")
+      -> 503 bars: {2019: 252, 2022: 251}
+  ```
+
+  2019-12-31 and 2022-01-03 come back as **adjacent rows**. A
+  `close.pct_change()` books a two-year price move as a single day's return,
+  and any rolling window spanning the join is computed across a two-year hole.
+  Nothing raises. Same for HO across 2011 → 2013.
+
+  **Do not run daily backtests on ZS or HO until this is resolved.**
+  See `/mnt/backtest/lake/futures/README.md`.
 
 ## Hygiene Flags
 
