@@ -86,6 +86,7 @@ Run from the repo root.
 streamlit run dashboard/app.py
 
 # Tests. No pytest config - each is a script that exits non-zero on failure.
+python tests/test_tier2.py              # compliance, robustness, lifecycle
 python tests/test_tier3_workers.py      # worker tools, metrics, RAM ceiling
 python tests/test_engine_batching.py    # chunked == unchunked, trade for trade
 
@@ -137,8 +138,13 @@ starts reporting numbers nobody generated. Google AI Agent orchestration
 scripts (SDKs: `google-genai`, `mcp`):
 
 - `tier1_master.py`: CIO agent managing the global optimization goals.
-- `tier2_supervisors.py`: Prop-Firm Compliance (Max DD, Daily Loss Limits) and
-  OOS Validation supervisors.
+- `tier2_supervisors.py`: Prop-Firm Compliance and OOS Validation.
+  **Implemented:** `evaluate_compliance` (profit target, trailing drawdown,
+  consistency — all thresholds read from the JSON ruleset, never hardcoded),
+  `evaluate_robustness` (WFO >= 0.50, MC drawdown within the ruleset limit),
+  `evaluate_lifecycle_state` (ACTIVE / PAUSED / DECOMMISSIONED). Still
+  scaffold: `PropFirmSupervisor`, `OOSValidationSupervisor`, `review_all`.
+  Tested by `tests/test_tier2.py`.
 - `tier3_workers.py`: Backtest execution and quantitative testing.
   **Implemented:** `run_strategy_backtest`, `run_walk_forward_analysis`,
   `run_parameter_sensitivity`, `run_monte_carlo_simulation`,
