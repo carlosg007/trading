@@ -34,6 +34,10 @@ What it checks
    template assigned to its own parameter name inside signal_fn, which made it
    a local and raised UnboundLocalError on the first call.
 10. Peak RSS on a real multi-symbol run stays under the ceiling.
+11. Model-generated code is rejected before it is imported when it imports
+    outside the allowlist, reaches for eval/dunders, contains a negative shift
+    or reversed slice, or returns prices instead of booleans. Importing a
+    module executes it, so everything checkable statically is checked first.
 """
 
 from __future__ import annotations
@@ -50,10 +54,10 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agents.tier3_workers import (  # noqa: E402
-    StrategyLoadError, generate_strategy_boilerplate, load_strategy,
-    run_monte_carlo_simulation, run_parameter_sensitivity,
+    GeneratedCodeError, StrategyLoadError, generate_strategy_boilerplate,
+    load_strategy, run_monte_carlo_simulation, run_parameter_sensitivity,
     run_strategy_backtest, run_walk_forward_analysis, _fold_windows,
-    trade_returns_from_result,
+    trade_returns_from_result, write_and_validate_strategy,
 )
 
 FAILURES: list[str] = []
@@ -321,6 +325,100 @@ def test_load_errors(tmp: Path) -> None:
         check("rejects unknown BacktestConfig field", True)
 
 
+GENERATED_OK = """
+import numpy as np
+
+def signal_fn(open_, high, low, close, volume, lookback=20):
+    n = len(close)
+    entries = np.zeros(n, dtype=bool)
+    exits = np.zeros(n, dtype=bool)
+    for i in range(lookback, n):
+        entries[i] = close[i] > np.max(high[i - lookback:i])
+        exits[i] = close[i] < np.min(low[i - lookback:i])
+    return entries, exits
+"""
+
+
+def test_generated_code_validation(tmp: Path) -> None:
+    """
+    Model-authored code is executed by importing it, so everything checkable
+    without running it is checked first. These are the cases that must never
+    reach an import.
+    """
+    print("\ngenerated code validation")
+
+    path = write_and_validate_strategy("gen_ok", GENERATED_OK, out_dir=tmp)
+    check("valid array-signature module is accepted", path.exists())
+
+    fenced = write_and_validate_strategy(
+        "gen_fenced", "```python\n" + GENERATED_OK + "\n```", out_dir=tmp)
+    check("markdown fences are stripped",
+          "```" not in fenced.read_text())
+
+    # The engine calls signal_fn(bars) with one DataFrame; the generated
+    # function takes unpacked arrays. The adapter bridges that, and is written
+    # here rather than by the model so the glue cannot be got wrong.
+    check("engine adapter is appended",
+          "make_signal_fn" in path.read_text())
+    fn, _ = load_strategy(path)
+    bars = pd.DataFrame({
+        "open": np.arange(100.0, 340.0), "high": np.arange(101.0, 341.0),
+        "low": np.arange(99.0, 339.0), "close": np.arange(100.0, 340.0),
+        "volume": np.ones(240, dtype="uint64"),
+    })
+    entries, exits = fn(bars)
+    check("adapted strategy returns aligned booleans",
+          len(entries) == len(bars) and entries.dtype == bool
+          and exits.dtype == bool)
+
+    rejects = [
+        ("syntax error", "def signal_fn(((", SyntaxError),
+        ("empty code", "   ", GeneratedCodeError),
+        ("no signal_fn", "import numpy as np\ndef other(x):\n    return x\n",
+         GeneratedCodeError),
+        ("os import", "import os\ndef signal_fn(o,h,l,c,v):\n    return c>0, c<0\n",
+         GeneratedCodeError),
+        ("subprocess import",
+         "import subprocess\ndef signal_fn(o,h,l,c,v):\n    return c>0, c<0\n",
+         GeneratedCodeError),
+        ("eval", "def signal_fn(o,h,l,c,v):\n    eval('1')\n    return c>0, c<0\n",
+         GeneratedCodeError),
+        ("dunder escape",
+         "def signal_fn(o,h,l,c,v):\n    x = c.__class__\n    return c>0, c<0\n",
+         GeneratedCodeError),
+        ("lookahead shift(-1)",
+         "import pandas as pd\ndef signal_fn(o,h,l,c,v):\n"
+         "    f = pd.Series(c).shift(-1)\n    return c>0, c<0\n",
+         GeneratedCodeError),
+        ("reversed slice",
+         "def signal_fn(o,h,l,c,v):\n    r = c[::-1]\n    return c>0, c<0\n",
+         GeneratedCodeError),
+        ("returns one array",
+         "import numpy as np\ndef signal_fn(o,h,l,c,v):\n    return c>0\n",
+         GeneratedCodeError),
+        # Blanket astype(bool) would make this True on every nonzero bar: a
+        # position opened every bar, and an equity curve that looks like
+        # leverage rather than a bug.
+        ("returns prices, not booleans",
+         "import numpy as np\ndef signal_fn(o,h,l,c,v):\n    return c, c\n",
+         GeneratedCodeError),
+    ]
+    for label, code, expected in rejects:
+        try:
+            write_and_validate_strategy(label.replace(" ", "_"), code, out_dir=tmp)
+            check(f"rejects {label}", False, "accepted it")
+        except Exception as e:
+            check(f"rejects {label}", isinstance(e, expected),
+                  f"{type(e).__name__}")
+
+    ok_int = write_and_validate_strategy(
+        "gen_ints",
+        "import numpy as np\ndef signal_fn(o,h,l,c,v):\n"
+        "    z = (c > c.mean()).astype(int)\n    return z, 1 - z\n",
+        out_dir=tmp)
+    check("accepts 0/1 integer signals", ok_int.exists())
+
+
 def test_memory(tmp: Path) -> None:
     print("\nmemory")
     path = dummy_strategy(tmp)
@@ -337,6 +435,7 @@ if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as d:
         tmp = Path(d)
         test_boilerplate_runs(tmp)
+        test_generated_code_validation(tmp)
         test_load_errors(tmp)
         test_metrics_are_arithmetic(tmp)
         test_monte_carlo_matches_reference()

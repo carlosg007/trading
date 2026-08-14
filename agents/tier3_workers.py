@@ -55,9 +55,11 @@ how an ML result gets adopted on no evidence.
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import inspect
 import math
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -915,6 +917,270 @@ def make_signal_fn({signature}):
 
     return signal_fn
 '''
+
+
+# --------------------------------------------------------------------------
+# Validating generated strategy code
+# --------------------------------------------------------------------------
+# Importing a module executes it, so anything written here runs. Model-authored
+# code gets an allowlist rather than a denylist: a denylist is a guess about
+# what is dangerous, and a strategy legitimately needs nothing beyond arrays.
+ALLOWED_IMPORTS = {
+    "__future__", "numpy", "np", "pandas", "pd", "math",
+    "vectorbtpro", "vbt", "numba", "typing", "dataclasses",
+}
+
+# Names that give a strategy module reach it has no reason to have.
+FORBIDDEN_NAMES = {
+    "eval", "exec", "compile", "__import__", "open", "input",
+    "globals", "locals", "vars", "getattr", "setattr", "delattr",
+    "breakpoint", "memoryview",
+}
+
+# Lookahead written as an index shift. Cannot catch every form, but a negative
+# shift is the one that actually shows up and it is invisible in the equity
+# curve - the backtest simply becomes prescient and the Sharpe looks superb.
+_LOOKAHEAD_CALLS = {"shift", "diff", "pct_change"}
+
+
+class GeneratedCodeError(Exception):
+    """Generated strategy code failed validation before it could be run."""
+
+
+def _strip_code_fences(code: str) -> str:
+    """Remove markdown fences a model added despite being told not to."""
+    text = (code or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z0-9_+-]*\s*\n", "", text)
+        text = re.sub(r"\n```\s*$", "", text)
+    return text.strip() + "\n"
+
+
+def _audit_ast(tree: ast.AST) -> list[str]:
+    """Structural objections to generated code. Empty list means it may run."""
+    problems: list[str] = []
+
+    for node in ast.walk(tree):
+        # Imports -------------------------------------------------------
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                root = alias.name.split(".")[0]
+                if root not in ALLOWED_IMPORTS:
+                    problems.append(f"import of '{alias.name}' is not allowed")
+        elif isinstance(node, ast.ImportFrom):
+            root = (node.module or "").split(".")[0]
+            if root not in ALLOWED_IMPORTS:
+                problems.append(f"import from '{node.module}' is not allowed")
+
+        # Dangerous builtins --------------------------------------------
+        elif isinstance(node, ast.Name) and node.id in FORBIDDEN_NAMES:
+            problems.append(f"use of '{node.id}' is not allowed")
+
+        # Dunder access, the usual sandbox escape ------------------------
+        elif isinstance(node, ast.Attribute):
+            if node.attr.startswith("__") and node.attr.endswith("__"):
+                problems.append(f"access to '{node.attr}' is not allowed")
+
+    # Negative shifts, checked where the call node is in hand.
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = func.attr if isinstance(func, ast.Attribute) else (
+            func.id if isinstance(func, ast.Name) else None)
+        if name not in _LOOKAHEAD_CALLS:
+            continue
+        for arg in list(node.args) + [k.value for k in node.keywords]:
+            if (isinstance(arg, ast.UnaryOp) and isinstance(arg.op, ast.USub)
+                    and isinstance(arg.operand, ast.Constant)
+                    and isinstance(arg.operand.value, (int, float))):
+                problems.append(
+                    f"lookahead: {name}(-{arg.operand.value}) shifts future "
+                    f"data into the present"
+                )
+            elif (isinstance(arg, ast.Constant)
+                  and isinstance(arg.value, (int, float)) and arg.value < 0):
+                problems.append(
+                    f"lookahead: {name}({arg.value}) shifts future data into "
+                    f"the present"
+                )
+
+    # Reversed slices, the other common way to see the future.
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Slice) and isinstance(node.step, ast.UnaryOp):
+            if isinstance(node.step.op, ast.USub):
+                problems.append(
+                    "lookahead: a reversed slice ([::-1]) on a price series "
+                    "lets a bar depend on later bars"
+                )
+    return problems
+
+
+ENGINE_ADAPTER = '''
+
+# ---------------------------------------------------------------------------
+# Engine adapter - written by agents.tier3_workers, NOT by the model.
+#
+# backtest.engine calls `signal_fn(bars)` with one symbol's DataFrame. The
+# generated function above takes unpacked arrays, which is the better shape for
+# Numba and vectorbt but not what the engine passes. This closure bridges the
+# two. It is generated deterministically so correctness does not depend on the
+# model getting the glue right.
+# ---------------------------------------------------------------------------
+import numpy as _np_adapter
+import pandas as _pd_adapter
+
+
+def _as_bool_signal(values, index, label):
+    """
+    Coerce a returned signal to boolean, refusing anything that is not one.
+
+    Blanket .astype(bool) is what makes this dangerous: a strategy that returns
+    the close series instead of a comparison becomes True on every nonzero bar,
+    which is a position opened every bar and an equity curve that looks like
+    leverage rather than a bug. Only genuine booleans, or numerics that are
+    exactly 0/1, are accepted.
+    """
+    arr = _np_adapter.asarray(values)
+    if arr.dtype != bool:
+        finite = arr[_np_adapter.isfinite(arr)] if arr.dtype.kind == "f" else arr
+        if finite.size and not _np_adapter.isin(finite, (0, 1)).all():
+            raise ValueError(
+                f"{label} must be boolean; got dtype {arr.dtype} with values "
+                f"outside {{0, 1}} (min {finite.min()}, max {finite.max()}). "
+                f"Return a comparison, not a price series."
+            )
+    return (_pd_adapter.Series(arr, index=index)
+            .fillna(False).astype(bool))
+
+
+def make_signal_fn(**params):
+    def _engine_signal_fn(bars):
+        entries, exits = signal_fn(
+            bars["open"].to_numpy(),
+            bars["high"].to_numpy(),
+            bars["low"].to_numpy(),
+            bars["close"].to_numpy(),
+            bars["volume"].to_numpy(),
+            **params,
+        )
+        idx = bars.index
+        return (_as_bool_signal(entries, idx, "entries"),
+                _as_bool_signal(exits, idx, "exits"))
+
+    return _engine_signal_fn
+'''
+
+
+def _smoke_test(fn: Callable, n: int = 240) -> None:
+    """
+    Call the strategy once on synthetic bars.
+
+    Callable-but-broken is the normal failure for generated code, and finding
+    it here costs a millisecond where finding it inside the engine costs a
+    full lake read first.
+    """
+    rng = np.random.default_rng(0)
+    close = 100 + np.cumsum(rng.standard_normal(n))
+    bars = pd.DataFrame({
+        "open": close, "high": close + 1.0, "low": close - 1.0,
+        "close": close, "volume": rng.integers(1, 1000, n).astype("uint64"),
+    }, index=pd.date_range("2020-01-01", periods=n, freq="D", tz="UTC"))
+
+    try:
+        result = fn(bars)
+    except Exception as e:
+        raise GeneratedCodeError(
+            f"strategy raised on a synthetic frame: {type(e).__name__}: {e}"
+        ) from e
+
+    if not isinstance(result, tuple) or len(result) != 2:
+        raise GeneratedCodeError(
+            f"strategy must return (entries, exits); got {type(result).__name__}"
+        )
+    entries, exits = result
+    for label, series in (("entries", entries), ("exits", exits)):
+        if len(series) != len(bars):
+            raise GeneratedCodeError(
+                f"{label} has length {len(series)}, expected {len(bars)}"
+            )
+        if pd.Series(series).dtype != bool:
+            raise GeneratedCodeError(
+                f"{label} must be boolean, got {pd.Series(series).dtype}"
+            )
+
+
+def write_and_validate_strategy(name: str, code_str: str,
+                                out_dir: str | Path | None = None,
+                                overwrite: bool = True) -> Path:
+    """
+    Validate generated strategy code, write it, and prove it runs.
+
+    Order matters: everything that can be checked without executing the code is
+    checked first, because importing a module runs it.
+
+      1. `ast.parse` - raises SyntaxError with the offending line
+      2. structural audit - import allowlist, forbidden builtins, lookahead
+      3. a `signal_fn` definition must exist
+      4. write, appending the deterministic engine adapter
+      5. import and smoke-test on a synthetic frame
+
+    Raises `SyntaxError` when the code will not compile and
+    `GeneratedCodeError` for everything else, both with the reason attached so
+    Tier 1 can report it rather than retrying blind.
+    """
+    code = _strip_code_fences(code_str)
+    if not code.strip():
+        raise GeneratedCodeError("generated code is empty")
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError as e:
+        raise SyntaxError(
+            f"generated strategy does not compile at line {e.lineno}: {e.msg}"
+        ) from e
+
+    problems = _audit_ast(tree)
+    if problems:
+        raise GeneratedCodeError(
+            "generated strategy failed the safety audit: "
+            + "; ".join(sorted(set(problems)))
+        )
+
+    defs = {n.name for n in ast.walk(tree)
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    if "signal_fn" not in defs:
+        raise GeneratedCodeError(
+            f"generated strategy defines no signal_fn (found: "
+            f"{sorted(defs) or 'nothing'})"
+        )
+
+    slug = "".join(c if c.isalnum() or c == "_" else "_" for c in name.strip().lower())
+    slug = "_".join(filter(None, slug.split("_"))) or "generated"
+    if slug[0].isdigit():
+        slug = f"s_{slug}"
+
+    directory = Path(out_dir) if out_dir else EXPERIMENTAL
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{slug}.py"
+    if path.exists() and not overwrite:
+        raise FileExistsError(f"{path} already exists")
+
+    body = code
+    if "make_signal_fn" not in defs:
+        body = code.rstrip() + "\n" + ENGINE_ADAPTER
+    path.write_text(body)
+
+    # Only now is anything executed.
+    try:
+        fn, _info = load_strategy(path)
+    except StrategyLoadError as e:
+        raise GeneratedCodeError(f"generated strategy would not import: {e}") from e
+    if not callable(fn):
+        raise GeneratedCodeError("resolved strategy is not callable")
+
+    _smoke_test(fn)
+    return path
 
 
 def generate_strategy_boilerplate(name: str,
