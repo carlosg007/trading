@@ -250,22 +250,46 @@ def monthly_table(returns: pd.Series) -> pd.DataFrame:
     return out.pivot(index="year", columns="month", values="ret")
 
 
-def regime_join(yearly: pd.DataFrame, symbol: str = "ES") -> pd.DataFrame | None:
+def regime_join(yearly: pd.DataFrame,
+                symbol: str = "ES") -> tuple[pd.DataFrame | None, str | None]:
     """
     Attach market regime labels so 'does this only work in bull markets?'
     is answered directly rather than by inference.
+
+    Returns (merged, reason). Exactly one is None: on success the merged frame,
+    otherwise a human-readable reason the labels are unavailable.
+
+    The reason is not decoration. Without labels the report still renders a
+    complete-looking BY YEAR table, just missing the one section that separates
+    a strategy edge from long market exposure. A reader who is not told the
+    check was skipped will read its absence as its passing.
     """
     if not REGIME_FILE.exists():
-        return None
+        return None, (f"{REGIME_FILE} does not exist - regime labels skipped. "
+                      f"Generate it with: python scripts/classify_regime.py "
+                      f"--threshold 10.0")
     try:
         reg = pd.read_parquet(REGIME_FILE)
-    except Exception:
-        return None
+    except Exception as e:
+        return None, f"{REGIME_FILE} could not be read ({e}) - regime labels skipped."
+
+    missing = {"symbol", "year", "regime", "ret_pct"} - set(reg.columns)
+    if missing:
+        return None, (f"{REGIME_FILE} is missing column(s) {sorted(missing)} - "
+                      f"regime labels skipped. Regenerate it.")
 
     reg = reg[reg["symbol"] == symbol][["year", "regime", "ret_pct"]]
+    if reg.empty:
+        return None, (f"{REGIME_FILE} has no rows for symbol {symbol!r} - regime "
+                      f"labels skipped. Check --regime-symbol.")
+
     reg = reg.rename(columns={"ret_pct": "market_ret_pct"})
     merged = yearly.merge(reg, on="year", how="left")
-    return merged if merged["regime"].notna().any() else None
+    if not merged["regime"].notna().any():
+        lo, hi = int(yearly["year"].min()), int(yearly["year"].max())
+        return None, (f"No regime labels overlap the backtest years {lo}-{hi} for "
+                      f"symbol {symbol!r} - regime labels skipped.")
+    return merged, None
 
 
 # --------------------------------------------------------------------------
@@ -371,13 +395,24 @@ def build_report(returns: pd.Series, trades: pd.DataFrame | None,
     add("BY YEAR")
     add("-" * 66)
     yearly = yearly_table(returns)
-    reg = regime_join(yearly, regime_symbol)
+    reg, regime_note = regime_join(yearly, regime_symbol)
     table = reg if reg is not None else yearly
     add(table.to_string(index=False))
 
     pos_years = int((yearly["return_pct"] > 0).sum())
     add("")
     add(f"  Positive years: {pos_years}/{len(yearly)}")
+
+    if regime_note:
+        # Surfaced in the report as well as on stderr: the saved report is what
+        # gets read later, and a caveat that lives only in a terminal scrollback
+        # has not been recorded.
+        print(f"[!] {regime_note}", file=sys.stderr, flush=True)
+        add("")
+        add(f"  ⚠ REGIME ANALYSIS UNAVAILABLE")
+        add(f"    {regime_note}")
+        add(f"    This report cannot say whether the strategy is merely long")
+        add(f"    market exposure. Treat that question as unanswered.")
 
     if reg is not None:
         add("")
