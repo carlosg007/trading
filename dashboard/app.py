@@ -11,15 +11,24 @@ strategy incubator.
 
 Scope
 -----
-Layout, file reading, and error handling only. **The agent backend is mocked.**
-agents/tier1_master.py raises NotImplementedError on every entry point, and
-this app does not pretend otherwise: the chat panel is visibly labelled as a
-mock and returns a fixed acknowledgement rather than anything resembling an
-analysis.
+The chat panel is live. It drives `agents.tier1_master.run_campaign`, a
+generator that routes a prompt to a vault query, a conversational answer, or a
+full research campaign (stage a strategy, backtest it with costs, audit it
+against the active ruleset).
 
-That labelling is the point. A command centre that renders plausible agent
-replies over a backend that does not exist is how a research pipeline starts
-reporting conclusions nobody reached. The same rule governs the Strategy Vault:
+The generator is iterated on Streamlit's own script thread. That is why it is a
+generator: Streamlit re-executes this file per interaction, and a worker thread
+loses its ScriptRunContext, so any st.* call from it writes into a context that
+no longer exists. Yielding returns control between steps, so progress renders
+normally without threading.
+
+**What is still not real: the strategy itself.** A campaign stages a module
+from `generate_strategy_boilerplate`, whose signal logic is an explicitly
+labelled placeholder. The compliance verdict therefore describes that template,
+not the hypothesis someone typed. The UI says so on the panel and in every
+verdict, because a command centre that renders a clean PASS over generated
+boilerplate is how a research pipeline starts reporting conclusions nobody
+reached. The same rule governs the Strategy Vault:
 a strategy with no saved results gets an empty panel, never a placeholder
 equity curve that could be mistaken for a result.
 """
@@ -40,7 +49,6 @@ REPO = Path(__file__).resolve().parent.parent
 RULES_DIR = REPO / "compliance_rules"
 INCUBATOR = REPO / "strategies" / "approved_incubator"
 
-MOCK_BANNER = "Agent backend is not implemented. Replies below are mocked."
 
 
 # --------------------------------------------------------------------------
@@ -303,41 +311,36 @@ def render_ruleset_summary(rs: Ruleset) -> None:
 # --------------------------------------------------------------------------
 # Tab: Command Center
 # --------------------------------------------------------------------------
-def mock_agent_reply(command: str, rs: Ruleset | None) -> str:
-    """
-    Stand-in for agents.tier1_master.
-
-    Deliberately does not analyse, estimate, or speculate about the command.
-    It echoes what was received and states what would happen, so nothing here
-    can be mistaken for a result the system actually produced.
-    """
-    name = rs.label if rs and rs.ok else "none selected"
-    return (
-        f"**Mock acknowledgement — no agent ran.**\n\n"
-        f"Received: `{command}`\n\n"
-        f"Active ruleset: **{name}**\n\n"
-        f"Wired up, this would dispatch to `agents.tier1_master.propose_goals()`, "
-        f"which currently raises `NotImplementedError`. No backtest was queued, "
-        f"no data was read, and no conclusion was formed."
-    )
+STATUS_ICONS = {
+    "routing": "🧭", "planning": "📋", "generating": "🧱",
+    "backtesting": "⚙️", "auditing": "🔎", "complete": "✅",
+    "rejected": "🚫", "error": "❌",
+}
 
 
 def render_command_center(rs: Ruleset | None) -> None:
     st.subheader("Master Agent")
-    st.warning(MOCK_BANNER, icon="🧪")
 
     tier_cols = st.columns(4)
     tiers = [
-        ("Tier 1 · CIO", "tier1_master", "Goal generation"),
-        ("Tier 2 · Supervisors", "tier2_supervisors", "Compliance / OOS"),
-        ("Tier 3 · Workers", "tier3_workers", "Backtest execution"),
-        ("Monitor", "system_monitor", "RAM / runaway loops"),
+        ("Tier 1 · CIO", "tier1_master", "Routing / campaigns", "partial"),
+        ("Tier 2 · Supervisors", "tier2_supervisors", "Compliance / OOS", "partial"),
+        ("Tier 3 · Workers", "tier3_workers", "Backtest execution", "partial"),
+        ("Monitor", "system_monitor", "RAM / runaway loops", "off"),
     ]
-    for col, (label, module, role) in zip(tier_cols, tiers):
+    labels = {"partial": ("live", "on"), "off": ("not implemented", "off")}
+    for col, (label, module, role, state) in zip(tier_cols, tiers):
+        text, kind = labels[state]
         with col:
             st.markdown(f"**{label}**")
-            st.markdown(tag("not implemented", "off"), unsafe_allow_html=True)
+            st.markdown(tag(text, kind), unsafe_allow_html=True)
             st.caption(f"`agents/{module}.py` — {role}")
+
+    st.caption(
+        "Campaigns stage a strategy from **boilerplate whose signal logic is a "
+        "placeholder**. A verdict describes that template, not the hypothesis "
+        "in the prompt — real strategy synthesis is not implemented."
+    )
 
     st.divider()
 
@@ -352,22 +355,81 @@ def render_command_center(rs: Ruleset | None) -> None:
 
     if not st.session_state.chat:
         st.caption(
-            "No commands issued yet. Try: *“Propose five mean-reversion "
-            "hypotheses for the rates complex.”*"
+            "No commands issued yet. Try: *“backtest a daily breakout on ES "
+            "and NQ”*, *“what's in the vault?”*, or *“what can you do?”*"
         )
 
     prompt = st.chat_input("Send a command to the Master Agent…")
     if prompt:
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
-        st.session_state.chat.append({"role": "user", "content": prompt, "ts": now})
-        st.session_state.chat.append(
-            {"role": "assistant", "content": mock_agent_reply(prompt, rs), "ts": now}
-        )
-        st.rerun()
+        _run_prompt(prompt, rs)
 
     if st.session_state.chat and st.button("Clear transcript", type="secondary"):
         st.session_state.chat = []
         st.rerun()
+
+
+def _run_prompt(prompt: str, rs: Ruleset | None) -> None:
+    """
+    Drive one campaign, rendering each yielded event as it lands.
+
+    The generator is iterated on Streamlit's own script thread. That is the
+    point of the generator: a worker thread would lose its ScriptRunContext and
+    any st.* call from it writes into a context that no longer exists. Here
+    control returns to the script between steps, so progress renders normally.
+
+    Nothing is written to the transcript until the campaign produces a final
+    payload. A half-finished run left in the history would read as a result.
+    """
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+    st.session_state.chat.append({"role": "user", "content": prompt, "ts": now})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    ruleset_arg = str(rs.path) if rs is not None and rs.ok else None
+
+    with st.chat_message("assistant"):
+        final: dict | None = None
+        try:
+            from agents.tier1_master import run_campaign
+        except Exception as e:
+            body = (f"**Master Agent unavailable** — `agents.tier1_master` "
+                    f"could not be imported: {type(e).__name__}: {e}")
+            st.error(body)
+            st.session_state.chat.append(
+                {"role": "assistant", "content": body, "ts": now})
+            return
+
+        with st.status("Working…", expanded=True) as status:
+            try:
+                for event in run_campaign(prompt, ruleset_arg):
+                    icon = STATUS_ICONS.get(event.get("status", ""), "•")
+                    st.write(f"{icon} {event.get('message', '')}")
+                    final = event
+            except Exception as e:
+                # The generator raising is a real failure, not a verdict. Say
+                # so plainly rather than leaving a spinner that never resolves.
+                body = f"**Campaign crashed** — {type(e).__name__}: {e}"
+                status.update(label="Failed", state="error")
+                st.error(body)
+                st.session_state.chat.append(
+                    {"role": "assistant", "content": body, "ts": now})
+                return
+
+            outcome = (final or {}).get("status")
+            status.update(
+                label={"complete": "Done", "rejected": "Not run",
+                       "error": "Failed"}.get(outcome, "Finished"),
+                state="error" if outcome == "error" else "complete",
+                expanded=False,
+            )
+
+        body = (final or {}).get("response") or (
+            "The campaign produced no final payload. Nothing was concluded.")
+        st.markdown(body)
+        st.caption(now)
+
+    st.session_state.chat.append(
+        {"role": "assistant", "content": body, "ts": now})
 
 
 # --------------------------------------------------------------------------
@@ -598,7 +660,7 @@ def main() -> None:
     st.title("CIO Command Center")
     st.caption(
         "Autonomous quantitative research under prop-firm constraints · "
-        "frontend scaffold, agent backend not implemented"
+        "campaigns run against generated boilerplate, not synthesised strategies"
     )
 
     tab_cmd, tab_vault, tab_rules = st.tabs(

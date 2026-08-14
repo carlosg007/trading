@@ -349,6 +349,11 @@ def summarize_result(result: BacktestResult,
     }
     if include_trades:
         out["trades"] = trades
+        # The daily equity curve, so a compliance audit can measure drawdown on
+        # the real path rather than reconstructing it from trade exits. Bounded
+        # regardless of timeframe - one point per trading day, so ~4,000 floats
+        # over the full 16-year lake.
+        out["equity"] = result.equity
         if include_trade_records:
             out["trade_log"] = trades.to_dict("records")
     return out
