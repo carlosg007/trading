@@ -37,7 +37,8 @@ year was probably choppy or had a sharp reversal - worth looking at.
 
 Reads
 -----
-    /mnt/backtest/lake/futures/bars/symbol=X/tf=1d/data.parquet
+    Daily bars via mdlib.lake.iter_bars (which applies the Sunday-session
+    merge), from /mnt/backtest/lake/futures/bars/symbol=X/tf=1d/year=*/month=*/
 
 Writes
 ------
@@ -59,6 +60,12 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+# Run as `python scripts/classify_regime.py`, so sys.path[0] is scripts/ and the
+# repo root is absent. mdlib is the only sanctioned lake reader, so put the root
+# on the path rather than reaching into the Parquet files directly.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from mdlib.lake import iter_bars  # noqa: E402
 
 LAKE = Path("/mnt/backtest/lake/futures/bars")
 OUT_DIR = Path("/mnt/backtest/reference/futures")
@@ -91,14 +98,29 @@ def discover_symbols() -> list[str]:
 
 
 def load_daily(sym: str) -> pd.DataFrame | None:
-    path = LAKE / f"symbol={sym}" / "tf=1d" / "data.parquet"
-    if not path.exists():
-        warn(f"{sym}: no daily bars at {path}")
+    """
+    Daily bars for one symbol, via the sanctioned reader.
+
+    This used to read symbol=<SYM>/tf=1d/data.parquet directly - a flat file
+    above the year= partitions. Those files were the double-counting hazard
+    validate_lake.py flags as strays, and were removed on 2026-08-14, at which
+    point this function silently found nothing for all 27 symbols.
+
+    Going through mdlib.lake also buys the Sunday-session merge, which matters
+    here specifically: CME opens Sunday 18:00 ET, so a raw UTC day boundary
+    manufactures ~51 thin stub "days" a year. Those distort both the 200-day
+    SMA and the realized-vol estimate this script reports.
+    """
+    try:
+        frames = [df for _, df in iter_bars([sym], "1d", None, None)]
+    except Exception as e:
+        warn(f"{sym}: could not read daily bars ({e})")
         return None
-    df = pd.read_parquet(path)
-    if df.empty:
-        warn(f"{sym}: daily file is empty")
+    if not frames or frames[0].empty:
+        warn(f"{sym}: no daily bars in the lake")
         return None
+
+    df = frames[0]
     df["ts"] = pd.to_datetime(df["ts"], utc=True)
     return df.sort_values("ts").reset_index(drop=True)
 
