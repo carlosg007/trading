@@ -1,0 +1,69 @@
+# experimental/
+
+Where `agents.tier3_workers.generate_strategy_boilerplate` writes new candidate
+strategies. Nothing here has been evaluated.
+
+**Nothing in this directory should be read as a result.** A strategy is
+promoted to `approved_incubator/` only after it has been run with costs, across
+a symbol list rather than one instrument, and survives the walk-forward and
+sensitivity checks. Until then a file here is a hypothesis someone typed.
+
+## Generating one
+
+```python
+from agents.tier3_workers import generate_strategy_boilerplate
+
+generate_strategy_boilerplate(
+    "Opening Range Breakout",
+    description="Breakout of the first 30 minutes of the RTH session",
+    params={"fast": 20, "slow": 50},
+    symbols=["ES", "NQ"],
+    timeframe="30m",
+)
+```
+
+The generated module carries placeholder logic, clearly labelled. Replace it —
+backtesting the template measures the template.
+
+## The interface
+
+```python
+TIMEFRAME = "1d"
+SYMBOLS = ["ES", "NQ"]
+DEFAULT_PARAMS = {"fast": 20, "slow": 50}
+
+def make_signal_fn(fast: int = 20, slow: int = 50):
+    def signal_fn(bars: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+        ...
+        return entries, exits
+    return signal_fn
+```
+
+`make_signal_fn(**params)` is the parameterised form and the one the tooling
+prefers — `run_parameter_sensitivity` and the walk-forward optimizer both need
+to rebind parameters, and a bare `signal_fn` cannot accept any. A module may
+expose a bare `signal_fn(bars)` instead when it genuinely takes no parameters.
+
+`TIMEFRAME` and `SYMBOLS` are read by `load_strategy` as defaults. Without
+`TIMEFRAME` the tooling falls back to `1d`, which will silently produce a
+plausible, wrong result for a strategy written against intraday bars.
+
+## Rules
+
+- **One symbol at a time.** `signal_fn` receives a single instrument's bars.
+  This is the whole reason the engine takes a callable: it once accepted a
+  multi-symbol frame, and a `close.rolling(200).mean()` over it averaged across
+  27 unrelated contracts without raising, producing 608,079 trades where the
+  correct signals give 86,035.
+- **No data access.** The engine reads the bars.
+- **No cost handling.** Slippage and commission live in `BacktestConfig`.
+- **No session logic.** `flat_by_close` and the Sunday merge are upstream.
+- **No lookahead.** Anything derived from bar `i` uses data up to `i` only. The
+  engine fills at the *next* bar's open, so a signal computed from bar `i`'s
+  close is legitimate; one computed from bar `i+1` is not.
+
+## Dual-Version Mandate
+
+Every strategy is expected to produce a Version A (rule-based) and a Version B
+(A plus an ML filter), run on identical terms. B is adopted only if it beats A
+out-of-sample without breaching the prop-firm limits.

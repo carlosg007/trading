@@ -3,7 +3,9 @@ agents.tier3_workers - the tier that actually runs things.
 
 Location:  ~/src/trading/agents/tier3_workers.py
 
-SCAFFOLD ONLY. Interfaces are defined here; the logic is not written yet.
+The execution and quantitative-testing tools are implemented. The agent
+orchestration entry points (`run_variant`, `run_dual_version`,
+`generate_ml_filter`, `main`) are still scaffold and raise NotImplementedError.
 
 What this tier is for
 ---------------------
@@ -53,13 +55,38 @@ how an ML result gets adopted on no evidence.
 
 from __future__ import annotations
 
+import importlib.util
+import inspect
+import math
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Iterable, Protocol
 
+import numpy as np
 import pandas as pd
 
+# Importable both as `agents.tier3_workers` and as a script; the latter puts
+# agents/ on sys.path rather than the repo root, so backtest/ would not resolve.
+_REPO = Path(__file__).resolve().parent.parent
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
+
+from backtest.engine import BacktestConfig, BacktestResult, run_backtest  # noqa: E402
+
 ARTIFACTS = Path("/mnt/backtest/artifacts")
+EXPERIMENTAL = _REPO / "strategies" / "experimental"
+
+TRADING_DAYS = 252
+
+# Default when neither the caller nor the strategy module names one. Daily is
+# the safe default: an intraday timeframe silently applied to a strategy
+# written for daily bars produces a plausible, wrong result.
+DEFAULT_TIMEFRAME = "1d"
+
+
+class StrategyLoadError(Exception):
+    """Raised when a strategy module cannot be loaded or does not conform."""
 
 
 class SignalFn(Protocol):
@@ -103,6 +130,851 @@ class WorkReport:
     error: str | None = None
 
 
+# --------------------------------------------------------------------------
+# Strategy loading
+# --------------------------------------------------------------------------
+def load_strategy(strategy_path: str | Path,
+                  params: dict[str, Any] | None = None) -> tuple[SignalFn, dict]:
+    """
+    Import a strategy module from a file path and bind its parameters.
+
+    A module may expose either:
+
+        make_signal_fn(**params) -> signal_fn      preferred when parameterised
+        signal_fn(bars)                            when it takes none
+
+    Returns `(bound_signal_fn, module_info)`. `module_info` carries the
+    module's declared TIMEFRAME and SYMBOLS if it sets them.
+
+    Every failure here raises. A worker that returns a null strategy on a bad
+    import produces a backtest with no trades, which downstream is
+    indistinguishable from a strategy that simply never triggered.
+    """
+    params = dict(params or {})
+    path = Path(strategy_path).expanduser().resolve()
+    if not path.exists():
+        raise StrategyLoadError(f"strategy file not found: {path}")
+    if path.suffix != ".py":
+        raise StrategyLoadError(f"not a Python module: {path}")
+
+    spec = importlib.util.spec_from_file_location(f"_strategy_{path.stem}", path)
+    if spec is None or spec.loader is None:
+        raise StrategyLoadError(f"could not build an import spec for {path}")
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except Exception as e:
+        raise StrategyLoadError(f"{path.name} raised on import: "
+                                f"{type(e).__name__}: {e}") from e
+
+    info = {
+        "path": str(path),
+        "module": path.stem,
+        "timeframe": getattr(module, "TIMEFRAME", None),
+        "symbols": getattr(module, "SYMBOLS", None),
+        "default_params": dict(getattr(module, "DEFAULT_PARAMS", {}) or {}),
+    }
+
+    factory = getattr(module, "make_signal_fn", None)
+    raw = getattr(module, "signal_fn", None)
+
+    if factory is not None:
+        merged = {**info["default_params"], **params}
+        _reject_unknown_params(factory, merged, path.name)
+        try:
+            fn = factory(**merged)
+        except Exception as e:
+            raise StrategyLoadError(f"{path.name}: make_signal_fn(**{merged}) "
+                                    f"raised {type(e).__name__}: {e}") from e
+        info["bound_params"] = merged
+    elif raw is not None:
+        if params:
+            raise StrategyLoadError(
+                f"{path.name} defines signal_fn but no make_signal_fn, so it "
+                f"cannot accept params {sorted(params)}. Add a "
+                f"make_signal_fn(**params) factory."
+            )
+        fn = raw
+        info["bound_params"] = {}
+    else:
+        raise StrategyLoadError(
+            f"{path.name} defines neither signal_fn nor make_signal_fn"
+        )
+
+    if not callable(fn):
+        raise StrategyLoadError(f"{path.name}: resolved strategy is not callable")
+    return fn, info
+
+
+def _reject_unknown_params(factory: Callable, params: dict, name: str) -> None:
+    """
+    Fail on a parameter the factory does not accept.
+
+    Silently ignoring an unknown key is how a sensitivity sweep ends up
+    reporting that a parameter does not matter, when in truth it was never
+    applied.
+    """
+    try:
+        sig = inspect.signature(factory)
+    except (TypeError, ValueError):
+        return
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+        return
+    unknown = set(params) - set(sig.parameters)
+    if unknown:
+        raise StrategyLoadError(
+            f"{name}: make_signal_fn does not accept {sorted(unknown)} "
+            f"(accepts {sorted(sig.parameters)})"
+        )
+
+
+def _resolve_timeframe(explicit: str | None, info: dict) -> str:
+    return explicit or info.get("timeframe") or DEFAULT_TIMEFRAME
+
+
+def _build_config(params: dict[str, Any] | None,
+                  cfg: BacktestConfig | None) -> BacktestConfig:
+    """
+    Config overrides come from `params["config"]`, never from strategy params.
+
+    Costs and prop-firm constraints are not the strategy's to choose - see the
+    module docstring. Keeping them in a separate sub-dict means a parameter
+    sweep over strategy inputs cannot accidentally sweep away the cost model.
+    """
+    if cfg is not None:
+        return cfg
+    overrides = dict((params or {}).get("config") or {})
+    unknown = set(overrides) - set(BacktestConfig.__dataclass_fields__)
+    if unknown:
+        raise StrategyLoadError(
+            f"unknown BacktestConfig field(s): {sorted(unknown)}"
+        )
+    return BacktestConfig(**overrides)
+
+
+def _strategy_params(params: dict[str, Any] | None) -> dict[str, Any]:
+    """Strategy params are everything except the reserved `config` key."""
+    return {k: v for k, v in (params or {}).items() if k != "config"}
+
+
+# --------------------------------------------------------------------------
+# Metrics
+# --------------------------------------------------------------------------
+def _win_rate(trades: pd.DataFrame) -> float:
+    if trades.empty:
+        return float("nan")
+    return float((trades["pnl"] > 0).sum() / len(trades))
+
+
+def _profit_factor(trades: pd.DataFrame) -> float:
+    """
+    Gross profit / gross loss.
+
+    Returns inf when there are winners and no losers - a real but useless
+    number, and better than a silent 0 or a crash. NaN when there are no
+    trades at all, which is a different thing and should not be confused
+    with a bad profit factor.
+    """
+    if trades.empty:
+        return float("nan")
+    pnl = trades["pnl"]
+    gross_profit = float(pnl[pnl > 0].sum())
+    gross_loss = float(-pnl[pnl < 0].sum())
+    if gross_loss == 0:
+        return float("inf") if gross_profit > 0 else float("nan")
+    return gross_profit / gross_loss
+
+
+def _annualized_return_pct(equity: pd.Series, initial_capital: float) -> float:
+    """
+    CAGR from the equity curve, in percent.
+
+    Uses trading days rather than calendar days because the curve is indexed on
+    sessions. Returns NaN rather than a complex number when equity has gone to
+    or below zero.
+    """
+    if equity is None or len(equity) < 2:
+        return float("nan")
+    final = float(equity.iloc[-1])
+    if final <= 0 or initial_capital <= 0:
+        return float("nan")
+    years = len(equity) / TRADING_DAYS
+    if years <= 0:
+        return float("nan")
+    return float(((final / initial_capital) ** (1.0 / years) - 1.0) * 100.0)
+
+
+def summarize_result(result: BacktestResult,
+                     include_trades: bool = True,
+                     include_trade_records: bool = False) -> dict[str, Any]:
+    """
+    Flatten a BacktestResult into the structured dict the agent tiers consume.
+
+    `include_trades=False` drops the trade log. Walk-forward and sensitivity
+    runs use that: holding every fold's trades at once is what turns a bounded
+    sweep into an unbounded one.
+
+    `include_trade_records` additionally emits the trades as a list of dicts.
+    It defaults to False because it is a second, far more expensive copy of
+    data already present in `trades`: on a 27-symbol 1-minute run producing
+    535,563 trades, materialising the records list is most of a gigabyte on its
+    own. Ask for it only when something genuinely needs JSON-shaped rows.
+    """
+    trades = result.trades
+    stats = result.stats or {}
+    final_equity = (float(result.equity.iloc[-1])
+                    if result.equity is not None and len(result.equity) else float("nan"))
+    out: dict[str, Any] = {
+        "ok": True,
+        # Equity at or below zero is a blown account, not a bad quarter. It is
+        # surfaced explicitly because the derived figures go quiet at exactly
+        # that point: CAGR of a non-positive final equity is undefined, so a
+        # total wipeout otherwise shows up only as a NaN that reads like
+        # missing data.
+        "ruined": bool(final_equity <= 0) if not math.isnan(final_equity) else False,
+        "final_equity": final_equity,
+        "total_pnl": float(stats.get("net_pnl", float("nan"))),
+        "gross_pnl": float(stats.get("gross_pnl", float("nan"))),
+        "total_costs": float(stats.get("total_costs", float("nan"))),
+        "total_return_pct": float(stats.get("total_return_pct", float("nan"))),
+        "annualized_return_pct": _annualized_return_pct(
+            result.equity, result.config.initial_capital),
+        "sharpe": float(stats.get("sharpe", float("nan"))),
+        "max_drawdown_pct": float(stats.get("max_dd_pct", float("nan"))),
+        "win_rate": _win_rate(trades),
+        "profit_factor": _profit_factor(trades),
+        "trade_count": int(stats.get("n_trades", len(trades))),
+        "breach": dict(result.breach or {}),
+        "n_days": int(len(result.equity)) if result.equity is not None else 0,
+    }
+    if include_trades:
+        out["trades"] = trades
+        if include_trade_records:
+            out["trade_log"] = trades.to_dict("records")
+    return out
+
+
+def _empty_metrics(reason: str) -> dict[str, Any]:
+    """A failed run, shaped like a successful one so callers can aggregate."""
+    return {
+        "ok": False, "error": reason,
+        "total_pnl": float("nan"), "gross_pnl": float("nan"),
+        "total_costs": float("nan"), "total_return_pct": float("nan"),
+        "annualized_return_pct": float("nan"), "sharpe": float("nan"),
+        "max_drawdown_pct": float("nan"), "win_rate": float("nan"),
+        "profit_factor": float("nan"), "trade_count": 0,
+        "breach": {}, "n_days": 0,
+    }
+
+
+# --------------------------------------------------------------------------
+# 1. Backtest
+# --------------------------------------------------------------------------
+def run_strategy_backtest(strategy_path: str | Path,
+                          symbols: str | list[str],
+                          start_date: str | None = None,
+                          end_date: str | None = None,
+                          params: dict[str, Any] | None = None,
+                          tf: str | None = None,
+                          cfg: BacktestConfig | None = None,
+                          include_trades: bool = True,
+                          include_trade_records: bool = False,
+                          **lake_kwargs) -> dict[str, Any]:
+    """
+    Load a strategy and run it through the streaming engine.
+
+    Parameters
+    ----------
+    strategy_path
+        Path to a module exposing `make_signal_fn(**params)` or `signal_fn`.
+    symbols
+        One symbol or a list. A list is the normal case - a daily strategy on
+        ES alone over 16 years is ~100-200 trades, too thin to separate skill
+        from luck.
+    params
+        Strategy parameters. The reserved key `params["config"]` holds
+        BacktestConfig overrides; everything else is passed to the strategy.
+    tf
+        Timeframe. Falls back to the module's TIMEFRAME, then "1d". The engine
+        requires one and there is no way to infer it from the strategy code.
+
+    Returns a dict with total P&L, Sharpe, max drawdown, win rate, profit
+    factor, trade count and the raw trade log.
+
+    Load failures raise StrategyLoadError. A strategy that loads but produces
+    no trades returns ok=True with trade_count=0 - that is a result, not an
+    error, and the two must stay distinguishable.
+    """
+    fn, info = load_strategy(strategy_path, _strategy_params(params))
+    config = _build_config(params, cfg)
+    timeframe = _resolve_timeframe(tf, info)
+
+    result = run_backtest(symbols, timeframe, fn,
+                          start=start_date, end=end_date, cfg=config,
+                          **lake_kwargs)
+
+    out = summarize_result(result, include_trades=include_trades,
+                           include_trade_records=include_trade_records)
+    out["meta"] = {
+        "strategy": info["module"],
+        "strategy_path": info["path"],
+        "params": info.get("bound_params", {}),
+        "symbols": [symbols] if isinstance(symbols, str) else list(symbols),
+        "timeframe": timeframe,
+        "start": start_date,
+        "end": end_date,
+        "costs_included": True,
+        "initial_capital": config.initial_capital,
+    }
+    return out
+
+
+# --------------------------------------------------------------------------
+# 2. Walk-forward
+# --------------------------------------------------------------------------
+def _fold_windows(start_year: int, end_year: int,
+                  train_years: int, test_years: int) -> list[dict]:
+    """Sequential, non-overlapping test windows rolling forward."""
+    folds = []
+    year = start_year
+    while year + train_years + test_years - 1 <= end_year:
+        folds.append({
+            "train_start": f"{year}-01-01",
+            "train_end": f"{year + train_years - 1}-12-31",
+            "test_start": f"{year + train_years}-01-01",
+            "test_end": f"{year + train_years + test_years - 1}-12-31",
+        })
+        year += test_years
+    return folds
+
+
+def run_walk_forward_analysis(strategy_path: str | Path,
+                              symbols: str | list[str],
+                              train_years: int = 2,
+                              test_years: int = 1,
+                              start_year: int = 2010,
+                              end_year: int = 2023,
+                              params: dict[str, Any] | None = None,
+                              param_grid: list[dict] | None = None,
+                              tf: str | None = None,
+                              cfg: BacktestConfig | None = None,
+                              **lake_kwargs) -> dict[str, Any]:
+    """
+    Roll train/test segments forward and report the WFO efficiency ratio.
+
+    Efficiency = annualized OOS return / annualized IS return. Below ~0.5 is
+    the usual warning that in-sample performance is not surviving the step
+    forward.
+
+    What the ratio does and does not measure
+    ----------------------------------------
+    **Without `param_grid` this is not an overfitting test.** With nothing
+    being selected in-sample, the train window is just an earlier slice of
+    history run with the same fixed parameters, and the ratio compares two time
+    periods rather than fitted-versus-unseen. It is reported either way, with
+    `optimized` recording which was done, because a ratio of 0.4 means
+    something very different in the two cases.
+
+    Pass `param_grid=[{...}, {...}]` to select the best in-sample combination
+    per fold by Sharpe and carry it into the test window. That is the version
+    that says something about overfitting.
+
+    The efficiency ratio is undefined when the in-sample return is <= 0:
+    dividing a negative OOS return by a negative IS return yields a healthy
+    looking positive number for a strategy that lost money in both windows.
+    Those folds report `efficiency=None` and are excluded from the aggregate.
+    """
+    folds_spec = _fold_windows(start_year, end_year, train_years, test_years)
+    if not folds_spec:
+        return {
+            "ok": False,
+            "error": (f"no folds fit in {start_year}-{end_year} with "
+                      f"train={train_years}y test={test_years}y"),
+            "folds": [], "efficiency_ratio": None,
+        }
+
+    base_params = _strategy_params(params)
+    optimized = bool(param_grid)
+    folds: list[dict] = []
+
+    for spec in folds_spec:
+        fold = dict(spec)
+        try:
+            chosen = dict(base_params)
+            if param_grid:
+                best, best_sharpe = None, -math.inf
+                for combo in param_grid:
+                    trial = {**base_params, **combo}
+                    m = run_strategy_backtest(
+                        strategy_path, symbols, spec["train_start"],
+                        spec["train_end"], {**trial, "config": (params or {}).get("config", {})},
+                        tf=tf, cfg=cfg, include_trades=False, **lake_kwargs)
+                    s = m.get("sharpe", float("nan"))
+                    if not math.isnan(s) and s > best_sharpe:
+                        best, best_sharpe = trial, s
+                if best is None:
+                    fold.update(error="no parameter combination produced a "
+                                      "finite in-sample Sharpe",
+                                efficiency=None, is_metrics=None, oos_metrics=None)
+                    folds.append(fold)
+                    continue
+                chosen = best
+            fold["params"] = chosen
+
+            run_params = {**chosen, "config": (params or {}).get("config", {})}
+            is_m = run_strategy_backtest(
+                strategy_path, symbols, spec["train_start"], spec["train_end"],
+                run_params, tf=tf, cfg=cfg, include_trades=False, **lake_kwargs)
+            oos_m = run_strategy_backtest(
+                strategy_path, symbols, spec["test_start"], spec["test_end"],
+                run_params, tf=tf, cfg=cfg, include_trades=False, **lake_kwargs)
+
+            is_ann = is_m["annualized_return_pct"]
+            oos_ann = oos_m["annualized_return_pct"]
+            # Either side being NaN means an annualized return could not be
+            # formed - normally because the account was ruined and CAGR is
+            # undefined. A NaN ratio must not reach the aggregate, where it
+            # would turn the whole mean into NaN.
+            if (math.isnan(is_ann) or math.isnan(oos_ann) or is_ann <= 0):
+                eff = None
+            else:
+                eff = float(oos_ann / is_ann)
+
+            fold.update(is_metrics=is_m, oos_metrics=oos_m,
+                        is_annualized_pct=is_ann, oos_annualized_pct=oos_ann,
+                        efficiency=eff, error=None)
+        except Exception as e:
+            fold.update(error=f"{type(e).__name__}: {e}",
+                        efficiency=None, is_metrics=None, oos_metrics=None)
+        folds.append(fold)
+
+    scored = [f["efficiency"] for f in folds
+              if f.get("efficiency") is not None and not math.isnan(f["efficiency"])]
+    failed = [f for f in folds if f.get("error")]
+    undefined = [f for f in folds
+                 if not f.get("error") and f.get("efficiency") is None]
+
+    oos_returns = [f["oos_metrics"]["annualized_return_pct"] for f in folds
+                   if f.get("oos_metrics")]
+    positive_oos = sum(1 for r in oos_returns if not math.isnan(r) and r > 0)
+    ruined = [f for f in folds
+              if (f.get("oos_metrics") or {}).get("ruined")
+              or (f.get("is_metrics") or {}).get("ruined")]
+
+    return {
+        "ok": bool(scored) or not failed,
+        "optimized": optimized,
+        "warning": None if optimized else (
+            "No param_grid supplied: nothing was selected in-sample, so this "
+            "ratio compares two time periods rather than fitted-versus-unseen "
+            "performance. It is not evidence about overfitting."
+        ),
+        "n_folds": len(folds),
+        "n_scored": len(scored),
+        "n_failed": len(failed),
+        "n_undefined": len(undefined),
+        "undefined_reason": ("in-sample return <= 0, or an account was ruined "
+                             "so no annualized return exists - the ratio would "
+                             "be misleading" if undefined else None),
+        "n_ruined_folds": len(ruined),
+        "ruin_warning": (
+            f"{len(ruined)} fold(s) ended with equity at or below zero. No "
+            f"efficiency ratio is meaningful for a strategy that blows the "
+            f"account." if ruined else None
+        ),
+        "efficiency_ratio": float(np.mean(scored)) if scored else None,
+        "efficiency_median": float(np.median(scored)) if scored else None,
+        "efficiency_min": float(np.min(scored)) if scored else None,
+        "oos_positive_folds": positive_oos,
+        "oos_mean_annualized_pct": (float(np.nanmean(oos_returns))
+                                    if oos_returns else float("nan")),
+        "folds": folds,
+    }
+
+
+# --------------------------------------------------------------------------
+# 3. Parameter sensitivity
+# --------------------------------------------------------------------------
+def run_parameter_sensitivity(strategy_path: str | Path,
+                              base_params: dict[str, Any],
+                              perturbation_pct: float = 0.10,
+                              symbols: str | list[str] | None = None,
+                              start_date: str | None = None,
+                              end_date: str | None = None,
+                              metric: str = "sharpe",
+                              tf: str | None = None,
+                              cfg: BacktestConfig | None = None,
+                              **lake_kwargs) -> dict[str, Any]:
+    """
+    Shift each numeric parameter by +/- `perturbation_pct` and measure the hit.
+
+    A strategy whose edge evaporates when a lookback moves from 20 to 22 has
+    found a feature of this particular history, not of the market. The point of
+    this sweep is that a fragile optimum and a robust one look identical in a
+    single backtest.
+
+    Integer parameters are perturbed as integers and rounded away from the base
+    value, so a 10% shift on a lookback of 20 gives 18 and 22 rather than
+    collapsing back onto 20. Parameters that cannot move (a bool, a string, an
+    int whose perturbation rounds to itself) are reported as skipped rather
+    than silently dropped - "not tested" and "insensitive" are different
+    findings.
+    """
+    if symbols is None:
+        raise ValueError("run_parameter_sensitivity requires symbols")
+    if not 0 < perturbation_pct < 1:
+        raise ValueError(f"perturbation_pct must be in (0, 1), got {perturbation_pct}")
+
+    strat_params = _strategy_params(base_params)
+    config_block = (base_params or {}).get("config", {})
+
+    base = run_strategy_backtest(strategy_path, symbols, start_date, end_date,
+                                 base_params, tf=tf, cfg=cfg,
+                                 include_trades=False, **lake_kwargs)
+    base_metric = base.get(metric, float("nan"))
+
+    variations: list[dict] = []
+    skipped: list[dict] = []
+
+    for name, value in strat_params.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            skipped.append({"param": name, "value": value,
+                            "reason": "not a numeric parameter"})
+            continue
+
+        for direction, sign in (("up", 1.0), ("down", -1.0)):
+            shifted = value * (1.0 + sign * perturbation_pct)
+            if isinstance(value, int):
+                # Round to nearest, then nudge if the shift rounded back onto
+                # the base. Nearest rather than ceil/floor because binary
+                # floating point makes 50 * 1.1 == 55.00000000000001, and
+                # ceil() would turn a 10% step into 56.
+                shifted = int(round(shifted))
+                if shifted == value:
+                    shifted = value + (1 if sign > 0 else -1)
+            if isinstance(value, int) and shifted <= 0:
+                skipped.append({"param": name, "direction": direction,
+                                "value": value,
+                                "reason": "perturbation would be non-positive"})
+                continue
+
+            trial = {**strat_params, name: shifted, "config": config_block}
+            entry = {"param": name, "direction": direction,
+                     "base_value": value, "value": shifted}
+            try:
+                m = run_strategy_backtest(strategy_path, symbols, start_date,
+                                          end_date, trial, tf=tf, cfg=cfg,
+                                          include_trades=False, **lake_kwargs)
+                entry["metrics"] = m
+                entry["metric_value"] = m.get(metric, float("nan"))
+                entry["degradation_pct"] = _degradation_pct(
+                    base_metric, entry["metric_value"])
+                entry["error"] = None
+            except Exception as e:
+                entry.update(metrics=None, metric_value=float("nan"),
+                             degradation_pct=float("nan"),
+                             error=f"{type(e).__name__}: {e}")
+            variations.append(entry)
+
+    degradations = [v["degradation_pct"] for v in variations
+                    if not math.isnan(v.get("degradation_pct", float("nan")))]
+    worst = max(degradations) if degradations else float("nan")
+    mean_deg = float(np.mean(degradations)) if degradations else float("nan")
+
+    # A sign flip is the loudest fragility signal there is: the edge did not
+    # shrink under a small shift, it inverted.
+    sign_flips = [v for v in variations
+                  if not math.isnan(v.get("metric_value", float("nan")))
+                  and not math.isnan(base_metric)
+                  and np.sign(v["metric_value"]) != np.sign(base_metric)
+                  and base_metric != 0]
+
+    return {
+        "ok": True,
+        "metric": metric,
+        "perturbation_pct": perturbation_pct,
+        "base_metric": float(base_metric),
+        "base_metrics": base,
+        "n_variations": len(variations),
+        "n_skipped": len(skipped),
+        "mean_degradation_pct": mean_deg,
+        "worst_degradation_pct": worst,
+        "sign_flips": len(sign_flips),
+        "fragile": bool(
+            (not math.isnan(worst) and worst > 50.0) or sign_flips
+        ),
+        "fragility_note": (
+            "A >50% drop or a sign flip from a 10% parameter move means the "
+            "result depends on the exact parameter value, which is the "
+            "signature of a fitted optimum rather than an edge."
+        ),
+        "variations": variations,
+        "skipped": skipped,
+    }
+
+
+def _degradation_pct(base: float, trial: float) -> float:
+    """
+    Percentage fall from base to trial. Positive means worse.
+
+    Normalised by |base| so a base Sharpe of -0.2 does not invert the sign of
+    the degradation. Undefined when base is zero or either side is NaN.
+    """
+    if math.isnan(base) or math.isnan(trial) or base == 0:
+        return float("nan")
+    return float((base - trial) / abs(base) * 100.0)
+
+
+# --------------------------------------------------------------------------
+# 4. Monte Carlo
+# --------------------------------------------------------------------------
+def run_monte_carlo_simulation(trade_returns: Iterable[float] | pd.Series | np.ndarray,
+                               n_iterations: int = 1000,
+                               confidence_pct: float = 0.95,
+                               max_loss_pct: float = 8.0,
+                               initial_capital: float = 100_000.0,
+                               returns_are_dollars: bool = False,
+                               seed: int | None = 42,
+                               chunk: int | None = None,
+                               max_bytes: int = 256 * 1024 ** 2) -> dict[str, Any]:
+    """
+    Bootstrap the trade sequence to get a drawdown distribution.
+
+    One backtest yields exactly one drawdown, produced by one ordering of the
+    trades. Reshuffling with replacement asks how bad the drawdown could have
+    been had the same edge arrived in a different order - which is the question
+    a prop account actually poses, since the account dies on the path, not on
+    the total.
+
+    Parameters
+    ----------
+    trade_returns
+        Per-trade returns as fractions of equity, or dollar P&L with
+        `returns_are_dollars=True`.
+    max_loss_pct
+        Drawdown threshold counted as a breach, e.g. the 8% trailing limit in
+        compliance_rules/fundednext_rapid.json.
+
+    Assumption worth stating
+    ------------------------
+    Resampling with replacement assumes trades are independent and identically
+    distributed. They are not: real trades cluster, and a losing regime tends
+    to produce consecutive losers. Destroying that autocorrelation makes this
+    an OPTIMISTIC estimate of drawdown. Treat the reported figure as a floor on
+    the risk, not a ceiling.
+    """
+    arr = np.asarray(pd.Series(list(trade_returns)
+                               if not isinstance(trade_returns, (pd.Series, np.ndarray))
+                               else trade_returns).dropna(), dtype=float)
+    n = arr.size
+    if n == 0:
+        return {"ok": False, "error": "no trades to resample", "n_trades": 0}
+    if n_iterations < 1:
+        raise ValueError(f"n_iterations must be >= 1, got {n_iterations}")
+    if not 0 < confidence_pct < 1:
+        raise ValueError(f"confidence_pct must be in (0, 1), got {confidence_pct}")
+
+    if returns_are_dollars:
+        if initial_capital <= 0:
+            raise ValueError("initial_capital must be positive to convert dollars")
+        arr = arr / initial_capital
+
+    rng = np.random.default_rng(seed)
+    max_dds = np.empty(n_iterations, dtype=float)
+    finals = np.empty(n_iterations, dtype=float)
+
+    # Chunk size is derived from a byte budget rather than fixed, because the
+    # cost per iteration scales with the trade count. A fixed 200 was sized for
+    # an ~86k-trade run; on a 27-symbol 1-minute run with 535,563 trades the
+    # same setting asks for 200 x 535,563 x 8 bytes per array, and this holds
+    # two of them - roughly 1.7 GiB, on top of whatever the caller is holding.
+    if chunk is None:
+        per_row = n * 8 * 2          # two live float64 arrays of (chunk, n)
+        chunk = max(1, min(n_iterations, int(max_bytes // max(per_row, 1))))
+
+    done = 0
+    while done < n_iterations:
+        size = min(chunk, n_iterations - done)
+        # In-place throughout: the resample becomes the equity curve, which
+        # then becomes the drawdown series, so only `path` and `peak` are ever
+        # resident rather than four separate matrices.
+        path = rng.choice(arr, size=(size, n), replace=True)
+        np.add(path, 1.0, out=path)
+        np.cumprod(path, axis=1, out=path)
+        finals[done:done + size] = path[:, -1]
+        peak = np.maximum.accumulate(path, axis=1)
+        np.divide(path, peak, out=path)
+        np.subtract(path, 1.0, out=path)
+        max_dds[done:done + size] = path.min(axis=1)
+        done += size
+        del path, peak
+
+    max_dds_pct = max_dds * 100.0
+    # Drawdowns are negative; the "95th percentile worst" is the 5th percentile
+    # of the signed series.
+    tail = float(np.percentile(max_dds_pct, (1.0 - confidence_pct) * 100.0))
+    breach_prob = float(np.mean(max_dds_pct <= -abs(max_loss_pct)))
+
+    return {
+        "ok": True,
+        "n_trades": int(n),
+        "n_iterations": int(n_iterations),
+        "confidence_pct": confidence_pct,
+        "max_loss_pct": max_loss_pct,
+        "max_drawdown_pct_at_confidence": tail,
+        "prob_max_loss_breach": breach_prob,
+        "median_max_drawdown_pct": float(np.median(max_dds_pct)),
+        "worst_max_drawdown_pct": float(np.min(max_dds_pct)),
+        "median_final_return_pct": float((np.median(finals) - 1.0) * 100.0),
+        "prob_profit": float(np.mean(finals > 1.0)),
+        "assumption": (
+            "i.i.d. bootstrap - trade autocorrelation is destroyed, so this "
+            "understates clustered drawdowns. Treat as a floor on risk."
+        ),
+    }
+
+
+def trade_returns_from_result(result: dict[str, Any] | BacktestResult,
+                              initial_capital: float | None = None) -> np.ndarray:
+    """Per-trade returns as fractions of starting equity, for the bootstrap."""
+    if isinstance(result, BacktestResult):
+        trades, capital = result.trades, result.config.initial_capital
+    else:
+        trades = result.get("trades")
+        capital = initial_capital or result.get("meta", {}).get(
+            "initial_capital", 100_000.0)
+    if trades is None or len(trades) == 0:
+        return np.array([], dtype=float)
+    return (trades["pnl"].to_numpy(dtype=float) / float(capital))
+
+
+# --------------------------------------------------------------------------
+# 5. Strategy boilerplate
+# --------------------------------------------------------------------------
+BOILERPLATE = '''"""
+{name} - {description}
+
+Generated by agents.tier3_workers.generate_strategy_boilerplate on {date}.
+
+THIS IS A TEMPLATE. The signal logic below is a placeholder and must be
+replaced before the result of any backtest over it means anything.
+
+The streaming interface
+-----------------------
+`signal_fn` receives ONE symbol's bars and returns two boolean Series aligned
+to them. It never sees more than one instrument, which is deliberate: the
+engine used to accept a multi-symbol frame, and a `close.rolling(200).mean()`
+over it averaged across 27 unrelated contracts without raising.
+
+Rules for anything written here:
+
+  - No data access. The engine reads the bars and hands them over.
+  - No cost handling. Slippage and commission live in BacktestConfig.
+  - No session logic. flat_by_close and the Sunday merge are handled upstream.
+  - No lookahead. Anything derived from bar i must use data up to i only;
+    the engine fills at the NEXT bar's open.
+"""
+
+from __future__ import annotations
+
+import pandas as pd
+
+TIMEFRAME = "{timeframe}"
+SYMBOLS = {symbols}
+DEFAULT_PARAMS = {params}
+
+
+def make_signal_fn({signature}):
+    """Bind parameters and return the signal function the engine calls."""
+{validation}
+
+    def signal_fn(bars: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+        close = bars["close"]
+
+        # ------------------------------------------------------------------
+        # PLACEHOLDER LOGIC - replace this.
+        # Written as a trivially inspectable crossover so a first run
+        # exercises the plumbing without pretending to be a strategy.
+        #
+        # Note the _ma suffixes: assigning to the parameter name here would
+        # make it a local of signal_fn and shadow the closure, raising
+        # UnboundLocalError on the first call.
+        # ------------------------------------------------------------------
+        fast_ma = close.rolling({fast_ref}, min_periods={fast_ref}).mean()
+        slow_ma = close.rolling({slow_ref}, min_periods={slow_ref}).mean()
+
+        entries = (fast_ma > slow_ma) & (fast_ma.shift(1) <= slow_ma.shift(1))
+        exits = (fast_ma < slow_ma) & (fast_ma.shift(1) >= slow_ma.shift(1))
+
+        return entries.fillna(False), exits.fillna(False)
+
+    return signal_fn
+'''
+
+
+def generate_strategy_boilerplate(name: str,
+                                  description: str = "candidate strategy",
+                                  params: dict[str, Any] | None = None,
+                                  symbols: list[str] | None = None,
+                                  timeframe: str = DEFAULT_TIMEFRAME,
+                                  out_dir: str | Path | None = None,
+                                  overwrite: bool = False) -> Path:
+    """
+    Write a new candidate strategy into strategies/experimental/.
+
+    The generated module follows the streaming `signal_fn` contract and carries
+    the constraints in its docstring, so a strategy written from it starts out
+    unable to express the multi-symbol bleed the engine was redesigned to
+    prevent.
+
+    The placeholder logic is labelled as a placeholder. A generator that emits
+    a plausible-looking strategy invites someone to backtest the template and
+    read the number.
+    """
+    from datetime import date
+
+    slug = "".join(c if c.isalnum() or c == "_" else "_" for c in name.strip().lower())
+    slug = "_".join(filter(None, slug.split("_")))
+    if not slug:
+        raise ValueError(f"cannot derive a module name from {name!r}")
+    if slug[0].isdigit():
+        slug = f"s_{slug}"
+
+    directory = Path(out_dir) if out_dir else EXPERIMENTAL
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{slug}.py"
+    if path.exists() and not overwrite:
+        raise FileExistsError(
+            f"{path} already exists. Pass overwrite=True to replace it."
+        )
+
+    p = dict(params or {"fast": 20, "slow": 50})
+    fast_ref = "fast" if "fast" in p else repr(next(iter(p.values()), 20))
+    slow_ref = "slow" if "slow" in p else repr(50)
+
+    signature = ", ".join(f"{k}: {type(v).__name__} = {v!r}" for k, v in p.items())
+    validation = "\n".join(
+        f"    if not isinstance({k}, (int, float)) or {k} <= 0:\n"
+        f"        raise ValueError(f\"{k} must be positive, got {{{k}!r}}\")"
+        for k, v in p.items() if isinstance(v, (int, float)) and not isinstance(v, bool)
+    ) or "    pass"
+
+    path.write_text(BOILERPLATE.format(
+        name=name, description=description,
+        date=date.today().isoformat(),
+        timeframe=timeframe,
+        symbols=repr(symbols or ["ES", "NQ"]),
+        params=repr(p),
+        signature=signature,
+        validation=validation,
+        fast_ref=fast_ref, slow_ref=slow_ref,
+    ))
+    return path
+
+
+# --------------------------------------------------------------------------
+# Agent orchestration - still scaffold
+# --------------------------------------------------------------------------
 def run_variant(order: WorkOrder, signal_fn: SignalFn) -> WorkReport:
     """Run one strategy variant and save its artifacts."""
     raise NotImplementedError("tier3_workers: not implemented yet")
