@@ -138,6 +138,12 @@ starts reporting numbers nobody generated. Google AI Agent orchestration
 scripts (SDKs: `google-genai`, `mcp`):
 
 - `tier1_master.py`: CIO agent managing the global optimization goals.
+  **Implemented:** `run_campaign` (generator; routes a prompt to vault /
+  conversational / research and yields progress), `classify_intent`,
+  `synthesize_strategy_code` (Gemini via `google-genai`), `build_client`.
+  Still scaffold: `propose_goals`, `prioritise`, `review`, `main`.
+  Synthesis needs `GEMINI_API_KEY`; without it a campaign falls back to the
+  placeholder template and says so in every event and in the verdict.
 - `tier2_supervisors.py`: Prop-Firm Compliance and OOS Validation.
   **Implemented:** `evaluate_compliance` (profit target, trailing drawdown,
   consistency — all thresholds read from the JSON ruleset, never hardcoded),

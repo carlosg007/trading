@@ -314,7 +314,7 @@ def render_ruleset_summary(rs: Ruleset) -> None:
 STATUS_ICONS = {
     "routing": "🧭", "planning": "📋", "generating": "🧱",
     "backtesting": "⚙️", "auditing": "🔎", "complete": "✅",
-    "rejected": "🚫", "error": "❌",
+    "rejected": "🚫", "error": "❌", "warning": "⚠️",
 }
 
 
@@ -337,9 +337,11 @@ def render_command_center(rs: Ruleset | None) -> None:
             st.caption(f"`agents/{module}.py` — {role}")
 
     st.caption(
-        "Campaigns stage a strategy from **boilerplate whose signal logic is a "
-        "placeholder**. A verdict describes that template, not the hypothesis "
-        "in the prompt — real strategy synthesis is not implemented."
+        "Campaigns synthesise a strategy with Gemini, validate it (AST parse, "
+        "import allowlist, lookahead scan, smoke test), then backtest and audit "
+        "it. Without a `GEMINI_API_KEY`, or if the generated code is rejected, "
+        "the run falls back to **boilerplate whose logic is a placeholder** — "
+        "the verdict then describes that template, and every such run says so."
     )
 
     st.divider()

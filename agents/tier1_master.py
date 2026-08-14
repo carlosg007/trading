@@ -281,7 +281,8 @@ def run_campaign(prompt: str,
                  symbols: list[str] | None = None,
                  start_date: str = DEFAULT_START,
                  end_date: str = DEFAULT_END,
-                 timeframe: str | None = None) -> Iterator[dict[str, Any]]:
+                 timeframe: str | None = None,
+                 genai_client: Any = None) -> Iterator[dict[str, Any]]:
     """
     Route a prompt and run the resulting work, yielding progress as it goes.
 
@@ -323,7 +324,7 @@ def run_campaign(prompt: str,
         return
     yield from _run_research_campaign(
         prompt, intent_info, ruleset_path, symbols,
-        start_date, end_date, timeframe)
+        start_date, end_date, timeframe, genai_client)
 
 
 # -- vault ------------------------------------------------------------------
@@ -425,7 +426,8 @@ def _run_research_campaign(prompt: str, intent_info: dict,
                            ruleset_path: str | Path | None,
                            symbols: list[str] | None,
                            start_date: str, end_date: str,
-                           timeframe: str | None) -> Iterator[dict]:
+                           timeframe: str | None,
+                           genai_client: Any = None) -> Iterator[dict]:
     # Step A: resolve inputs -------------------------------------------------
     yield _event("planning", "Resolving symbols, timeframe and ruleset…")
 
@@ -460,13 +462,12 @@ def _run_research_campaign(prompt: str, intent_info: dict,
                  symbols=resolved_symbols, timeframe=tf,
                  ruleset=str(rules), start=start_date, end=end_date)
 
-    # Step B: stage a strategy ----------------------------------------------
-    yield _event("generating",
-                 "Staging a strategy module — **placeholder logic**, the "
-                 "prompt's hypothesis is recorded, not implemented.")
+    # Step B: synthesise a strategy -----------------------------------------
     try:
-        from agents.tier3_workers import (generate_strategy_boilerplate,
-                                          run_strategy_backtest)
+        from agents.tier3_workers import (GeneratedCodeError,
+                                          generate_strategy_boilerplate,
+                                          run_strategy_backtest,
+                                          write_and_validate_strategy)
         from agents.tier2_supervisors import evaluate_compliance
     except Exception as e:
         yield _event("error", f"Could not import the worker tiers: {e}",
@@ -476,29 +477,66 @@ def _run_research_campaign(prompt: str, intent_info: dict,
 
     stamp = date.today().isoformat().replace("-", "")
     name = f"campaign {'_'.join(resolved_symbols[:3])} {stamp}"
-    try:
-        strategy_path = generate_strategy_boilerplate(
-            name,
-            description=f"Auto-staged for campaign: {prompt[:120]}",
-            params={"fast": 20, "slow": 50},
-            symbols=resolved_symbols, timeframe=tf, overwrite=True)
-    except Exception as e:
-        yield _event("error", f"Could not stage a strategy: {e}",
-                     intent="research_campaign",
-                     response=f"**Campaign aborted** — {type(e).__name__}: {e}")
-        return
+    strategy_path = None
+    synthesized = False
 
-    yield _event("generating", f"Staged `{strategy_path.name}`.",
-                 strategy_path=str(strategy_path))
+    yield _event("generating",
+                 f"Synthesising a strategy for **{resolved_symbols[0]}** "
+                 f"with `{DEFAULT_MODEL}`…")
+    try:
+        code = synthesize_strategy_code(prompt, resolved_symbols[0],
+                                        client=genai_client, timeframe=tf)
+        strategy_path = write_and_validate_strategy(name, code)
+        synthesized = True
+        yield _event("generating",
+                     f"Synthesised and validated `{strategy_path.name}` — "
+                     f"parsed, audited for unsafe imports and lookahead, and "
+                     f"smoke-tested.",
+                     strategy_path=str(strategy_path), synthesized=True)
+    except MissingAPIKey as e:
+        yield _event("warning",
+                     f"⚠️ **No GenAI credential** ({e}). Falling back to the "
+                     f"safe template — its logic is a PLACEHOLDER, so any "
+                     f"verdict describes the template and not your hypothesis.",
+                     fallback_reason="missing_api_key")
+    except (SynthesisError, SyntaxError, GeneratedCodeError) as e:
+        # The model was reachable and produced something unusable. Say what
+        # was wrong rather than silently retrying or quietly degrading - a
+        # rejected strategy is a finding about the generator.
+        yield _event("warning",
+                     f"⚠️ **Synthesis rejected** — {type(e).__name__}: {e}. "
+                     f"Falling back to the safe template, whose logic is a "
+                     f"PLACEHOLDER.",
+                     fallback_reason=f"{type(e).__name__}: {e}")
+
+    if strategy_path is None:
+        try:
+            strategy_path = generate_strategy_boilerplate(
+                name,
+                description=f"Auto-staged for campaign: {prompt[:120]}",
+                params={"fast": 20, "slow": 50},
+                symbols=resolved_symbols, timeframe=tf, overwrite=True)
+        except Exception as e:
+            yield _event("error", f"Could not stage a strategy: {e}",
+                         intent="research_campaign",
+                         response=f"**Campaign aborted** — {type(e).__name__}: {e}")
+            return
+        yield _event("generating",
+                     f"Staged template `{strategy_path.name}` — placeholder logic.",
+                     strategy_path=str(strategy_path), synthesized=False)
 
     # Step C: backtest -------------------------------------------------------
     yield _event("backtesting",
                  f"Running the streaming engine over "
                  f"{len(resolved_symbols)} symbol(s) at {tf}, costs included…")
+    # A synthesised module names its own parameters, so the template's
+    # fast/slow would be rejected by its signature. Its defaults are used
+    # instead - the system prompt requires the signature to carry them.
+    run_params: dict[str, Any] = {} if synthesized else {"fast": 20, "slow": 50}
     try:
         metrics = run_strategy_backtest(
             strategy_path, resolved_symbols, start_date, end_date,
-            params={"fast": 20, "slow": 50}, tf=tf)
+            params=run_params, tf=tf)
     except Exception as e:
         yield _event("error", f"Backtest failed: {type(e).__name__}: {e}",
                      intent="research_campaign",
@@ -535,29 +573,49 @@ def _run_research_campaign(prompt: str, intent_info: dict,
                  intent="research_campaign",
                  response=_render_campaign(prompt, resolved_symbols, tf,
                                            start_date, end_date, rules,
-                                           strategy_path, metrics, compliance),
+                                           strategy_path, metrics, compliance,
+                                           synthesized),
                  metrics={k: v for k, v in metrics.items()
-                          if k not in ("trades", "trade_log")},
+                          if k not in ("trades", "trade_log", "equity")},
                  compliance=compliance,
                  strategy_path=str(strategy_path),
-                 strategy_is_placeholder=True,
+                 synthesized=synthesized,
+                 strategy_is_placeholder=not synthesized,
                  ran_backtest=True)
 
 
 def _render_campaign(prompt: str, symbols: list[str], tf: str,
                      start: str, end: str, rules: Path, strategy_path: Path,
-                     metrics: dict, compliance: dict) -> str:
+                     metrics: dict, compliance: dict,
+                     synthesized: bool = False) -> str:
     verdict = compliance["verdict"]
     icon = "✅" if verdict == "PASS" else "❌"
+    rel = strategy_path.relative_to(_REPO)
+
+    if synthesized:
+        provenance = (
+            f"> 🤖 **Strategy synthesised by `{DEFAULT_MODEL}`** and validated "
+            f"before running: parsed, audited for unsafe imports and lookahead, "
+            f"and smoke-tested on a synthetic frame. Source: `{rel}`.\n"
+            f">\n"
+            f"> The audit catches negative shifts and reversed slices. It "
+            f"cannot catch every form of lookahead, and it says nothing about "
+            f"whether the logic implements what you asked for. **Read the "
+            f"generated code before acting on this verdict.**"
+        )
+    else:
+        provenance = (
+            f"> ⚠️ **The strategy is generated boilerplate with placeholder "
+            f"crossover logic.** The hypothesis in your prompt was recorded, "
+            f"not implemented, so this verdict describes the template — not "
+            f"the idea you asked for. Replace the signal logic in `{rel}` "
+            f"before reading anything into it."
+        )
 
     lines = [
         f"### {icon} Campaign verdict: **{verdict}**",
         "",
-        "> ⚠️ **The strategy is generated boilerplate with placeholder "
-        "crossover logic.** The hypothesis in your prompt was recorded, not "
-        "implemented, so this verdict describes the template — not the idea "
-        "you asked for. Replace the signal logic in "
-        f"`{strategy_path.relative_to(_REPO)}` before reading anything into it.",
+        provenance,
         "",
         f"**Setup** — {', '.join(symbols)} · {tf} · {start} → {end} · "
         f"ruleset `{rules.name}` · costs included",
@@ -599,9 +657,116 @@ def _render_campaign(prompt: str, symbols: list[str], tf: str,
     return "\n".join(lines)
 
 
+API_KEY_VARS = ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENAI_API_KEY")
+
+SYNTHESIS_SYSTEM_PROMPT = """\
+Generate a strictly compliant Vectorbt Pro `signal_fn` module for futures \
+trading.
+
+SIGNATURE (exact):
+    def signal_fn(open_, high, low, close, volume, **params)
+
+Each argument is a 1-D NumPy array for ONE instrument, ordered oldest to \
+newest. Return a tuple `(entries, exits)` of two BOOLEAN arrays the same \
+length as `close`.
+
+HARD CONSTRAINTS:
+- Use Numba-compatible array operations or Vectorbt indicator functions.
+- NEVER use future-looking arrays. A value at index i may depend only on \
+indices <= i. No negative shifts, no reversed slices, no centred windows. \
+The engine fills at the NEXT bar's open, so a signal computed from bar i's \
+close is legitimate.
+- Return booleans, not prices. `close > ma` is a signal; `close` is not.
+- Warm-up periods must be False, not NaN-coerced-to-True.
+- Import only from: numpy, pandas, math, vectorbtpro, numba.
+- No file, network, or OS access. No eval/exec/__import__/open.
+- Output clean, executable Python only. No markdown backticks, no prose, no \
+explanation outside comments.
+- Give numeric parameters sensible defaults in the signature so the module \
+runs with no arguments.
+"""
+
+
 def build_client(api_key: str | None = None):
-    """Construct the GenAI client used by this tier."""
-    raise NotImplementedError("tier1_master: not implemented yet")
+    """
+    Construct the GenAI client used by this tier.
+
+    Raises rather than returning None when the SDK or key is missing, so a
+    caller cannot mistake an unusable client for a working one.
+    """
+    if genai is None:
+        raise RuntimeError(
+            f"google-genai is not importable: {_GENAI_IMPORT_ERROR}"
+        )
+    key = api_key or _find_api_key()
+    if not key:
+        raise MissingAPIKey(
+            f"no API key found in {' / '.join(API_KEY_VARS)}"
+        )
+    return genai.Client(api_key=key)
+
+
+def _find_api_key() -> str | None:
+    import os
+    for var in API_KEY_VARS:
+        value = os.environ.get(var)
+        if value:
+            return value
+    return None
+
+
+class MissingAPIKey(RuntimeError):
+    """No GenAI credential is available. Callers fall back to the template."""
+
+
+class SynthesisError(RuntimeError):
+    """The model was reachable but did not return usable code."""
+
+
+def synthesize_strategy_code(prompt: str,
+                             symbol: str,
+                             model: str = DEFAULT_MODEL,
+                             client: Any = None,
+                             timeframe: str = "1d") -> str:
+    """
+    Ask Gemini for a strategy module implementing `prompt` for `symbol`.
+
+    Returns raw Python source. It is NOT validated here - that is
+    `tier3_workers.write_and_validate_strategy`, which parses it, audits it for
+    unsafe imports and lookahead, and smoke-tests it before anything runs. This
+    function's only job is to get text back.
+
+    Raises `MissingAPIKey` when no credential is configured, which
+    `run_campaign` catches to fall back to the template. That distinction
+    matters: no key is an expected configuration state, while a model that
+    returns nothing usable is a failure worth reporting.
+    """
+    if client is None:
+        client = build_client()          # raises MissingAPIKey when unset
+
+    user_prompt = (
+        f"Instrument: {symbol}\n"
+        f"Timeframe: {timeframe}\n"
+        f"Strategy to implement: {prompt}\n\n"
+        f"Write the module now."
+    )
+
+    try:
+        response = client.models.generate_content(
+            model=model,
+            contents=user_prompt,
+            config={"system_instruction": SYNTHESIS_SYSTEM_PROMPT,
+                    "temperature": 0.2},
+        )
+    except Exception as e:
+        raise SynthesisError(
+            f"{model} call failed: {type(e).__name__}: {e}"
+        ) from e
+
+    text = getattr(response, "text", None)
+    if not text or not text.strip():
+        raise SynthesisError(f"{model} returned no code")
+    return text
 
 
 def propose_goals(context: dict[str, Any], n: int = 5) -> list[ResearchGoal]:
