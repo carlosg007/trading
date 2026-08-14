@@ -86,9 +86,15 @@ Run from the repo root.
 streamlit run dashboard/app.py
 
 # Tests. No pytest config - each is a script that exits non-zero on failure.
+# Eight suites, 468 checks. The first four need neither the lake nor a network.
+python tests/test_tier1.py              # intent routing, vault, synthesis errors
 python tests/test_tier2.py              # compliance, robustness, lifecycle
 python tests/test_tier3_workers.py      # worker tools, metrics, RAM ceiling
+python tests/test_dispatcher.py         # CrossTrade payload, transport, fill logs
+python tests/test_clean_signals.py      # per-symbol signals vs the interleaved trap
+python tests/test_streaming_lake.py     # iter_bars and the streaming engine
 python tests/test_engine_batching.py    # chunked == unchunked, trade for trade
+python tests/test_engine_vbt.py         # vectorbt P&L == the legacy loop oracle
 
 # Data manifest: path, size, SHA-256, row count, ts range per file.
 # Answers "have the bytes changed?"; validate_lake.py answers "is it sane?".
