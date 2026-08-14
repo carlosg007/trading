@@ -102,11 +102,17 @@ Note `data_pull/coverage_summary.py` is a superseded copy without the newer
 python scripts/classify_regime.py --threshold 10.0
 ```
 
-Labels symbol-years Bull/Bear/Neutral into `reference/futures/regimes.parquet`.
+Labels symbol-years Bull/Bear/Neutral into `reference/futures/regimes.parquet`
+and `.csv`. Reads daily bars through `mdlib.lake`, so it gets the Sunday-session
+merge — without it, ~51 stub "days" a year distort both the 200-day SMA and the
+realized-vol figure it reports.
 
-**Has never been run.** `regimes.parquet` does not exist, so
-`backtest/report.py`'s regime join currently finds nothing and produces
-unlabelled output without complaining.
+Generated 2026-08-14: 434 symbol-years, 27 symbols, 2010–2026
+(130 Bull / 81 Bear / 223 Neutral). `backtest/report.py`'s regime join resolves
+against it.
+
+**Re-run after any lake rebuild** — the labels are derived from daily closes, so
+a changed lake silently invalidates them.
 
 ## Update Cadence
 

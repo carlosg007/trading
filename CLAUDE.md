@@ -307,11 +307,11 @@ phases 1-7 are clean or every exception is documented).
   symbols, 563 files), written by `data_pull/ingest_nt8.py`. Still open: update
   `mdlib/lake.py` to route the data source flag — `get_bars` has no `source`
   parameter, so the NT8 tree is currently unreachable through the reader.
-- **`classify_regime.py` has never been run**, so
-  `reference/futures/regimes.parquet` does not exist. `report.py` now warns
-  loudly instead of silently omitting the section, but the regime breakdown is
-  unavailable until this is run: `python scripts/classify_regime.py
-  --threshold 10.0`.
+- ~~`classify_regime.py` has never been run, so
+  `reference/futures/regimes.parquet` does not exist.~~ Run 2026-08-14 at
+  `--threshold 10.0`: 434 symbol-years across 27 symbols, 2010-2026
+  (130 Bull / 81 Bear / 223 Neutral). `report.py`'s regime join now resolves.
+  Re-run after any lake rebuild — the labels are derived from daily closes.
 - ~~Two 1d partition gaps in the lake (`ZS` 2020-2021, `HO` 2012) surviving only
   in un-partitioned stray files.~~ Resolved 2026-08-14. The 3 missing
   symbol-years were re-pulled from Databento ($0.00), restoring
