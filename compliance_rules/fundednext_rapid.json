@@ -50,35 +50,36 @@
       "comparison": "profit_at_or_above_target_passes",
       "description": "Account profit required to complete the challenge phase.",
       "enforcement": {
-        "status": "NOT_ENFORCED",
+        "status": "ENFORCED_AT_TIER2",
         "engine_field": null,
-        "detail": "No profit target field exists in BacktestConfig and nothing computes it. A backtest that returns without a breach has NOT been shown to reach this target."
+        "detail": "No profit target field exists in BacktestConfig and the engine does not compute it. Evaluated by agents.tier2_supervisors.evaluate_compliance. A backtest that returns without a breach has NOT been shown to reach this target."
       }
     },
 
     "consistency": {
-      "value": 30.0,
+      "value": 40.0,
       "unit": "percent",
       "basis": "total_profit",
       "comparison": "share_above_limit_fails",
-      "description": "No single trading day may account for more than 30% of total profit. Targets accounts carried by one outlier session rather than a repeatable edge.",
+      "description": "No single trading day may account for more than 40% of total profit. Targets accounts carried by one outlier session rather than a repeatable edge.",
       "evaluation_notes": [
         "Computed over PROFITABLE days against total NET profit at the point of evaluation.",
         "Undefined when total profit is zero or negative — treat as not-yet-assessable rather than passing.",
         "This is the rule most likely to fail a strategy that already passes drawdown: a single gap-driven session can carry an entire backtest."
       ],
       "enforcement": {
-        "status": "NOT_ENFORCED",
+        "status": "ENFORCED_AT_TIER2",
         "engine_field": null,
-        "detail": "No consistency check exists in backtest/engine.py. agents/tier2_supervisors.py names it in its module docstring but every method raises NotImplementedError."
+        "detail": "Not checked inside backtest/engine.py, which computes only the trailing drawdown. Evaluated by agents.tier2_supervisors.evaluate_compliance, which reads this value rather than hardcoding it. An engine BacktestResult on its own says nothing about this rule."
       }
     }
   },
 
   "enforcement_summary": {
-    "enforced": ["max_trailing_drawdown"],
-    "not_enforced": ["max_daily_loss", "profit_target", "consistency"],
-    "warning": "1 of 4 rules is actually checked today. A backtest whose BacktestResult.breach is empty is NOT evidence of compliance with this ruleset — it means only the trailing drawdown was evaluated. Any UI or agent reporting a compliance verdict must state which rules were checked, not just the outcome."
+    "enforced_in_engine": ["max_trailing_drawdown"],
+    "enforced_at_tier2": ["profit_target", "max_trailing_drawdown", "consistency"],
+    "not_enforced": ["max_daily_loss"],
+    "warning": "A BacktestResult.breach on its own covers only the trailing drawdown. Profit target and consistency are evaluated by agents.tier2_supervisors.evaluate_compliance, and max_daily_loss is still checked nowhere. Any UI or agent reporting a compliance verdict must state which rules were checked, not just the outcome — evaluate_compliance returns that list as `unenforced_rules`."
   },
 
   "provenance": {

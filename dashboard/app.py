@@ -266,12 +266,17 @@ def render_ruleset_summary(rs: Ruleset) -> None:
         if not isinstance(r, dict):
             continue
         status = str((r.get("enforcement") or {}).get("status", "UNKNOWN")).upper()
-        (enforced if status == "ENFORCED" else unenforced).append((key, r, status))
+        # ENFORCED_AT_TIER2 counts as enforced: the rule is checked, just by
+        # agents.tier2_supervisors rather than inside the engine. Matching only
+        # the bare "ENFORCED" would report a checked rule as unchecked.
+        (enforced if status.startswith("ENFORCED") else unenforced).append(
+            (key, r, status))
 
     for key, r, status in enforced + unenforced:
         value, unit = r.get("value"), r.get("unit", "")
         shown = f"{value}%" if unit == "percent" else f"{value} {unit}".strip()
-        kind = {"ENFORCED": "on", "NOT_ENFORCED": "off"}.get(status, "warn")
+        kind = "on" if status.startswith("ENFORCED") else (
+            "off" if status == "NOT_ENFORCED" else "warn")
         st.sidebar.markdown(
             f'<div class="cc-rule"><b>{key.replace("_", " ").title()}</b> '
             f'<span class="cc-mono">{shown}</span><br>{tag(status.replace("_", " "), kind)}</div>',
@@ -280,9 +285,15 @@ def render_ruleset_summary(rs: Ruleset) -> None:
 
     if unenforced:
         st.sidebar.warning(
-            f"**{len(unenforced)} of {len(enforced) + len(unenforced)} rules are not "
-            f"enforced by the engine.** A clean backtest is not evidence of "
-            f"compliance with them."
+            f"**{len(unenforced)} of {len(enforced) + len(unenforced)} rules are "
+            f"checked nowhere** — not by the engine and not by Tier 2. Neither a "
+            f"clean backtest nor a Tier 2 PASS is evidence of compliance with them."
+        )
+    tier2 = [k for k, _, s in enforced if s != "ENFORCED"]
+    if tier2:
+        st.sidebar.info(
+            f"{len(tier2)} rule(s) are checked by Tier 2 rather than the engine: "
+            f"a `BacktestResult` alone does not cover them."
         )
 
     if str(data.get("provenance", {}).get("verification_status", "")).startswith("UNVERIFIED"):
@@ -543,7 +554,8 @@ def render_ruleset_detail(rs: Ruleset | None) -> None:
             "Value": (f"{r.get('value')}%" if r.get("unit") == "percent"
                       else f"{r.get('value')} {r.get('unit', '')}".strip()),
             "Basis": r.get("basis", "—"),
-            "Enforced": "yes" if str(enf.get("status", "")).upper() == "ENFORCED" else "no",
+            "Enforced": ("yes" if str(enf.get("status", "")).upper().startswith("ENFORCED")
+                         else "no"),
             "Engine field": enf.get("engine_field") or "—",
         })
     st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
