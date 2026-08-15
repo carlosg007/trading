@@ -75,6 +75,7 @@ if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
 from backtest.engine import BacktestConfig, BacktestResult, run_backtest  # noqa: E402
+from backtest.report import sortino as report_sortino  # noqa: E402
 
 ARTIFACTS = Path("/mnt/backtest/artifacts")
 EXPERIMENTAL = _REPO / "strategies" / "experimental"
@@ -306,6 +307,36 @@ def _annualized_return_pct(equity: pd.Series, initial_capital: float) -> float:
     return float(((final / initial_capital) ** (1.0 / years) - 1.0) * 100.0)
 
 
+def _sortino(returns: pd.Series) -> float:
+    """
+    Sortino ratio, delegated to `backtest.report.sortino`.
+
+    Delegated rather than reimplemented because the denominator convention is a
+    real choice - downside deviation over losing periods only, versus over all
+    periods - and the two differ by roughly sqrt(n_all / n_down). A second
+    local implementation would make the dashboard and the CLI report disagree
+    about the same backtest.
+    """
+    if returns is None or len(returns) < 2:
+        return float("nan")
+    return report_sortino(returns)
+
+
+def _calmar(annualized_return_pct: float, max_drawdown_pct: float) -> float:
+    """
+    CAGR over the absolute max drawdown, both already in percent.
+
+    NaN when there was no drawdown: a strategy that never drew down has an
+    undefined Calmar, not an infinite one, and an inf here reads as a headline
+    result rather than as a degenerate sample.
+    """
+    if math.isnan(annualized_return_pct) or math.isnan(max_drawdown_pct):
+        return float("nan")
+    if max_drawdown_pct == 0:
+        return float("nan")
+    return float(annualized_return_pct / abs(max_drawdown_pct))
+
+
 def summarize_result(result: BacktestResult,
                      include_trades: bool = True,
                      include_trade_records: bool = False) -> dict[str, Any]:
@@ -326,6 +357,9 @@ def summarize_result(result: BacktestResult,
     stats = result.stats or {}
     final_equity = (float(result.equity.iloc[-1])
                     if result.equity is not None and len(result.equity) else float("nan"))
+    annualized_pct = _annualized_return_pct(result.equity,
+                                            result.config.initial_capital)
+    max_dd_pct = float(stats.get("max_dd_pct", float("nan")))
     out: dict[str, Any] = {
         "ok": True,
         # Equity at or below zero is a blown account, not a bad quarter. It is
@@ -339,10 +373,11 @@ def summarize_result(result: BacktestResult,
         "gross_pnl": float(stats.get("gross_pnl", float("nan"))),
         "total_costs": float(stats.get("total_costs", float("nan"))),
         "total_return_pct": float(stats.get("total_return_pct", float("nan"))),
-        "annualized_return_pct": _annualized_return_pct(
-            result.equity, result.config.initial_capital),
+        "annualized_return_pct": annualized_pct,
         "sharpe": float(stats.get("sharpe", float("nan"))),
-        "max_drawdown_pct": float(stats.get("max_dd_pct", float("nan"))),
+        "sortino": _sortino(result.returns),
+        "calmar": _calmar(annualized_pct, max_dd_pct),
+        "max_drawdown_pct": max_dd_pct,
         "win_rate": _win_rate(trades),
         "profit_factor": _profit_factor(trades),
         "trade_count": int(stats.get("n_trades", len(trades))),
@@ -368,6 +403,7 @@ def _empty_metrics(reason: str) -> dict[str, Any]:
         "total_pnl": float("nan"), "gross_pnl": float("nan"),
         "total_costs": float("nan"), "total_return_pct": float("nan"),
         "annualized_return_pct": float("nan"), "sharpe": float("nan"),
+        "sortino": float("nan"), "calmar": float("nan"),
         "max_drawdown_pct": float("nan"), "win_rate": float("nan"),
         "profit_factor": float("nan"), "trade_count": 0,
         "breach": {}, "n_days": 0,
