@@ -695,7 +695,13 @@ def run_dual_version_backtest(strategy_code: str,
                               symbol: str | None = None,
                               cfg: Any = None,
                               params: dict[str, Any] | None = None,
-                              threshold: float = 0.50) -> dict[str, Any]:
+                              threshold: float = 0.50,
+                              robustness: dict[str, Any] | None = None,
+                              holdout: dict[str, Any] | None = None,
+                              emit_reports: bool = True,
+                              report_dir: Any = None,
+                              artifacts_root: str = "/mnt/backtest/artifacts",
+                              strat_name: str | None = None) -> dict[str, Any]:
     """
     Run a strategy as Version A (rule-based) and Version B (ML-filtered) over
     the same bars, under identical costs.
@@ -724,13 +730,27 @@ def run_dual_version_backtest(strategy_code: str,
         resample is how a 15m result gets reported as a 1m one.
     threshold
         P(win) at or above which Version B keeps an entry.
+    robustness, holdout
+        Optional per-version evidence for Gates 2 and 3, keyed by version:
+        `{"A": {...}, "B": {...}}`. See
+        `backtest.report.audit_acceptance_gates` for the shapes. Omitted, those
+        gates report NOT EVALUATED - which is not a pass. Nothing here can
+        produce them: a walk-forward and a bootstrap are separate runs, and
+        inventing a number to fill the slot is the failure this project exists
+        to avoid.
+    emit_reports
+        Write `report_version_a.html`, `report_version_b.html` and
+        `dual_metrics.json` into
+        `<artifacts_root>/<strat_name>_<timestamp>/` (or `report_dir`). A
+        failure to write is recorded in the returned dict, never raised - a
+        completed backtest is not thrown away because an NFS mount was busy.
 
     Returns
     -------
     dict with `version_a` and `version_b`, each carrying `metrics` (the same
-    dict shape `run_strategy_backtest` returns) and `result` (a
-    `BacktestResult` with returns, trades and equity), plus a `comparison`
-    block and `meta`.
+    dict shape `run_strategy_backtest` returns), `result` (a `BacktestResult`
+    with returns, trades and equity) and `gate_audit`, plus a `comparison`
+    block, `reports` and `meta`.
 
     Note `result` is the engine's BacktestResult, not a raw vectorbt Portfolio.
     `_simulate` feeds vectorbt in chunks and concatenates the trade records, so
@@ -833,12 +853,24 @@ def run_dual_version_backtest(strategy_code: str,
     for m in (metrics_a, metrics_b):
         m["meta"] = meta
 
+    # Gate audit per version. Gates 2 and 3 report NOT EVALUATED unless the
+    # caller supplied the walk-forward, bootstrap and holdout evidence, because
+    # this function does not produce them and a blank gate is not a cleared one.
+    from backtest.report import audit_acceptance_gates
+
+    rb = robustness or {}
+    ho = holdout or {}
+    audit_a = audit_acceptance_gates(metrics_a, rb.get("A"), ho.get("A"),
+                                     version="A", name=info["module"])
+    audit_b = audit_acceptance_gates(metrics_b, rb.get("B"), ho.get("B"),
+                                     version="B", name=info["module"])
+
     suppressed = int(entries_a.sum() - entries_b.sum())
-    return {
-        "version_a": {"label": "A · rule-based",
-                      "metrics": metrics_a, "result": result_a},
-        "version_b": {"label": "B · ML-filtered",
-                      "metrics": metrics_b, "result": result_b},
+    out = {
+        "version_a": {"label": "A · rule-based", "metrics": metrics_a,
+                      "result": result_a, "gate_audit": audit_a},
+        "version_b": {"label": "B · ML-filtered", "metrics": metrics_b,
+                      "result": result_b, "gate_audit": audit_b},
         "comparison": {
             "entries_a": int(entries_a.sum()),
             "entries_b": int(entries_b.sum()),
@@ -846,8 +878,25 @@ def run_dual_version_backtest(strategy_code: str,
             "sharpe_delta": metrics_b["sharpe"] - metrics_a["sharpe"],
             "b_beats_a": bool(metrics_b["sharpe"] > metrics_a["sharpe"]),
         },
+        "reports": None,
         "meta": meta,
     }
+
+    if emit_reports:
+        from backtest.report_html import write_dual_reports
+        try:
+            name = strat_name or Path(info["path"]).stem
+            out["reports"] = write_dual_reports(
+                out, out_dir=report_dir, strat_name=name,
+                artifacts_root=artifacts_root)
+        except Exception as e:                                  # noqa: BLE001
+            # Recorded rather than raised, and recorded loudly enough that a
+            # caller cannot mistake "no reports" for "reports somewhere else".
+            out["reports"] = {"error": f"{type(e).__name__}: {e}"}
+            print(f"[!] HTML reports were not written: {type(e).__name__}: {e}",
+                  file=sys.stderr, flush=True)
+
+    return out
 
 
 API_KEY_VARS = ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENAI_API_KEY")
