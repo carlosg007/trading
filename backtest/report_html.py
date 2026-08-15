@@ -5,12 +5,21 @@ report_html.py - Self-contained HTML tear sheet for one version of a strategy.
 Location:  ~/src/trading/backtest/report_html.py
 
 `backtest/report.py` produces the paste-ready text block. This produces the
-file you open in a browser: the same numbers, plus an interactive equity and
-drawdown chart, the monthly return matrix and the trade log.
+file you open in a browser:
+
+    a) Gate 1 / 2 / 3 pass-fail badges
+    b) the alpha metrics table
+    c) interactive equity and underwater drawdown curves
+    d) the monthly return heatmap
+    e) a searchable, sortable trade log
+    f) the strategy name header
+    g) the strategy logic card - entries, exits, stops, session flatten
+    h) the trade inspector: click a row for a candlestick of that trade
 
     from backtest.report_html import generate_html_report
-    generate_html_report(result, metrics, gate_audit,
+    generate_html_report(bars, result, metrics, gate_audit,
                          "/mnt/backtest/artifacts/x/report_version_a.html",
+                         strat_name="sma_crossover",
                          version_label="Version A")
 
 Self-contained means self-contained
@@ -22,11 +31,28 @@ shows an empty rectangle the first time it is opened offline, months later,
 when someone is trying to work out why a strategy was promoted. Reports are
 evidence; evidence has to keep.
 
+The same rule drives the trade inspector. Rather than re-reading the lake when
+a row is clicked - which would need the lake, and a server - the bar windows
+each shown trade needs are extracted at build time and embedded. Overlapping
+windows are deduplicated, so the cost is roughly one row per bar in the union
+of the windows rather than 31 rows per trade.
+
 Every number displayed here was computed by the deterministic engine and
-handed in. This module formats, it does not calculate - the one exception is
-the drawdown series and the monthly matrix, both derived from the returns
-series by `backtest/report.py`'s own functions so the HTML and the text report
-cannot disagree.
+handed in. This module formats, it does not calculate. The exceptions are all
+derivations of handed-in numbers: the drawdown series and monthly matrix come
+from `backtest/report.py`'s own functions so the HTML and the text report
+cannot disagree, and the fee/slippage split is arithmetic on the engine's own
+cost figure - see `_cost_split`.
+
+Chart colors
+------------
+The equity/drawdown pair and the candlestick bodies use the validated dark
+categorical steps (blue `#3987e5`, red `#e66767`): adjacent CVD ΔE 19.2,
+normal-vision ΔE 29.0 against this surface. The entry and exit markers are the
+green and red a trader expects, and that pair FAILS colorblind separation on
+its own (deutan ΔE 4.1) - so the distinction is carried by shape (triangle up
+against triangle down), by position, and by a printed IN / OUT label. Color is
+the last of the four channels, never the only one.
 """
 
 from __future__ import annotations
@@ -51,8 +77,18 @@ from backtest.report import (FAIL, NOT_EVALUATED, PASS, criterion_text,
 # truncated log reads as a complete one.
 MAX_TRADE_ROWS = 2_000
 
+# The trade inspector's window: bars before the entry, bars after the exit.
+INSPECT_PRE = 20
+INSPECT_POST = 10
+
 MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+# Validated against this page's surface - see the module docstring.
+C_UP = "#3987e5"        # equity, rising candles
+C_DOWN = "#e66767"      # drawdown, falling candles
+C_ENTRY = "#0ca30c"     # status good  - shape and label carry it too
+C_EXIT = "#d03b3b"      # status critical
 
 
 # --------------------------------------------------------------------------
@@ -105,6 +141,93 @@ def _unpack(result: Any) -> tuple[pd.Series | None, pd.DataFrame | None, pd.Seri
             getattr(result, "equity", None))
 
 
+def _config(result: Any) -> Any:
+    """The BacktestConfig behind a result, or None."""
+    return getattr(result, "config", None)
+
+
+def _cost_split(trades: pd.DataFrame, result: Any,
+                symbol: str | None) -> tuple[pd.Series, pd.Series] | None:
+    """
+    Split the engine's single `costs` figure into commission and slippage.
+
+    The engine records `costs = gross_pnl - pnl`, which is both sides'
+    commission plus both sides' slippage. Commission is the deterministic half:
+
+        commission_total = 2 * commission_per_side * contracts
+
+    and slippage is the remainder. That is arithmetic on the engine's own
+    number, not a re-derivation of it - the split cannot disagree with the
+    total, because the total is what it is split from.
+
+    Returns None rather than guessing when the symbol has no spec or the
+    remainder comes out negative. A negative slippage means the assumption
+    above is wrong for this run, and a column of impossible numbers is worse
+    than one honest combined column.
+    """
+    cfg = _config(result)
+    if cfg is None or trades is None or "costs" not in trades.columns:
+        return None
+    try:
+        from backtest.specs import get_spec
+        spec = get_spec(symbol) if symbol else None
+    except Exception:                                          # noqa: BLE001
+        spec = None
+
+    per_side = getattr(cfg, "commission_per_side", None)
+    if per_side is None:
+        per_side = getattr(spec, "commission", None)
+    if per_side is None:
+        return None
+
+    contracts = getattr(cfg, "contracts", 1) or 1
+    fees = pd.Series(float(per_side) * 2.0 * contracts, index=trades.index)
+    slippage = trades["costs"].astype(float) - fees
+    # A cent of float noise is fine; a real negative is not.
+    if bool((slippage < -0.01).any()):
+        return None
+    return fees, slippage
+
+
+def _trade_return_pct(trades: pd.DataFrame) -> pd.Series:
+    """
+    Per-trade return as a percentage of the entry price, signed by direction.
+
+    A price return, not a return on account equity: the account figure depends
+    on position size and starting capital, both of which live in the config
+    rather than in the trade. The header says which it is.
+    """
+    if trades is None or "entry_price" not in trades.columns:
+        return pd.Series(dtype=float)
+    entry = trades["entry_price"].astype(float)
+    exit_ = trades["exit_price"].astype(float)
+    raw = (exit_ / entry - 1.0) * 100.0
+    if "direction" in trades.columns:
+        short = trades["direction"].astype(str).str.lower().isin(["short", "sell", "-1"])
+        raw = raw.where(~short, -raw)
+    return raw.replace([np.inf, -np.inf], float("nan"))
+
+
+def module_docstring(path: str | Path | None) -> str | None:
+    """
+    A strategy module's docstring, read WITHOUT importing it.
+
+    `ast.parse` rather than `import` because a report is generated from a
+    module that may have been written by a model minutes earlier, and importing
+    a module runs it. Nothing here should have that power.
+    """
+    if not path:
+        return None
+    p = Path(path)
+    if not p.exists() or p.suffix != ".py":
+        return None
+    try:
+        import ast
+        return ast.get_docstring(ast.parse(p.read_text(encoding="utf-8")))
+    except Exception:                                          # noqa: BLE001
+        return None
+
+
 def _daily_index(returns: pd.Series) -> pd.Series:
     """Returns as a Series with a DatetimeIndex, whatever shape it arrived in."""
     if returns is None or len(returns) == 0:
@@ -114,6 +237,91 @@ def _daily_index(returns: pd.Series) -> pd.Series:
         s.index = pd.to_datetime(s.index, utc=True, errors="coerce")
         s = s[s.index.notna()]
     return s.astype(float)
+
+
+# --------------------------------------------------------------------------
+# Trade inspector payload
+# --------------------------------------------------------------------------
+def build_inspector(bars: pd.DataFrame | None,
+                    trades: pd.DataFrame | None,
+                    pre: int = INSPECT_PRE,
+                    post: int = INSPECT_POST) -> dict[str, Any]:
+    """
+    The bar windows the trade inspector draws, as compact parallel arrays.
+
+    For each trade, `pre` bars before the entry through `post` bars after the
+    exit. Windows overlap heavily on an active strategy, so the union of bar
+    indices is deduplicated and every trade points into it by position - on a
+    real 15-minute run that turns ~31 rows per trade into closer to 8.
+
+    Every window is a contiguous run of bar indices, so after the union is
+    sorted it is still contiguous, and a trade's window is a plain slice. That
+    is what lets the browser do `t.slice(lo, hi + 1)` with no index map.
+
+    Returns `{"bars": {...}, "trades": [...], "n": int}` - empty when there are
+    no bars to draw, which is the correct payload for a result whose frame was
+    not handed in.
+    """
+    empty = {"bars": {"t": [], "o": [], "h": [], "l": [], "c": []},
+             "trades": [], "n": 0}
+    if bars is None or len(bars) == 0 or trades is None or len(trades) == 0:
+        return empty
+    if not {"open", "high", "low", "close"} <= set(bars.columns):
+        return empty
+
+    ts = (pd.DatetimeIndex(pd.to_datetime(bars["ts"], utc=True))
+          if "ts" in bars.columns else
+          pd.DatetimeIndex(pd.to_datetime(bars.index, utc=True)))
+    if not ts.is_monotonic_increasing:
+        # The engine only ever hands over one symbol's frame, oldest first. An
+        # unsorted frame means something else arrived, and searchsorted would
+        # silently return nonsense positions for it.
+        return empty
+
+    entry_t = pd.DatetimeIndex(pd.to_datetime(trades["entry_time"], utc=True))
+    exit_t = pd.DatetimeIndex(pd.to_datetime(trades["exit_time"], utc=True))
+    n_bars = len(ts)
+    e_pos = np.clip(ts.searchsorted(entry_t, side="left"), 0, n_bars - 1)
+    x_pos = np.clip(ts.searchsorted(exit_t, side="left"), 0, n_bars - 1)
+
+    los = np.maximum(e_pos - pre, 0)
+    his = np.minimum(x_pos + post, n_bars - 1)
+
+    needed = np.zeros(n_bars, dtype=bool)
+    for lo, hi in zip(los.tolist(), his.tolist()):
+        needed[lo:hi + 1] = True
+    idx = np.flatnonzero(needed)
+    if idx.size == 0:
+        return empty
+
+    # Position of each original bar index inside the compact arrays.
+    remap = np.full(n_bars, -1, dtype=np.int64)
+    remap[idx] = np.arange(idx.size, dtype=np.int64)
+
+    def col(name: str) -> list[float]:
+        return [round(float(v), 6) for v in bars[name].to_numpy(dtype=float)[idx]]
+
+    payload_bars = {
+        # Epoch milliseconds: Date-constructible in the browser and about half
+        # the bytes of an ISO string.
+        #
+        # `as_unit("ms")` rather than dividing asi8 by a million. Since pandas
+        # 2.0 a DatetimeIndex carries its own resolution and asi8 is in THAT
+        # unit, so the division only happens to be right for nanosecond
+        # indexes. On the microsecond index this lake actually produces it
+        # yields seconds, and every candlestick renders in 1970 - a wrong
+        # chart, not an error.
+        "t": ts[idx].as_unit("ms").asi8.tolist(),
+        "o": col("open"), "h": col("high"),
+        "l": col("low"), "c": col("close"),
+    }
+    payload_trades = [
+        {"lo": int(remap[lo]), "hi": int(remap[hi]),
+         "e": int(remap[ep]), "x": int(remap[xp])}
+        for lo, hi, ep, xp in zip(los.tolist(), his.tolist(),
+                                  e_pos.tolist(), x_pos.tolist())
+    ]
+    return {"bars": payload_bars, "trades": payload_trades, "n": idx.size}
 
 
 # --------------------------------------------------------------------------
@@ -250,11 +458,12 @@ def _chart_html(returns: pd.Series, initial_capital: float) -> str:
                         vertical_spacing=0.06, row_heights=[0.68, 0.32],
                         subplot_titles=("Equity", "Drawdown %"))
     fig.add_trace(go.Scatter(x=eq.index, y=eq.values, name="Equity",
-                             line=dict(color="#4ea1ff", width=1.6),
+                             line=dict(color=C_UP, width=2),
                              hovertemplate="%{x|%Y-%m-%d}<br>%{y:,.0f}<extra></extra>"),
                   row=1, col=1)
-    fig.add_trace(go.Scatter(x=dd.index, y=dd.values, name="Drawdown",
-                             fill="tozeroy", line=dict(color="#ff6b6b", width=1.0),
+    fig.add_trace(go.Scatter(x=dd.index, y=dd.values, name="Underwater",
+                             fill="tozeroy", line=dict(color=C_DOWN, width=1.5),
+                             fillcolor="rgba(230,103,103,0.22)",
                              hovertemplate="%{x|%Y-%m-%d}<br>%{y:.2f}%<extra></extra>"),
                   row=2, col=1)
     fig.update_layout(
@@ -273,10 +482,35 @@ def _chart_html(returns: pd.Series, initial_capital: float) -> str:
     return f'<div class="card"><h2>Equity &amp; drawdown</h2>{div}</div>'
 
 
+def _heat_style(value: float, vmax: float) -> str:
+    """
+    Diverging blue/red cell fill, intensity by magnitude.
+
+    A diverging scale needs two hues and a neutral middle, so a month near zero
+    fades to the panel rather than to a third colour. Alpha stops at 0.55 so
+    the printed number keeps its contrast: the value is readable with the fill
+    ignored entirely, which is what makes the colour an accent rather than the
+    only channel carrying the data.
+    """
+    v = _num(value)
+    if math.isnan(v) or vmax <= 0:
+        return ""
+    weight = min(abs(v) / vmax, 1.0) ** 0.65        # eases small months up
+    alpha = round(0.06 + 0.49 * weight, 3)
+    rgb = "57,135,229" if v > 0 else "230,103,103"
+    return f' style="background:rgba({rgb},{alpha})"'
+
+
 def _monthly_html(returns: pd.Series) -> str:
     if not len(returns):
         return ""
     matrix = monthly_table(returns)
+    values = matrix.to_numpy(dtype=float)
+    finite = values[np.isfinite(values)]
+    vmax = float(np.percentile(np.abs(finite), 98)) if finite.size else 0.0
+    if vmax <= 0:
+        vmax = float(np.max(np.abs(finite))) if finite.size else 1.0
+
     head = "".join(f"<th>{m}</th>" for m in MONTH_NAMES)
     rows = []
     for year, row in matrix.iterrows():
@@ -286,58 +520,201 @@ def _monthly_html(returns: pd.Series) -> str:
             if v is None or (isinstance(v, float) and math.isnan(v)):
                 cells.append('<td class="num empty">·</td>')
             else:
-                cells.append(f'<td class="num {_sign_class(v)}">{v:.2f}</td>')
+                cells.append(f'<td class="num heat"{_heat_style(v, vmax)}>{v:.2f}</td>')
         total = float(((1 + returns[returns.index.year == year]).prod() - 1) * 100)
         rows.append(f'<tr><th class="rowhead">{int(year)}</th>{"".join(cells)}'
                     f'<td class="num total {_sign_class(total)}">{total:.2f}</td></tr>')
 
     yearly = yearly_table(returns)
     positive = int((yearly["return_pct"] > 0).sum())
-    return (f'<div class="card"><h2>Monthly returns (%)</h2>'
+    legend = (f'<div class="legend"><span class="dim">−{vmax:.1f}%</span>'
+              f'<span class="ramp" aria-hidden="true"></span>'
+              f'<span class="dim">+{vmax:.1f}%</span>'
+              f'<span class="dim legend-note">colour is intensity only — every '
+              f'cell prints its value</span></div>')
+    return (f'<div class="card"><h2>Monthly returns (%)</h2>{legend}'
             f'<div class="scroll"><table class="grid matrix"><thead><tr><th></th>'
             f'{head}<th>Year</th></tr></thead><tbody>{"".join(rows)}</tbody>'
             f'</table></div>'
             f'<p class="dim">Positive years: {positive}/{len(yearly)}</p></div>')
 
 
-def _trades_html(trades: pd.DataFrame | None,
-                 max_rows: int = MAX_TRADE_ROWS) -> str:
+def _logic_card(metrics: dict, result: Any, description: str | None,
+                trades: pd.DataFrame | None) -> str:
+    """
+    What the engine actually did, next to what the strategy claims to do.
+
+    The execution half is read off the config rather than described from
+    memory, because these are exactly the assumptions that make a backtest
+    unreproducible when they drift: which bar a signal fills on, whether the
+    position is flattened at the session close, and what a round trip cost.
+
+    Stops are stated as absent when they are absent. The engine models no
+    stop-loss and no take-profit - a position is opened by the entry signal and
+    closed by the exit signal or the session flatten, and nothing else. A
+    reader who assumes an unstated 2% stop is reading a different strategy.
+    """
+    cfg = _config(result)
+    meta = (metrics or {}).get("meta", {}) or {}
+    params = meta.get("params") or {}
+
+    entry = ("The strategy module's `signal_fn` returns the entry mask; the "
+             "engine opens a position on the bar AFTER the signal.")
+    exit_rule = ("The same call's exit mask closes it, again on the following "
+                 "bar. `clean_signals` drops an exit with no open position and "
+                 "an entry while already long, so the two masks resolve to "
+                 "alternating trades.")
+
+    if meta.get("ml_threshold") is not None:
+        entry += (f" Version B then suppresses any entry the causal filter "
+                  f"scores below P(win) {meta['ml_threshold']:g}; it can only "
+                  f"remove entries, never add one.")
+
+    flat = getattr(cfg, "flat_by_close", None)
+    if flat:
+        flatten = (f"ON — any open position is closed at "
+                   f"{getattr(cfg, 'session_close_utc', '?')} UTC each session.")
+    elif flat is None:
+        flatten = "Not recorded — no BacktestConfig was handed to this report."
+    else:
+        flatten = ("OFF — positions are held across the session close. This is "
+                   "the Portfolio B (swing) setting; Portfolio A sets "
+                   "flat_by_close=True.")
+
+    rows = [
+        ("Entry trigger", entry),
+        ("Exit rule", exit_rule),
+        ("Stops / targets",
+         "NONE MODELLED. The engine has no stop-loss or take-profit. Every "
+         "exit above comes from the strategy's own signal or the session "
+         "flatten — read the drawdown figures with that in mind."),
+        ("Session flatten", flatten),
+        ("Fill price", "The NEXT bar's open. Filling on the signal bar's close "
+                       "would be lookahead bias."),
+    ]
+    if cfg is not None:
+        rows.append((
+            "Costs charged",
+            f"{getattr(cfg, 'slippage_ticks', '?')} tick(s) slippage each way, "
+            f"plus commission "
+            f"{('$' + format(cfg.commission_per_side, ',.2f') + '/side') if getattr(cfg, 'commission_per_side', None) is not None else 'from backtest/specs.py'}"
+            f", on {getattr(cfg, 'contracts', 1)} contract(s)."))
+        if getattr(cfg, "trailing_drawdown_pct", None) is not None:
+            rows.append(("Trailing drawdown",
+                         f"{cfg.trailing_drawdown_pct}% — descriptive only. "
+                         f"Account governance lives in CrossTrade NAM, not "
+                         f"in research."))
+    if params:
+        rows.append(("Parameters", ", ".join(f"{k}={v}" for k, v in params.items())))
+    if trades is not None and len(trades) and "direction" in trades.columns:
+        sides = sorted(set(str(d) for d in trades["direction"].unique()))
+        rows.append(("Sides taken", ", ".join(sides)))
+
+    body = "".join(f'<tr><td class="lbl">{_esc(k)}</td><td>{_esc(v)}</td></tr>'
+                   for k, v in rows)
+    desc = (f'<p class="desc">{_esc(description.strip())}</p>'
+            if description and description.strip() else "")
+    return (f'<div class="card"><h2>Strategy logic</h2>{desc}'
+            f'<table class="grid logic"><tbody>{body}</tbody></table></div>')
+
+
+_TRADE_COLS = [
+    ("#", "num", "Trade number, in exit order"),
+    ("Entry time", "txt", "UTC"),
+    ("Exit time", "txt", "UTC"),
+    ("Entry price", "num", "The raw bar open, before slippage"),
+    ("Exit price", "num", "The raw bar open, before slippage"),
+    ("Return %", "num", "Price return from entry to exit, signed by direction"),
+    ("Fees $", "num", "Commission, both sides"),
+    ("Slippage $", "num", "The rest of the engine's cost figure"),
+    ("Net P&L $", "num", "After all costs"),
+]
+
+
+def _trades_html(trades: pd.DataFrame | None, result: Any = None,
+                 symbol: str | None = None,
+                 max_rows: int = MAX_TRADE_ROWS,
+                 inspectable: bool = False) -> str:
+    """
+    The trade log: searchable, sortable, and clickable when bars were supplied.
+
+    Sort keys are carried in `data-v` rather than parsed out of the rendered
+    text, so "1,234.50" and "2026-08-15 13:45" both sort as what they are
+    instead of as strings.
+    """
     if trades is None or len(trades) == 0:
         return ('<div class="card"><h2>Trade log</h2>'
                 '<p class="warn">No trades.</p></div>')
 
     total = len(trades)
-    shown = trades.head(max_rows) if total > max_rows else trades
-    cols = [c for c in ("entry_time", "exit_time", "symbol", "direction",
-                        "entry_price", "exit_price", "gross_pnl", "costs", "pnl")
-            if c in shown.columns]
-    if not cols:
-        cols = list(shown.columns)
+    shown = (trades.head(max_rows) if total > max_rows else trades).reset_index(drop=True)
 
-    head = "".join(f'<th>{_esc(c)}</th>' for c in cols)
+    split = _cost_split(shown, result, symbol)
+    fees, slip = split if split else (None, None)
+    rets = _trade_return_pct(shown)
+
+    head = "".join(
+        f'<th class="{cls}" data-sort="{i}" tabindex="0" role="columnheader" '
+        f'aria-sort="none" title="{_esc(tip)}">{_esc(label)}'
+        f'<span class="arrow" aria-hidden="true"></span></th>'
+        for i, (label, cls, tip) in enumerate(_TRADE_COLS))
+
+    def cell(value: float, spec: str = "{:,.2f}", cls: str = "") -> str:
+        v = _num(value)
+        sortable = "" if math.isnan(v) else f' data-v="{v:.6f}"'
+        return f'<td class="num {cls}"{sortable}>{_fmt(value, spec)}</td>'
+
     body = []
-    for row in shown[cols].itertuples(index=False, name=None):
-        cells = []
-        for col, value in zip(cols, row):
-            if isinstance(value, (pd.Timestamp, datetime)):
-                cells.append(f'<td class="mono">{_esc(str(value)[:19])}</td>')
-            elif isinstance(value, (int, float, np.integer, np.floating)):
-                cls = _sign_class(value) if col in ("pnl", "gross_pnl") else "num"
-                spec = "{:,.2f}" if col not in ("costs",) else "{:,.2f}"
-                cells.append(f'<td class="num {cls}">{_fmt(value, spec)}</td>')
-            else:
-                cells.append(f'<td>{_esc(value)}</td>')
-        body.append(f"<tr>{''.join(cells)}</tr>")
+    for i in range(len(shown)):
+        row = shown.iloc[i]
+        entry_t, exit_t = str(row.get("entry_time"))[:19], str(row.get("exit_time"))[:19]
+        pnl = _num(row.get("pnl"))
+        costs = _num(row.get("costs"))
+        f_val = fees.iloc[i] if fees is not None else float("nan")
+        s_val = slip.iloc[i] if slip is not None else costs
+        cells = [
+            f'<td class="num" data-v="{i + 1}">{i + 1}</td>',
+            f'<td class="mono" data-v="{_esc(entry_t)}">{_esc(entry_t)}</td>',
+            f'<td class="mono" data-v="{_esc(exit_t)}">{_esc(exit_t)}</td>',
+            cell(row.get("entry_price")),
+            cell(row.get("exit_price")),
+            cell(rets.iloc[i] if len(rets) else float("nan"), "{:,.3f}",
+                 _sign_class(rets.iloc[i] if len(rets) else float("nan"))),
+            cell(f_val),
+            cell(s_val),
+            cell(pnl, "{:,.2f}", _sign_class(pnl)),
+        ]
+        attrs = (f' data-trade="{i}" tabindex="0" role="button" '
+                 f'aria-label="Inspect trade {i + 1}"' if inspectable else "")
+        body.append(f'<tr{attrs}>{"".join(cells)}</tr>')
 
-    cap = ""
+    notes = []
     if total > max_rows:
-        cap = (f'<p class="warn">Showing the first {max_rows:,} of {total:,} '
-               f'trades. The rest are in the saved trades parquet, not here — '
-               f'a full table at this size will not open in a browser.</p>')
+        notes.append(
+            f'<p class="warn">Showing the first {max_rows:,} of {total:,} '
+            f'trades. The rest are in the saved trades parquet, not here — a '
+            f'full table at this size will not open in a browser.</p>')
+    if split is None:
+        notes.append(
+            '<p class="warn">Fees and slippage could not be separated for this '
+            'run — the Slippage column carries the engine\'s whole cost figure '
+            'and Fees reads n/a. Splitting them needs the contract\'s '
+            'commission from backtest/specs.py.</p>')
+    hint = ('<p class="dim">Click a row to inspect that trade on the chart.</p>'
+            if inspectable else
+            '<p class="dim">Pass the bars frame to enable the trade inspector.</p>')
 
     return (f'<div class="card"><h2>Trade log <span class="dim">({total:,})</span></h2>'
-            f'{cap}<div class="scroll tall"><table class="grid trades"><thead><tr>'
-            f'{head}</tr></thead><tbody>{"".join(body)}</tbody></table></div></div>')
+            f'{"".join(notes)}'
+            f'<div class="toolbar">'
+            f'<label class="sr-only" for="trade-search">Search trades</label>'
+            f'<input id="trade-search" type="search" placeholder="Search trades — '
+            f'date, price, P&amp;L…" autocomplete="off">'
+            f'<span class="dim" id="trade-count"></span></div>'
+            f'{hint}'
+            f'<div class="scroll tall"><table class="grid trades" id="trade-table">'
+            f'<thead><tr>{head}</tr></thead><tbody>{"".join(body)}</tbody>'
+            f'</table></div></div>')
 
 
 def _meta_html(metrics: dict, gate_audit: dict | None) -> str:
@@ -434,16 +811,242 @@ table.trades td { font-size:12px; font-family:ui-monospace,SFMono-Regular,Menlo,
 footer { color:var(--ink-dim); font-size:12px; border-top:1px solid var(--line);
   padding-top:16px; margin-top:8px; }
 @media (max-width:640px) { .wrap { padding:16px 12px 40px; } .card { padding:14px; } }
+
+/* Strategy logic card */
+table.logic td { vertical-align:top; }
+table.logic td.lbl { color:var(--ink-dim); white-space:nowrap; width:150px;
+  font-weight:600; }
+.desc { color:var(--ink-dim); margin:0 0 14px; white-space:pre-wrap;
+  border-left:2px solid var(--line); padding-left:12px; }
+
+/* Monthly heatmap */
+td.heat { color:var(--ink); }
+.legend { display:flex; align-items:center; gap:8px; margin:0 0 12px;
+  font-size:12px; flex-wrap:wrap; }
+.ramp { width:140px; height:10px; border-radius:2px; display:inline-block;
+  background:linear-gradient(90deg, rgba(230,103,103,0.55), rgba(230,103,103,0.06),
+    rgba(57,135,229,0.06), rgba(57,135,229,0.55)); }
+.legend-note { margin-left:4px; }
+
+/* Trade log toolbar, sorting, row affordance */
+.toolbar { display:flex; align-items:center; gap:12px; margin-bottom:8px; }
+.toolbar input { flex:1; max-width:340px; background:#0b0f15; color:var(--ink);
+  border:1px solid var(--line); border-radius:6px; padding:7px 10px;
+  font-size:13px; font-family:inherit; }
+.toolbar input:focus { outline:2px solid var(--accent); outline-offset:1px; }
+table.trades thead th { cursor:pointer; user-select:none; position:sticky; top:0;
+  background:var(--panel); z-index:1; }
+table.trades thead th:focus-visible { outline:2px solid var(--accent);
+  outline-offset:-2px; }
+.arrow { display:inline-block; width:10px; color:var(--ink-dim); }
+th[aria-sort="ascending"] .arrow::after { content:"\\2191"; }
+th[aria-sort="descending"] .arrow::after { content:"\\2193"; }
+table.trades tbody tr[data-trade] { cursor:pointer; }
+table.trades tbody tr[data-trade]:hover,
+table.trades tbody tr[data-trade]:focus-visible {
+  background:rgba(57,135,229,0.14); outline:none; }
+.sr-only { position:absolute; width:1px; height:1px; overflow:hidden;
+  clip:rect(0 0 0 0); white-space:nowrap; }
+
+/* Trade inspector modal */
+.modal[hidden] { display:none; }
+.modal { position:fixed; inset:0; z-index:50; display:flex; align-items:center;
+  justify-content:center; padding:24px; background:rgba(4,7,11,0.74); }
+.modal-box { background:var(--panel); border:1px solid var(--line);
+  border-radius:12px; width:min(1000px,100%); max-height:92vh; overflow:auto;
+  padding:20px; box-shadow:0 24px 64px rgba(0,0,0,0.55); }
+.modal-head { display:flex; align-items:flex-start; justify-content:space-between;
+  gap:16px; margin-bottom:12px; }
+.modal-head h3 { margin:0; font-size:16px; }
+.modal-facts { display:flex; flex-wrap:wrap; gap:6px 18px; margin:6px 0 0;
+  font-size:12px; color:var(--ink-dim); font-variant-numeric:tabular-nums; }
+.modal-close { background:none; border:1px solid var(--line); color:var(--ink);
+  border-radius:6px; width:32px; height:32px; font-size:16px; cursor:pointer;
+  flex:none; }
+.modal-close:hover { border-color:var(--accent); color:var(--accent); }
 """
+
+# Search, column sort, and the click-to-inspect modal. Vanilla, because the
+# page has to work from a file:// URL with no network - a script tag pointing
+# at a table library would break exactly when the report is being read as
+# evidence. Plotly is already inlined for the equity chart, so the candlestick
+# costs nothing extra.
+_JS = """
+(function () {
+  var TABLE = document.getElementById('trade-table');
+  if (!TABLE) return;
+  var TBODY = TABLE.tBodies[0];
+  var ROWS = Array.prototype.slice.call(TBODY.rows);
+  var COUNT = document.getElementById('trade-count');
+
+  function sortKey(cell) {
+    if (!cell) return '';
+    var v = cell.getAttribute('data-v');
+    if (v === null) return cell.textContent.trim();
+    var n = parseFloat(v);
+    return isNaN(n) ? v : n;
+  }
+
+  /* Search ------------------------------------------------------------- */
+  var search = document.getElementById('trade-search');
+  function applyFilter() {
+    var q = (search && search.value || '').trim().toLowerCase();
+    var shown = 0;
+    ROWS.forEach(function (tr) {
+      var hit = !q || tr.textContent.toLowerCase().indexOf(q) !== -1;
+      tr.style.display = hit ? '' : 'none';
+      if (hit) shown++;
+    });
+    if (COUNT) {
+      COUNT.textContent = q ? shown + ' of ' + ROWS.length + ' shown'
+                            : ROWS.length + ' rows';
+    }
+  }
+  if (search) search.addEventListener('input', applyFilter);
+  applyFilter();
+
+  /* Sort --------------------------------------------------------------- */
+  var heads = Array.prototype.slice.call(TABLE.tHead.rows[0].cells);
+  function sortBy(i, dir) {
+    var sorted = ROWS.slice().sort(function (a, b) {
+      var x = sortKey(a.cells[i]), y = sortKey(b.cells[i]);
+      if (x < y) return -dir;
+      if (x > y) return dir;
+      return 0;
+    });
+    sorted.forEach(function (tr) { TBODY.appendChild(tr); });
+  }
+  heads.forEach(function (th, i) {
+    function toggle() {
+      var next = th.getAttribute('aria-sort') === 'ascending'
+        ? 'descending' : 'ascending';
+      heads.forEach(function (o) { o.setAttribute('aria-sort', 'none'); });
+      th.setAttribute('aria-sort', next);
+      sortBy(i, next === 'ascending' ? 1 : -1);
+    }
+    th.addEventListener('click', toggle);
+    th.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
+    });
+  });
+
+  /* Trade inspector ----------------------------------------------------- */
+  var modal = document.getElementById('trade-modal');
+  if (!modal || !window.INSPECTOR || !INSPECTOR.trades.length) return;
+  var B = INSPECTOR.bars, T = INSPECTOR.trades;
+  var lastFocus = null;
+
+  function closeModal() {
+    modal.hidden = true;
+    if (window.Plotly) Plotly.purge('modal-chart');
+    if (lastFocus) lastFocus.focus();
+  }
+
+  function showTrade(i) {
+    var t = T[i];
+    if (!t || !window.Plotly) return;
+    var lo = t.lo, hi = t.hi + 1;
+    var x = B.t.slice(lo, hi).map(function (ms) { return new Date(ms); });
+    var candles = {
+      type: 'candlestick', name: 'Price',
+      x: x,
+      open: B.o.slice(lo, hi), high: B.h.slice(lo, hi),
+      low: B.l.slice(lo, hi), close: B.c.slice(lo, hi),
+      increasing: { line: { color: '%(up)s' }, fillcolor: '%(up)s' },
+      decreasing: { line: { color: '%(down)s' }, fillcolor: '%(down)s' }
+    };
+    /* Shape AND label carry entry vs exit - the green/red pair alone is not
+       separable under deuteranopia. */
+    var marks = [
+      { type: 'scatter', mode: 'markers+text', name: 'Entry',
+        x: [new Date(B.t[t.e])], y: [B.o[t.e]],
+        text: ['IN'], textposition: 'bottom center',
+        textfont: { color: '%(entry)s', size: 11 },
+        marker: { symbol: 'triangle-up', size: 15, color: '%(entry)s',
+                  line: { color: '#12161d', width: 1.5 } },
+        hovertemplate: 'Entry %%{x|%%Y-%%m-%%d %%H:%%M}<br>%%{y:,.2f}<extra></extra>' },
+      { type: 'scatter', mode: 'markers+text', name: 'Exit',
+        x: [new Date(B.t[t.x])], y: [B.o[t.x]],
+        text: ['OUT'], textposition: 'top center',
+        textfont: { color: '%(exit)s', size: 11 },
+        marker: { symbol: 'triangle-down', size: 15, color: '%(exit)s',
+                  line: { color: '#12161d', width: 1.5 } },
+        hovertemplate: 'Exit %%{x|%%Y-%%m-%%d %%H:%%M}<br>%%{y:,.2f}<extra></extra>' }
+    ];
+    var row = ROWS[i];
+    var cells = row ? row.cells : [];
+    var fact = function (n) { return cells[n] ? cells[n].textContent.trim() : '—'; };
+    document.getElementById('modal-title').textContent =
+      'Trade ' + fact(0) + ' · ' + fact(1) + ' → ' + fact(2);
+    document.getElementById('modal-facts').innerHTML =
+      ['Entry ' + fact(3), 'Exit ' + fact(4), 'Return ' + fact(5) + '%%',
+       'Fees ' + fact(6), 'Slippage ' + fact(7), 'Net P&L ' + fact(8)]
+      .map(function (s) { return '<span>' + s + '</span>'; }).join('');
+
+    modal.hidden = false;
+    Plotly.newPlot('modal-chart', [candles].concat(marks), {
+      template: 'plotly_dark', height: 460, showlegend: false,
+      margin: { l: 62, r: 20, t: 10, b: 40 },
+      paper_bgcolor: '#12161d', plot_bgcolor: '#12161d',
+      font: { family: 'ui-sans-serif, system-ui, sans-serif', size: 12,
+              color: '#c8d1dc' },
+      xaxis: { gridcolor: '#232a34', rangeslider: { visible: false } },
+      yaxis: { gridcolor: '#232a34' }
+    }, { displaylogo: false, responsive: true });
+  }
+
+  ROWS.forEach(function (tr) {
+    var i = parseInt(tr.getAttribute('data-trade'), 10);
+    if (isNaN(i)) return;
+    tr.addEventListener('click', function () { lastFocus = tr; showTrade(i); });
+    tr.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault(); lastFocus = tr; showTrade(i);
+      }
+    });
+  });
+  modal.addEventListener('click', function (e) {
+    if (e.target === modal) closeModal();
+  });
+  document.getElementById('modal-close').addEventListener('click', closeModal);
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && !modal.hidden) closeModal();
+  });
+  window.showTrade = showTrade;      /* exercised by tests/test_report_gates */
+  window.closeTrade = closeModal;
+})();
+""" % {"up": C_UP, "down": C_DOWN, "entry": C_ENTRY, "exit": C_EXIT}
+
+_MODAL = """
+<div class="modal" id="trade-modal" role="dialog" aria-modal="true"
+     aria-labelledby="modal-title" hidden>
+  <div class="modal-box">
+    <div class="modal-head">
+      <div>
+        <h3 id="modal-title">Trade</h3>
+        <div class="modal-facts" id="modal-facts"></div>
+      </div>
+      <button class="modal-close" id="modal-close" aria-label="Close">&#215;</button>
+    </div>
+    <div id="modal-chart"></div>
+    <p class="dim">%d bars before the entry through %d after the exit.
+      Prices are the raw bar values; the fill is the open of the bar the
+      marker sits on.</p>
+  </div>
+</div>
+""" % (INSPECT_PRE, INSPECT_POST)
 
 
 # --------------------------------------------------------------------------
 # Entry point
 # --------------------------------------------------------------------------
-def generate_html_report(result: Any,
+def generate_html_report(bars: pd.DataFrame | None,
+                         result: Any,
                          metrics: dict,
                          gate_audit: dict | None,
                          out_path: str | Path,
+                         strat_name: str | None = None,
+                         strat_description: str | None = None,
                          version_label: str = "Version A",
                          max_trade_rows: int = MAX_TRADE_ROWS) -> Path:
     """
@@ -451,8 +1054,15 @@ def generate_html_report(result: Any,
 
     Parameters
     ----------
+    bars
+        The symbol's OHLCV frame the run was made on. Powers the trade
+        inspector; pass None and every other section still renders, with the
+        inspector reported as unavailable rather than quietly missing.
     result
         A `BacktestResult`, or a dict carrying `returns`, `trades`, `equity`.
+        The `config` on a BacktestResult is what fills the strategy logic
+        card's execution half, so hand over the result rather than just its
+        series when you have it.
     metrics
         The metrics dict from `agents.tier3_workers.summarize_result`.
     gate_audit
@@ -460,6 +1070,10 @@ def generate_html_report(result: Any,
         renders as "no gate audit was supplied" — never as a pass.
     out_path
         Destination `.html` file. Parent directories are created.
+    strat_name, strat_description
+        Header name and the prose above the logic card. Both default to what
+        the metrics meta and the strategy module's own docstring say, so a
+        caller that has nothing extra to add can leave them out.
 
     Returns the path written.
     """
@@ -471,7 +1085,16 @@ def generate_html_report(result: Any,
     if math.isnan(capital) or capital <= 0:
         capital = 100_000.0
 
-    name = meta.get("strategy", "unnamed strategy")
+    name = strat_name or meta.get("strategy") or "unnamed strategy"
+    symbol = meta.get("symbol")
+    description = strat_description
+    if description is None:
+        description = module_docstring(meta.get("strategy_path"))
+
+    inspector = build_inspector(bars, trades.head(max_trade_rows)
+                                if trades is not None else None)
+    inspectable = bool(inspector["trades"])
+
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     period = (f"{daily.index[0].date()} → {daily.index[-1].date()}"
               if len(daily) else "no daily returns")
@@ -480,10 +1103,14 @@ def generate_html_report(result: Any,
         _gates_html(gate_audit),
         _metrics_html(metrics or {}, daily),
         _chart_html(daily, capital),
+        _logic_card(metrics or {}, result, description, trades),
         _monthly_html(daily),
-        _trades_html(trades, max_trade_rows),
+        _trades_html(trades, result, symbol, max_trade_rows, inspectable),
         _meta_html(metrics or {}, gate_audit),
     ]
+
+    payload = (f'<script>window.INSPECTOR={json.dumps(inspector, separators=(",", ":"))};</script>'
+               if inspectable else "")
 
     doc = f"""<!DOCTYPE html>
 <html lang="en"><head>
@@ -494,7 +1121,7 @@ def generate_html_report(result: Any,
 </head><body><div class="wrap">
 <header>
   <h1>{_esc(name)} <span class="dim">·</span> {_esc(version_label)}</h1>
-  <div class="sub">{_esc(period)} &nbsp;·&nbsp; {_esc(meta.get('symbol', '—'))}
+  <div class="sub">{_esc(period)} &nbsp;·&nbsp; {_esc(symbol or '—')}
     {_esc(meta.get('timeframe', ''))} &nbsp;·&nbsp; generated {_esc(generated)}</div>
 </header>
 {''.join(sections)}
@@ -503,7 +1130,11 @@ def generate_html_report(result: Any,
   and formatted here. No model produced a number. In-sample results are not
   evidence of an edge until the 3-year holdout says so.
 </footer>
-</div></body></html>"""
+</div>
+{_MODAL if inspectable else ""}
+{payload}
+<script>{_JS}</script>
+</body></html>"""
 
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -512,10 +1143,12 @@ def generate_html_report(result: Any,
 
 
 def write_dual_reports(dual: dict,
+                       bars: pd.DataFrame | None = None,
                        out_dir: str | Path | None = None,
                        strat_name: str | None = None,
                        artifacts_root: str | Path = "/mnt/backtest/artifacts",
                        timestamp: str | None = None,
+                       strat_description: str | None = None,
                        max_trade_rows: int = MAX_TRADE_ROWS) -> dict[str, Any]:
     """
     Write `report_version_a.html` and `report_version_b.html` for a dual run.
@@ -524,6 +1157,10 @@ def write_dual_reports(dual: dict,
     Both versions get a report whether or not either cleared a gate — a failing
     version is exactly the one somebody will want to read.
 
+    `bars` is the frame both versions ran on. It is the same frame for A and B
+    by construction — that is the whole point of the dual run — so one is
+    passed to both reports and each extracts its own trades' windows from it.
+
     Without `out_dir`, the destination is
     `<artifacts_root>/<strat_name>_<timestamp>/`. The timestamp is part of the
     directory rather than the filename so a re-run never overwrites the
@@ -531,21 +1168,23 @@ def write_dual_reports(dual: dict,
     """
     va, vb = dual["version_a"], dual["version_b"]
     meta = dual.get("meta", {}) or {}
+    name = strat_name or meta.get("strategy") or "strategy"
 
     if out_dir is None:
-        name = strat_name or meta.get("strategy") or "strategy"
         stamp = timestamp or datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         out_dir = Path(artifacts_root) / f"{name}_{stamp}"
     out_dir = Path(out_dir)
 
     paths = {
         "version_a": generate_html_report(
-            va.get("result"), va.get("metrics", {}), va.get("gate_audit"),
-            out_dir / "report_version_a.html",
+            bars, va.get("result"), va.get("metrics", {}), va.get("gate_audit"),
+            out_dir / "report_version_a.html", strat_name=name,
+            strat_description=strat_description,
             version_label="Version A · rule-based", max_trade_rows=max_trade_rows),
         "version_b": generate_html_report(
-            vb.get("result"), vb.get("metrics", {}), vb.get("gate_audit"),
-            out_dir / "report_version_b.html",
+            bars, vb.get("result"), vb.get("metrics", {}), vb.get("gate_audit"),
+            out_dir / "report_version_b.html", strat_name=name,
+            strat_description=strat_description,
             version_label="Version B · ML-filtered", max_trade_rows=max_trade_rows),
     }
 

@@ -886,8 +886,11 @@ def run_dual_version_backtest(strategy_code: str,
         from backtest.report_html import write_dual_reports
         try:
             name = strat_name or Path(info["path"]).stem
+            # `bars` powers the trade inspector: the report embeds the window
+            # around each trade at build time, so a reader clicking a row does
+            # not need the lake, a server, or this process still being alive.
             out["reports"] = write_dual_reports(
-                out, out_dir=report_dir, strat_name=name,
+                out, bars=bars, out_dir=report_dir, strat_name=name,
                 artifacts_root=artifacts_root)
         except Exception as e:                                  # noqa: BLE001
             # Recorded rather than raised, and recorded loudly enough that a
