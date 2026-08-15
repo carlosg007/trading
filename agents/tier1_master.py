@@ -62,6 +62,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Iterator
 
+import pandas as pd
+
 _REPO = Path(__file__).resolve().parent.parent
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
@@ -653,6 +655,199 @@ def _render_campaign(prompt: str, symbols: list[str], tf: str,
     ]
 
     return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------
+# The Dual-Version Mandate
+# --------------------------------------------------------------------------
+def _resolve_strategy(strategy_code: str, params: dict[str, Any] | None):
+    """
+    Accept either a path to a strategy module or raw source, and return a bound
+    signal_fn.
+
+    Raw source is written through `write_and_validate_strategy`, so it takes
+    the same AST audit - import allowlist, forbidden builtins, negative shifts,
+    reversed slices - and the same smoke test as anything Gemini produces.
+    There is deliberately no path that imports a code string directly.
+    """
+    from agents.tier3_workers import load_strategy, write_and_validate_strategy
+
+    text = (strategy_code or "").strip()
+    if not text:
+        raise ValueError("strategy_code is empty")
+
+    # A path is one line ending in .py. Source always carries a newline, so the
+    # two cannot be confused by a filename that happens to contain "def".
+    if "\n" not in text and text.endswith(".py"):
+        path = Path(text)
+        if not path.exists():
+            raise FileNotFoundError(f"strategy module not found: {path}")
+        return load_strategy(path, params)
+
+    stamp = date.today().isoformat().replace("-", "")
+    staged = write_and_validate_strategy(f"dual version {stamp}", text)
+    return load_strategy(staged, params)
+
+
+def run_dual_version_backtest(strategy_code: str,
+                              df: pd.DataFrame,
+                              freq: str = "15m",
+                              symbol: str | None = None,
+                              cfg: Any = None,
+                              params: dict[str, Any] | None = None,
+                              threshold: float = 0.50) -> dict[str, Any]:
+    """
+    Run a strategy as Version A (rule-based) and Version B (ML-filtered) over
+    the same bars, under identical costs.
+
+    This is the comparison the Dual-Version Mandate is built on: ML is adopted
+    only if B beats A out-of-sample. Both versions see the same frame, the same
+    fills - next bar's open - and the same cost arrays, so the only difference
+    between the two equity curves is which entries the classifier suppressed.
+    Nothing else is allowed to vary, because if it did, the comparison would be
+    measuring the change rather than the filter.
+
+    `df` is ONE symbol's OHLCV frame. A multi-symbol frame raises rather than
+    being silently accepted: rows sorted by (ts, symbol) interleave instruments,
+    and a rolling window over that averages across contracts. It produced a
+    plausible equity curve and 608,079 trades where the correct per-symbol
+    signals gave 86,035, which is why the engine has no frame-in entry point at
+    all. This function needs one, so it checks.
+
+    Parameters
+    ----------
+    strategy_code
+        A path to a strategy module, or raw source (audited before it runs).
+    freq
+        The timeframe the frame is already at. Recorded as provenance and used
+        for nothing else - no resampling happens here, because a silent
+        resample is how a 15m result gets reported as a 1m one.
+    threshold
+        P(win) at or above which Version B keeps an entry.
+
+    Returns
+    -------
+    dict with `version_a` and `version_b`, each carrying `metrics` (the same
+    dict shape `run_strategy_backtest` returns) and `result` (a
+    `BacktestResult` with returns, trades and equity), plus a `comparison`
+    block and `meta`.
+
+    Note `result` is the engine's BacktestResult, not a raw vectorbt Portfolio.
+    `_simulate` feeds vectorbt in chunks and concatenates the trade records, so
+    there is no single Portfolio object to hand back; returning one would mean
+    disabling the batching that keeps peak RAM flat.
+    """
+    import numpy as np
+
+    from backtest.engine import BacktestConfig, _assemble_result, _simulate, clean_signals
+    from agents.tier3_workers import apply_ml_signal_filter, summarize_result
+
+    config = cfg or BacktestConfig()
+
+    if df is None or len(df) == 0:
+        raise ValueError("df is empty - nothing to simulate")
+
+    bars = df
+    if "ts" not in bars.columns:
+        if not isinstance(bars.index, pd.DatetimeIndex):
+            raise ValueError(
+                "df needs a `ts` column or a DatetimeIndex; got an index of "
+                f"type {type(bars.index).__name__}")
+        bars = bars.assign(ts=pd.DatetimeIndex(bars.index).tz_localize("UTC")
+                           if bars.index.tz is None else bars.index)
+    bars = bars.reset_index(drop=True)
+
+    missing = {"open", "high", "low", "close", "volume"} - set(bars.columns)
+    if missing:
+        raise ValueError(f"df is missing OHLCV columns: {sorted(missing)}")
+
+    if "symbol" in bars.columns:
+        present = pd.unique(bars["symbol"].dropna())
+        if len(present) > 1:
+            raise ValueError(
+                f"df carries {len(present)} symbols ({', '.join(map(str, present[:5]))}). "
+                f"Pass one symbol's bars: a rolling window over an interleaved "
+                f"frame averages across contracts and the result looks fine.")
+        if symbol is None and len(present) == 1:
+            symbol = str(present[0])
+    if symbol is None:
+        raise ValueError(
+            "symbol could not be determined from df and none was given. It "
+            "sets the contract multiplier, tick size and commission - guessing "
+            "it would silently rescale every P&L figure.")
+
+    signal_fn, info = _resolve_strategy(strategy_code, params)
+
+    # -- Version A: the rule-based baseline --------------------------------
+    entries, exits = signal_fn(bars)
+    if len(entries) != len(bars) or len(exits) != len(bars):
+        raise ValueError(
+            f"signal_fn returned {len(entries)}/{len(exits)} signals for "
+            f"{len(bars)} bars")
+    entries = pd.Series(entries).reset_index(drop=True).fillna(False).astype(bool)
+    exits = pd.Series(exits).reset_index(drop=True).fillna(False).astype(bool)
+
+    if config.flat_by_close:
+        from backtest.engine import apply_flat_by_close
+        entries, exits = apply_flat_by_close(bars, entries, exits,
+                                             config.session_close_utc)
+
+    entries_a, exits_a = clean_signals(entries, exits)
+
+    days = pd.DatetimeIndex(np.unique(
+        pd.DatetimeIndex(bars["ts"]).values.astype("datetime64[D]"))
+    ).tz_localize("UTC")
+
+    trades_a = _simulate(bars, entries_a, exits_a, symbol, config)
+    result_a = _assemble_result([trades_a] if not trades_a.empty else [],
+                                days, config)
+
+    # -- Version B: the same signals, ML-filtered ---------------------------
+    # Filtering the CLEANED signals, not the raw ones, so the trades the
+    # classifier learns from are exactly the trades Version A took.
+    filtered, exits_b = apply_ml_signal_filter(
+        bars, entries_a, exits_a, symbol=symbol, cfg=config,
+        threshold=threshold)
+    entries_b, exits_b = clean_signals(filtered, exits_b)
+
+    trades_b = _simulate(bars, entries_b, exits_b, symbol, config)
+    result_b = _assemble_result([trades_b] if not trades_b.empty else [],
+                                days, config)
+
+    metrics_a = summarize_result(result_a)
+    metrics_b = summarize_result(result_b)
+
+    meta = {
+        "strategy": info["module"],
+        "strategy_path": info["path"],
+        "params": info.get("bound_params", {}),
+        "symbol": symbol,
+        "timeframe": freq,
+        "bars": int(len(bars)),
+        "start": str(bars["ts"].iloc[0]),
+        "end": str(bars["ts"].iloc[-1]),
+        "costs_included": True,
+        "initial_capital": config.initial_capital,
+        "ml_threshold": threshold,
+    }
+    for m in (metrics_a, metrics_b):
+        m["meta"] = meta
+
+    suppressed = int(entries_a.sum() - entries_b.sum())
+    return {
+        "version_a": {"label": "A · rule-based",
+                      "metrics": metrics_a, "result": result_a},
+        "version_b": {"label": "B · ML-filtered",
+                      "metrics": metrics_b, "result": result_b},
+        "comparison": {
+            "entries_a": int(entries_a.sum()),
+            "entries_b": int(entries_b.sum()),
+            "entries_suppressed": suppressed,
+            "sharpe_delta": metrics_b["sharpe"] - metrics_a["sharpe"],
+            "b_beats_a": bool(metrics_b["sharpe"] > metrics_a["sharpe"]),
+        },
+        "meta": meta,
+    }
 
 
 API_KEY_VARS = ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENAI_API_KEY")
