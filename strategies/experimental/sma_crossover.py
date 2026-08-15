@@ -28,6 +28,21 @@ TIMEFRAME = "1d"
 SYMBOLS = ["NQ"]
 DEFAULT_PARAMS = {"fast_window": 10, "slow_window": 30}
 
+# Plain-English description for the tear sheet's strategy card, written for a
+# reader deciding whether to trade this - not for whoever maintains the module.
+# `{param}` slots are filled with the run's own bound parameters, so the card
+# states the windows that actually ran rather than the defaults written here.
+# The report never infers any of this from the signal arrays: a description
+# guessed from the trades would be a guess printed as a fact.
+LOGIC = {
+    "concept": "Trend following. Buy strength when a short average of price "
+               "overtakes a long one, and stand aside when it gives way.",
+    "entry": "Go Long when the Fast SMA ({fast_window}) crosses above the "
+             "Slow SMA ({slow_window}).",
+    "exit": "Exit when the Fast SMA ({fast_window}) crosses back below the "
+            "Slow SMA ({slow_window}).",
+}
+
 
 def signal_fn(bars: pd.DataFrame,
               fast_window: int = 10,
@@ -73,6 +88,30 @@ def signal_fn(bars: pd.DataFrame,
     # window, so these fillna calls only ever fill the warm-up.
     return (entries.fillna(False).astype(bool),
             exits.fillna(False).astype(bool))
+
+
+def indicators(bars: pd.DataFrame,
+               fast_window: int = 10,
+               slow_window: int = 30) -> dict[str, pd.Series]:
+    """
+    The two means, for the tear sheet to draw over the trade inspector's candles.
+
+    Computed HERE, the same way and from the same column `signal_fn` reads, so
+    the line a reader sees cross is the line the entry was taken from. A second
+    implementation living in the report would be free to disagree with this one
+    - a chart showing a crossover one bar away from where the trade fired, with
+    nothing raising.
+
+    Warm-up stays NaN. The report renders it as a gap rather than drawing the
+    average flat through the first thirty bars.
+    """
+    close = bars["close"]
+    return {
+        f"Fast SMA ({fast_window})":
+            close.rolling(fast_window, min_periods=fast_window).mean(),
+        f"Slow SMA ({slow_window})":
+            close.rolling(slow_window, min_periods=slow_window).mean(),
+    }
 
 
 def make_signal_fn(fast_window: int = 10,

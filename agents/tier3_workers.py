@@ -151,6 +151,19 @@ def load_strategy(strategy_path: str | Path,
     Returns `(bound_signal_fn, module_info)`. `module_info` carries the
     module's declared TIMEFRAME and SYMBOLS if it sets them.
 
+    Two optional declarations are picked up for the tear sheet, and only for
+    the tear sheet - neither can change a signal:
+
+        LOGIC = {"concept": ..., "entry": ..., "exit": ...}
+            Plain-English sentences with `{param}` slots, filled here with the
+            parameters that were actually bound. `module_info["logic"]`.
+        indicators(bars, **params) -> {name: series}
+            The strategy's own calculated series, bound the same way as the
+            signal function and returned as `module_info["indicator_fn"]`. The
+            report draws these over the trade inspector's candles, so they have
+            to come from the module rather than be recomputed downstream where
+            they could drift out of step with the signals.
+
     Every failure here raises. A worker that returns a null strategy on a bad
     import produces a backtest with no trades, which downstream is
     indistinguishable from a strategy that simply never triggered.
@@ -208,7 +221,61 @@ def load_strategy(strategy_path: str | Path,
 
     if not callable(fn):
         raise StrategyLoadError(f"{path.name}: resolved strategy is not callable")
+
+    info["logic"] = _describe_strategy(module, info["bound_params"])
+    info["indicator_fn"] = _bind_indicators(module, info["bound_params"])
     return fn, info
+
+
+def _describe_strategy(module: Any, params: dict) -> dict[str, str]:
+    """
+    A module's LOGIC block with the run's parameters filled in.
+
+    Presentation only, so a malformed template costs the sentence rather than
+    the backtest: an unfilled slot is left verbatim instead of raising, and a
+    module with no LOGIC returns {} - which the report renders as "not
+    declared", never as an invented description.
+    """
+    logic = getattr(module, "LOGIC", None)
+    if not isinstance(logic, dict):
+        return {}
+    out: dict[str, str] = {}
+    for key in ("concept", "entry", "exit"):
+        text = logic.get(key)
+        if not isinstance(text, str) or not text.strip():
+            continue
+        try:
+            out[key] = text.format(**params)
+        except (KeyError, IndexError, ValueError):
+            out[key] = text
+    return out
+
+
+def _bind_indicators(module: Any, params: dict) -> Callable | None:
+    """
+    Bind a module's `indicators(bars, **params)` hook, or None if it has none.
+
+    Only the parameters the hook actually accepts are passed. A strategy whose
+    indicators depend on a subset of its parameters is normal, and an unknown
+    keyword here would break a report over a cosmetic function - the strict
+    check belongs on the signal path, where a dropped parameter changes trades.
+    """
+    fn = getattr(module, "indicators", None)
+    if not callable(fn):
+        return None
+    try:
+        sig = inspect.signature(fn)
+        takes_all = any(p.kind is inspect.Parameter.VAR_KEYWORD
+                        for p in sig.parameters.values())
+        accepted = (dict(params) if takes_all
+                    else {k: v for k, v in params.items() if k in sig.parameters})
+    except (TypeError, ValueError):
+        accepted = {}
+
+    def _bound(bars):
+        return fn(bars, **accepted)
+
+    return _bound
 
 
 def _reject_unknown_params(factory: Callable, params: dict, name: str) -> None:

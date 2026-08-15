@@ -689,6 +689,27 @@ def _resolve_strategy(strategy_code: str, params: dict[str, Any] | None):
     return load_strategy(staged, params)
 
 
+def _strategy_indicators(info: dict, bars: pd.DataFrame) -> dict | None:
+    """
+    The strategy's own indicator series, or None when it declares none.
+
+    Cosmetic - these are drawn on the tear sheet and read by nothing else - so
+    a hook that raises costs the overlay and says so on stderr, rather than
+    throwing away a completed backtest over a chart annotation. The same reason
+    the report writer itself is wrapped.
+    """
+    fn = info.get("indicator_fn")
+    if fn is None:
+        return None
+    try:
+        series = fn(bars)
+    except Exception as e:                                      # noqa: BLE001
+        print(f"[!] indicators() raised, so the inspector has no overlay: "
+              f"{type(e).__name__}: {e}", file=sys.stderr, flush=True)
+        return None
+    return series
+
+
 def run_dual_version_backtest(strategy_code: str,
                               df: pd.DataFrame,
                               freq: str = "15m",
@@ -849,6 +870,10 @@ def run_dual_version_backtest(strategy_code: str,
         "costs_included": True,
         "initial_capital": config.initial_capital,
         "ml_threshold": threshold,
+        # Plain-English sentences the module declares about itself, with the
+        # bound parameters filled in. Presentation only - the tear sheet's
+        # strategy card reads these, and nothing else does.
+        "logic": info.get("logic") or {},
     }
     for m in (metrics_a, metrics_b):
         m["meta"] = meta
@@ -889,9 +914,13 @@ def run_dual_version_backtest(strategy_code: str,
             # `bars` powers the trade inspector: the report embeds the window
             # around each trade at build time, so a reader clicking a row does
             # not need the lake, a server, or this process still being alive.
+            # `indicators` are drawn over those candles, and come from the
+            # strategy module itself so the line a reader watches cross is the
+            # array the entry was taken from.
             out["reports"] = write_dual_reports(
                 out, bars=bars, out_dir=report_dir, strat_name=name,
-                artifacts_root=artifacts_root)
+                artifacts_root=artifacts_root,
+                indicators=_strategy_indicators(info, bars))
         except Exception as e:                                  # noqa: BLE001
             # Recorded rather than raised, and recorded loudly enough that a
             # caller cannot mistake "no reports" for "reports somewhere else".
