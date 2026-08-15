@@ -4,41 +4,64 @@ app.py - CIO Command Center.
 
 Location:  ~/src/trading/dashboard/app.py
 
-Streamlit front end over the agent tiers, the compliance rulesets, and the
-strategy incubator.
+Streamlit front end over the Pure Alpha research stack.
 
     streamlit run dashboard/app.py
 
 Scope
 -----
-The chat panel is live. It drives `agents.tier1_master.run_campaign`, a
-generator that routes a prompt to a vault query, a conversational answer, or a
-full research campaign (stage a strategy, backtest it with costs, audit it
-against the active ruleset).
+**Tab 1 - CIO Terminal.** Takes a natural-language alpha hypothesis and drives
+`agents.tier1_master.run_campaign`: Gemini synthesises a `signal_fn` module,
+`agents.tier3_workers.write_and_validate_strategy` audits it statically (AST
+parse, import allowlist, forbidden builtins, negative-shift and reversed-slice
+lookahead scan) before anything is imported, and the survivor is backtested by
+`backtest.engine.run_backtest` over the real lake at
+`/mnt/backtest/lake/futures/bars/`. The result is rendered as an Institutional
+Pure Alpha Tear Sheet.
 
-The generator is iterated on Streamlit's own script thread. That is why it is a
-generator: Streamlit re-executes this file per interaction, and a worker thread
-loses its ScriptRunContext, so any st.* call from it writes into a context that
-no longer exists. Yielding returns control between steps, so progress renders
-normally without threading.
+**Tab 2 - Strategy Vault.** Catalogues `strategies/experimental/` and
+`strategies/approved_incubator/`. Modules are inspected with `ast`, never
+imported: importing a module runs it, and this directory is where
+model-generated code lands. The catalogue therefore reports what a module
+declares, and checks it against the one strategy contract:
 
-**What is still not real: the strategy itself.** A campaign stages a module
-from `generate_strategy_boilerplate`, whose signal logic is an explicitly
-labelled placeholder. The compliance verdict therefore describes that template,
-not the hypothesis someone typed. The UI says so on the panel and in every
-verdict, because a command centre that renders a clean PASS over generated
+    signal_fn(bars: pd.DataFrame, **params) -> tuple[pd.Series, pd.Series]
+
+**Tab 3 - CrossTrade Governance.** The prop-firm rulesets, shown as the
+specification handed to CrossTrade NAM. They are NOT a research gate and no
+PASS/FAIL verdict is rendered anywhere in this app. Account governance is
+enforced against a live balance on the execution bridge; a backtest cannot
+evaluate it, and a green tick here would only ever have been a statement about
+a funding program rather than about an edge.
+
+What is real and what is not
+----------------------------
+Every number on the tear sheet is computed by `agents.tier3_workers` from the
+engine's own trade list and daily equity curve. No model produces a metric.
+
+A campaign without a `GEMINI_API_KEY`, or one whose generated code fails the
+audit, falls back to boilerplate whose signal logic is an explicitly labelled
+placeholder. The UI says so on the panel, in the verdict, and on the tear sheet
+itself - a command centre that renders a clean Sharpe over generated
 boilerplate is how a research pipeline starts reporting conclusions nobody
-reached. The same rule governs the Strategy Vault:
-a strategy with no saved results gets an empty panel, never a placeholder
-equity curve that could be mistaken for a result.
+reached. The same rule governs the vault: a strategy with no saved results gets
+an empty panel, never a placeholder equity curve.
+
+The campaign generator is iterated on Streamlit's own script thread. That is
+why it is a generator: Streamlit re-executes this file per interaction, and a
+worker thread loses its ScriptRunContext, so any st.* call from it writes into
+a context that no longer exists. Yielding returns control between steps, so
+progress renders normally without threading.
 """
 
 from __future__ import annotations
 
+import ast
 import json
+import math
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -46,9 +69,42 @@ import plotly.graph_objects as go
 import streamlit as st
 
 REPO = Path(__file__).resolve().parent.parent
+
+# Streamlit puts the SCRIPT's directory on sys.path, not the repo root, so
+# `import agents...` resolves only by accident of the working directory.
+# Without this the terminal tab breaks the moment the app is launched from
+# anywhere other than ~/src/trading.
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
 RULES_DIR = REPO / "compliance_rules"
 INCUBATOR = REPO / "strategies" / "approved_incubator"
+EXPERIMENTAL = REPO / "strategies" / "experimental"
+LAKE = Path("/mnt/backtest/lake/futures/bars")
 
+# Mirrors backtest.engine's default. Shown so the equity axis is never read as
+# a percentage, and so a P&L figure has a stated denominator.
+INITIAL_CAPITAL = 100_000.0
+
+TIMEFRAMES = ["1d", "1w", "4h", "2h", "1h", "30m", "15m", "5m", "1m"]
+
+
+# --------------------------------------------------------------------------
+# Backend access
+# --------------------------------------------------------------------------
+def load_tier1() -> tuple[object | None, str | None]:
+    """
+    Import the master agent, returning the failure rather than raising.
+
+    A broken backend must render as a named error inside the page. An uncaught
+    ImportError at module scope takes the whole command centre down, including
+    the vault and the governance spec, which are readable without it.
+    """
+    try:
+        from agents import tier1_master
+        return tier1_master, None
+    except Exception as e:                                    # noqa: BLE001
+        return None, f"{type(e).__name__}: {e}"
 
 
 # --------------------------------------------------------------------------
@@ -74,10 +130,27 @@ class Ruleset:
 
 
 @dataclass
-class Strategy:
-    """One incubator strategy directory."""
-    path: Path
+class StrategyEntry:
+    """
+    One catalogued strategy - either a bare module in `experimental/` or a
+    staged directory in `approved_incubator/`.
+
+    `contract_ok` is None when the module could not be parsed at all, which is
+    a different state from a module that parsed and does not conform.
+    """
     name: str
+    path: Path
+    stage: str                                   # "experimental" | "incubator"
+    module_path: Path | None = None
+    docstring: str | None = None
+    entry_point: str | None = None               # signal_fn / make_signal_fn
+    signature: str | None = None
+    timeframe: str | None = None
+    symbols: list | None = None
+    default_params: dict | None = None
+    contract_ok: bool | None = None
+    contract_notes: list[str] = field(default_factory=list)
+    contract_problems: list[str] = field(default_factory=list)
     meta: dict = field(default_factory=dict)
     error: str | None = None
     returns: pd.DataFrame | None = None
@@ -95,8 +168,8 @@ def load_rulesets(_dir: str) -> list[dict]:
     Parse every ruleset in compliance_rules/.
 
     A malformed file is carried through as an error entry rather than dropped.
-    Silently skipping an unparseable ruleset would let a compliance run appear
-    to cover a constraint set that never loaded.
+    Silently skipping an unparseable ruleset would let the governance spec
+    appear to cover a constraint set that never loaded.
     """
     d = Path(_dir)
     if not d.exists():
@@ -108,7 +181,7 @@ def load_rulesets(_dir: str) -> list[dict]:
             if not isinstance(data, dict):
                 raise ValueError("top level is not a JSON object")
             out.append({"path": str(p), "name": p.stem, "data": data, "error": None})
-        except Exception as e:
+        except Exception as e:                                # noqa: BLE001
             out.append({"path": str(p), "name": p.stem, "data": None,
                         "error": f"{type(e).__name__}: {e}"})
     return out
@@ -122,11 +195,136 @@ def get_rulesets() -> list[Ruleset]:
 def _read_parquet(p: Path) -> pd.DataFrame | None:
     try:
         return pd.read_parquet(p) if p.exists() else None
-    except Exception:
+    except Exception:                                         # noqa: BLE001
         return None
 
 
-def get_strategies() -> list[Strategy]:
+# -- static module inspection ----------------------------------------------
+def _literal(node: ast.AST):
+    """Best-effort literal, or None. A computed value is not worth executing."""
+    try:
+        return ast.literal_eval(node)
+    except Exception:                                         # noqa: BLE001
+        return None
+
+
+def inspect_module(path: Path) -> dict:
+    """
+    Describe a strategy module WITHOUT importing it.
+
+    `strategies/experimental/` is where model-generated code lands, and
+    importing a module executes it. A catalogue that runs every candidate
+    strategy on each Streamlit rerun is a code-execution surface disguised as a
+    directory listing, so everything here comes from the AST.
+
+    Reports the declared entry point and whether it matches the one contract
+    the engine calls:
+
+        signal_fn(bars: pd.DataFrame, **params) -> tuple[pd.Series, pd.Series]
+    """
+    out: dict = {"docstring": None, "entry_point": None, "signature": None,
+                 "timeframe": None, "symbols": None, "default_params": None,
+                 "contract_ok": None, "notes": [], "problems": [], "error": None}
+    try:
+        tree = ast.parse(path.read_text())
+    except Exception as e:                                    # noqa: BLE001
+        out["error"] = f"{type(e).__name__}: {e}"
+        out["problems"].append("module does not parse - it cannot be loaded either")
+        return out
+
+    out["docstring"] = ast.get_docstring(tree)
+
+    functions = {n.name: n for n in tree.body
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if not isinstance(target, ast.Name):
+                continue
+            if target.id == "TIMEFRAME":
+                out["timeframe"] = _literal(node.value)
+            elif target.id == "SYMBOLS":
+                out["symbols"] = _literal(node.value)
+            elif target.id == "DEFAULT_PARAMS":
+                out["default_params"] = _literal(node.value)
+
+    # make_signal_fn is the preferred form: the engine calls signal_fn(bars)
+    # with no parameters, so anything parameterised needs the factory for
+    # load_strategy to bind against.
+    fn = functions.get("make_signal_fn") or functions.get("signal_fn")
+    if fn is None:
+        out["contract_ok"] = False
+        out["problems"].append(
+            "defines neither signal_fn nor make_signal_fn - load_strategy "
+            "will refuse it")
+        return out
+
+    out["entry_point"] = fn.name
+    try:
+        out["signature"] = f"{fn.name}({ast.unparse(fn.args)})"
+    except Exception:                                         # noqa: BLE001
+        out["signature"] = f"{fn.name}(…)"
+
+    notes: list[str] = []
+    problems: list[str] = []
+
+    # The function the ENGINE ends up calling. Usually module level, but the
+    # preferred form is a factory returning a closure, and that closure is the
+    # thing that receives `bars` - checking only module scope would report the
+    # whole factory form as unverifiable.
+    target = functions.get("signal_fn")
+    if target is None and "make_signal_fn" in functions:
+        target = next((n for n in ast.walk(functions["make_signal_fn"])
+                       if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                       and n is not functions["make_signal_fn"]), None)
+        if target is None:
+            notes.append("make_signal_fn returns something this static check "
+                         "cannot follow - verify by hand that it takes `bars`")
+
+    if target is not None:
+        args = target.args
+        positional = [a.arg for a in args.posonlyargs + args.args]
+        if not positional:
+            problems.append(f"`{target.name}` takes no positional argument; "
+                            f"the engine calls it with one symbol's DataFrame")
+        elif positional[0] != "bars":
+            problems.append(
+                f"`{target.name}`'s first parameter is `{positional[0]}`, not "
+                f"`bars`. The engine passes ONE symbol's DataFrame; a module "
+                f"that unpacks arrays in its signature is the pre-2026-08-15 "
+                f"contract and is now wrong.")
+
+    out["notes"] = notes
+    out["problems"] = problems
+    # Notes are informational. Only a real mismatch clears this flag - a
+    # warning icon on a conforming module trains people to ignore the icon.
+    out["contract_ok"] = not problems
+    return out
+
+
+def _catalogue_module(path: Path, stage: str) -> StrategyEntry:
+    info = inspect_module(path)
+    return StrategyEntry(
+        name=path.stem, path=path, stage=stage, module_path=path,
+        docstring=info["docstring"], entry_point=info["entry_point"],
+        signature=info["signature"], timeframe=info["timeframe"],
+        symbols=info["symbols"], default_params=info["default_params"],
+        contract_ok=info["contract_ok"], contract_notes=info["notes"],
+        contract_problems=info["problems"], error=info["error"],
+    )
+
+
+def get_experimental() -> list[StrategyEntry]:
+    """Every candidate module in strategies/experimental/. Nothing here is a result."""
+    if not EXPERIMENTAL.exists():
+        return []
+    return [_catalogue_module(p, "experimental")
+            for p in sorted(EXPERIMENTAL.glob("*.py"))
+            if p.name != "__init__.py"]
+
+
+def get_incubator() -> list[StrategyEntry]:
     """
     Scan the incubator. Directories without meta.json are surfaced as
     incomplete rather than hidden - an unlabelled strategy is worse than a
@@ -134,19 +332,34 @@ def get_strategies() -> list[Strategy]:
     """
     if not INCUBATOR.exists():
         return []
-    out: list[Strategy] = []
+    out: list[StrategyEntry] = []
     for d in sorted(x for x in INCUBATOR.iterdir() if x.is_dir()):
         if d.name.startswith((".", "__")):
             continue
-        s = Strategy(path=d, name=d.name)
+        s = StrategyEntry(name=d.name, path=d, stage="incubator")
         meta_p = d / "meta.json"
         if not meta_p.exists():
             s.error = "no meta.json - cannot describe what this strategy is"
         else:
             try:
                 s.meta = json.loads(meta_p.read_text())
-            except Exception as e:
+            except Exception as e:                            # noqa: BLE001
                 s.error = f"meta.json unreadable - {type(e).__name__}: {e}"
+
+        modules = sorted(d.glob("*.py"))
+        if modules:
+            s.module_path = modules[0]
+            info = inspect_module(s.module_path)
+            s.docstring = info["docstring"]
+            s.entry_point = info["entry_point"]
+            s.signature = info["signature"]
+            s.timeframe = info["timeframe"]
+            s.symbols = info["symbols"]
+            s.default_params = info["default_params"]
+            s.contract_ok = info["contract_ok"]
+            s.contract_notes = info["notes"]
+            s.contract_problems = info["problems"]
+
         s.returns = _read_parquet(d / "returns.parquet")
         s.trades = _read_parquet(d / "trades.parquet")
         s.equity = _read_parquet(d / "equity.parquet")
@@ -196,120 +409,314 @@ def tag(text: str, kind: str) -> str:
     return f'<span class="cc-tag cc-{kind}">{text}</span>'
 
 
+def fmt(value, suffix: str = "", digits: int = 2) -> str:
+    """
+    Format a metric, refusing to render an undefined one as a number.
+
+    NaN and inf are real outcomes here - no trades, no losing trades, a ruined
+    account - and each would otherwise print as `nan` or a headline `inf`.
+    """
+    if value is None:
+        return "—"
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if math.isnan(v):
+        return "—"
+    if math.isinf(v):
+        return "∞" if v > 0 else "-∞"
+    return f"{v:,.{digits}f}{suffix}"
+
+
 # --------------------------------------------------------------------------
 # Sidebar
 # --------------------------------------------------------------------------
-def render_sidebar() -> Ruleset | None:
+@dataclass
+class RunSettings:
+    """Everything the terminal needs to launch a campaign."""
+    symbols: list[str]
+    timeframe: str
+    start: str
+    end: str
+
+
+def render_sidebar(tier1) -> RunSettings:
     st.sidebar.title("CIO Command Center")
-    st.sidebar.caption("Prop-firm constrained research")
+    st.sidebar.caption("Pure alpha discovery · Databento futures lake")
     st.sidebar.divider()
-    st.sidebar.subheader("Compliance Ruleset")
 
-    if not RULES_DIR.exists():
-        st.sidebar.error(
-            f"`compliance_rules/` not found at `{RULES_DIR}`.\n\n"
-            "Create it and add a ruleset JSON."
-        )
-        return None
+    st.sidebar.subheader("Campaign Universe")
 
-    rulesets = get_rulesets()
-    if not rulesets:
-        st.sidebar.warning(
-            "No rulesets found. Add a `.json` file to `compliance_rules/`."
-        )
-        return None
+    default_start = getattr(tier1, "DEFAULT_START", "2018-01-01")
+    default_end = getattr(tier1, "DEFAULT_END", "2023-12-31")
+    default_tf = getattr(tier1, "DEFAULT_TIMEFRAME", "1d")
 
-    broken = [r for r in rulesets if not r.ok]
-    labels = [r.label for r in rulesets]
-
-    # Default to the first ruleset that actually parsed. Files sort
-    # alphabetically, so without this a single malformed JSON whose name sorts
-    # early becomes the default selection and the whole command centre opens in
-    # an error state. Broken files stay listed and stay loud - they are just not
-    # what you land on.
-    default = next((i for i, r in enumerate(rulesets) if r.ok), 0)
-    idx = st.sidebar.selectbox(
-        "Active ruleset", range(len(rulesets)),
-        index=default,
-        format_func=lambda i: labels[i],
-        help="Detected from compliance_rules/*.json",
+    raw_symbols = st.sidebar.text_input(
+        "Symbols", value="ES, NQ",
+        help="Comma separated. Leave empty to let the router parse them out of "
+             "the hypothesis text instead.",
     )
-    chosen = rulesets[idx]
+    symbols = [s.strip().upper() for s in raw_symbols.replace(",", " ").split()
+               if s.strip()]
 
-    if broken:
+    timeframe = st.sidebar.selectbox(
+        "Timeframe", TIMEFRAMES,
+        index=TIMEFRAMES.index(default_tf) if default_tf in TIMEFRAMES else 0,
+        help="Only 1m and 1d are stored; everything else is derived by the "
+             "lake reader.",
+    )
+
+    c1, c2 = st.sidebar.columns(2)
+    start = c1.date_input("Start", value=date.fromisoformat(default_start))
+    end = c2.date_input("End", value=date.fromisoformat(default_end))
+
+    if len(symbols) == 1:
+        st.sidebar.warning(
+            "One symbol. A daily strategy on a single instrument over 16 years "
+            "is ~100-200 trades — too thin to separate skill from luck.",
+            icon="⚠️",
+        )
+    if start >= end:
+        st.sidebar.error("Start is not before end — the campaign will find no bars.")
+
+    st.sidebar.divider()
+    st.sidebar.subheader("Environment")
+
+    lake_ok = LAKE.exists()
+    st.sidebar.markdown(
+        f"{tag('lake mounted' if lake_ok else 'lake missing', 'on' if lake_ok else 'off')}",
+        unsafe_allow_html=True)
+    st.sidebar.caption(f"`{LAKE}`")
+    if not lake_ok:
         st.sidebar.error(
-            f"{len(broken)} ruleset file(s) failed to parse: "
-            + ", ".join(f"`{b.path.name}`" for b in broken)
+            "The bars directory is not reachable. Campaigns will fail at the "
+            "backtest step — nothing to read."
         )
 
-    if not chosen.ok:
-        st.sidebar.error(f"`{chosen.path.name}` could not be parsed:\n\n{chosen.error}")
-        return chosen
+    key_var = None
+    if tier1 is not None:
+        finder = getattr(tier1, "_find_api_key", None)
+        key_var = finder() if callable(finder) else None
+    st.sidebar.markdown(
+        tag("gemini key found" if key_var else "no gemini key",
+            "on" if key_var else "warn"),
+        unsafe_allow_html=True)
+    if not key_var:
+        st.sidebar.caption(
+            "Campaigns fall back to placeholder boilerplate. Set "
+            "`GEMINI_API_KEY` to synthesise the hypothesis."
+        )
 
-    render_ruleset_summary(chosen)
     st.sidebar.divider()
     st.sidebar.caption(
-        f"{len(rulesets)} ruleset(s) · {len(get_strategies())} incubator strategy(ies)"
+        f"{len(get_experimental())} experimental · {len(get_incubator())} "
+        f"staged · {len(get_rulesets())} governance ruleset(s)"
     )
-    return chosen
+    st.sidebar.caption(
+        "Prop-firm governance is enforced by CrossTrade NAM against a live "
+        "account, not here."
+    )
 
-
-def render_ruleset_summary(rs: Ruleset) -> None:
-    """Sidebar detail for the selected ruleset, enforcement status foremost."""
-    data = rs.data or {}
-    rules = data.get("rules")
-    if not isinstance(rules, dict) or not rules:
-        st.sidebar.warning("Ruleset has no `rules` block — nothing to display.")
-        return
-
-    acct = data.get("account") or {}
-    if acct.get("initial_balance") is not None:
-        st.sidebar.caption(
-            f"Account basis: {acct.get('currency', '')} "
-            f"{acct['initial_balance']:,.0f}".strip()
-        )
-
-    enforced, unenforced = [], []
-    for key, r in rules.items():
-        if not isinstance(r, dict):
-            continue
-        status = str((r.get("enforcement") or {}).get("status", "UNKNOWN")).upper()
-        # ENFORCED_AT_TIER2 counts as enforced: the rule is checked, just by
-        # agents.tier2_supervisors rather than inside the engine. Matching only
-        # the bare "ENFORCED" would report a checked rule as unchecked.
-        (enforced if status.startswith("ENFORCED") else unenforced).append(
-            (key, r, status))
-
-    for key, r, status in enforced + unenforced:
-        value, unit = r.get("value"), r.get("unit", "")
-        shown = f"{value}%" if unit == "percent" else f"{value} {unit}".strip()
-        kind = "on" if status.startswith("ENFORCED") else (
-            "off" if status == "NOT_ENFORCED" else "warn")
-        st.sidebar.markdown(
-            f'<div class="cc-rule"><b>{key.replace("_", " ").title()}</b> '
-            f'<span class="cc-mono">{shown}</span><br>{tag(status.replace("_", " "), kind)}</div>',
-            unsafe_allow_html=True,
-        )
-
-    if unenforced:
-        st.sidebar.warning(
-            f"**{len(unenforced)} of {len(enforced) + len(unenforced)} rules are "
-            f"checked nowhere** — not by the engine and not by Tier 2. Neither a "
-            f"clean backtest nor a Tier 2 PASS is evidence of compliance with them."
-        )
-    tier2 = [k for k, _, s in enforced if s != "ENFORCED"]
-    if tier2:
-        st.sidebar.info(
-            f"{len(tier2)} rule(s) are checked by Tier 2 rather than the engine: "
-            f"a `BacktestResult` alone does not cover them."
-        )
-
-    if str(data.get("provenance", {}).get("verification_status", "")).startswith("UNVERIFIED"):
-        st.sidebar.info("Ruleset values are unverified against the provider.")
+    return RunSettings(symbols=symbols, timeframe=timeframe,
+                       start=start.isoformat(), end=end.isoformat())
 
 
 # --------------------------------------------------------------------------
-# Tab: Command Center
+# Tear sheet
+# --------------------------------------------------------------------------
+def _equity_series(artifacts: dict | None) -> pd.Series | None:
+    eq = (artifacts or {}).get("equity")
+    if eq is None or len(eq) == 0:
+        return None
+    return pd.Series(eq)
+
+
+def equity_figure(equity: pd.Series) -> go.Figure:
+    """Account equity in dollars, with the starting balance marked."""
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=equity.index, y=equity.values, mode="lines", name="Equity",
+        line=dict(width=1.6, color="#1f77b4"),
+        hovertemplate="%{x|%Y-%m-%d}<br>$%{y:,.0f}<extra></extra>",
+    ))
+    fig.add_hline(y=float(equity.iloc[0]), line_dash="dot",
+                  line_color="rgba(128,128,128,0.6)",
+                  annotation_text="initial capital",
+                  annotation_position="bottom right")
+    fig.update_layout(
+        height=340, margin=dict(l=8, r=8, t=34, b=8),
+        title="Equity curve (net of costs)", hovermode="x unified",
+        xaxis_title=None, yaxis_title=None, showlegend=False,
+    )
+    return fig
+
+
+def underwater_figure(equity: pd.Series) -> go.Figure:
+    """
+    Drawdown from the running high water mark.
+
+    Plotted separately from equity because depth and DURATION are what get a
+    strategy abandoned in live trading, and both are invisible on a rising
+    equity curve.
+    """
+    dd = (equity / equity.cummax() - 1.0) * 100.0
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=dd.index, y=dd.values, mode="lines", fill="tozeroy",
+        line=dict(width=1.0, color="#c0392b"),
+        fillcolor="rgba(192,57,43,0.25)", name="Drawdown",
+        hovertemplate="%{x|%Y-%m-%d}<br>%{y:.2f}%<extra></extra>",
+    ))
+    fig.update_layout(
+        height=260, margin=dict(l=8, r=8, t=34, b=8),
+        title="Underwater — drawdown from high water mark (%)",
+        hovermode="x unified", xaxis_title=None, yaxis_title=None,
+        showlegend=False,
+    )
+    return fig
+
+
+def trade_distribution_figure(trades: pd.DataFrame) -> go.Figure | None:
+    """Histogram of per-trade net P&L, split at breakeven."""
+    if trades is None or trades.empty or "pnl" not in trades.columns:
+        return None
+    pnl = pd.to_numeric(trades["pnl"], errors="coerce").dropna()
+    if pnl.empty:
+        return None
+
+    wins, losses = pnl[pnl > 0], pnl[pnl <= 0]
+    fig = go.Figure()
+    if not losses.empty:
+        fig.add_trace(go.Histogram(x=losses.values, name="Losers",
+                                   marker_color="#c0392b", opacity=0.75,
+                                   nbinsx=60))
+    if not wins.empty:
+        fig.add_trace(go.Histogram(x=wins.values, name="Winners",
+                                   marker_color="#1f9254", opacity=0.75,
+                                   nbinsx=60))
+    fig.add_vline(x=float(pnl.mean()), line_dash="dot",
+                  line_color="rgba(128,128,128,0.8)",
+                  annotation_text=f"mean {pnl.mean():,.0f}",
+                  annotation_position="top right")
+    fig.update_layout(
+        height=300, margin=dict(l=8, r=8, t=34, b=8),
+        title="Trade P&L distribution (net, dollars)",
+        barmode="overlay", xaxis_title=None, yaxis_title="Trades",
+        legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0),
+    )
+    return fig
+
+
+def render_tear_sheet(run: dict) -> None:
+    """
+    The Institutional Pure Alpha Tear Sheet.
+
+    Every figure here was computed by `agents.tier3_workers.summarize_result`
+    from the engine's trade list and daily equity curve. Nothing on this panel
+    came from a language model.
+    """
+    metrics = run.get("metrics") or {}
+    meta = metrics.get("meta") or {}
+    artifacts = run.get("artifacts") or {}
+    equity = _equity_series(artifacts)
+    trades = artifacts.get("trades")
+
+    st.subheader("Pure Alpha Tear Sheet")
+    st.caption(
+        f"{', '.join(meta.get('symbols') or []) or '—'} · "
+        f"{meta.get('timeframe', '—')} · {meta.get('start', '—')} → "
+        f"{meta.get('end', '—')} · costs included · "
+        f"initial capital ${meta.get('initial_capital', INITIAL_CAPITAL):,.0f}"
+    )
+
+    if run.get("strategy_is_placeholder"):
+        st.error(
+            "**These figures describe generated boilerplate, not your "
+            "hypothesis.** The signal logic is a placeholder crossover that was "
+            "staged because synthesis was unavailable or rejected. Read it as a "
+            "test of the pipeline, not as a measurement of an edge.",
+            icon="🚨",
+        )
+
+    if metrics.get("ruined"):
+        st.error(
+            "**Account ruined** — equity reached zero or below. Annualized "
+            "figures are undefined and shown as `—`.",
+            icon="🚨",
+        )
+
+    r1 = st.columns(3)
+    r1[0].metric("Annualized Sharpe", fmt(metrics.get("sharpe")))
+    r1[1].metric("Sortino", fmt(metrics.get("sortino")))
+    r1[2].metric("Calmar", fmt(metrics.get("calmar")))
+
+    st.caption(
+        "Sortino uses `backtest.report.sortino` — downside deviation over "
+        "LOSING days only. For a strategy that trades rarely, most days are "
+        "flat and excluded, so this reads below Sharpe rather than above it. "
+        "That is the convention, not a defect."
+    )
+
+    r2 = st.columns(3)
+    r2[0].metric("Profit factor", fmt(metrics.get("profit_factor")))
+    win = metrics.get("win_rate")
+    r2[1].metric("Win rate",
+                 fmt(win * 100 if isinstance(win, float) and not math.isnan(win)
+                     else win, "%"))
+    r2[2].metric("Total trades", f"{metrics.get('trade_count', 0):,}")
+
+    r3 = st.columns(3)
+    r3[0].metric("Max drawdown", fmt(metrics.get("max_drawdown_pct"), "%"))
+    r3[1].metric("Total net return", fmt(metrics.get("total_return_pct"), "%"))
+    r3[2].metric("CAGR", fmt(metrics.get("annualized_return_pct"), "%"))
+
+    r4 = st.columns(3)
+    r4[0].metric("Net P&L", fmt(metrics.get("total_pnl"), digits=0))
+    r4[1].metric("Total costs", fmt(metrics.get("total_costs"), digits=0))
+    r4[2].metric("Trading days", f"{metrics.get('n_days', 0):,}")
+
+    variants = meta.get("variants_tested")
+    st.caption(
+        f"Search recorded: `variants_tested = {variants if variants is not None else 'unrecorded'}`. "
+        f"A Sharpe read without knowing how many variants produced it is not a "
+        f"measurement."
+    )
+
+    if metrics.get("trade_count", 0) == 0:
+        st.info(
+            "The strategy loaded and ran but never triggered. That is a result, "
+            "not an error — there is nothing to plot.", icon="📄")
+        return
+
+    if equity is None:
+        st.info("No equity curve was returned with this run.", icon="📄")
+        return
+
+    st.plotly_chart(equity_figure(equity), width="stretch")
+    st.plotly_chart(underwater_figure(equity), width="stretch")
+
+    dist = trade_distribution_figure(trades)
+    if dist is not None:
+        st.plotly_chart(dist, width="stretch")
+
+    if trades is not None and not trades.empty:
+        with st.expander(f"Trade log — {len(trades):,} trades"):
+            # Bounded on purpose: a 1-minute cross-sectional run produces
+            # hundreds of thousands of trades and st.dataframe will happily try
+            # to ship all of them to the browser.
+            st.caption("Showing the 500 most recent trades.")
+            st.dataframe(trades.tail(500), hide_index=True, width="stretch")
+
+    st.caption(
+        "⚖️ No prop-firm compliance was evaluated. Trailing drawdown, daily "
+        "loss, consistency and sizing are enforced by CrossTrade NAM against a "
+        "live balance. These figures describe the edge only."
+    )
+
+
+# --------------------------------------------------------------------------
+# Tab: CIO Terminal
 # --------------------------------------------------------------------------
 STATUS_ICONS = {
     "routing": "🧭", "planning": "📋", "generating": "🧱",
@@ -318,14 +725,14 @@ STATUS_ICONS = {
 }
 
 
-def render_command_center(rs: Ruleset | None) -> None:
-    st.subheader("Master Agent")
+def render_terminal(tier1, tier1_error: str | None, settings: RunSettings) -> None:
+    st.subheader("CIO Terminal")
 
     tier_cols = st.columns(4)
     tiers = [
-        ("Tier 1 · CIO", "tier1_master", "Routing / campaigns", "partial"),
-        ("Tier 2 · Supervisors", "tier2_supervisors", "Compliance / OOS", "partial"),
-        ("Tier 3 · Workers", "tier3_workers", "Backtest execution", "partial"),
+        ("Tier 1 · CIO", "tier1_master", "Routing / synthesis", "partial"),
+        ("Tier 2 · Supervisors", "tier2_supervisors", "Robustness / lifecycle", "partial"),
+        ("Tier 3 · Workers", "tier3_workers", "Audit / backtest / metrics", "partial"),
         ("Monitor", "system_monitor", "RAM / runaway loops", "off"),
     ]
     labels = {"partial": ("live", "on"), "off": ("not implemented", "off")}
@@ -337,12 +744,20 @@ def render_command_center(rs: Ruleset | None) -> None:
             st.caption(f"`agents/{module}.py` — {role}")
 
     st.caption(
-        "Campaigns synthesise a strategy with Gemini, validate it (AST parse, "
-        "import allowlist, lookahead scan, smoke test), then backtest and audit "
-        "it. Without a `GEMINI_API_KEY`, or if the generated code is rejected, "
-        "the run falls back to **boilerplate whose logic is a placeholder** — "
-        "the verdict then describes that template, and every such run says so."
+        "Describe an alpha hypothesis in plain English. The campaign "
+        "synthesises a `signal_fn(bars, **params)` module with Gemini, audits "
+        "it statically (import allowlist, forbidden builtins, negative-shift "
+        "and reversed-slice lookahead), smoke-tests it, then backtests it over "
+        "the real lake with costs applied. Universe and window come from the "
+        "sidebar."
     )
+
+    if tier1_error:
+        st.error(
+            f"**Master Agent unavailable** — `agents.tier1_master` could not be "
+            f"imported: {tier1_error}"
+        )
+        return
 
     st.divider()
 
@@ -357,20 +772,27 @@ def render_command_center(rs: Ruleset | None) -> None:
 
     if not st.session_state.chat:
         st.caption(
-            "No commands issued yet. Try: *“backtest a daily breakout on ES "
-            "and NQ”*, *“what's in the vault?”*, or *“what can you do?”*"
+            "No hypotheses submitted yet. Try: *“go long when the 20-day "
+            "momentum is positive and volatility is contracting”*, *“what's in "
+            "the vault?”*, or *“what can you do?”*"
         )
 
-    prompt = st.chat_input("Send a command to the Master Agent…")
+    prompt = st.chat_input("Describe an alpha hypothesis…")
     if prompt:
-        _run_prompt(prompt, rs)
+        _run_prompt(tier1, prompt, settings)
+
+    last = st.session_state.get("last_run")
+    if last and last.get("ran_backtest"):
+        st.divider()
+        render_tear_sheet(last)
 
     if st.session_state.chat and st.button("Clear transcript", type="secondary"):
         st.session_state.chat = []
+        st.session_state.pop("last_run", None)
         st.rerun()
 
 
-def _run_prompt(prompt: str, rs: Ruleset | None) -> None:
+def _run_prompt(tier1, prompt: str, settings: RunSettings) -> None:
     """
     Drive one campaign, rendering each yielded event as it lands.
 
@@ -387,27 +809,21 @@ def _run_prompt(prompt: str, rs: Ruleset | None) -> None:
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    ruleset_arg = str(rs.path) if rs is not None and rs.ok else None
-
     with st.chat_message("assistant"):
         final: dict | None = None
-        try:
-            from agents.tier1_master import run_campaign
-        except Exception as e:
-            body = (f"**Master Agent unavailable** — `agents.tier1_master` "
-                    f"could not be imported: {type(e).__name__}: {e}")
-            st.error(body)
-            st.session_state.chat.append(
-                {"role": "assistant", "content": body, "ts": now})
-            return
-
         with st.status("Working…", expanded=True) as status:
             try:
-                for event in run_campaign(prompt, ruleset_arg):
+                for event in tier1.run_campaign(
+                        prompt,
+                        symbols=settings.symbols or None,
+                        start_date=settings.start,
+                        end_date=settings.end,
+                        timeframe=settings.timeframe,
+                        include_artifacts=True):
                     icon = STATUS_ICONS.get(event.get("status", ""), "•")
                     st.write(f"{icon} {event.get('message', '')}")
                     final = event
-            except Exception as e:
+            except Exception as e:                            # noqa: BLE001
                 # The generator raising is a real failure, not a verdict. Say
                 # so plainly rather than leaving a spinner that never resolves.
                 body = f"**Campaign crashed** — {type(e).__name__}: {e}"
@@ -415,6 +831,7 @@ def _run_prompt(prompt: str, rs: Ruleset | None) -> None:
                 st.error(body)
                 st.session_state.chat.append(
                     {"role": "assistant", "content": body, "ts": now})
+                st.session_state.pop("last_run", None)
                 return
 
             outcome = (final or {}).get("status")
@@ -433,51 +850,48 @@ def _run_prompt(prompt: str, rs: Ruleset | None) -> None:
     st.session_state.chat.append(
         {"role": "assistant", "content": body, "ts": now})
 
+    # Keep the tear sheet only for a run that actually reached the engine. A
+    # rejected or conversational turn must not leave the previous campaign's
+    # metrics on screen next to a new answer.
+    if (final or {}).get("ran_backtest"):
+        st.session_state.last_run = {
+            "prompt": prompt, "ts": now,
+            "metrics": final.get("metrics") or {},
+            "artifacts": final.get("artifacts") or {},
+            "strategy_path": final.get("strategy_path"),
+            "strategy_is_placeholder": final.get("strategy_is_placeholder", True),
+            "ran_backtest": True,
+        }
+    else:
+        st.session_state.pop("last_run", None)
+    st.rerun()
+
 
 # --------------------------------------------------------------------------
 # Tab: Strategy Vault
 # --------------------------------------------------------------------------
-def equity_figure(strategy: Strategy) -> go.Figure | None:
-    """
-    Plotly equity curve from saved results. Returns None when there is nothing
-    real to plot - the caller renders an empty state rather than a fake curve.
-    """
-    df = strategy.equity if strategy.equity is not None else strategy.returns
-    if df is None or df.empty:
-        return None
+def render_contract(s: StrategyEntry) -> None:
+    """Show what the module declares and whether it matches the engine's call."""
+    if s.entry_point is None and s.module_path is None:
+        st.caption("No Python module in this directory — nothing to inspect.")
+        return
 
-    frame = df.reset_index()
-    time_col = next((c for c in frame.columns
-                     if str(c).lower() in ("ts", "date", "datetime", "index")), None)
-    value_col = next((c for c in frame.columns
-                      if str(c).lower() in ("equity", "value", "cum", "cumulative")), None)
+    if s.contract_ok is None:
+        st.warning(f"Module could not be parsed: {s.error}", icon="⚠️")
+    elif s.contract_ok:
+        st.markdown(tag("contract ok", "on"), unsafe_allow_html=True)
+    else:
+        st.markdown(tag("contract mismatch", "off"), unsafe_allow_html=True)
 
-    if value_col is None:
-        numeric = frame.select_dtypes("number").columns
-        ret_col = next((c for c in numeric
-                        if str(c).lower() in ("ret", "return", "returns", "pnl")), None)
-        if ret_col is None:
-            return None
-        frame["_equity"] = (1.0 + frame[ret_col].fillna(0)).cumprod()
-        value_col = "_equity"
-
-    if time_col is None:
-        return None
-
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=frame[time_col], y=frame[value_col], mode="lines",
-        name="Equity", line=dict(width=1.6),
-    ))
-    fig.update_layout(
-        height=340, margin=dict(l=8, r=8, t=28, b=8),
-        title="Equity curve", hovermode="x unified",
-        xaxis_title=None, yaxis_title=None, showlegend=False,
-    )
-    return fig
+    if s.signature:
+        st.code(f"def {s.signature}", language="python")
+    for problem in s.contract_problems:
+        st.error(problem, icon="🚨")
+    for note in s.contract_notes:
+        st.caption(f"ℹ️ {note}")
 
 
-def render_strategy(s: Strategy, rulesets: list[Ruleset]) -> None:
+def render_strategy(s: StrategyEntry, rulesets: list[Ruleset]) -> None:
     meta = s.meta or {}
     title = meta.get("name") or s.name
     version = meta.get("version")
@@ -487,113 +901,177 @@ def render_strategy(s: Strategy, rulesets: list[Ruleset]) -> None:
         if s.error:
             st.error(f"**{s.name}** — {s.error}")
 
-        if meta.get("description"):
-            st.write(meta["description"])
+        description = meta.get("description") or s.docstring
+        if description:
+            st.write(description.strip().split("\n\n")[0])
 
         cols = st.columns(4)
-        cols[0].metric("Symbols", len(meta.get("symbols") or []) or "—")
-        cols[1].metric("Timeframe", meta.get("timeframe") or "—")
-        variants = meta.get("variants_tested")
-        cols[2].metric("Variants tested", variants if variants is not None else "—")
-        costs = meta.get("costs_included")
-        cols[3].metric("Costs included",
-                       "yes" if costs is True else "no" if costs is False else "—")
+        symbols = meta.get("symbols") or s.symbols or []
+        cols[0].metric("Symbols", ", ".join(map(str, symbols)) if symbols else "—")
+        cols[1].metric("Timeframe", meta.get("timeframe") or s.timeframe or "—")
+        cols[2].metric("Entry point", s.entry_point or "—")
+        cols[3].metric("Results", "yes" if s.has_results else "no")
 
-        if variants is None or costs is None:
-            st.warning(
-                "`variants_tested` or `costs_included` missing from `meta.json`. "
-                "A Sharpe ratio cannot be judged without knowing how many variants "
-                "it was selected from and whether costs were applied.",
-                icon="⚠️",
-            )
+        render_contract(s)
 
-        rid = meta.get("ruleset_id")
-        if rid:
-            known = {r.name for r in rulesets}
-            if rid in known:
-                st.caption(f"Evaluated against ruleset `{rid}`.")
-            else:
-                st.error(
-                    f"`meta.json` references ruleset `{rid}`, which is not present "
-                    f"in `compliance_rules/`. The stated constraints cannot be "
-                    f"reproduced."
+        if s.default_params:
+            st.caption("Declared defaults")
+            st.json(s.default_params, expanded=False)
+
+        if s.stage == "incubator":
+            variants = meta.get("variants_tested")
+            costs = meta.get("costs_included")
+            c1, c2 = st.columns(2)
+            c1.metric("Variants tested", variants if variants is not None else "—")
+            c2.metric("Costs included",
+                      "yes" if costs is True else "no" if costs is False else "—")
+            if variants is None or costs is None:
+                st.warning(
+                    "`variants_tested` or `costs_included` missing from "
+                    "`meta.json`. A Sharpe ratio cannot be judged without "
+                    "knowing how many variants it was selected from and whether "
+                    "costs were applied.",
+                    icon="⚠️",
                 )
 
-        st.markdown("**Backtest summary**")
-        if s.returns is None and s.trades is None:
-            st.info(
-                "No saved results in this directory. Add `returns.parquet` / "
-                "`trades.parquet` from a `BacktestResult`.",
-                icon="📄",
-            )
-        else:
-            summary = []
-            if s.returns is not None:
-                summary.append(("Return rows", f"{len(s.returns):,}"))
-            if s.trades is not None:
-                summary.append(("Trades", f"{len(s.trades):,}"))
-            st.dataframe(
-                pd.DataFrame(summary, columns=["Metric", "Value"]),
-                hide_index=True, width="stretch",
-            )
+            rid = meta.get("ruleset_id")
+            if rid:
+                known = {r.name for r in rulesets}
+                if rid in known:
+                    st.caption(
+                        f"References governance ruleset `{rid}` — a CrossTrade "
+                        f"execution constraint, not a research gate.")
+                else:
+                    st.error(
+                        f"`meta.json` references ruleset `{rid}`, which is not "
+                        f"present in `compliance_rules/`. The stated "
+                        f"constraints cannot be reproduced."
+                    )
 
-        fig = equity_figure(s)
-        if fig is not None:
-            st.plotly_chart(fig, width="stretch")
-        else:
-            st.caption(
-                "No equity curve — nothing has been run for this strategy. "
-                "Vectorbt Pro figures render here once results are saved."
-            )
+            st.markdown("**Saved results**")
+            if s.returns is None and s.trades is None:
+                st.info(
+                    "No saved results in this directory. Add `returns.parquet` "
+                    "/ `trades.parquet` from a `BacktestResult`.", icon="📄")
+            else:
+                summary = []
+                if s.returns is not None:
+                    summary.append(("Return rows", f"{len(s.returns):,}"))
+                if s.trades is not None:
+                    summary.append(("Trades", f"{len(s.trades):,}"))
+                st.dataframe(pd.DataFrame(summary, columns=["Metric", "Value"]),
+                             hide_index=True, width="stretch")
+
+        if s.module_path is not None:
+            rel = s.module_path.relative_to(REPO)
+            st.caption(f"`{rel}`")
+            with st.expander("Source"):
+                # Read, not imported. Importing a module executes it, and this
+                # is where model-generated code lands.
+                try:
+                    st.code(s.module_path.read_text(), language="python")
+                except Exception as e:                        # noqa: BLE001
+                    st.error(f"Could not read the module: {type(e).__name__}: {e}")
 
 
 def render_vault(rulesets: list[Ruleset]) -> None:
     st.subheader("Strategy Vault")
-    st.caption(f"Reading `{INCUBATOR.relative_to(REPO)}`")
 
-    if not INCUBATOR.exists():
-        st.error(
-            f"`{INCUBATOR}` does not exist. Create it and add one directory per "
-            f"strategy, each with a `meta.json`."
-        )
-        return
+    experimental = get_experimental()
+    incubator = get_incubator()
 
-    strategies = get_strategies()
-    if not strategies:
-        st.info(
-            "No strategies staged yet. Each strategy is a directory containing "
-            "`meta.json` and, once run, `returns.parquet` / `trades.parquet`. "
-            "See the directory's `README.md` for the expected layout.",
-            icon="🗄️",
-        )
-        return
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Experimental", len(experimental))
+    c2.metric("Staged", len(incubator))
+    c3.metric("With results", len([s for s in incubator if s.has_results]))
+    nonconforming = [s for s in experimental + incubator if s.contract_ok is False]
+    c4.metric("Contract issues", len(nonconforming))
 
-    incomplete = [s for s in strategies if s.error]
-    with_results = [s for s in strategies if s.has_results]
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Staged", len(strategies))
-    c2.metric("With results", len(with_results))
-    c3.metric("Incomplete", len(incomplete))
-
-    if incomplete:
+    if nonconforming:
         st.warning(
-            f"{len(incomplete)} strategy directory(ies) missing or with unreadable "
-            f"`meta.json`: " + ", ".join(f"`{s.name}`" for s in incomplete)
+            f"{len(nonconforming)} module(s) do not match "
+            f"`signal_fn(bars, **params)`: "
+            + ", ".join(f"`{s.name}`" for s in nonconforming)
+            + ". `load_strategy` will reject or mis-bind them.",
+            icon="⚠️",
         )
 
     st.divider()
-    for s in strategies:
+
+    st.markdown("#### `strategies/experimental/`")
+    st.caption(
+        "Candidate modules, including everything Gemini has synthesised. "
+        "**Nothing here has been evaluated** — a file in this directory is a "
+        "hypothesis someone typed."
+    )
+    if not experimental:
+        st.info("No candidate modules staged yet.", icon="🧪")
+    for s in experimental:
+        render_strategy(s, rulesets)
+
+    st.divider()
+
+    st.markdown("#### `strategies/approved_incubator/`")
+    st.caption(
+        "Promoted only after a run with costs across a symbol list that "
+        "survives walk-forward and sensitivity checks. One directory per "
+        "strategy, each with a `meta.json`."
+    )
+    if not INCUBATOR.exists():
+        st.error(f"`{INCUBATOR}` does not exist.")
+        return
+    if not incubator:
+        st.info(
+            "No strategies staged yet. See the directory's `README.md` for the "
+            "expected layout.", icon="🗄️")
+        return
+
+    incomplete = [s for s in incubator if s.error]
+    if incomplete:
+        st.warning(
+            f"{len(incomplete)} strategy directory(ies) missing or with "
+            f"unreadable `meta.json`: "
+            + ", ".join(f"`{s.name}`" for s in incomplete)
+        )
+    for s in incubator:
         render_strategy(s, rulesets)
 
 
 # --------------------------------------------------------------------------
-# Tab: Ruleset detail
+# Tab: CrossTrade Governance
 # --------------------------------------------------------------------------
-def render_ruleset_detail(rs: Ruleset | None) -> None:
-    st.subheader("Ruleset Detail")
-    if rs is None:
-        st.info("No ruleset selected.")
+def render_governance(rulesets: list[Ruleset]) -> None:
+    st.subheader("CrossTrade Governance Spec")
+    st.info(
+        "**This is not a research gate.** Trailing drawdown, daily loss, "
+        "consistency and contract sizing are enforced by CrossTrade NAM on the "
+        "Windows execution bridge, against a live account balance. These "
+        "rulesets are the declarative specification handed to it. A backtest "
+        "cannot evaluate them, so this app renders no compliance verdict.",
+        icon="⚖️",
+    )
+
+    if not RULES_DIR.exists():
+        st.error(f"`compliance_rules/` not found at `{RULES_DIR}`.")
         return
+    if not rulesets:
+        st.warning("No rulesets found. Add a `.json` file to `compliance_rules/`.")
+        return
+
+    broken = [r for r in rulesets if not r.ok]
+    if broken:
+        st.error(
+            f"{len(broken)} ruleset file(s) failed to parse: "
+            + ", ".join(f"`{b.path.name}`" for b in broken))
+
+    # Default to the first ruleset that actually parsed. Files sort
+    # alphabetically, so without this a single malformed JSON whose name sorts
+    # early becomes the default selection and the tab opens in an error state.
+    default = next((i for i, r in enumerate(rulesets) if r.ok), 0)
+    idx = st.selectbox("Ruleset", range(len(rulesets)), index=default,
+                       format_func=lambda i: rulesets[i].label)
+    rs = rulesets[idx]
+
     if not rs.ok:
         st.error(f"`{rs.path.name}` could not be parsed:\n\n{rs.error}")
         return
@@ -602,6 +1080,11 @@ def render_ruleset_detail(rs: Ruleset | None) -> None:
     st.markdown(f"**{rs.label}** · `{rs.path.name}`")
     if data.get("description"):
         st.caption(data["description"])
+
+    acct = data.get("account") or {}
+    if acct.get("initial_balance") is not None:
+        st.caption(f"Account basis: {acct.get('currency', '')} "
+                   f"{acct['initial_balance']:,.0f}".strip())
 
     rules = data.get("rules")
     if not isinstance(rules, dict) or not rules:
@@ -618,8 +1101,7 @@ def render_ruleset_detail(rs: Ruleset | None) -> None:
             "Value": (f"{r.get('value')}%" if r.get("unit") == "percent"
                       else f"{r.get('value')} {r.get('unit', '')}".strip()),
             "Basis": r.get("basis", "—"),
-            "Enforced": ("yes" if str(enf.get("status", "")).upper().startswith("ENFORCED")
-                         else "no"),
+            "Status": str(enf.get("status", "UNKNOWN")).replace("_", " "),
             "Engine field": enf.get("engine_field") or "—",
         })
     st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
@@ -641,6 +1123,9 @@ def render_ruleset_detail(rs: Ruleset | None) -> None:
                 for note in r.get("evaluation_notes") or []:
                     st.caption(f"• {note}")
 
+    if str(data.get("provenance", {}).get("verification_status", "")).startswith("UNVERIFIED"):
+        st.info("Ruleset values are unverified against the provider.")
+
     summary = data.get("enforcement_summary") or {}
     if summary.get("warning"):
         st.error(summary["warning"], icon="🚨")
@@ -656,24 +1141,26 @@ def main() -> None:
     )
     inject_css()
 
-    active = render_sidebar()
+    tier1, tier1_error = load_tier1()
+    settings = render_sidebar(tier1)
     rulesets = get_rulesets()
 
     st.title("CIO Command Center")
     st.caption(
-        "Autonomous quantitative research under prop-firm constraints · "
-        "campaigns run against generated boilerplate, not synthesised strategies"
+        "Pure alpha discovery over the Databento futures lake · synthesis is "
+        "audited before it runs, and every metric is computed deterministically "
+        "from the engine's own trades"
     )
 
     tab_cmd, tab_vault, tab_rules = st.tabs(
-        ["Command Center", "Strategy Vault", "Ruleset Detail"]
+        ["CIO Terminal", "Strategy Vault", "CrossTrade Governance"]
     )
     with tab_cmd:
-        render_command_center(active)
+        render_terminal(tier1, tier1_error, settings)
     with tab_vault:
         render_vault(rulesets)
     with tab_rules:
-        render_ruleset_detail(active)
+        render_governance(rulesets)
 
 
 # Streamlit executes this file top to bottom on every rerun, so main() is
