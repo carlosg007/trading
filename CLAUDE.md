@@ -187,7 +187,9 @@ Run from the repo root.
 streamlit run dashboard/app.py
 
 # Tests. No pytest config - each is a script that exits non-zero on failure.
-# Nine suites, 586 checks. The first five need neither the lake nor a network.
+# Nine suites, 658 checks. The first five need neither the lake nor a network.
+# test_report_gates.py shells out to `node` for the trade inspector's own
+# checks and skips them, loudly, when node is absent.
 python tests/test_tier1.py              # intent routing, vault, synthesis errors
 python tests/test_tier2.py              # compliance, robustness, lifecycle
 python tests/test_tier3_workers.py      # worker tools, metrics, RAM ceiling
@@ -348,15 +350,29 @@ many variants it was selected from. Also holds the acceptance gates
 `print_dual_scorecard` — see the dual-version workflow below.
 
 **`backtest/report_html.py`** — the browser tear sheet.
-`generate_html_report(result, metrics, gate_audit, out_path, version_label)`
-writes one self-contained dark-themed HTML file: gate badges, alpha metrics,
-an interactive Plotly equity/drawdown chart, the monthly return matrix and the
-trade log. Plotly is **inlined**, not CDN-loaded — ~4.5 MB a file, and worth it
-because a report is evidence and a CDN tag renders an empty rectangle the first
-time someone opens it offline. The trade log is capped at `MAX_TRADE_ROWS`
-(2,000) and says so on the page when the cap bites; a 535k-row table opens in no
-browser, and a silently truncated log reads as a complete one.
-`write_dual_reports(dual, ...)` emits both versions plus `dual_metrics.json`.
+`generate_html_report(bars, result, metrics, gate_audit, out_path, strat_name,
+strat_description, version_label)` writes one self-contained dark-themed HTML
+file: gate badges, alpha metrics, the Plotly equity and underwater curves, the
+strategy logic card, the monthly heatmap, a searchable/sortable trade log, and
+the click-to-inspect candlestick modal. `write_dual_reports(dual, bars, ...)`
+emits both versions plus `dual_metrics.json`.
+
+- **Everything is inlined** — Plotly, the bar windows the inspector draws, the
+  CSS and the JS. ~5 MB a file, and worth it: a report is evidence, and a CDN
+  tag renders an empty rectangle the first time someone opens it offline.
+- **The trade log caps at `MAX_TRADE_ROWS`** (2,000) and says so on the page
+  when the cap bites. A 535k-row table opens in no browser, and a silently
+  truncated log reads as a complete one. The inspector caps with it.
+- **Fees and slippage are split** out of the engine's single `costs` figure by
+  subtracting the deterministic commission (`_cost_split`). When the remainder
+  would be negative the split is abandoned and the page says so, rather than
+  printing an impossible column.
+- **Chart colors are validated** (see the module docstring). The equity/
+  drawdown pair clears CVD separation; the green/red entry-exit markers do not,
+  so they carry shape and an IN/OUT label as well.
+- **`tests/inspector_dom_test.js`** runs the page's own JavaScript against a
+  stub DOM under node — search, sort, row click, the window slice, Escape.
+  Markup assertions cannot catch an off-by-one that draws the wrong trade.
 
 **`backtest/promote.py`** — promotes one version into
 `strategies/approved_incubator/<strat>/` and commits it. See the workflow below.
@@ -409,12 +425,19 @@ aligned to it. A module may declare `TIMEFRAME`, `SYMBOLS`, and `DEFAULT_PARAMS`
 
 ## The Dual-Version Workflow
 
-What to do when a backtest finishes. Five steps, in order. Steps 1-2 are
-automatic; step 3 is where a human decides.
+What to do when a backtest finishes:
 
-**1. Score both versions against the acceptance gates.**
-`run_dual_version_backtest` calls `audit_acceptance_gates` for A and B and
-attaches the result as `gate_audit` on each version.
+1. Console scorecard and gate audit — **Version A**
+2. Standalone HTML report with the trade inspector — **Version A**
+3. Console scorecard and gate audit — **Version B**
+4. Standalone HTML report with the trade inspector — **Version B**
+5. The four-choice menu
+
+Steps 1-4 are automatic. Step 5 is where a human decides, and nothing is
+promoted without them.
+
+**1. The gates.** `run_dual_version_backtest` calls `audit_acceptance_gates`
+for A and B and attaches the result as `gate_audit` on each version.
 
 | Gate | Criterion | Threshold |
 |---|---|---|
@@ -435,27 +458,44 @@ nothing can be promoted on a gate that was never run. Drawdowns are compared on
 magnitude — the engine signs them negative, and comparing raw would let -40%
 clear a 15% limit.
 
-**2. Print the dual scorecard.** `print_dual_scorecard(metrics_a, metrics_b,
-audit_a, audit_b)` renders A and B side by side with a `B − A` delta column,
-the gate table, per-criterion detail for every FAIL, and the verdict.
+**2. Print the console scorecard, then emit the HTML report — Version A first,
+then Version B.** Take the versions one at a time, in that order: the console
+scorecard for A, then A's report, then the same pair for B. A reader who sees
+Version B's tear sheet before Version A's has no baseline to judge it against,
+and the whole point of the mandate is that B is only interesting relative to A.
 
-**3. Emit the HTML reports.** `report_version_a.html` and
-`report_version_b.html`, plus `dual_metrics.json`, land in
-`/mnt/backtest/artifacts/<strat_name>_<timestamp>/`. The timestamp is on the
-directory, not the filename, so a re-run never overwrites the evidence an
+`print_dual_scorecard(metrics_a, metrics_b, audit_a, audit_b)` renders both
+columns side by side with a `B − A` delta, the gate table, per-criterion detail
+for every FAIL, and the verdict.
+
+`report_version_a.html` and `report_version_b.html`, plus `dual_metrics.json`,
+land in `/mnt/backtest/artifacts/<strat_name>_<timestamp>/`. The timestamp is on
+the directory, not the filename, so a re-run never overwrites the evidence an
 earlier promotion decision was made on. A write failure is recorded in
 `result["reports"]["error"]` and printed to stderr — never raised, because a
 completed backtest is not thrown away over a busy NFS mount. Pass
 `emit_reports=False` to skip.
 
-**4. Prompt the user. Do not choose for them.**
+Each report carries the gate badges, the alpha metrics, the equity and
+underwater curves, the strategy logic card, the monthly heatmap, a searchable
+and sortable trade log, and the **trade inspector**: click any row for a
+candlestick of that trade, 20 bars before the entry through 10 after the exit,
+entry and exit marked. The bar windows are embedded at build time, so the file
+keeps working with no lake, no server, and no network.
+
+Read the logic card before the metrics. It states what the engine actually did
+— fills on the next bar's open, the session flatten setting, the costs charged,
+and that **no stop-loss or take-profit is modelled at all**. A drawdown figure
+read on the assumption of an unstated stop is being read wrong.
+
+**3. Present the menu. Do not choose for them.**
 
 ```text
-[1] Promote Version A     [2] Promote Version B
-[3] Parameter sweep       [4] Keep in experimental
+[1] Promote Version A to Incubator     [2] Promote Version B to Incubator
+[3] Parameter Sweep / Sensitivity      [4] Keep in Experimental / New Idea
 ```
 
-**5. Promote.**
+**4-5. Promote (or sweep, or leave it).**
 
 ```bash
 python3 backtest/promote.py --strat sma_crossover --version A \
