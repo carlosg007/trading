@@ -74,8 +74,10 @@ _REPO = Path(__file__).resolve().parent.parent
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
-from backtest.engine import BacktestConfig, BacktestResult, run_backtest  # noqa: E402
+from backtest.engine import (BacktestConfig, BacktestResult,  # noqa: E402
+                             _pair_trades, round_turn_cost, run_backtest)
 from backtest.report import sortino as report_sortino  # noqa: E402
+from backtest.specs import get_spec  # noqa: E402
 
 ARTIFACTS = Path("/mnt/backtest/artifacts")
 EXPERIMENTAL = _REPO / "strategies" / "experimental"
@@ -893,7 +895,272 @@ def trade_returns_from_result(result: dict[str, Any] | BacktestResult,
 
 
 # --------------------------------------------------------------------------
-# 5. Strategy boilerplate
+# 5. Causal ML signal filter (the Dual-Version Mandate's Version B)
+# --------------------------------------------------------------------------
+ML_FEATURES = ["atr_norm", "volume_z", "rsi_14", "hour", "minute",
+               "ret_1", "ret_5"]
+
+# Below this many completed trades the classifier has nothing to learn from, so
+# the signal passes through unfiltered. Suppressing entries during the warm-up
+# instead would silently truncate the start of the sample and flatter Version B
+# by removing trades it never actually judged.
+MIN_TRAIN_TRADES = 30
+
+
+def _bar_timestamps(bars: pd.DataFrame) -> pd.DatetimeIndex:
+    """
+    The bar timestamps, from the `ts` column or a DatetimeIndex.
+
+    The engine hands strategies a long-format frame with `ts` as a COLUMN and a
+    positional index, so `bars.index.hour` raises there. Accepting both shapes
+    keeps this usable from the engine path and from a caller holding a
+    time-indexed frame, without either one silently producing garbage.
+    """
+    if "ts" in bars.columns:
+        return pd.DatetimeIndex(pd.to_datetime(bars["ts"], utc=True))
+    if isinstance(bars.index, pd.DatetimeIndex):
+        idx = bars.index
+        return idx if idx.tz is not None else idx.tz_localize("UTC")
+    raise ValueError(
+        "bars needs a `ts` column or a DatetimeIndex; got an index of type "
+        f"{type(bars.index).__name__} and columns {list(bars.columns)}"
+    )
+
+
+def _rsi(close: pd.Series, window: int = 14) -> pd.Series:
+    """
+    RSI on rolling means of gains and losses.
+
+    Simple rolling means rather than Wilder's smoothing: a rolling window has a
+    hard cutoff, so the value at bar i provably depends on exactly the last
+    `window` bars. An EWM tail is also causal but never fully forgets, which
+    makes "does this feature see the future" harder to prove by truncation -
+    and that proof is the point of this whole module.
+    """
+    delta = close.diff()
+    gain = delta.clip(lower=0.0)
+    loss = (-delta).clip(lower=0.0)
+    avg_gain = gain.rolling(window, min_periods=window).mean()
+    avg_loss = loss.rolling(window, min_periods=window).mean()
+    rs = avg_gain / (avg_loss + 1e-12)
+    return 100.0 - 100.0 / (1.0 + rs)
+
+
+def causal_features(bars: pd.DataFrame) -> pd.DataFrame:
+    """
+    Feature matrix for the ML filter. Every column is strictly causal.
+
+    A value at row i is a function of bars 0..i only. No `shift(-k)`, no
+    centred window, no reversed slice, nothing computed off a full-sample
+    statistic such as a global mean or a fitted scaler - a StandardScaler fit
+    on the whole frame leaks the test period's distribution into the training
+    rows, which is lookahead that no shift-based audit would catch.
+
+    Using bar i's close to decide a signal on bar i is legitimate here: the
+    engine fills at bar i+1's open, never on the signal bar. That one-bar gap
+    is what makes these features tradeable rather than clairvoyant.
+
+    Columns: atr_norm, volume_z, rsi_14, hour, minute, ret_1, ret_5.
+    NaN warm-up rows are left as NaN - HistGradientBoostingClassifier consumes
+    them natively, and filling them with a column mean would import a
+    full-sample statistic into the early rows.
+    """
+    ts = _bar_timestamps(bars)
+    close = bars["close"].astype(float)
+    high = bars["high"].astype(float)
+    low = bars["low"].astype(float)
+    volume = bars["volume"].astype(float)
+
+    prev_close = close.shift(1)
+    true_range = pd.concat([high - low,
+                            (high - prev_close).abs(),
+                            (low - prev_close).abs()], axis=1).max(axis=1)
+    atr = true_range.rolling(14, min_periods=14).mean()
+
+    vol_mean = volume.rolling(20, min_periods=20).mean()
+    vol_std = volume.rolling(20, min_periods=20).std()
+
+    out = pd.DataFrame({
+        "atr_norm": (atr / close.where(close != 0)).to_numpy(dtype=float),
+        "volume_z": ((volume - vol_mean) / (vol_std + 1e-8)).to_numpy(dtype=float),
+        "rsi_14": _rsi(close, 14).to_numpy(dtype=float),
+        "hour": ts.hour.to_numpy(dtype=float),
+        "minute": ts.minute.to_numpy(dtype=float),
+        "ret_1": close.pct_change(1).to_numpy(dtype=float),
+        "ret_5": close.pct_change(5).to_numpy(dtype=float),
+    }, index=bars.index)
+    return out[ML_FEATURES]
+
+
+def _label_baseline_trades(bars: pd.DataFrame,
+                           entries: pd.Series,
+                           exits: pd.Series,
+                           symbol: str | None,
+                           cfg: BacktestConfig | None) -> dict[str, np.ndarray]:
+    """
+    Resolve the baseline's signals into labelled trades.
+
+    Reproduces the engine's execution rules rather than approximating them: a
+    signal on bar i fills on bar i+1's OPEN, and `_pair_trades` applies the
+    same first-exit-strictly-after-entry pairing `_simulate` uses. A label
+    computed off close-to-close would be scoring a trade the engine never took.
+
+    Returns arrays of equal length:
+        signal_idx  bar the entry was signalled on - where features are read
+        exit_idx    bar the position was closed on - when the label becomes known
+        label       1 if the trade made money net of costs, else 0
+
+    Costs enter the label when `symbol` is supplied. They change the sign of
+    marginal trades, and a filter trained on gross outcomes learns to keep
+    trades that lose money after commission.
+    """
+    ent = np.roll(entries.to_numpy(dtype=bool), 1)
+    exi = np.roll(exits.to_numpy(dtype=bool), 1)
+    ent[0] = False
+    exi[0] = False
+
+    e_idx, x_idx = _pair_trades(ent, exi)
+    empty = {"signal_idx": np.empty(0, dtype=np.int64),
+             "exit_idx": np.empty(0, dtype=np.int64),
+             "label": np.empty(0, dtype=np.int64)}
+    if e_idx.size == 0:
+        return empty
+
+    px = bars["open"].to_numpy(dtype=float)
+    entry_px = px[e_idx]
+    exit_px = px[x_idx]
+
+    # Long-only, matching the engine's entries/exits simulation.
+    gross = exit_px - entry_px
+    if symbol is not None:
+        spec = get_spec(symbol)
+        config = cfg or BacktestConfig()
+        # round_turn_cost is dollars per contract for the whole round trip;
+        # dividing by the multiplier puts it back into price points so it can
+        # be compared against a price difference.
+        cost_points = (round_turn_cost(symbol, config)
+                       / (float(spec.multiplier) * config.contracts))
+        net = gross - cost_points
+    else:
+        net = gross
+
+    return {"signal_idx": (e_idx - 1).astype(np.int64),
+            "exit_idx": x_idx.astype(np.int64),
+            "label": (net > 0).astype(np.int64)}
+
+
+def apply_ml_signal_filter(bars: pd.DataFrame,
+                           entries: pd.Series,
+                           exits: pd.Series,
+                           symbol: str | None = None,
+                           cfg: BacktestConfig | None = None,
+                           threshold: float = 0.50,
+                           min_train_trades: int = MIN_TRAIN_TRADES,
+                           random_state: int = 0) -> tuple[pd.Series, pd.Series]:
+    """
+    Version B of the Dual-Version Mandate: suppress the baseline's entries the
+    classifier expects to lose.
+
+    Takes the rule-based signals and returns the same pair with some entries
+    turned off. Exits are returned untouched - an exit with no open position is
+    dropped by `clean_signals` downstream, so suppressing an entry cleanly
+    removes the whole trade.
+
+    Causality
+    ---------
+    This is an expanding-window walk-forward, not a fitted model applied to its
+    own training data, and the distinction is the entire value of the function.
+    For a candidate entry signalled on bar `s`, the model is fitted ONLY on
+    trades that had already CLOSED before `s`:
+
+        exit_idx < s
+
+    Not "entered before s". A trade that opened last week and closes tomorrow
+    has no label today, and training on it leaks the future outcome into a
+    decision made before that outcome existed. That distinction is invisible in
+    the equity curve - it just makes Version B look brilliant - which is why it
+    is enforced here rather than left to the caller.
+
+    The classifier is refitted whenever the pool of completed trades grows, so
+    every decision uses the largest strictly-historical sample available. Fits
+    cost one per completed trade, not one per bar.
+
+    Warm-up
+    -------
+    Until `min_train_trades` trades have closed, or while only one class has
+    been seen, entries pass through unchanged. Version B therefore begins life
+    identical to Version A and diverges as evidence accumulates. Any comparison
+    between the two must be read with that in mind: the early sample is shared,
+    so the versions are not independent.
+
+    Parameters
+    ----------
+    symbol, cfg
+        Supply both to include commission and slippage in the training labels.
+        Without them the model learns from gross outcomes and will keep trades
+        that lose money after costs.
+    threshold
+        Keep the entry when P(win) >= this. 0.50 is "more likely than not".
+
+    Returns (entries, exits), boolean Series on the input index.
+    """
+    try:
+        from sklearn.ensemble import HistGradientBoostingClassifier
+    except ImportError as e:                                  # pragma: no cover
+        raise ImportError(
+            "apply_ml_signal_filter needs scikit-learn. "
+            "Run: uv pip install -r requirements.txt"
+        ) from e
+
+    entries = pd.Series(entries).fillna(False).astype(bool)
+    exits = pd.Series(exits).fillna(False).astype(bool)
+    if len(entries) != len(bars) or len(exits) != len(bars):
+        raise ValueError(
+            f"signals and bars disagree on length: {len(entries)}/{len(exits)} "
+            f"signals for {len(bars)} bars")
+
+    trades = _label_baseline_trades(bars, entries, exits, symbol, cfg)
+    kept = entries.to_numpy(dtype=bool).copy()
+    signal_bars = np.flatnonzero(kept)
+
+    if trades["signal_idx"].size == 0 or signal_bars.size == 0:
+        return entries, exits
+
+    features = causal_features(bars).to_numpy(dtype=float)
+    train_rows = features[trades["signal_idx"]]
+    labels = trades["label"]
+    # _pair_trades emits trades in order, so exits are non-decreasing and the
+    # count of completed trades before bar s is a searchsorted, not a scan.
+    exit_idx = trades["exit_idx"]
+
+    model = None
+    fitted_n = -1
+    for s in signal_bars:
+        n_available = int(np.searchsorted(exit_idx, s, side="left"))
+        if n_available < min_train_trades:
+            continue                       # warm-up: pass through unfiltered
+
+        y = labels[:n_available]
+        if np.unique(y).size < 2:
+            continue                       # one class so far; nothing to learn
+
+        if n_available != fitted_n:
+            model = HistGradientBoostingClassifier(
+                max_iter=100, max_depth=3, learning_rate=0.1,
+                min_samples_leaf=5, early_stopping=False,
+                random_state=random_state)
+            model.fit(train_rows[:n_available], y)
+            fitted_n = n_available
+
+        p_win = float(model.predict_proba(features[s:s + 1])[0, 1])
+        if p_win < threshold:
+            kept[s] = False
+
+    return pd.Series(kept, index=entries.index), exits
+
+
+# --------------------------------------------------------------------------
+# 6. Strategy boilerplate
 # --------------------------------------------------------------------------
 BOILERPLATE = '''"""
 {name} - {description}
