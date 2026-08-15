@@ -925,9 +925,13 @@ def make_signal_fn({signature}):
 # Importing a module executes it, so anything written here runs. Model-authored
 # code gets an allowlist rather than a denylist: a denylist is a guess about
 # what is dangerous, and a strategy legitimately needs nothing beyond arrays.
+# The five libraries a signal function has any business touching, plus
+# `__future__`, which is a compiler directive rather than a runtime import and
+# is what the boilerplate opens with. Deliberately NOT here: `vectorbt`. The
+# open-source package is a different library with the same-looking API, and
+# importing it silently changes simulation semantics.
 ALLOWED_IMPORTS = {
-    "__future__", "numpy", "np", "pandas", "pd", "math",
-    "vectorbtpro", "vbt", "numba", "typing", "dataclasses",
+    "__future__", "numpy", "pandas", "math", "vectorbtpro", "numba",
 }
 
 # Names that give a strategy module reach it has no reason to have.
@@ -991,12 +995,15 @@ def _audit_ast(tree: ast.AST) -> list[str]:
         if name not in _LOOKAHEAD_CALLS:
             continue
         for arg in list(node.args) + [k.value for k in node.keywords]:
-            if (isinstance(arg, ast.UnaryOp) and isinstance(arg.op, ast.USub)
-                    and isinstance(arg.operand, ast.Constant)
-                    and isinstance(arg.operand.value, (int, float))):
+            # Any unary minus is rejected, whatever it wraps. Restricting this
+            # to literals let `shift(-k)` and `shift(-(n))` through, which is
+            # the same lookahead written one character differently.
+            if isinstance(arg, ast.UnaryOp) and isinstance(arg.op, ast.USub):
+                shown = getattr(arg.operand, "value",
+                                getattr(arg.operand, "id", "…"))
                 problems.append(
-                    f"lookahead: {name}(-{arg.operand.value}) shifts future "
-                    f"data into the present"
+                    f"lookahead: {name}(-{shown}) shifts future data into "
+                    f"the present"
                 )
             elif (isinstance(arg, ast.Constant)
                   and isinstance(arg.value, (int, float)) and arg.value < 0):
@@ -1021,10 +1028,17 @@ ENGINE_ADAPTER = '''
 # ---------------------------------------------------------------------------
 # Engine adapter - written by agents.tier3_workers, NOT by the model.
 #
-# backtest.engine calls `signal_fn(bars)` with one symbol's DataFrame. The
-# generated function above takes unpacked arrays, which is the better shape for
-# Numba and vectorbt but not what the engine passes. This closure bridges the
-# two. It is generated deterministically so correctness does not depend on the
+# The generated `signal_fn(bars, **params)` already matches what
+# backtest.engine calls, so this no longer reshapes arguments. It exists for
+# the two things the model still cannot be trusted to get right:
+#
+#   1. Parameter binding. The engine calls `signal_fn(bars)` with no params,
+#      so a parameterised module needs a `make_signal_fn(**params)` factory
+#      for load_strategy to bind against.
+#   2. Boolean coercion. A model that returns a price series instead of a
+#      comparison must fail loudly rather than trade every bar.
+#
+# It is generated deterministically so correctness does not depend on the
 # model getting the glue right.
 # ---------------------------------------------------------------------------
 import numpy as _np_adapter
@@ -1056,14 +1070,7 @@ def _as_bool_signal(values, index, label):
 
 def make_signal_fn(**params):
     def _engine_signal_fn(bars):
-        entries, exits = signal_fn(
-            bars["open"].to_numpy(),
-            bars["high"].to_numpy(),
-            bars["low"].to_numpy(),
-            bars["close"].to_numpy(),
-            bars["volume"].to_numpy(),
-            **params,
-        )
+        entries, exits = signal_fn(bars, **params)
         idx = bars.index
         return (_as_bool_signal(entries, idx, "entries"),
                 _as_bool_signal(exits, idx, "exits"))

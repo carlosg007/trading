@@ -127,9 +127,13 @@ Its API differs significantly from open-source `vectorbt`. **Do not hallucinate
 methods.** Run a quick terminal inspection (`dir()`, `help()`, docstrings)
 before writing an implementation.
 
-> Note: `vectorbt==1.1.0` is *also* installed as a transitive package. Always
-> `import vectorbtpro as vbt`. Importing `vectorbt` will resolve, run, and give
-> you subtly different behaviour — this footgun is live in the current venv.
+> Note: open-source `vectorbt` was uninstalled on 2026-08-15 and unpinned from
+> `requirements.txt`, so `import vectorbt` now fails loudly instead of resolving
+> to a different library. Always `import vectorbtpro as vbt`. The footgun is not
+> dead: `riskfolio-lib` (pinned, imported nowhere here) declares `vectorbt` as a
+> dependency, so a reinstall can pull it back — check `uv pip list | grep -i
+> vectorbt` after one. `ALLOWED_IMPORTS` in `agents/tier3_workers.py` also
+> rejects it in model-generated strategy code.
 
 **Atomic git commits.** Granular and single-purpose. A data fix and a loop
 optimisation are two commits, so a script that breaks the server can be rolled

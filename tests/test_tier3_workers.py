@@ -326,15 +326,14 @@ def test_load_errors(tmp: Path) -> None:
 
 
 GENERATED_OK = """
-import numpy as np
+import pandas as pd
 
-def signal_fn(open_, high, low, close, volume, lookback=20):
-    n = len(close)
-    entries = np.zeros(n, dtype=bool)
-    exits = np.zeros(n, dtype=bool)
-    for i in range(lookback, n):
-        entries[i] = close[i] > np.max(high[i - lookback:i])
-        exits[i] = close[i] < np.min(low[i - lookback:i])
+def signal_fn(bars, lookback=20):
+    close = bars["close"]
+    prior_high = bars["high"].rolling(lookback).max().shift(1)
+    prior_low = bars["low"].rolling(lookback).min().shift(1)
+    entries = (close > prior_high).fillna(False)
+    exits = (close < prior_low).fillna(False)
     return entries, exits
 """
 
@@ -348,16 +347,16 @@ def test_generated_code_validation(tmp: Path) -> None:
     print("\ngenerated code validation")
 
     path = write_and_validate_strategy("gen_ok", GENERATED_OK, out_dir=tmp)
-    check("valid array-signature module is accepted", path.exists())
+    check("valid bars-signature module is accepted", path.exists())
 
     fenced = write_and_validate_strategy(
         "gen_fenced", "```python\n" + GENERATED_OK + "\n```", out_dir=tmp)
     check("markdown fences are stripped",
           "```" not in fenced.read_text())
 
-    # The engine calls signal_fn(bars) with one DataFrame; the generated
-    # function takes unpacked arrays. The adapter bridges that, and is written
-    # here rather than by the model so the glue cannot be got wrong.
+    # The generated signature now matches what the engine calls, so the adapter
+    # no longer reshapes arguments. It still binds params and forces the return
+    # to boolean, which is the part the model cannot be trusted with.
     check("engine adapter is appended",
           "make_signal_fn" in path.read_text())
     fn, _ = load_strategy(path)
@@ -376,31 +375,50 @@ def test_generated_code_validation(tmp: Path) -> None:
         ("empty code", "   ", GeneratedCodeError),
         ("no signal_fn", "import numpy as np\ndef other(x):\n    return x\n",
          GeneratedCodeError),
-        ("os import", "import os\ndef signal_fn(o,h,l,c,v):\n    return c>0, c<0\n",
+        ("os import",
+         "import os\ndef signal_fn(bars):\n"
+         "    c = bars['close']\n    return c>0, c<0\n",
          GeneratedCodeError),
         ("subprocess import",
-         "import subprocess\ndef signal_fn(o,h,l,c,v):\n    return c>0, c<0\n",
+         "import subprocess\ndef signal_fn(bars):\n"
+         "    c = bars['close']\n    return c>0, c<0\n",
          GeneratedCodeError),
-        ("eval", "def signal_fn(o,h,l,c,v):\n    eval('1')\n    return c>0, c<0\n",
+        # The open-source twin. Same-looking API, different simulation
+        # semantics, and nothing downstream would report the substitution.
+        ("open-source vectorbt import",
+         "import vectorbt as vbt\ndef signal_fn(bars):\n"
+         "    c = bars['close']\n    return c>0, c<0\n",
+         GeneratedCodeError),
+        ("eval",
+         "def signal_fn(bars):\n    eval('1')\n"
+         "    c = bars['close']\n    return c>0, c<0\n",
          GeneratedCodeError),
         ("dunder escape",
-         "def signal_fn(o,h,l,c,v):\n    x = c.__class__\n    return c>0, c<0\n",
+         "def signal_fn(bars):\n    c = bars['close']\n"
+         "    x = c.__class__\n    return c>0, c<0\n",
          GeneratedCodeError),
         ("lookahead shift(-1)",
-         "import pandas as pd\ndef signal_fn(o,h,l,c,v):\n"
-         "    f = pd.Series(c).shift(-1)\n    return c>0, c<0\n",
+         "import pandas as pd\ndef signal_fn(bars):\n"
+         "    c = bars['close']\n    f = c.shift(-1)\n    return c>0, c<0\n",
+         GeneratedCodeError),
+        # The same lookahead written through a variable. A literal-only check
+        # let this through, which is why the audit rejects any unary minus.
+        ("lookahead shift(-k) via a variable",
+         "import pandas as pd\ndef signal_fn(bars, k=1):\n"
+         "    c = bars['close']\n    f = c.shift(-k)\n    return c>0, c<0\n",
          GeneratedCodeError),
         ("reversed slice",
-         "def signal_fn(o,h,l,c,v):\n    r = c[::-1]\n    return c>0, c<0\n",
+         "def signal_fn(bars):\n    c = bars['close']\n"
+         "    r = c[::-1]\n    return c>0, c<0\n",
          GeneratedCodeError),
         ("returns one array",
-         "import numpy as np\ndef signal_fn(o,h,l,c,v):\n    return c>0\n",
+         "def signal_fn(bars):\n    return bars['close']>0\n",
          GeneratedCodeError),
         # Blanket astype(bool) would make this True on every nonzero bar: a
         # position opened every bar, and an equity curve that looks like
         # leverage rather than a bug.
         ("returns prices, not booleans",
-         "import numpy as np\ndef signal_fn(o,h,l,c,v):\n    return c, c\n",
+         "def signal_fn(bars):\n    c = bars['close']\n    return c, c\n",
          GeneratedCodeError),
     ]
     for label, code, expected in rejects:
@@ -413,7 +431,7 @@ def test_generated_code_validation(tmp: Path) -> None:
 
     ok_int = write_and_validate_strategy(
         "gen_ints",
-        "import numpy as np\ndef signal_fn(o,h,l,c,v):\n"
+        "def signal_fn(bars):\n    c = bars['close']\n"
         "    z = (c > c.mean()).astype(int)\n    return z, 1 - z\n",
         out_dir=tmp)
     check("accepts 0/1 integer signals", ok_int.exists())

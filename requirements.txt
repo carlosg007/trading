@@ -231,7 +231,13 @@ typing-inspection==0.4.3
 tzlocal==5.4.4
 urllib3==2.7.0
 uvicorn==0.52.1
-vectorbt==1.1.0
+# vectorbt (open source) is deliberately NOT pinned here and is uninstalled
+# from the venv. Its API resembles vectorbtpro's closely enough that an
+# accidental `import vectorbt` resolves, runs, and gives different simulation
+# results with nothing raising. riskfolio-lib declares it as a dependency, so
+# `uv pip install -r requirements.txt` can pull it back in -- re-run
+# `uv pip uninstall vectorbt` after any reinstall, or drop riskfolio-lib
+# (pinned below, imported nowhere in this repo).
 vectorbtpro @ git+ssh://git@github.com/polakowo/vectorbt.pro.git@7e2c8e86425d28ed7d97a3e07fd548b0fc694323
 watchdog==6.0.0
 wcwidth==0.8.2
