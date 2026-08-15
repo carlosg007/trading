@@ -42,6 +42,7 @@ The report records it so the number is never read without that context.
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 from pathlib import Path
 
@@ -308,6 +309,401 @@ def regime_join(yearly: pd.DataFrame,
         return None, (f"No regime labels overlap the backtest years {lo}-{hi} for "
                       f"symbol {symbol!r} - regime labels skipped.")
     return merged, None
+
+
+# --------------------------------------------------------------------------
+# Acceptance gates
+# --------------------------------------------------------------------------
+# The three gates a strategy clears before it is allowed near a live account.
+# They are stated once, here, so Version A and Version B are judged against
+# identical numbers - a scorecard where the two columns were scored on
+# different bars is worse than no scorecard.
+GATE_THRESHOLDS: dict[str, dict[str, float]] = {
+    "gate1": {"min_sharpe": 1.20, "min_profit_factor": 1.50,
+              "min_trades": 200, "max_drawdown_pct": 15.0},
+    "gate2": {"min_wfo_efficiency": 0.50, "max_mc_drawdown_pct": 18.0},
+    # Retention = holdout Sharpe / in-sample Sharpe. 0.85 is "no more than 15%
+    # degradation", expressed as a ratio because that is what gets computed.
+    "gate3": {"min_sharpe_retention": 0.85},
+}
+
+GATE_NAMES = {
+    "gate1": "GATE 1 · In-Sample",
+    "gate2": "GATE 2 · Robustness",
+    "gate3": "GATE 3 · OOS Holdout",
+}
+
+PASS = "PASS"
+FAIL = "FAIL"
+NOT_EVALUATED = "NOT EVALUATED"
+
+
+def _numeric(value) -> float:
+    """
+    Coerce a metric to a float, mapping anything unusable to NaN.
+
+    None, a missing key and a string that is not a number all collapse to NaN,
+    which every comparison below treats as *not a pass*. A gate must never
+    clear because the number that would have failed it was absent.
+    """
+    if value is None or isinstance(value, bool):
+        return float("nan")
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float("nan")
+
+
+def _pick(source, *keys) -> float:
+    """First present key from a metrics-shaped dict, as a float. NaN if none."""
+    if source is None:
+        return float("nan")
+    if not isinstance(source, dict):
+        return _numeric(source)
+    for k in keys:
+        if k in source:
+            return _numeric(source[k])
+    return float("nan")
+
+
+def _criterion(label: str, value: float, threshold: float, direction: str,
+               unit: str = "", note: str | None = None,
+               fmt: str = "{:.2f}") -> dict:
+    """
+    Score one criterion.
+
+    `direction` is 'min' (value must be >= threshold) or 'max' (value must be
+    <= threshold). A NaN value scores NOT EVALUATED rather than FAIL: "we did
+    not measure this" and "this failed" are different findings, and collapsing
+    them is how an unmeasured gate gets reported as a cleared one. Neither is
+    a pass, so the distinction never flatters a result.
+
+    Drawdowns are compared on magnitude. The engine reports `max_dd_pct` as a
+    negative number and `report.drawdown_stats` agrees, but a caller handing in
+    a positive 12.0 means the same drawdown - comparing the raw sign would let
+    a 40% drawdown clear a 15% limit because -40 <= 15.
+    """
+    if direction not in ("min", "max"):
+        raise ValueError(f"direction must be 'min' or 'max', got {direction!r}")
+
+    if math.isnan(value):
+        status = NOT_EVALUATED
+    elif direction == "min":
+        status = PASS if value >= threshold else FAIL
+    else:
+        status = PASS if value <= threshold else FAIL
+
+    return {"label": label, "value": value, "threshold": threshold,
+            "direction": direction, "unit": unit, "status": status,
+            "note": note, "fmt": fmt}
+
+
+def criterion_text(check: dict) -> tuple[str, str]:
+    """
+    `(measured, required)` as display strings, e.g. ('11.20%', '<= 15%').
+
+    The value goes through `_numeric` rather than being used raw because an
+    audit is routinely read back out of JSON, and a NaN written to
+    `dual_metrics.json` comes back as `null` - JSON has no NaN. This is the one
+    place both the scorecard and the HTML report render a criterion, so it is
+    the one place that has to survive the round trip.
+    """
+    fmt = check.get("fmt", "{:.2f}")
+    unit = check.get("unit", "")
+    value = _numeric(check.get("value"))
+    measured = "n/a" if math.isnan(value) else fmt.format(value) + unit
+    op = ">=" if check.get("direction") == "min" else "<="
+    return measured, f"{op} {_numeric(check.get('threshold')):g}{unit}"
+
+
+def _roll_up(checks: list[dict]) -> str:
+    """A gate is only PASS when every one of its criteria passed."""
+    if any(c["status"] == FAIL for c in checks):
+        return FAIL
+    if any(c["status"] == NOT_EVALUATED for c in checks):
+        return NOT_EVALUATED
+    return PASS
+
+
+def audit_acceptance_gates(metrics: dict,
+                           robustness: dict | None = None,
+                           holdout: dict | None = None,
+                           version: str = "A",
+                           name: str | None = None) -> dict:
+    """
+    Score one version of a strategy against the three acceptance gates.
+
+    Call it once per version - `print_dual_scorecard` puts the two audits side
+    by side - because a single audit over merged inputs cannot say which
+    version failed.
+
+    Parameters
+    ----------
+    metrics
+        The in-sample metrics dict `agents.tier3_workers.summarize_result`
+        returns: `sharpe`, `profit_factor`, `trade_count`, `max_drawdown_pct`.
+    robustness
+        Optional. `{"wfo": <run_walk_forward_analysis result or ratio>,
+        "monte_carlo": <run_monte_carlo_simulation result or drawdown pct>}`.
+        Omit it and Gate 2 reports NOT EVALUATED - it never reports PASS on
+        evidence that was not supplied.
+    holdout
+        Optional. The metrics dict from the held-back final 3 years, or
+        `{"sharpe": x}`, or a bare Sharpe. Gate 3 compares it against the
+        in-sample Sharpe in `metrics`.
+
+    Returns
+    -------
+    dict with `gates` (gate1/gate2/gate3, each with `status` and `checks`),
+    an overall `status` (PASS / FAIL / NOT EVALUATED), `passed` (True only when
+    all three gates passed), and the thresholds used.
+
+    An incomplete audit is NOT a passing audit. `passed` is True only when
+    every gate cleared on real numbers, so a caller that promotes on `passed`
+    cannot promote a strategy whose robustness was never run.
+    """
+    t1, t2, t3 = (GATE_THRESHOLDS["gate1"], GATE_THRESHOLDS["gate2"],
+                  GATE_THRESHOLDS["gate3"])
+
+    is_sharpe = _pick(metrics, "sharpe", "sharpe_ratio")
+    gate1 = [
+        _criterion("Sharpe", is_sharpe, t1["min_sharpe"], "min"),
+        _criterion("Profit factor", _pick(metrics, "profit_factor"),
+                   t1["min_profit_factor"], "min"),
+        _criterion("Trades", _pick(metrics, "trade_count", "n_trades"),
+                   t1["min_trades"], "min", fmt="{:,.0f}"),
+        _criterion("Max drawdown", abs(_pick(metrics, "max_drawdown_pct", "max_dd_pct")),
+                   t1["max_drawdown_pct"], "max", unit="%"),
+    ]
+
+    rb = robustness or {}
+    wfo = _pick(rb.get("wfo"), "efficiency_ratio", "efficiency", "wfo_efficiency")
+    if math.isnan(wfo):
+        wfo = _pick(rb, "wfo_efficiency", "efficiency_ratio")
+    mc = _pick(rb.get("monte_carlo"), "max_drawdown_pct_at_confidence",
+               "mc_max_drawdown_pct", "max_drawdown_pct")
+    if math.isnan(mc):
+        mc = _pick(rb, "mc_max_drawdown_pct", "max_drawdown_pct_at_confidence")
+
+    # The bootstrap reports the 95% tail as a signed (negative) drawdown; take
+    # the magnitude for the same reason as Gate 1.
+    gate2 = [
+        _criterion("WFO efficiency", wfo, t2["min_wfo_efficiency"], "min",
+                   note=(rb.get("wfo") or {}).get("warning")
+                   if isinstance(rb.get("wfo"), dict) else None),
+        _criterion("Monte Carlo 95% max DD", abs(mc),
+                   t2["max_mc_drawdown_pct"], "max", unit="%"),
+    ]
+
+    oos_sharpe = _pick(holdout, "sharpe", "sharpe_ratio", "holdout_sharpe")
+    retention, retention_note = float("nan"), None
+    if not math.isnan(oos_sharpe) and not math.isnan(is_sharpe):
+        if is_sharpe > 0:
+            retention = oos_sharpe / is_sharpe
+        else:
+            # Two negative Sharpes divide to a healthy-looking positive ratio.
+            # The ratio is undefined here, and saying so beats reporting 1.4x
+            # retention on a strategy that lost money in both windows.
+            retention_note = (f"in-sample Sharpe is {is_sharpe:.2f} (<= 0), so "
+                              f"retention is undefined, not passing")
+    gate3 = [
+        _criterion("Holdout Sharpe retention", retention,
+                   t3["min_sharpe_retention"], "min", unit="x",
+                   note=retention_note),
+    ]
+
+    gates = {
+        "gate1": {"name": GATE_NAMES["gate1"], "status": _roll_up(gate1),
+                  "checks": gate1},
+        "gate2": {"name": GATE_NAMES["gate2"], "status": _roll_up(gate2),
+                  "checks": gate2},
+        "gate3": {"name": GATE_NAMES["gate3"], "status": _roll_up(gate3),
+                  "checks": gate3},
+    }
+    statuses = [g["status"] for g in gates.values()]
+    overall = (FAIL if FAIL in statuses
+               else NOT_EVALUATED if NOT_EVALUATED in statuses
+               else PASS)
+
+    return {
+        "version": version,
+        "name": name or (metrics or {}).get("meta", {}).get("strategy", "unnamed"),
+        "gates": gates,
+        "status": overall,
+        "passed": overall == PASS,
+        "thresholds": GATE_THRESHOLDS,
+        "holdout_sharpe": oos_sharpe,
+        "in_sample_sharpe": is_sharpe,
+        "sharpe_retention": retention,
+    }
+
+
+# --------------------------------------------------------------------------
+# Dual-version scorecard
+# --------------------------------------------------------------------------
+_SCORECARD_ROWS = [
+    ("Sharpe", "sharpe", "{:.2f}", "high"),
+    ("Sortino", "sortino", "{:.2f}", "high"),
+    ("Calmar", "calmar", "{:.2f}", "high"),
+    ("Profit factor", "profit_factor", "{:.2f}", "high"),
+    ("Win rate %", "win_rate_pct", "{:.1f}", "high"),
+    # Compared on magnitude. The engine signs drawdown negative, so "lower is
+    # better" would mark B's DEEPER drawdown as the improvement - -36.73
+    # against -29.27 is a delta of -7.47, which reads as progress and is the
+    # opposite of what happened.
+    ("Max drawdown %", "max_drawdown_pct", "{:.2f}", "smaller"),
+    ("Net return %", "total_return_pct", "{:.2f}", "high"),
+    ("CAGR %", "annualized_return_pct", "{:.2f}", "high"),
+    ("Trades", "trade_count", "{:,.0f}", "none"),
+    ("Total costs $", "total_costs", "{:,.0f}", "none"),
+]
+
+
+def _metric(metrics: dict, key: str) -> float:
+    """
+    One scorecard value.
+
+    `win_rate` is stored as a fraction by `summarize_result` and shown as a
+    percent here; every other key is passed through unchanged.
+    """
+    if key == "win_rate_pct":
+        value = _pick(metrics, "win_rate_pct")
+        return value if not math.isnan(value) else _pick(metrics, "win_rate") * 100
+    return _pick(metrics, key)
+
+
+def _cell(metrics: dict, key: str, fmt: str) -> str:
+    value = _metric(metrics, key)
+    if math.isnan(value):
+        return "n/a"
+    if math.isinf(value):
+        return "inf"
+    return fmt.format(value)
+
+
+def _delta_cell(metrics_a: dict, metrics_b: dict, key: str, fmt: str,
+                better: str) -> str:
+    a, b = _metric(metrics_a, key), _metric(metrics_b, key)
+    if math.isnan(a) or math.isnan(b) or math.isinf(a) or math.isinf(b):
+        return "n/a"
+    d = b - a
+    mark = ""
+    if better != "none" and abs(d) > 1e-12:
+        if better == "high":
+            improved = d > 0
+        elif better == "smaller":
+            improved = abs(b) < abs(a)      # magnitude, so the sign cannot lie
+        else:
+            improved = d < 0
+        mark = " +" if improved else " -"
+    return (fmt.format(d) + mark).strip()
+
+
+def _gate_line(audit: dict, key: str) -> str:
+    return (audit or {}).get("gates", {}).get(key, {}).get("status", NOT_EVALUATED)
+
+
+def format_dual_scorecard(metrics_a: dict, metrics_b: dict,
+                          gate_audit_a: dict | None = None,
+                          gate_audit_b: dict | None = None,
+                          label_a: str = "A · rule-based",
+                          label_b: str = "B · ML-filtered") -> str:
+    """The scorecard as a string, so it can be tested and written to a file."""
+    W = 78
+    L: list[str] = []
+    add = L.append
+
+    add("=" * W)
+    add("DUAL-VERSION SCORECARD")
+    add("=" * W)
+
+    meta = (metrics_a or {}).get("meta") or (metrics_b or {}).get("meta") or {}
+    if meta:
+        add(f"Strategy      : {meta.get('strategy', 'unnamed')}")
+        add(f"Symbol / TF   : {meta.get('symbol', '?')} / {meta.get('timeframe', '?')}")
+        add(f"Period        : {str(meta.get('start', '?'))[:19]} → "
+            f"{str(meta.get('end', '?'))[:19]}")
+        add(f"Costs included: {'yes' if meta.get('costs_included') else 'NO — results are not comparable to live'}")
+    add("")
+    add(f"  {'Metric':<22}{label_a:>20}{label_b:>20}{'B − A':>14}")
+    add("  " + "-" * (W - 4))
+    for label, key, fmt, better in _SCORECARD_ROWS:
+        add(f"  {label:<22}{_cell(metrics_a, key, fmt):>20}"
+            f"{_cell(metrics_b, key, fmt):>20}"
+            f"{_delta_cell(metrics_a, metrics_b, key, fmt, better):>14}")
+
+    add("")
+    add("-" * W)
+    add("ACCEPTANCE GATES")
+    add("-" * W)
+    add(f"  {'Gate':<40}{'A':>18}{'B':>18}")
+    for gk in ("gate1", "gate2", "gate3"):
+        name = GATE_NAMES[gk]
+        add(f"  {name:<40}{_gate_line(gate_audit_a, gk):>18}"
+            f"{_gate_line(gate_audit_b, gk):>18}")
+    add("  " + "-" * (W - 4))
+    add(f"  {'OVERALL':<40}{(gate_audit_a or {}).get('status', NOT_EVALUATED):>18}"
+        f"{(gate_audit_b or {}).get('status', NOT_EVALUATED):>18}")
+
+    # Per-criterion detail, so a FAIL says which number failed and by how much.
+    for audit, label in ((gate_audit_a, label_a), (gate_audit_b, label_b)):
+        if not audit:
+            continue
+        add("")
+        add(f"  {label}")
+        for gk in ("gate1", "gate2", "gate3"):
+            gate = audit["gates"][gk]
+            add(f"    {gate['name']:<32}{gate['status']}")
+            for c in gate["checks"]:
+                measured, required = criterion_text(c)
+                add(f"      {c['label']:<28}{measured:>10}  "
+                    f"{required:<12}{c['status']}")
+                if c.get("note"):
+                    add(f"        ! {c['note']}")
+
+    incomplete = [lbl for audit, lbl in ((gate_audit_a, "A"), (gate_audit_b, "B"))
+                  if audit and audit["status"] == NOT_EVALUATED]
+    if incomplete:
+        add("")
+        add(f"  ⚠ Version {', '.join(incomplete)}: at least one gate was NOT")
+        add("    EVALUATED. That is not a pass. Run the walk-forward, the Monte")
+        add("    Carlo bootstrap and the 3-year holdout before promoting.")
+
+    add("")
+    add("-" * W)
+    add("VERDICT")
+    add("-" * W)
+    sa, sb = _pick(metrics_a, "sharpe"), _pick(metrics_b, "sharpe")
+    if math.isnan(sa) or math.isnan(sb):
+        add("  Sharpe is undefined for at least one version — no comparison.")
+    elif sb > sa:
+        add(f"  Version B leads on Sharpe by {sb - sa:+.2f}.")
+    else:
+        add(f"  Version A leads on Sharpe by {sa - sb:+.2f}. The ML filter did "
+            f"not earn its place.")
+    add("")
+    add("  The Dual-Version Mandate adopts B only if it beats A OUT-OF-SAMPLE.")
+    add("  An in-sample lead is not that evidence — the filter was fitted")
+    add("  walk-forward on this very period.")
+    add("=" * W)
+    return "\n".join(L)
+
+
+def print_dual_scorecard(metrics_a: dict, metrics_b: dict,
+                         gate_audit_a: dict | None = None,
+                         gate_audit_b: dict | None = None,
+                         label_a: str = "A · rule-based",
+                         label_b: str = "B · ML-filtered") -> str:
+    """
+    Render the side-by-side terminal scorecard for both versions.
+
+    Returns the same text it prints, so a caller can save it next to the HTML
+    reports without formatting it twice.
+    """
+    text = format_dual_scorecard(metrics_a, metrics_b, gate_audit_a,
+                                 gate_audit_b, label_a, label_b)
+    print(text)
+    return text
 
 
 # --------------------------------------------------------------------------
