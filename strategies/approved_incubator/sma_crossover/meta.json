@@ -1,0 +1,27 @@
+{
+  "name": "sma_crossover",
+  "version": "A",
+  "description": "Promoted Version A (rule-based baseline).",
+  "symbols": [
+    "NQ"
+  ],
+  "timeframe": "1d",
+  "params": {
+    "fast_window": 10,
+    "slow_window": 30
+  },
+  "source": "strategies/experimental/sma_crossover.py",
+  "source_sha256": "486f9b5769d84e8c4084c10aee115e487d51755db54b27b8c9daaa719a633199",
+  "promoted_sha256": "486f9b5769d84e8c4084c10aee115e487d51755db54b27b8c9daaa719a633199",
+  "promoted_utc": "2026-08-15T22:14:59+00:00",
+  "costs_included": false,
+  "variants_tested": null,
+  "metrics_status": "NOT RECORDED",
+  "metrics": null,
+  "gate_audit_status": "NOT EVALUATED",
+  "gate_audit": null,
+  "gates_overridden": false,
+  "oos_status": "not_run",
+  "audit_warnings": [],
+  "notes": ""
+}
