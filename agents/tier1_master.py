@@ -301,10 +301,13 @@ def run_campaign(prompt: str,
         planning       inputs resolved
         generating     a strategy module was staged
         backtesting    Tier 3 is running
-        auditing       Tier 2 is evaluating
         complete       final payload, carries `response`
         rejected       understood, deliberately not run
         error          something failed, named
+
+    `ruleset_path` is accepted for API compatibility and is no longer applied:
+    prop-firm governance moved to CrossTrade NAM, so a research campaign
+    reports statistics and does not issue a compliance verdict.
 
     The final event always carries `response` (markdown for a chat transcript)
     and `intent`. Callers should render the last event and may render the rest
@@ -448,19 +451,12 @@ def _run_research_campaign(prompt: str, intent_info: dict,
         return
 
     tf = timeframe or parse_timeframe(prompt) or DEFAULT_TIMEFRAME
-    try:
-        rules = resolve_ruleset(ruleset_path)
-    except FileNotFoundError as e:
-        yield _event("error", str(e), intent="research_campaign",
-                     response=f"**Campaign aborted** — {e}")
-        return
 
     yield _event("planning",
                  f"Symbols **{', '.join(resolved_symbols)}** · timeframe "
-                 f"**{tf}** · {start_date} → {end_date} · ruleset "
-                 f"`{rules.name}`",
+                 f"**{tf}** · {start_date} → {end_date}",
                  symbols=resolved_symbols, timeframe=tf,
-                 ruleset=str(rules), start=start_date, end=end_date)
+                 start=start_date, end=end_date)
 
     # Step B: synthesise a strategy -----------------------------------------
     try:
@@ -468,7 +464,6 @@ def _run_research_campaign(prompt: str, intent_info: dict,
                                           generate_strategy_boilerplate,
                                           run_strategy_backtest,
                                           write_and_validate_strategy)
-        from agents.tier2_supervisors import evaluate_compliance
     except Exception as e:
         yield _event("error", f"Could not import the worker tiers: {e}",
                      intent="research_campaign",
@@ -550,34 +545,22 @@ def _run_research_campaign(prompt: str, intent_info: dict,
                  metrics={k: v for k, v in metrics.items()
                           if k not in ("trades", "trade_log")})
 
-    # Step D: audit ----------------------------------------------------------
-    yield _event("auditing", f"Auditing against `{rules.name}`…")
-    try:
-        # Pass the engine's own daily equity curve rather than letting the
-        # supervisor rebuild one from trade exits. A reconstructed curve marks
-        # P&L only when a position closes, so drawdown suffered while a trade
-        # was open is invisible and the figure is a lower bound - and a prop
-        # account is closed on unrealized drawdown too.
-        compliance = evaluate_compliance(
-            metrics["trades"], rules,
-            initial_balance=metrics["meta"]["initial_capital"],
-            equity=metrics.get("equity"))
-    except Exception as e:
-        yield _event("error", f"Compliance audit failed: {type(e).__name__}: {e}",
-                     intent="research_campaign",
-                     response=f"**Audit failed** — {type(e).__name__}: {e}")
-        return
-
-    # Step E: verdict --------------------------------------------------------
-    yield _event("complete", f"Campaign complete — {compliance['verdict']}.",
+    # Step D: report ---------------------------------------------------------
+    # There is deliberately no compliance audit here. Prop-firm balance math is
+    # enforced by CrossTrade NAM against a live account, not against a
+    # backtest, and running it here produced a PASS/FAIL that read as a verdict
+    # on the edge when it was a verdict on a funding program. Research reports
+    # the statistics and stops.
+    yield _event("complete",
+                 f"Campaign complete — Sharpe {metrics['sharpe']:.2f} over "
+                 f"{metrics['trade_count']:,} trades.",
                  intent="research_campaign",
                  response=_render_campaign(prompt, resolved_symbols, tf,
-                                           start_date, end_date, rules,
-                                           strategy_path, metrics, compliance,
+                                           start_date, end_date,
+                                           strategy_path, metrics,
                                            synthesized),
                  metrics={k: v for k, v in metrics.items()
                           if k not in ("trades", "trade_log", "equity")},
-                 compliance=compliance,
                  strategy_path=str(strategy_path),
                  synthesized=synthesized,
                  strategy_is_placeholder=not synthesized,
@@ -585,11 +568,8 @@ def _run_research_campaign(prompt: str, intent_info: dict,
 
 
 def _render_campaign(prompt: str, symbols: list[str], tf: str,
-                     start: str, end: str, rules: Path, strategy_path: Path,
-                     metrics: dict, compliance: dict,
-                     synthesized: bool = False) -> str:
-    verdict = compliance["verdict"]
-    icon = "✅" if verdict == "PASS" else "❌"
+                     start: str, end: str, strategy_path: Path,
+                     metrics: dict, synthesized: bool = False) -> str:
     rel = strategy_path.relative_to(_REPO)
 
     if synthesized:
@@ -613,12 +593,12 @@ def _render_campaign(prompt: str, symbols: list[str], tf: str,
         )
 
     lines = [
-        f"### {icon} Campaign verdict: **{verdict}**",
+        f"### 📊 Campaign result — {', '.join(symbols)} {tf}",
         "",
         provenance,
         "",
         f"**Setup** — {', '.join(symbols)} · {tf} · {start} → {end} · "
-        f"ruleset `{rules.name}` · costs included",
+        f"costs included",
         "",
         "**Performance**",
         "",
@@ -638,21 +618,17 @@ def _render_campaign(prompt: str, symbols: list[str], tf: str,
         lines += ["> 🚨 **Account ruined** — equity reached zero or below, so "
                   "annualized figures are undefined.", ""]
 
-    lines.append("**Compliance**")
-    lines.append("")
-    for rule, c in (compliance.get("checks") or {}).items():
-        status = c.get("status", "?")
-        mark = {"PASS": "✅", "FAIL": "❌"}.get(status, "⚪")
-        lines.append(f"- {mark} `{rule}` — {status}")
-    if compliance.get("failures"):
-        lines += ["", "**Why it failed**", ""]
-        lines += [f"- {f}" for f in compliance["failures"]]
-    if compliance.get("unenforced_rules"):
-        lines += ["", f"⚠ Not evaluated here: "
-                      f"{', '.join(compliance['unenforced_rules'])}. A PASS "
-                      f"does not cover them."]
-    if compliance.get("caveat"):
-        lines += ["", f"⚠ {compliance['caveat']}"]
+    lines += [
+        "> ⚖️ **No prop-firm compliance was evaluated.** Account governance — "
+        "trailing drawdown, daily loss, consistency, sizing — is enforced by "
+        "CrossTrade NAM against a live balance. These figures describe the "
+        "edge only. A strong Sharpe here is not clearance to trade a funded "
+        "account.",
+        "",
+        f"**Next gate** — hold out the final 3 years and re-run before "
+        f"believing any of this. `variants_tested` is "
+        f"{metrics.get('meta', {}).get('variants_tested', 'unrecorded')}.",
+    ]
 
     return "\n".join(lines)
 
