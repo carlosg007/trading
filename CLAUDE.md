@@ -205,6 +205,15 @@ python tests/test_engine_vbt.py         # vectorbt P&L == the legacy loop oracle
 # 16-core box each fit's thread pool costs far more than the fit.
 OMP_NUM_THREADS=1 python test_dual_version.py
 
+# Run one strategy through the whole dual-version workflow: lake -> A and B
+# under identical costs -> console scorecard + gate audit -> both tear sheets
+# -> the four-choice menu. Steps 1-4 of the workflow below; it promotes nothing.
+# Pins the thread count itself. Symbol and timeframe default to the module's
+# SYMBOLS / TIMEFRAME.
+python3 backtest/run.py --strat sma_crossover --symbol NQ --tf 1d
+python3 backtest/run.py --strat sma_crossover --tf 15m \
+  --start 2018-01-01 --end 2023-12-31 --param fast_window=10 --variants-tested 1
+
 # Promote a version into the incubator and commit it (see the workflow below).
 python3 backtest/promote.py --strat sma_crossover --version A \
   --source strategies/experimental/sma_crossover.py \
@@ -351,11 +360,30 @@ many variants it was selected from. Also holds the acceptance gates
 
 **`backtest/report_html.py`** — the browser tear sheet.
 `generate_html_report(bars, result, metrics, gate_audit, out_path, strat_name,
-strat_description, version_label)` writes one self-contained dark-themed HTML
-file: gate badges, alpha metrics, the Plotly equity and underwater curves, the
-strategy logic card, the monthly heatmap, a searchable/sortable trade log, and
-the click-to-inspect candlestick modal. `write_dual_reports(dual, bars, ...)`
-emits both versions plus `dual_metrics.json`.
+strat_description, version_label, indicators)` writes one self-contained
+dark-themed HTML file: gate badges, alpha metrics, the Plotly equity and
+underwater curves, the strategy logic card, the monthly heatmap, a
+searchable/sortable trade log, and the click-to-inspect candlestick modal.
+`write_dual_reports(dual, bars, ...)` emits both versions plus
+`dual_metrics.json`.
+
+- **The strategy logic card is plain English**, written for whoever is deciding
+  whether to trade the thing: core concept, entry trigger, exit rule, risk
+  management (stop, target, session flatten) and execution (fill price,
+  slippage, commission, size). No function names, no array shapes. The concept
+  and the entry/exit sentences are DECLARED by the strategy module's `LOGIC`
+  block with the run's own parameters filled in and carried through
+  `metrics["meta"]["logic"]` — never inferred from the signal arrays, because a
+  description guessed from the trades is a guess printed as a fact. A module
+  that declares none gets "not declared", plus the first paragraph of its
+  docstring.
+- **The inspector draws the strategy's own indicator lines** over the candles,
+  passed in as `indicators={name: series}` (or a DataFrame), each the full
+  length of `bars`. They come from the module's `indicators()` hook so the line
+  a reader watches cross is the array the entry was taken from — recomputing
+  them in the report would let the line and the signal disagree, with nothing
+  raising. A series that is not the frame's length is DROPPED, never reindexed;
+  warm-up NaN renders as a gap.
 
 - **Everything is inlined** — Plotly, the bar windows the inspector draws, the
   CSS and the JS. ~5 MB a file, and worth it: a report is evidence, and a CDN
@@ -369,10 +397,23 @@ emits both versions plus `dual_metrics.json`.
   printing an impossible column.
 - **Chart colors are validated** (see the module docstring). The equity/
   drawdown pair clears CVD separation; the green/red entry-exit markers do not,
-  so they carry shape and an IN/OUT label as well.
+  so they carry shape and an IN/OUT label as well. Indicator lines avoid the
+  blue/red the candles own (amber, violet, teal, slate) and carry a dash
+  pattern and a legend label, so "which one is the fast mean" survives
+  greyscale.
 - **`tests/inspector_dom_test.js`** runs the page's own JavaScript against a
-  stub DOM under node — search, sort, row click, the window slice, Escape.
-  Markup assertions cannot catch an off-by-one that draws the wrong trade.
+  stub DOM under node — search, sort, row click, the window slice, the
+  indicator overlays, Escape. Markup assertions cannot catch an off-by-one that
+  draws the wrong trade, or a line sliced one bar out of step with the candles
+  under it.
+
+**`backtest/run.py`** — the CLI that drives the dual-version workflow on real
+bars: resolves a strategy by name, reads one symbol through `iter_bars`, runs
+Version A and Version B under identical costs, prints the scorecard and the gate
+audit, writes both tear sheets, and stops at the four-choice menu. It promotes
+nothing and has no code path that could — that decision is a human's. Gates 2
+and 3 are NOT EVALUATED here; a walk-forward, a bootstrap and the 3-year holdout
+are separate runs.
 
 **`backtest/promote.py`** — promotes one version into
 `strategies/approved_incubator/<strat>/` and commits it. See the workflow below.
@@ -415,6 +456,26 @@ signal_fn(bars) -> (entries, exits)       # when it takes none
 
 `bars` is ONE symbol's DataFrame, oldest to newest. Return two boolean Series
 aligned to it. A module may declare `TIMEFRAME`, `SYMBOLS`, and `DEFAULT_PARAMS`.
+
+Two further declarations are optional, read by the loader, and used **only by
+the tear sheet** — neither can change a signal:
+
+```python
+LOGIC = {"concept": "...",                                  # plain English
+         "entry": "Go Long when the Fast SMA ({fast_window}) crosses above "
+                  "the Slow SMA ({slow_window}).",
+         "exit":  "Exit when it crosses back below."}       # {param} slots are
+                                                            # filled with the
+                                                            # bound params
+def indicators(bars, **params) -> dict[str, pd.Series]:     # full-length series
+    ...                                                     # drawn over the
+                                                            # inspector's candles
+```
+
+Write the indicator series the same way the signals are computed, in the same
+module. A second implementation in the report would be free to disagree with
+this one and draw a crossover a bar away from where the trade fired, with
+nothing raising.
 
 - **Dual-Version Mandate:** every strategy outputs two versions. **Version A** is
   a pure rule-based baseline (e.g. an SMA crossover); **Version B** adds an ML
@@ -480,13 +541,16 @@ Each report carries the gate badges, the alpha metrics, the equity and
 underwater curves, the strategy logic card, the monthly heatmap, a searchable
 and sortable trade log, and the **trade inspector**: click any row for a
 candlestick of that trade, 20 bars before the entry through 10 after the exit,
-entry and exit marked. The bar windows are embedded at build time, so the file
-keeps working with no lake, no server, and no network.
+entry and exit marked, with the strategy's own indicator lines drawn over the
+candles so the crossover or band touch behind the trade is visible next to the
+IN and OUT markers. The bar windows and the indicator series are embedded at
+build time, so the file keeps working with no lake, no server, and no network.
 
-Read the logic card before the metrics. It states what the engine actually did
-— fills on the next bar's open, the session flatten setting, the costs charged,
-and that **no stop-loss or take-profit is modelled at all**. A drawdown figure
-read on the assumption of an unstated stop is being read wrong.
+Read the logic card before the metrics. In plain English it states what this
+strategy does — core concept, entry trigger, exit rule — and what the engine
+actually did: fills on the next bar's open, the session flatten setting, the
+costs charged, and that **no stop-loss or take-profit is modelled at all**. A
+drawdown figure read on the assumption of an unstated stop is being read wrong.
 
 **3. Present the menu. Do not choose for them.**
 
