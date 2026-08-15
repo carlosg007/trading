@@ -55,7 +55,8 @@ from backtest.report import (FAIL, GATE_THRESHOLDS, NOT_EVALUATED,  # noqa: E402
 from backtest.engine import BacktestConfig                          # noqa: E402
 from backtest.report_html import (build_inspector,                  # noqa: E402
                                   generate_html_report,
-                                  module_docstring, write_dual_reports)
+                                  module_docstring, normalize_indicators,
+                                  write_dual_reports)
 
 _failures: list[str] = []
 
@@ -84,7 +85,17 @@ def clearing_metrics(**over) -> dict:
                  "timeframe": "15m", "start": "2018-01-01", "end": "2023-12-31",
                  "bars": 149_000, "params": {"fast_window": 10},
                  "initial_capital": 100_000.0, "costs_included": True,
-                 "variants_tested": 1},
+                 "variants_tested": 1,
+                 # What the strategy module declares about itself, with its
+                 # bound parameters already filled in - the logic card states
+                 # this rather than inferring anything from the trades.
+                 "logic": {
+                     "concept": "Trend following on a moving-average pair.",
+                     "entry": "Go Long when the Fast SMA (10) crosses above "
+                              "the Slow SMA (30).",
+                     "exit": "Exit when the Fast SMA (10) crosses back below "
+                             "the Slow SMA (30).",
+                 }},
     }
     m.update(over)
     return m
@@ -108,6 +119,13 @@ def synthetic_bars(n: int = 3_000, seed: int = 4) -> pd.DataFrame:
         "symbol": "NQ", "open": px, "high": px + 3.0, "low": px - 3.0,
         "close": px + rng.normal(0, 1.0, n), "volume": rng.integers(50, 900, n),
     })
+
+
+def synthetic_indicators(bars: pd.DataFrame) -> dict[str, pd.Series]:
+    """Two moving averages, the shape a strategy's `indicators()` hook returns."""
+    close = bars["close"]
+    return {"Fast SMA (10)": close.rolling(10, min_periods=10).mean(),
+            "Slow SMA (30)": close.rolling(30, min_periods=30).mean()}
 
 
 def synthetic_result(bars: pd.DataFrame | None = None, n_days: int = 900,
@@ -388,7 +406,8 @@ def test_html(tmp: Path) -> None:
     out = generate_html_report(bars, result, m, audit,
                                tmp / "report_version_a.html",
                                strat_name="sma_crossover",
-                               version_label="Version A · rule-based")
+                               version_label="Version A · rule-based",
+                               indicators=synthetic_indicators(bars))
     html = out.read_text(encoding="utf-8")
 
     check("the file was written", out.exists(), f"{out.stat().st_size / 1e6:.2f} MB")
@@ -414,14 +433,58 @@ def test_html(tmp: Path) -> None:
     # models none, and a reader who assumes an unstated stop is reading a
     # different strategy.
     check("the strategy logic card is present", "Strategy logic" in html)
-    for label in ("Entry trigger", "Exit rule", "Stops / targets",
-                  "Session flatten", "Fill price", "Costs charged"):
-        check(f"the logic card states {label.lower()}", label in html)
-    check("it states that no stop-loss is modelled", "NONE MODELLED" in html)
+    card = _card(html, "Strategy logic")
+    for label in ("Core concept", "Entry trigger", "Exit rule",
+                  "Risk management", "Execution"):
+        check(f"the logic card states {label.lower()}", f">{label}<" in html)
+    check("the entry trigger is the module's own declared sentence",
+          "Go Long when the Fast SMA (10) crosses above the Slow SMA (30)."
+          in html)
+    check("the exit rule is too",
+          "Exit when the Fast SMA (10) crosses back below the Slow SMA (30)."
+          in html)
+    check("it states that no stop-loss is modelled",
+          "Stop loss: NONE MODELLED" in html)
+    check("and that no take-profit is either",
+          "Take profit: NONE MODELLED" in html)
     check("it names the fill bar, not the signal bar",
           "NEXT bar&#x27;s open" in html or "NEXT bar's open" in html)
     check("session flatten reads off the config, not a guess",
           "20:00 UTC" in html)
+    check("slippage and commission are stated per side",
+          f"${COMMISSION:,.2f} per side" in html
+          and "1 tick charged each way" in html)
+    check("counts and their nouns agree", "1 contract per trade" in html
+          and "contract(s)" not in card and "tick(s)" not in card)
+    check("the risk and execution facts are bullets, not a paragraph",
+          html.count('<ul class="bullets">') == 2)
+
+    # The card is for a reader deciding whether to trade this, so the module's
+    # own vocabulary must not leak into it. These are the names that used to be
+    # printed verbatim.
+    for jargon in ("signal_fn", "clean_signals", "BacktestConfig",
+                   "multi-symbol", "long-format", "entry mask", "boolean",
+                   "backtest/specs.py", "flat_by_close"):
+        check(f"the card is free of '{jargon}'", jargon not in card)
+
+    # A module that declares nothing gets an honest blank, not an invented
+    # description — and the docstring fallback prints its summary paragraph
+    # only, because the rest of a strategy docstring is notes for whoever edits
+    # the module.
+    silent = clearing_metrics()
+    silent["meta"] = {k: v for k, v in silent["meta"].items() if k != "logic"}
+    quiet = generate_html_report(
+        bars, result, silent, audit, tmp / "nologic.html",
+        strat_description="Buys dips in an uptrend.\n\n"
+                          "`signal_fn` returns two boolean masks aligned to "
+                          "the long-format frame.")
+    qh = quiet.read_text(encoding="utf-8")
+    qcard = _card(qh, "Strategy logic")
+    check("an undeclared concept says so rather than inventing one",
+          "Not declared by the strategy module" in qcard)
+    check("the docstring summary is kept", "Buys dips in an uptrend." in qcard)
+    check("the implementation notes under it are not",
+          "long-format" not in qcard and "signal_fn" not in qcard)
 
     # (e) Trade log columns, search, and sort.
     for col in ("Entry price", "Exit price", "Return %", "Fees $",
@@ -445,6 +508,15 @@ def test_html(tmp: Path) -> None:
           'data-trade="0"' in html and 'role="button"' in html)
     check("the bar windows are embedded, not fetched",
           "window.INSPECTOR=" in html and "candlestick" in html)
+    check("the indicator lines are embedded with them",
+          '"Fast SMA (10)"' in html and '"Slow SMA (30)"' in html)
+    check("and the modal plots them as named lines",
+          "mode: 'lines'" in html and "showlegend: lines.length > 0" in html)
+
+    # A report whose caller has no indicators to hand still draws candles.
+    plain = generate_html_report(bars, result, m, audit, tmp / "noind.html")
+    check("no indicators still produces a working inspector",
+          '"ind":[]' in plain.read_text(encoding="utf-8"))
 
     # Self-contained: plotly inlined, nothing fetched at render time. A CDN
     # script tag renders an empty rectangle the first time the file is opened
@@ -466,7 +538,10 @@ def test_html(tmp: Path) -> None:
     # comes from a module docstring and is therefore attacker-adjacent in the
     # one case that matters: a strategy a model just wrote.
     evil = clearing_metrics()
-    evil["meta"] = dict(evil["meta"], strategy='x<script>alert(1)</script>')
+    # No declared concept, so the handed-in description is what the card
+    # prints — which is the case the escaping has to hold for.
+    evil["meta"] = {k: v for k, v in evil["meta"].items() if k != "logic"}
+    evil["meta"]["strategy"] = 'x<script>alert(1)</script>'
     esc = generate_html_report(bars, result, evil, audit, tmp / "escaped.html",
                                strat_description="<img src=x onerror=alert(2)>")
     body = esc.read_text(encoding="utf-8")
@@ -513,6 +588,21 @@ def test_html(tmp: Path) -> None:
                                  tmp / "empty.html")
     check("an empty result produces a report instead of a traceback",
           empty.exists() and "nothing to plot" in empty.read_text(encoding="utf-8"))
+
+
+def _card(markup: str, heading: str) -> str:
+    """
+    Just the named card's markup.
+
+    Split on the rendered `<h2>`, not on the bare title: the stylesheet carries
+    a `/* Strategy logic card */` comment above the page's own body, so a plain
+    substring split hands back the whole document — including the 4.9 MB inlined
+    plotly bundle, which contains every word anyone might grep for.
+    """
+    after = markup.split(f"<h2>{heading}", 1)
+    if len(after) < 2:
+        return ""
+    return after[1].split("<h2>", 1)[0]        # up to the next card's heading
 
 
 def _unbalanced(markup: str) -> list[str]:
@@ -599,6 +689,49 @@ def test_inspector_payload(tmp: Path) -> None:
     check("overlapping windows are deduplicated",
           ins["n"] <= sum(widths), f"{ins['n']} bars vs {sum(widths)} naive")
 
+    # Indicator overlays ride the same compact index as the candles. If they
+    # did not, a line would be drawn against the wrong bars and the crossover
+    # would appear where it did not happen.
+    ind = synthetic_indicators(bars)
+    with_ind = build_inspector(bars, trades, indicators=ind)
+    lines = with_ind["bars"]["ind"]
+    check("one line per indicator handed in", len(lines) == 2,
+          ", ".join(s["name"] for s in lines))
+    check("each line is as long as the bar payload",
+          all(len(s["v"]) == len(with_ind["bars"]["t"]) for s in lines))
+    check("lines carry a colour, a dash and a legend name",
+          all(s["color"] and s["dash"] and s["name"] for s in lines))
+    check("indicator colours are distinct from each other",
+          len({s["color"] for s in lines}) == 2)
+
+    # Sample a bar and compare against the source series at that timestamp.
+    fast = ind["Fast SMA (10)"].to_numpy(dtype=float)
+    probe = with_ind["trades"][3]["e"]
+    src_pos = int(ts.searchsorted(pd.to_datetime(with_ind["bars"]["t"][probe],
+                                                 unit="ms", utc=True)))
+    check("a line's value at a bar is that bar's indicator value",
+          lines[0]["v"][probe] == round(float(fast[src_pos]), 6),
+          f"{lines[0]['v'][probe]} vs {fast[src_pos]:.6f}")
+    check("the warm-up is null, not zero and not carried forward",
+          build_inspector(bars, trades.iloc[:1], pre=1_000,
+                          indicators=ind)["bars"]["ind"][1]["v"][0] is None)
+
+    # A series that is not the length of the frame is DROPPED. Reindexing it
+    # would draw a line one bar out of step with the candles, silently.
+    check("a mis-sized series is dropped, never realigned",
+          normalize_indicators({"short": pd.Series([1.0, 2.0])}, len(bars)) == [])
+    check("a non-numeric series is dropped too",
+          normalize_indicators({"txt": pd.Series(["a"] * len(bars))},
+                               len(bars)) == [])
+    check("an all-NaN series is dropped rather than drawn as a blank legend",
+          normalize_indicators({"nan": pd.Series([np.nan] * len(bars))},
+                               len(bars)) == [])
+    check("a DataFrame of columns is accepted as well as a mapping",
+          len(normalize_indicators(pd.DataFrame(ind), len(bars))) == 2)
+    check("junk is ignored instead of raising",
+          normalize_indicators("not a series", len(bars)) == []
+          and normalize_indicators(None, len(bars)) == [])
+
     # Degenerate inputs return an empty payload rather than half a chart.
     check("no bars -> empty payload", build_inspector(None, trades)["trades"] == [])
     check("no trades -> empty payload", build_inspector(bars, None)["trades"] == [])
@@ -626,7 +759,8 @@ def test_inspector_dom(tmp: Path) -> None:
     result = synthetic_result(bars, n_trades=13)
     m = clearing_metrics(trade_count=13)
     page = generate_html_report(bars, result, m, audit_acceptance_gates(m),
-                                tmp / "dom.html", strat_name="sma_crossover")
+                                tmp / "dom.html", strat_name="sma_crossover",
+                                indicators=synthetic_indicators(bars))
     proc = subprocess.run([node, str(harness), str(page)],
                           capture_output=True, text=True, cwd=REPO)
     for line in proc.stdout.strip().splitlines():
@@ -653,8 +787,11 @@ def test_write_dual_reports(tmp: Path) -> None:
         "comparison": {"b_beats_a": False, "sharpe_delta": -0.5},
         "meta": a["meta"],
     }
+    for m in (a, b):
+        m["meta"] = dict(m["meta"], ml_threshold=0.55)
     out = write_dual_reports(dual, bars=bars, out_dir=tmp / "run",
-                             max_trade_rows=50)
+                             max_trade_rows=50,
+                             indicators=synthetic_indicators(bars))
 
     check("report_version_a.html was written",
           out["report_version_a"].name == "report_version_a.html"
@@ -670,6 +807,16 @@ def test_write_dual_reports(tmp: Path) -> None:
           "window.INSPECTOR=" in a_html and "window.INSPECTOR=" in b_html)
     check("each inspector holds that version's own trades",
           a_html.count('data-trade="') == 20 and b_html.count('data-trade="') == 8)
+    check("both draw the same indicator lines — B filters A's entries, it does "
+          "not recompute them",
+          '"Fast SMA (10)"' in a_html and '"Fast SMA (10)"' in b_html)
+
+    # The dual runner hands BOTH versions the same meta dict, so the ML
+    # threshold is on Version A's metrics too. Only B applies the filter, so
+    # only B's card may claim one.
+    check("only Version B's card mentions the ML filter",
+          "machine-learning filter" in _card(b_html, "Strategy logic")
+          and "machine-learning filter" not in _card(a_html, "Strategy logic"))
 
     snap = json.loads(out["metrics_json"].read_text(encoding="utf-8"))
     check("dual_metrics.json is valid JSON with both versions",

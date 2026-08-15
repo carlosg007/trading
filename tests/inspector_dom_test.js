@@ -19,6 +19,10 @@
  * what it was asked to draw, and the captured traces are checked against the
  * embedded INSPECTOR payload.
  *
+ * The indicator overlays are checked the same way and for the same reason: a
+ * line sliced at a different offset than the candles under it draws a
+ * crossover on the wrong bar, and the picture still looks right.
+ *
  * Exits non-zero on the first failed check, like every other suite here.
  */
 
@@ -224,6 +228,41 @@ check('highs are not below lows anywhere',
 const year = candle.x[0].getUTCFullYear();
 check('bar timestamps are milliseconds, not seconds', year > 2000 && year < 2100,
   'first bar ' + candle.x[0].toISOString());
+
+/* Indicator overlays. The failure this catches is a line drawn against the
+   wrong bars - sliced with a different offset than the candles, or joined
+   straight through the warm-up - which renders a crossover that never
+   happened and raises nothing. */
+const IND = B.ind || [];
+check('the payload carries the strategy indicator series', IND.length >= 2,
+  IND.map((s) => s.name).join(', '));
+const lines = plot.traces.filter((tr) => tr.mode === 'lines');
+check('every indicator is drawn as a line', lines.length === IND.length,
+  lines.length + ' line traces');
+check('each line is named for the legend',
+  lines.every((l, i) => l.name === IND[i].name));
+check('lines span exactly the candle window, bar for bar',
+  lines.every((l) => l.y.length === candle.x.length &&
+    l.x.length === candle.x.length));
+check('each line value is the payload value for that bar',
+  lines.every((l, i) => l.y.every((v, j) => v === IND[i].v[t.lo + j])));
+check('lines share the candles x axis, not their own',
+  lines.every((l) => l.x[0].getTime() === candle.x[0].getTime() &&
+    l.x[l.x.length - 1].getTime() === candle.x[candle.x.length - 1].getTime()));
+check('indicators are told apart by dash as well as colour',
+  new Set(lines.map((l) => l.line.dash)).size === lines.length &&
+  new Set(lines.map((l) => l.line.color)).size === lines.length,
+  lines.map((l) => l.line.color + '/' + l.line.dash).join(' '));
+check('no indicator borrows a candle or marker colour',
+  lines.every((l) => ['#3987e5', '#e66767', '#0ca30c', '#d03b3b']
+    .indexOf(l.line.color.toLowerCase()) === -1));
+check('the warm-up is left as a gap, not joined across',
+  lines.every((l) => l.connectgaps === false));
+check('the legend is switched on so the lines are labelled',
+  plot.layout.showlegend === true);
+check('the candles are still the first trace, markers still on top',
+  plot.traces[0].type === 'candlestick' &&
+  plot.traces[plot.traces.length - 1].name === 'Exit');
 
 const entry = plot.traces.find((tr) => tr.name === 'Entry');
 const exit = plot.traces.find((tr) => tr.name === 'Exit');

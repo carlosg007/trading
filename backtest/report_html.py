@@ -14,13 +14,15 @@ file you open in a browser:
     e) a searchable, sortable trade log
     f) the strategy name header
     g) the strategy logic card - entries, exits, stops, session flatten
-    h) the trade inspector: click a row for a candlestick of that trade
+    h) the trade inspector: click a row for a candlestick of that trade,
+       with the strategy's own indicator lines drawn over it
 
     from backtest.report_html import generate_html_report
     generate_html_report(bars, result, metrics, gate_audit,
                          "/mnt/backtest/artifacts/x/report_version_a.html",
                          strat_name="sma_crossover",
-                         version_label="Version A")
+                         version_label="Version A",
+                         indicators={"Fast SMA (10)": fast, "Slow SMA (30)": slow})
 
 Self-contained means self-contained
 -----------------------------------
@@ -36,6 +38,13 @@ a row is clicked - which would need the lake, and a server - the bar windows
 each shown trade needs are extracted at build time and embedded. Overlapping
 windows are deduplicated, so the cost is roughly one row per bar in the union
 of the windows rather than 31 rows per trade.
+
+Indicator lines follow the bars into that payload. They are handed in already
+calculated - by the strategy module's own `indicators()` hook, so the line the
+reader sees is drawn from the same array the signal was taken from, not from a
+second implementation of the same moving average that might disagree with it.
+This module samples them onto the window and picks their colours; it does not
+compute one.
 
 Every number displayed here was computed by the deterministic engine and
 handed in. This module formats, it does not calculate. The exceptions are all
@@ -53,6 +62,13 @@ green and red a trader expects, and that pair FAILS colorblind separation on
 its own (deutan ΔE 4.1) - so the distinction is carried by shape (triangle up
 against triangle down), by position, and by a printed IN / OUT label. Color is
 the last of the four channels, never the only one.
+
+The indicator lines sit on the same surface as the candles, so they avoid the
+blue/red the candles already own: amber, violet, teal, then a light slate. Each
+also gets its own dash pattern and a legend label, so two lines are told apart
+by stroke and by name with the colour ignored entirely - which matters here
+more than anywhere else on the page, because "which mean is the fast one" is
+the whole question a crossover chart is being read to answer.
 """
 
 from __future__ import annotations
@@ -89,6 +105,18 @@ C_UP = "#3987e5"        # equity, rising candles
 C_DOWN = "#e66767"      # drawdown, falling candles
 C_ENTRY = "#0ca30c"     # status good  - shape and label carry it too
 C_EXIT = "#d03b3b"      # status critical
+
+# Indicator overlays, in the order a strategy hands them over. Colour is never
+# the only channel: the dash pattern and the legend label carry the same
+# distinction, so the fast and slow means stay tellable apart in greyscale.
+INDICATOR_STYLES = [
+    ("#f0b429", "solid"),      # amber
+    ("#b48ef2", "dash"),       # violet
+    ("#38c7b8", "dot"),        # teal
+    ("#9aa7b6", "dashdot"),    # slate
+    ("#f08fc4", "longdash"),   # pink
+    ("#8fd14f", "longdashdot"),  # lime
+]
 
 
 # --------------------------------------------------------------------------
@@ -242,10 +270,49 @@ def _daily_index(returns: pd.Series) -> pd.Series:
 # --------------------------------------------------------------------------
 # Trade inspector payload
 # --------------------------------------------------------------------------
+def normalize_indicators(indicators: Any,
+                         n_bars: int) -> list[tuple[str, np.ndarray]]:
+    """
+    Named float arrays aligned to the bars, from whatever shape arrived.
+
+    Accepts a `{name: series}` mapping or a DataFrame of one column per line.
+    A series that is not the length of the frame is DROPPED rather than padded
+    or reindexed: an indicator drawn one bar out of step with the candles is a
+    chart that shows a crossover happening where it did not, and silently
+    aligning it is exactly how that gets shipped.
+
+    Never raises. A broken indicator hook costs the overlay, not the report.
+    """
+    if indicators is None or n_bars <= 0:
+        return []
+    if isinstance(indicators, pd.DataFrame):
+        items = [(str(c), indicators[c]) for c in indicators.columns]
+    elif isinstance(indicators, pd.Series):
+        items = [(str(indicators.name or "Indicator"), indicators)]
+    elif isinstance(indicators, dict):
+        items = [(str(k), v) for k, v in indicators.items()]
+    else:
+        return []
+
+    out: list[tuple[str, np.ndarray]] = []
+    for name, values in items:
+        try:
+            arr = np.asarray(pd.Series(values).to_numpy(), dtype=float)
+        except (TypeError, ValueError):
+            continue                       # a non-numeric column, not a line
+        if arr.ndim != 1 or arr.size != n_bars:
+            continue
+        if not np.isfinite(arr).any():
+            continue                       # all-NaN: nothing to draw
+        out.append((name, arr))
+    return out
+
+
 def build_inspector(bars: pd.DataFrame | None,
                     trades: pd.DataFrame | None,
                     pre: int = INSPECT_PRE,
-                    post: int = INSPECT_POST) -> dict[str, Any]:
+                    post: int = INSPECT_POST,
+                    indicators: Any = None) -> dict[str, Any]:
     """
     The bar windows the trade inspector draws, as compact parallel arrays.
 
@@ -258,11 +325,18 @@ def build_inspector(bars: pd.DataFrame | None,
     sorted it is still contiguous, and a trade's window is a plain slice. That
     is what lets the browser do `t.slice(lo, hi + 1)` with no index map.
 
+    `indicators` are the strategy's own calculated series - a `{name: series}`
+    mapping or a DataFrame, each the full length of `bars`. They are sampled
+    onto the same compact index as the candles, so the browser slices them with
+    the same `lo:hi` and cannot draw a line offset from the bars under it.
+    NaN survives as JSON `null`, which Plotly renders as a gap: a moving
+    average's warm-up is left blank rather than drawn flat at zero.
+
     Returns `{"bars": {...}, "trades": [...], "n": int}` - empty when there are
     no bars to draw, which is the correct payload for a result whose frame was
     not handed in.
     """
-    empty = {"bars": {"t": [], "o": [], "h": [], "l": [], "c": []},
+    empty = {"bars": {"t": [], "o": [], "h": [], "l": [], "c": [], "ind": []},
              "trades": [], "n": 0}
     if bars is None or len(bars) == 0 or trades is None or len(trades) == 0:
         return empty
@@ -301,6 +375,18 @@ def build_inspector(bars: pd.DataFrame | None,
     def col(name: str) -> list[float]:
         return [round(float(v), 6) for v in bars[name].to_numpy(dtype=float)[idx]]
 
+    lines = []
+    for i, (label, arr) in enumerate(normalize_indicators(indicators, n_bars)):
+        color, dash = INDICATOR_STYLES[i % len(INDICATOR_STYLES)]
+        window = arr[idx]
+        lines.append({
+            "name": label, "color": color, "dash": dash,
+            # None, not NaN: `NaN` is not valid JSON, and Plotly reads null as
+            # a gap - which is what a warm-up period actually is.
+            "v": [None if not np.isfinite(v) else round(float(v), 6)
+                  for v in window],
+        })
+
     payload_bars = {
         # Epoch milliseconds: Date-constructible in the browser and about half
         # the bytes of an ISO string.
@@ -314,6 +400,7 @@ def build_inspector(bars: pd.DataFrame | None,
         "t": ts[idx].as_unit("ms").asi8.tolist(),
         "o": col("open"), "h": col("high"),
         "l": col("low"), "c": col("close"),
+        "ind": lines,
     }
     payload_trades = [
         {"lo": int(remap[lo]), "hi": int(remap[hi]),
@@ -539,81 +626,170 @@ def _monthly_html(returns: pd.Series) -> str:
             f'<p class="dim">Positive years: {positive}/{len(yearly)}</p></div>')
 
 
-def _logic_card(metrics: dict, result: Any, description: str | None,
-                trades: pd.DataFrame | None) -> str:
+def _first_paragraph(text: str | None) -> str | None:
     """
-    What the engine actually did, next to what the strategy claims to do.
+    The opening paragraph of a docstring, which is the plain-English half.
 
-    The execution half is read off the config rather than described from
-    memory, because these are exactly the assumptions that make a backtest
-    unreproducible when they drift: which bar a signal fills on, whether the
-    position is flattened at the session close, and what a round trip cost.
+    A strategy module's docstring keeps going into the calling contract, the
+    array shapes and the traps - notes for whoever edits the module, and noise
+    to whoever is deciding whether to trade it. The summary paragraph is the
+    part written for a reader; the rest stays in the module where it is useful.
+    """
+    if not text:
+        return None
+    for block in text.strip().split("\n\n"):
+        para = " ".join(line.strip() for line in block.splitlines()).strip()
+        if para:
+            return para
+    return None
 
-    Stops are stated as absent when they are absent. The engine models no
-    stop-loss and no take-profit - a position is opened by the entry signal and
-    closed by the exit signal or the session flatten, and nothing else. A
+
+def _plain_flatten(cfg: Any) -> str:
+    flat = getattr(cfg, "flat_by_close", None)
+    if flat:
+        return (f"Session flatten: ON — any position still open is closed at "
+                f"{getattr(cfg, 'session_close_utc', '?')} UTC, so nothing is "
+                f"carried overnight.")
+    if flat is None:
+        return ("Session flatten: not recorded — no run configuration reached "
+                "this report.")
+    return ("Session flatten: OFF — positions are held through the session "
+            "close and across days.")
+
+
+def _plural(value: Any, singular: str, plural: str | None = None) -> str:
+    """`1 tick`, `1.5 ticks` - a count and its noun agreeing with each other."""
+    v = _num(value)
+    if math.isnan(v):
+        return f"an unrecorded number of {plural or singular + 's'}"
+    text = f"{v:g}"
+    return f"{text} {singular if v == 1 else (plural or singular + 's')}"
+
+
+def _is_version_b(version_label: str) -> bool:
+    """
+    Whether this report is the ML-filtered version.
+
+    Read off the label because the metrics cannot answer it: the dual runner
+    hands BOTH versions the same meta dict, so `ml_threshold` is present on
+    Version A's metrics as well. Printing the filter sentence off that would
+    have Version A's card describe a filter Version A never applied.
+    """
+    label = (version_label or "").strip().lower()
+    return label.startswith("b") or label.startswith("version b")
+
+
+def _logic_card(metrics: dict, result: Any, description: str | None,
+                trades: pd.DataFrame | None,
+                ml_filtered: bool = False) -> str:
+    """
+    What this strategy does and what the engine actually did, in plain English.
+
+    Written for a reader deciding whether to trade the thing, not for whoever
+    maintains the module. No function names, no array shapes, no repository
+    paths: the entry and exit lines name the indicators and the numbers, and
+    the execution lines name the price a fill was taken at and what it cost.
+
+    The concept, entry and exit sentences are DECLARED by the strategy module
+    (its `LOGIC` block, with the run's own parameters filled in) and carried
+    here through the metrics meta. Nothing on this card is inferred from the
+    signal arrays - a description guessed from the trades would be a guess
+    printed as a fact.
+
+    The execution half is read off the run configuration rather than described
+    from memory, because these are the assumptions that quietly drift: which
+    bar a signal fills on, whether the position is flattened at the session
+    close, what a round trip cost.
+
+    Stops are stated as absent because they are absent. The engine models no
+    stop-loss and no take-profit - a position is opened by the entry rule and
+    closed by the exit rule or the session flatten, and by nothing else. A
     reader who assumes an unstated 2% stop is reading a different strategy.
     """
     cfg = _config(result)
     meta = (metrics or {}).get("meta", {}) or {}
     params = meta.get("params") or {}
+    logic = meta.get("logic") or {}
 
-    entry = ("The strategy module's `signal_fn` returns the entry mask; the "
-             "engine opens a position on the bar AFTER the signal.")
-    exit_rule = ("The same call's exit mask closes it, again on the following "
-                 "bar. `clean_signals` drops an exit with no open position and "
-                 "an entry while already long, so the two masks resolve to "
-                 "alternating trades.")
+    concept = logic.get("concept") or (
+        "Not declared by the strategy module — read the description above and "
+        "the parameters below.")
+    entry = logic.get("entry") or (
+        "The strategy's own rule fires the entry; the position is opened on "
+        "the next bar.")
+    exit_rule = logic.get("exit") or (
+        "The strategy's own rule fires the exit; the position is closed on the "
+        "next bar.")
 
-    if meta.get("ml_threshold") is not None:
-        entry += (f" Version B then suppresses any entry the causal filter "
-                  f"scores below P(win) {meta['ml_threshold']:g}; it can only "
-                  f"remove entries, never add one.")
+    if ml_filtered and meta.get("ml_threshold") is not None:
+        entry += (f" This version then skips any of those entries the "
+                  f"machine-learning filter scores below a "
+                  f"{float(meta['ml_threshold']) * 100:g}% chance of winning. "
+                  f"The filter can only remove entries, never add one.")
 
-    flat = getattr(cfg, "flat_by_close", None)
-    if flat:
-        flatten = (f"ON — any open position is closed at "
-                   f"{getattr(cfg, 'session_close_utc', '?')} UTC each session.")
-    elif flat is None:
-        flatten = "Not recorded — no BacktestConfig was handed to this report."
+    risk = [
+        "Stop loss: NONE MODELLED. No protective stop is placed on any trade.",
+        "Take profit: NONE MODELLED. No profit target closes a trade early.",
+        _plain_flatten(cfg),
+        "Every exit comes from the exit rule above or the session flatten — "
+        "read the drawdown figures knowing nothing else cuts a loser.",
+    ]
+    if getattr(cfg, "trailing_drawdown_pct", None) is not None:
+        risk.insert(3, f"Trailing drawdown: {cfg.trailing_drawdown_pct}% — "
+                       f"descriptive only. Account limits are enforced by the "
+                       f"live execution bridge, not by this backtest.")
+
+    execution = ["Fill price: the NEXT bar's open. Filling on the close of the "
+                 "bar that produced the signal would be trading on information "
+                 "the strategy did not have yet."]
+    if cfg is not None:
+        commission = (f"${cfg.commission_per_side:,.2f} per side, per contract"
+                      if getattr(cfg, "commission_per_side", None) is not None
+                      else "the contract's own published rate")
+        execution += [
+            f"Slippage: {_plural(getattr(cfg, 'slippage_ticks', None), 'tick')} "
+            f"charged each way, on entry and on exit.",
+            f"Commission: {commission}, charged both sides.",
+            f"Position size: "
+            f"{_plural(getattr(cfg, 'contracts', 1), 'contract')} per trade.",
+        ]
     else:
-        flatten = ("OFF — positions are held across the session close. This is "
-                   "the Portfolio B (swing) setting; Portfolio A sets "
-                   "flat_by_close=True.")
+        execution.append("Costs: not recorded — no run configuration reached "
+                         "this report.")
 
-    rows = [
+    rows: list[tuple[str, str | list[str]]] = [
+        ("Core concept", concept),
         ("Entry trigger", entry),
         ("Exit rule", exit_rule),
-        ("Stops / targets",
-         "NONE MODELLED. The engine has no stop-loss or take-profit. Every "
-         "exit above comes from the strategy's own signal or the session "
-         "flatten — read the drawdown figures with that in mind."),
-        ("Session flatten", flatten),
-        ("Fill price", "The NEXT bar's open. Filling on the signal bar's close "
-                       "would be lookahead bias."),
+        ("Risk management", risk),
+        ("Execution", execution),
     ]
-    if cfg is not None:
-        rows.append((
-            "Costs charged",
-            f"{getattr(cfg, 'slippage_ticks', '?')} tick(s) slippage each way, "
-            f"plus commission "
-            f"{('$' + format(cfg.commission_per_side, ',.2f') + '/side') if getattr(cfg, 'commission_per_side', None) is not None else 'from backtest/specs.py'}"
-            f", on {getattr(cfg, 'contracts', 1)} contract(s)."))
-        if getattr(cfg, "trailing_drawdown_pct", None) is not None:
-            rows.append(("Trailing drawdown",
-                         f"{cfg.trailing_drawdown_pct}% — descriptive only. "
-                         f"Account governance lives in CrossTrade NAM, not "
-                         f"in research."))
     if params:
-        rows.append(("Parameters", ", ".join(f"{k}={v}" for k, v in params.items())))
+        rows.append(("Settings used",
+                     " · ".join(f"{k} = {v}" for k, v in params.items())))
     if trades is not None and len(trades) and "direction" in trades.columns:
-        sides = sorted(set(str(d) for d in trades["direction"].unique()))
-        rows.append(("Sides taken", ", ".join(sides)))
+        sides = {str(d).lower() for d in trades["direction"].unique()}
+        if sides <= {"long", "buy", "1"}:
+            taken = "Long only — this strategy never sold short."
+        elif sides <= {"short", "sell", "-1"}:
+            taken = "Short only — this strategy never bought."
+        else:
+            taken = "Both directions — long and short trades were taken."
+        rows.append(("Direction", taken))
 
-    body = "".join(f'<tr><td class="lbl">{_esc(k)}</td><td>{_esc(v)}</td></tr>'
+    def value(v: str | list[str]) -> str:
+        if isinstance(v, list):
+            return ('<ul class="bullets">'
+                    + "".join(f"<li>{_esc(item)}</li>" for item in v)
+                    + "</ul>")
+        return _esc(v)
+
+    body = "".join(f'<tr><td class="lbl">{_esc(k)}</td><td>{value(v)}</td></tr>'
                    for k, v in rows)
-    desc = (f'<p class="desc">{_esc(description.strip())}</p>'
-            if description and description.strip() else "")
+    # The declared concept already says what this is; repeating the module's
+    # summary above it just makes the reader compare two sentences.
+    prose = None if logic.get("concept") else _first_paragraph(description)
+    desc = f'<p class="desc">{_esc(prose)}</p>' if prose else ""
     return (f'<div class="card"><h2>Strategy logic</h2>{desc}'
             f'<table class="grid logic"><tbody>{body}</tbody></table></div>')
 
@@ -813,9 +989,12 @@ footer { color:var(--ink-dim); font-size:12px; border-top:1px solid var(--line);
 @media (max-width:640px) { .wrap { padding:16px 12px 40px; } .card { padding:14px; } }
 
 /* Strategy logic card */
-table.logic td { vertical-align:top; }
-table.logic td.lbl { color:var(--ink-dim); white-space:nowrap; width:150px;
+table.logic td { vertical-align:top; padding-top:9px; padding-bottom:9px; }
+table.logic td.lbl { color:var(--ink-dim); white-space:nowrap; width:170px;
   font-weight:600; }
+ul.bullets { margin:0; padding-left:18px; }
+ul.bullets li { margin:0 0 4px; }
+ul.bullets li:last-child { margin-bottom:0; }
 .desc { color:var(--ink-dim); margin:0 0 14px; white-space:pre-wrap;
   border-left:2px solid var(--line); padding-left:12px; }
 
@@ -955,6 +1134,19 @@ _JS = """
       increasing: { line: { color: '%(up)s' }, fillcolor: '%(up)s' },
       decreasing: { line: { color: '%(down)s' }, fillcolor: '%(down)s' }
     };
+    /* The strategy's own indicator series, sliced to the same window as the
+       candles so a crossover is drawn on the bar it happened on. Colour, dash
+       pattern and legend label all carry the distinction - "which one is the
+       fast mean" has to survive greyscale. Nulls are the warm-up and are left
+       as gaps rather than joined across. */
+    var lines = (B.ind || []).map(function (s) {
+      return {
+        type: 'scatter', mode: 'lines', name: s.name,
+        x: x, y: s.v.slice(lo, hi), connectgaps: false,
+        line: { color: s.color, width: 1.7, dash: s.dash || 'solid' },
+        hovertemplate: s.name + ' %%{y:,.2f}<extra></extra>'
+      };
+    });
     /* Shape AND label carry entry vs exit - the green/red pair alone is not
        separable under deuteranopia. */
     var marks = [
@@ -984,9 +1176,13 @@ _JS = """
       .map(function (s) { return '<span>' + s + '</span>'; }).join('');
 
     modal.hidden = false;
-    Plotly.newPlot('modal-chart', [candles].concat(marks), {
-      template: 'plotly_dark', height: 460, showlegend: false,
-      margin: { l: 62, r: 20, t: 10, b: 40 },
+    /* Markers last so they draw on top of the indicator lines. */
+    Plotly.newPlot('modal-chart', [candles].concat(lines, marks), {
+      template: 'plotly_dark', height: 460,
+      showlegend: lines.length > 0,
+      legend: { orientation: 'h', yanchor: 'bottom', y: 1.0, x: 0,
+                font: { size: 11 }, bgcolor: 'rgba(0,0,0,0)' },
+      margin: { l: 62, r: 20, t: lines.length ? 34 : 10, b: 40 },
       paper_bgcolor: '#12161d', plot_bgcolor: '#12161d',
       font: { family: 'ui-sans-serif, system-ui, sans-serif', size: 12,
               color: '#c8d1dc' },
@@ -1031,7 +1227,8 @@ _MODAL = """
     <div id="modal-chart"></div>
     <p class="dim">%d bars before the entry through %d after the exit.
       Prices are the raw bar values; the fill is the open of the bar the
-      marker sits on.</p>
+      marker sits on. Any indicator lines are the strategy's own series, taken
+      from the same arrays the signals were read off.</p>
   </div>
 </div>
 """ % (INSPECT_PRE, INSPECT_POST)
@@ -1048,7 +1245,8 @@ def generate_html_report(bars: pd.DataFrame | None,
                          strat_name: str | None = None,
                          strat_description: str | None = None,
                          version_label: str = "Version A",
-                         max_trade_rows: int = MAX_TRADE_ROWS) -> Path:
+                         max_trade_rows: int = MAX_TRADE_ROWS,
+                         indicators: Any = None) -> Path:
     """
     Write a self-contained dark-themed HTML tear sheet for ONE version.
 
@@ -1074,6 +1272,13 @@ def generate_html_report(bars: pd.DataFrame | None,
         Header name and the prose above the logic card. Both default to what
         the metrics meta and the strategy module's own docstring say, so a
         caller that has nothing extra to add can leave them out.
+    indicators
+        `{name: series}` (or a DataFrame) of the strategy's own calculated
+        series, each the full length of `bars`. Drawn over the candles in the
+        trade inspector so the crossover or band touch behind a trade is
+        visible next to the entry and exit markers. Pass the arrays the signals
+        were actually taken from — recomputing them here would let the line and
+        the signal disagree. A mis-sized series is dropped, not realigned.
 
     Returns the path written.
     """
@@ -1092,7 +1297,8 @@ def generate_html_report(bars: pd.DataFrame | None,
         description = module_docstring(meta.get("strategy_path"))
 
     inspector = build_inspector(bars, trades.head(max_trade_rows)
-                                if trades is not None else None)
+                                if trades is not None else None,
+                                indicators=indicators)
     inspectable = bool(inspector["trades"])
 
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -1103,7 +1309,8 @@ def generate_html_report(bars: pd.DataFrame | None,
         _gates_html(gate_audit),
         _metrics_html(metrics or {}, daily),
         _chart_html(daily, capital),
-        _logic_card(metrics or {}, result, description, trades),
+        _logic_card(metrics or {}, result, description, trades,
+                    ml_filtered=_is_version_b(version_label)),
         _monthly_html(daily),
         _trades_html(trades, result, symbol, max_trade_rows, inspectable),
         _meta_html(metrics or {}, gate_audit),
@@ -1149,7 +1356,8 @@ def write_dual_reports(dual: dict,
                        artifacts_root: str | Path = "/mnt/backtest/artifacts",
                        timestamp: str | None = None,
                        strat_description: str | None = None,
-                       max_trade_rows: int = MAX_TRADE_ROWS) -> dict[str, Any]:
+                       max_trade_rows: int = MAX_TRADE_ROWS,
+                       indicators: Any = None) -> dict[str, Any]:
     """
     Write `report_version_a.html` and `report_version_b.html` for a dual run.
 
@@ -1160,6 +1368,8 @@ def write_dual_reports(dual: dict,
     `bars` is the frame both versions ran on. It is the same frame for A and B
     by construction — that is the whole point of the dual run — so one is
     passed to both reports and each extracts its own trades' windows from it.
+    `indicators` are shared for the same reason: Version B filters Version A's
+    entries, it does not recompute them, so both charts draw the same lines.
 
     Without `out_dir`, the destination is
     `<artifacts_root>/<strat_name>_<timestamp>/`. The timestamp is part of the
@@ -1180,12 +1390,14 @@ def write_dual_reports(dual: dict,
             bars, va.get("result"), va.get("metrics", {}), va.get("gate_audit"),
             out_dir / "report_version_a.html", strat_name=name,
             strat_description=strat_description,
-            version_label="Version A · rule-based", max_trade_rows=max_trade_rows),
+            version_label="Version A · rule-based", max_trade_rows=max_trade_rows,
+            indicators=indicators),
         "version_b": generate_html_report(
             bars, vb.get("result"), vb.get("metrics", {}), vb.get("gate_audit"),
             out_dir / "report_version_b.html", strat_name=name,
             strat_description=strat_description,
-            version_label="Version B · ML-filtered", max_trade_rows=max_trade_rows),
+            version_label="Version B · ML-filtered", max_trade_rows=max_trade_rows,
+            indicators=indicators),
     }
 
     # The metrics snapshot promote.py locks into meta.json. Written next to the
