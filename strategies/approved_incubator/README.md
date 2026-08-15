@@ -15,11 +15,19 @@ One directory per strategy:
 approved_incubator/
     <strategy_name>/
         meta.json          required - what this is and how it was tested
+        strat.py           written by backtest/promote.py - the promoted version
+        baseline.py        version B only - the rule-based module strat.py filters
+        dual_metrics.json  written by promote.py when --metrics was supplied
         strategy.py        optional - signal_fn(bars) -> (entries, exits)
         returns.parquet    optional - saved BacktestResult.returns
         trades.parquet     optional - saved BacktestResult.trades
         equity.parquet     optional - saved BacktestResult.equity
 ```
+
+`strat.py` is what `backtest/promote.py` writes; `strategy.py` is the older
+hand-placed name. Nothing reads either programmatically — the dashboard and
+`agents.tier1_master` describe a strategy from `meta.json` alone — so both are
+listed rather than one being silently wrong.
 
 A strategy directory with no `meta.json` is listed by the dashboard as
 incomplete rather than skipped silently — an unlabelled strategy is worse than
@@ -53,6 +61,18 @@ commissions and slippage were applied, is not interpretable — see
 `version` follows the Dual-Version Mandate: `A` for the rule-based baseline,
 `B` for the ML-augmented filter. ML is adopted only if B beats A
 out-of-sample without breaching the prop-firm limits.
+
+`backtest/promote.py` writes the same file with extra keys, all of them there
+so a reader can tell what a number is worth:
+
+| Key | Why it is recorded |
+|---|---|
+| `source`, `source_sha256`, `promoted_sha256` | The promoted file provably is the file that was backtested. |
+| `metrics`, `metrics_status` | The locked snapshot, or `"NOT RECORDED"` when none was supplied. Never an invented number. |
+| `gate_audit`, `gate_audit_status` | Gate 1/2/3 as PASS / FAIL / NOT EVALUATED. `NOT EVALUATED` is not a pass. |
+| `gates_overridden` | True when `--force` promoted past a gate that did not clear. |
+| `audit_warnings` | Structural objections to the source module, reported not enforced. |
+| `ml_threshold`, `baseline` | Version B only: the filter threshold and the module it filters. |
 
 ## Why the parquet files are optional
 

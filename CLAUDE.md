@@ -187,15 +187,26 @@ Run from the repo root.
 streamlit run dashboard/app.py
 
 # Tests. No pytest config - each is a script that exits non-zero on failure.
-# Eight suites, 468 checks. The first four need neither the lake nor a network.
+# Nine suites, 586 checks. The first five need neither the lake nor a network.
 python tests/test_tier1.py              # intent routing, vault, synthesis errors
 python tests/test_tier2.py              # compliance, robustness, lifecycle
 python tests/test_tier3_workers.py      # worker tools, metrics, RAM ceiling
 python tests/test_dispatcher.py         # CrossTrade payload, transport, fill logs
+python tests/test_report_gates.py       # acceptance gates, scorecard, HTML, promotion
 python tests/test_clean_signals.py      # per-symbol signals vs the interleaved trap
 python tests/test_streaming_lake.py     # iter_bars and the streaming engine
 python tests/test_engine_batching.py    # chunked == unchunked, trade for trade
 python tests/test_engine_vbt.py         # vectorbt P&L == the legacy loop oracle
+
+# Dual-version integration on real bars (needs the lake). Pin the thread count:
+# the ML filter refits per completed trade on a few dozen rows, and on a
+# 16-core box each fit's thread pool costs far more than the fit.
+OMP_NUM_THREADS=1 python test_dual_version.py
+
+# Promote a version into the incubator and commit it (see the workflow below).
+python3 backtest/promote.py --strat sma_crossover --version A \
+  --source strategies/experimental/sma_crossover.py \
+  --metrics /mnt/backtest/artifacts/sma_crossover_<ts>/dual_metrics.json
 
 # Data manifest: path, size, SHA-256, row count, ts range per file.
 # Answers "have the bytes changed?"; validate_lake.py answers "is it sane?".
@@ -332,7 +343,23 @@ backtest still looks plausible. `verify_specs()` reconciles against Databento's
 
 **`backtest/report.py`** — standalone CLI over saved parquet; joins regime labels
 and records `--variants-tested` so a Sharpe is never read without knowing how
-many variants it was selected from.
+many variants it was selected from. Also holds the acceptance gates
+(`GATE_THRESHOLDS`, `audit_acceptance_gates`) and the terminal
+`print_dual_scorecard` — see the dual-version workflow below.
+
+**`backtest/report_html.py`** — the browser tear sheet.
+`generate_html_report(result, metrics, gate_audit, out_path, version_label)`
+writes one self-contained dark-themed HTML file: gate badges, alpha metrics,
+an interactive Plotly equity/drawdown chart, the monthly return matrix and the
+trade log. Plotly is **inlined**, not CDN-loaded — ~4.5 MB a file, and worth it
+because a report is evidence and a CDN tag renders an empty rectangle the first
+time someone opens it offline. The trade log is capped at `MAX_TRADE_ROWS`
+(2,000) and says so on the page when the cap bites; a 535k-row table opens in no
+browser, and a silently truncated log reads as a complete one.
+`write_dual_reports(dual, ...)` emits both versions plus `dual_metrics.json`.
+
+**`backtest/promote.py`** — promotes one version into
+`strategies/approved_incubator/<strat>/` and commits it. See the workflow below.
 
 **`data_pull/`** — vendor downloaders. The only layer that touches a vendor API.
 
@@ -377,6 +404,82 @@ aligned to it. A module may declare `TIMEFRAME`, `SYMBOLS`, and `DEFAULT_PARAMS`
   a pure rule-based baseline (e.g. an SMA crossover); **Version B** adds an ML
   filter over the same signals. ML is adopted only if B beats A out-of-sample.
   *Note: LightGBM is not currently in `requirements.txt`.*
+
+---
+
+## The Dual-Version Workflow
+
+What to do when a backtest finishes. Five steps, in order. Steps 1-2 are
+automatic; step 3 is where a human decides.
+
+**1. Score both versions against the acceptance gates.**
+`run_dual_version_backtest` calls `audit_acceptance_gates` for A and B and
+attaches the result as `gate_audit` on each version.
+
+| Gate | Criterion | Threshold |
+|---|---|---|
+| **1 · In-Sample** | Sharpe | >= 1.20 |
+| | Profit factor | >= 1.50 |
+| | Trades | >= 200 |
+| | Max drawdown | <= 15.0 % |
+| **2 · Robustness** | WFO efficiency | >= 0.50 |
+| | Monte Carlo 95% max DD | <= 18.0 % |
+| **3 · OOS Holdout** | Holdout Sharpe / IS Sharpe | >= 0.85 (<= 15% degradation) |
+
+Gates 2 and 3 need evidence the dual run does not produce — a walk-forward, a
+bootstrap, and the held-back final 3 years are separate runs. Pass them in via
+`robustness={"A": {...}, "B": {...}}` and `holdout={"A": {...}, "B": {...}}`.
+**Without them those gates report `NOT EVALUATED`, which is not a pass.**
+`audit["passed"]` is True only when all three gates cleared on real numbers, so
+nothing can be promoted on a gate that was never run. Drawdowns are compared on
+magnitude — the engine signs them negative, and comparing raw would let -40%
+clear a 15% limit.
+
+**2. Print the dual scorecard.** `print_dual_scorecard(metrics_a, metrics_b,
+audit_a, audit_b)` renders A and B side by side with a `B − A` delta column,
+the gate table, per-criterion detail for every FAIL, and the verdict.
+
+**3. Emit the HTML reports.** `report_version_a.html` and
+`report_version_b.html`, plus `dual_metrics.json`, land in
+`/mnt/backtest/artifacts/<strat_name>_<timestamp>/`. The timestamp is on the
+directory, not the filename, so a re-run never overwrites the evidence an
+earlier promotion decision was made on. A write failure is recorded in
+`result["reports"]["error"]` and printed to stderr — never raised, because a
+completed backtest is not thrown away over a busy NFS mount. Pass
+`emit_reports=False` to skip.
+
+**4. Prompt the user. Do not choose for them.**
+
+```text
+[1] Promote Version A     [2] Promote Version B
+[3] Parameter sweep       [4] Keep in experimental
+```
+
+**5. Promote.**
+
+```bash
+python3 backtest/promote.py --strat sma_crossover --version A \
+    --source strategies/experimental/sma_crossover.py \
+    --metrics /mnt/backtest/artifacts/sma_crossover_<ts>/dual_metrics.json
+```
+
+Writes `strategies/approved_incubator/<strat>/` — `strat.py`, `meta.json`
+(version, symbol, timeframe, params, locked metrics snapshot, gate statuses,
+SHA-256, timestamp), plus `baseline.py` for Version B — and commits that
+directory alone.
+
+- **Version A is promoted byte for byte** and its SHA-256 recorded, so the
+  promoted file provably *is* the file that was backtested. A strategy cleaned
+  up on the way through is a different strategy.
+- **Version B is a pipeline, not a file.** `baseline.py` is the verbatim source;
+  `strat.py` is a generated wrapper applying `apply_ml_signal_filter` at the
+  same threshold the run used.
+- **Promotion is refused when the gate audit is not PASS.** `--force` overrides
+  and records `gates_overridden: true` in `meta.json`.
+- **No `--metrics` means `metrics_status: "NOT RECORDED"`** in `meta.json`, not
+  an invented snapshot.
+- Being in `approved_incubator/` is a record that a version was chosen, **not
+  permission to trade it.**
 
 ---
 
