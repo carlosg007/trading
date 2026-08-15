@@ -444,14 +444,14 @@ pipeline), `STRATEGY_FAMILIES.md`, `PORTFOLIO.md` (correlation clusters),
 
 ## Open Tasks & Discrepancies (For Claude to Fix Opportunistically)
 
-- **The Gemini synthesis prompt emits a signature the engine cannot call.**
-  `SYNTHESIS_SYSTEM_PROMPT` in `agents/tier1_master.py` specifies
-  `def signal_fn(open_, high, low, close, volume, **params)`, but both the
-  engine (`backtest/engine.py`, `e, x = signal_fn(g)`) and the loader
-  (`agents/tier3_workers.load_strategy`) call `signal_fn(bars)` with a single
-  DataFrame. A synthesized module therefore raises on the first call. Either fix
-  the prompt to the `bars` contract or add an adapter in the loader — but the
-  two must agree, and the `bars` contract is the one the engine enforces.
+- ~~The Gemini synthesis prompt emits a signature the engine cannot call.~~
+  **Fixed 2026-08-15.** `SYNTHESIS_SYSTEM_PROMPT` in `agents/tier1_master.py`
+  now specifies `def signal_fn(bars: pd.DataFrame, **params) ->
+  tuple[pd.Series, pd.Series]`, which is what the engine
+  (`backtest/engine.py`) and the loader (`agents/tier3_workers.load_strategy`)
+  actually call. `ENGINE_ADAPTER` no longer reshapes arguments; it binds params
+  and forces the return to boolean. **This is the one contract** — a strategy
+  module that takes unpacked arrays is now wrong, not merely unconventional.
 - `mdlib/lake.py` needs the `source` parameter to route between `databento` and
   `nt8`; the NT8 tree (27 symbols, 563 files, written by
   `data_pull/ingest_nt8.py`) is currently unreachable through the reader.

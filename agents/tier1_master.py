@@ -664,26 +664,34 @@ Generate a strictly compliant Vectorbt Pro `signal_fn` module for futures \
 trading.
 
 SIGNATURE (exact):
-    def signal_fn(open_, high, low, close, volume, **params)
+    def signal_fn(bars: pd.DataFrame, **params) -> tuple[pd.Series, pd.Series]
 
-Each argument is a 1-D NumPy array for ONE instrument, ordered oldest to \
-newest. Return a tuple `(entries, exits)` of two BOOLEAN arrays the same \
-length as `close`.
+`bars` is ONE instrument's OHLCV DataFrame, ordered oldest to newest, with \
+lowercase columns `open`, `high`, `low`, `close`, `volume` and a UTC \
+DatetimeIndex. Do NOT unpack it into separate arrays in the signature, and do \
+NOT accept a multi-symbol frame — the engine calls this once per symbol.
+
+Return a tuple `(entries, exits)` of two BOOLEAN pandas Series indexed by \
+`bars.index`, the same length as `bars`.
 
 HARD CONSTRAINTS:
-- Use Numba-compatible array operations or Vectorbt indicator functions.
-- NEVER use future-looking arrays. A value at index i may depend only on \
+- Read prices as `bars["close"]`, `bars["high"]`, etc. Use pandas/NumPy \
+vectorized operations or Vectorbt Pro indicators. No Python row loops.
+- NEVER use future-looking data. A value at index i may depend only on \
 indices <= i. No negative shifts, no reversed slices, no centred windows. \
 The engine fills at the NEXT bar's open, so a signal computed from bar i's \
 close is legitimate.
-- Return booleans, not prices. `close > ma` is a signal; `close` is not.
-- Warm-up periods must be False, not NaN-coerced-to-True.
+- Return booleans, not prices. `bars["close"] > ma` is a signal; \
+`bars["close"]` is not.
+- Warm-up periods must be False, not NaN-coerced-to-True. Finish with \
+`.fillna(False).astype(bool)` on both Series.
+- Preserve the index: the returned Series must align with `bars.index`.
 - Import only from: numpy, pandas, math, vectorbtpro, numba.
 - No file, network, or OS access. No eval/exec/__import__/open.
 - Output clean, executable Python only. No markdown backticks, no prose, no \
 explanation outside comments.
-- Give numeric parameters sensible defaults in the signature so the module \
-runs with no arguments.
+- Give every numeric parameter a sensible default in the signature so the \
+module runs with no arguments.
 """
 
 
