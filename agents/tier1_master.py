@@ -282,7 +282,8 @@ def run_campaign(prompt: str,
                  start_date: str = DEFAULT_START,
                  end_date: str = DEFAULT_END,
                  timeframe: str | None = None,
-                 genai_client: Any = None) -> Iterator[dict[str, Any]]:
+                 genai_client: Any = None,
+                 include_artifacts: bool = False) -> Iterator[dict[str, Any]]:
     """
     Route a prompt and run the resulting work, yielding progress as it goes.
 
@@ -312,6 +313,12 @@ def run_campaign(prompt: str,
     The final event always carries `response` (markdown for a chat transcript)
     and `intent`. Callers should render the last event and may render the rest
     as progress.
+
+    `include_artifacts=True` additionally attaches the raw daily equity Series
+    and trade DataFrame to the final research event under `artifacts`. It is
+    opt-in because the default consumer is a chat transcript, and a 500k-row
+    trade list held in an event dict is most of a gigabyte for a caller that
+    only wanted the summary line. A UI that plots the equity path asks for it.
     """
     intent_info = classify_intent(prompt)
     intent = intent_info["intent"]
@@ -327,7 +334,7 @@ def run_campaign(prompt: str,
         return
     yield from _run_research_campaign(
         prompt, intent_info, ruleset_path, symbols,
-        start_date, end_date, timeframe, genai_client)
+        start_date, end_date, timeframe, genai_client, include_artifacts)
 
 
 # -- vault ------------------------------------------------------------------
@@ -430,7 +437,8 @@ def _run_research_campaign(prompt: str, intent_info: dict,
                            symbols: list[str] | None,
                            start_date: str, end_date: str,
                            timeframe: str | None,
-                           genai_client: Any = None) -> Iterator[dict]:
+                           genai_client: Any = None,
+                           include_artifacts: bool = False) -> Iterator[dict]:
     # Step A: resolve inputs -------------------------------------------------
     yield _event("planning", "Resolving symbols, timeframe and ruleset…")
 
@@ -546,6 +554,12 @@ def _run_research_campaign(prompt: str, intent_info: dict,
                           if k not in ("trades", "trade_log")})
 
     # Step D: report ---------------------------------------------------------
+    # The equity path and trade list, for a caller that plots them. Handed over
+    # by reference rather than copied: the alternative is a second full copy of
+    # the trade list in memory purely to render a histogram.
+    artifacts = {"equity": metrics.get("equity"),
+                 "trades": metrics.get("trades")} if include_artifacts else None
+
     # There is deliberately no compliance audit here. Prop-firm balance math is
     # enforced by CrossTrade NAM against a live account, not against a
     # backtest, and running it here produced a PASS/FAIL that read as a verdict
@@ -564,6 +578,7 @@ def _run_research_campaign(prompt: str, intent_info: dict,
                  strategy_path=str(strategy_path),
                  synthesized=synthesized,
                  strategy_is_placeholder=not synthesized,
+                 artifacts=artifacts,
                  ran_backtest=True)
 
 
