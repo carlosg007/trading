@@ -76,7 +76,14 @@ except ImportError as e:      # pragma: no cover - depends on the environment
     _GENAI_IMPORT_ERROR = e
 
 
-DEFAULT_MODEL = "gemini-2.5-pro"
+# Verified against the live API on 2026-08-15 (`python test_gemini_api.py`).
+# `gemini-2.5-pro` and `gemini-2.5-flash` still appear in `client.models.list()`
+# but 404 on generateContent for this key ("no longer available to new users"),
+# so listing a model is not evidence it can be called. Pinned rather than the
+# `gemini-pro-latest` alias: DEFAULT_MODEL is printed into every campaign
+# verdict as provenance, and a floating alias makes that record untrue the day
+# Google repoints it. When this 404s, re-run the test and pin the successor.
+DEFAULT_MODEL = "gemini-3.1-pro-preview"
 
 
 @dataclass

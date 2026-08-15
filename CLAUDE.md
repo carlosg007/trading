@@ -76,7 +76,7 @@ verify the output matches.
   engineer. Deep multi-file editing, git, package management via `uv`, AST
   verification, fixing runtime errors, optimising vectorized Vectorbt Pro /
   Numba loops.
-- **Google AI Synthesizer (`gemini-2.5-pro` via `google-genai`)** — **single-shot**
+- **Google AI Synthesizer (`gemini-3.1-pro-preview` via `google-genai`)** — **single-shot**
   strategy synthesis from a natural-language research hypothesis. One prompt,
   one module, no agentic loop and no iterative self-correction. It writes
   vectorized signal logic and nothing else: it does not choose symbols, size
