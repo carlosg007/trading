@@ -439,6 +439,7 @@ class RunSettings:
     timeframe: str
     start: str
     end: str
+    dual_version: bool = False
 
 
 def render_sidebar(tier1) -> RunSettings:
@@ -470,6 +471,13 @@ def render_sidebar(tier1) -> RunSettings:
     c1, c2 = st.sidebar.columns(2)
     start = c1.date_input("Start", value=date.fromisoformat(default_start))
     end = c2.date_input("End", value=date.fromisoformat(default_end))
+
+    dual_version = st.sidebar.checkbox(
+        "Dual-version (A vs B)", value=False,
+        help="After the campaign, re-run the staged strategy on the FIRST "
+             "symbol as a rule-based baseline and again with the causal ML "
+             "filter. Slower: it refits a classifier walk-forward.",
+    )
 
     if len(symbols) == 1:
         st.sidebar.warning(
@@ -519,7 +527,8 @@ def render_sidebar(tier1) -> RunSettings:
     )
 
     return RunSettings(symbols=symbols, timeframe=timeframe,
-                       start=start.isoformat(), end=end.isoformat())
+                       start=start.isoformat(), end=end.isoformat(),
+                       dual_version=dual_version)
 
 
 # --------------------------------------------------------------------------
@@ -716,6 +725,138 @@ def render_tear_sheet(run: dict) -> None:
 
 
 # --------------------------------------------------------------------------
+# Dual-Version Mandate: A vs B
+# --------------------------------------------------------------------------
+VERSION_A_COLOR = "#1f77b4"      # blue
+VERSION_B_COLOR = "#10b981"      # emerald
+
+# label, metrics key, formatting, and whether a higher number is better.
+# "better" drives nothing but the delta's sign hint - drawdown improving is a
+# smaller magnitude, and colouring it naively would call a deeper drawdown a win.
+DUAL_ROWS = [
+    ("Sharpe ratio", "sharpe", "ratio", True),
+    ("Sortino ratio", "sortino", "ratio", True),
+    ("Calmar ratio", "calmar", "ratio", True),
+    ("Profit factor", "profit_factor", "ratio", True),
+    ("Win rate", "win_rate", "pct_frac", True),
+    ("Total trades", "trade_count", "int", None),
+    ("Max drawdown", "max_drawdown_pct", "pct", False),
+    ("Net return", "total_return_pct", "pct", True),
+    ("CAGR", "annualized_return_pct", "pct", True),
+]
+
+
+def _dual_value(metrics: dict, key: str, kind: str) -> float:
+    v = metrics.get(key)
+    if kind == "pct_frac":
+        try:
+            return float(v) * 100.0
+        except (TypeError, ValueError):
+            return float("nan")
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return float("nan")
+
+
+def dual_comparison_table(a: dict, b: dict) -> pd.DataFrame:
+    """Side-by-side metrics with the delta B - A."""
+    rows = []
+    for label, key, kind, _better in DUAL_ROWS:
+        va, vb = _dual_value(a, key, kind), _dual_value(b, key, kind)
+        delta = vb - va if not (math.isnan(va) or math.isnan(vb)) else float("nan")
+        suffix = "%" if kind in ("pct", "pct_frac") else ""
+        digits = 0 if kind == "int" else 2
+        rows.append({
+            "Metric": label,
+            "A · rule-based": fmt(va, suffix, digits),
+            "B · ML-filtered": fmt(vb, suffix, digits),
+            "Delta (B − A)": ("—" if math.isnan(delta)
+                              else f"{delta:+,.{digits}f}{suffix}"),
+        })
+    return pd.DataFrame(rows)
+
+
+def dual_equity_figure(equity_a: pd.Series, equity_b: pd.Series) -> go.Figure:
+    """
+    Both equity curves on one axis.
+
+    Overlaid rather than stacked side by side: the question is which curve is
+    above the other and where they separated, and two panels with independent
+    y-axes hide exactly that.
+    """
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=equity_a.index, y=equity_a.values, mode="lines",
+        name="A · rule-based", line=dict(width=1.6, color=VERSION_A_COLOR),
+        hovertemplate="%{x|%Y-%m-%d}<br>A  $%{y:,.0f}<extra></extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=equity_b.index, y=equity_b.values, mode="lines",
+        name="B · ML-filtered", line=dict(width=1.6, color=VERSION_B_COLOR),
+        hovertemplate="%{x|%Y-%m-%d}<br>B  $%{y:,.0f}<extra></extra>",
+    ))
+    fig.add_hline(y=float(equity_a.iloc[0]), line_dash="dot",
+                  line_color="rgba(128,128,128,0.6)",
+                  annotation_text="initial capital",
+                  annotation_position="bottom right")
+    fig.update_layout(
+        height=380, margin=dict(l=8, r=8, t=34, b=8),
+        title="Version A vs Version B — equity, identical costs",
+        hovermode="x unified", xaxis_title=None, yaxis_title=None,
+        legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0),
+    )
+    return fig
+
+
+def render_dual_version(dual: dict) -> None:
+    """The Dual-Version Mandate comparison: rule-based baseline against the
+    ML-filtered variant, same bars, same costs."""
+    a = dual["version_a"]["metrics"]
+    b = dual["version_b"]["metrics"]
+    cmp_ = dual.get("comparison", {})
+    meta = dual.get("meta", {})
+
+    st.subheader("Dual-Version Mandate — A vs B")
+    st.caption(
+        f"{meta.get('symbol', '—')} · {meta.get('timeframe', '—')} · "
+        f"{meta.get('bars', 0):,} bars · identical costs · "
+        f"P(win) ≥ {meta.get('ml_threshold', 0.5):.2f}"
+    )
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Entries · A", f"{cmp_.get('entries_a', 0):,}")
+    c2.metric("Entries · B", f"{cmp_.get('entries_b', 0):,}")
+    c3.metric("Suppressed", f"{cmp_.get('entries_suppressed', 0):,}")
+
+    st.dataframe(dual_comparison_table(a, b), hide_index=True, width="stretch")
+
+    verdict = cmp_.get("b_beats_a")
+    if verdict:
+        st.success(
+            "Version B beats Version A on Sharpe **in sample**. Under the "
+            "Dual-Version Mandate that is not adoption: the filter is adopted "
+            "only if B beats A on the held-back final 3 years.", icon="🧪")
+    else:
+        st.info(
+            "Version B does not beat Version A on Sharpe. The mandate's answer "
+            "is to keep the rule-based baseline — an ML filter that loses "
+            "in-sample has nothing to prove out-of-sample.", icon="🧪")
+
+    eq_a = dual["version_a"]["result"].equity
+    eq_b = dual["version_b"]["result"].equity
+    if eq_a is not None and len(eq_a) and eq_b is not None and len(eq_b):
+        st.plotly_chart(dual_equity_figure(eq_a, eq_b), width="stretch")
+
+    st.caption(
+        "The filter passes entries through untouched until enough trades have "
+        "closed to train on, so the two versions share their early history and "
+        "are not independent samples. Every decision is fitted only on trades "
+        "that closed strictly before the signal."
+    )
+
+
+# --------------------------------------------------------------------------
 # Tab: CIO Terminal
 # --------------------------------------------------------------------------
 STATUS_ICONS = {
@@ -785,6 +926,14 @@ def render_terminal(tier1, tier1_error: str | None, settings: RunSettings) -> No
     if last and last.get("ran_backtest"):
         st.divider()
         render_tear_sheet(last)
+
+    dual = st.session_state.get("last_dual")
+    if dual:
+        st.divider()
+        if dual.get("error"):
+            st.error(f"**Dual-version run failed** — {dual['error']}")
+        else:
+            render_dual_version(dual)
 
     if st.session_state.chat and st.button("Clear transcript", type="secondary"):
         st.session_state.chat = []
@@ -864,7 +1013,58 @@ def _run_prompt(tier1, prompt: str, settings: RunSettings) -> None:
         }
     else:
         st.session_state.pop("last_run", None)
+
+    st.session_state.pop("last_dual", None)
+    if settings.dual_version and (final or {}).get("ran_backtest"):
+        _run_dual_version(tier1, final, settings)
+
     st.rerun()
+
+
+def _run_dual_version(tier1, final: dict, settings: RunSettings) -> None:
+    """
+    Re-run the staged strategy as Version A and Version B on one symbol.
+
+    Deliberately one symbol: `run_dual_version_backtest` takes a single frame,
+    and handing it an interleaved multi-symbol frame is the averaging-across-
+    contracts bug the engine has no entry point for. The symbol comes from the
+    campaign's own metadata rather than the sidebar, so it matches what was
+    actually backtested even when the router parsed the symbols out of the
+    prompt.
+    """
+    meta = (final.get("metrics") or {}).get("meta") or {}
+    symbols = meta.get("symbols") or settings.symbols
+    strategy_path = final.get("strategy_path")
+    if not symbols or not strategy_path:
+        st.session_state.last_dual = {
+            "error": "the campaign reported no symbol or staged module to re-run"}
+        return
+
+    symbol = str(symbols[0])
+    tf = meta.get("timeframe") or settings.timeframe
+    with st.status(f"Dual-version on {symbol} {tf} — fitting walk-forward…",
+                   expanded=True) as status:
+        try:
+            from mdlib.lake import iter_bars
+            st.write(f"📥 Reading {symbol} {tf} bars…")
+            bars = None
+            for sym, g in iter_bars([symbol], tf, meta.get("start"),
+                                    meta.get("end")):
+                if sym == symbol:
+                    bars = g.reset_index(drop=True)
+                    break
+            if bars is None or bars.empty:
+                raise ValueError(f"no {tf} bars returned for {symbol}")
+
+            st.write(f"⚙️ {len(bars):,} bars · running A, then the ML filter…")
+            dual = tier1.run_dual_version_backtest(
+                strategy_path, bars, freq=tf, symbol=symbol)
+            st.session_state.last_dual = dual
+            status.update(label="Dual-version complete", state="complete",
+                          expanded=False)
+        except Exception as e:                                # noqa: BLE001
+            st.session_state.last_dual = {"error": f"{type(e).__name__}: {e}"}
+            status.update(label="Dual-version failed", state="error")
 
 
 # --------------------------------------------------------------------------
