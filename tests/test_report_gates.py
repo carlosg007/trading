@@ -35,6 +35,7 @@ import ast                                                       # noqa: E402
 import importlib.util                                            # noqa: E402
 import json                                                      # noqa: E402
 import re                                                        # noqa: E402
+import shutil                                                    # noqa: E402
 import subprocess                                                # noqa: E402
 import sys                                                       # noqa: E402
 import tempfile                                                  # noqa: E402
@@ -51,8 +52,10 @@ from backtest.promote import (VERSION_B_TEMPLATE, inspect_source,   # noqa: E402
 from backtest.report import (FAIL, GATE_THRESHOLDS, NOT_EVALUATED,  # noqa: E402
                              PASS, audit_acceptance_gates,
                              format_dual_scorecard, print_dual_scorecard)
-from backtest.report_html import (generate_html_report,             # noqa: E402
-                                  write_dual_reports)
+from backtest.engine import BacktestConfig                          # noqa: E402
+from backtest.report_html import (build_inspector,                  # noqa: E402
+                                  generate_html_report,
+                                  module_docstring, write_dual_reports)
 
 _failures: list[str] = []
 
@@ -91,19 +94,58 @@ FULL_ROBUSTNESS = {"wfo": {"efficiency_ratio": 0.63},
                    "monte_carlo": {"max_drawdown_pct_at_confidence": -15.8}}
 
 
-def synthetic_result(n_days: int = 900, n_trades: int = 300, seed: int = 7):
-    """A BacktestResult-shaped object: returns, trades, equity."""
+COMMISSION = 2.25          # per side, per contract
+SLIP_PER_TRADE = 10.0      # 1 tick each way on NQ: 2 * 0.25 * 20
+COSTS_PER_TRADE = 2 * COMMISSION + SLIP_PER_TRADE
+
+
+def synthetic_bars(n: int = 3_000, seed: int = 4) -> pd.DataFrame:
+    """One symbol's 15-minute OHLCV frame, oldest first, as the lake returns it."""
+    rng = np.random.default_rng(seed)
+    px = 15_000 + np.cumsum(rng.normal(0, 4.0, n))
+    return pd.DataFrame({
+        "ts": pd.date_range("2021-01-04", periods=n, freq="15min", tz="UTC"),
+        "symbol": "NQ", "open": px, "high": px + 3.0, "low": px - 3.0,
+        "close": px + rng.normal(0, 1.0, n), "volume": rng.integers(50, 900, n),
+    })
+
+
+def synthetic_result(bars: pd.DataFrame | None = None, n_days: int = 900,
+                     n_trades: int = 60, seed: int = 7):
+    """
+    A BacktestResult-shaped object: returns, trades, equity, config.
+
+    Trades are placed on real bar timestamps when `bars` is given, so the trade
+    inspector has something to line up against. A trade whose entry_time is not
+    a bar in the frame would still produce a chart - searchsorted finds the
+    nearest position - which is exactly why the alignment is tested rather than
+    assumed.
+    """
     rng = np.random.default_rng(seed)
     idx = pd.date_range("2019-01-02", periods=n_days, freq="B", tz="UTC")
     returns = pd.Series(rng.normal(0.0006, 0.008, n_days), index=idx)
-    entry = idx[:n_trades]
+
+    if bars is not None:
+        ts = pd.DatetimeIndex(bars["ts"])
+        step = max(len(ts) // (n_trades + 2), 25)
+        e_pos = np.arange(step, step * (n_trades + 1), step)[:n_trades]
+        x_pos = np.minimum(e_pos + rng.integers(4, 25, len(e_pos)), len(ts) - 1)
+        entry_t, exit_t = ts[e_pos], ts[x_pos]
+        entry_px = bars["open"].to_numpy()[e_pos]
+        exit_px = bars["open"].to_numpy()[x_pos]
+    else:
+        n_trades = min(n_trades, n_days - 1)
+        entry_t, exit_t = idx[:n_trades], idx[1:n_trades + 1]
+        entry_px = rng.normal(15_000, 40, n_trades)
+        exit_px = rng.normal(15_000, 40, n_trades)
+
     trades = pd.DataFrame({
-        "entry_time": entry, "exit_time": idx[1:n_trades + 1],
+        "entry_time": entry_t, "exit_time": exit_t,
         "symbol": "NQ", "direction": "long",
-        "entry_price": rng.normal(15_000, 40, n_trades),
-        "exit_price": rng.normal(15_000, 40, n_trades),
-        "gross_pnl": rng.normal(140, 850, n_trades), "costs": 9.0,
+        "entry_price": entry_px, "exit_price": exit_px,
     })
+    trades["gross_pnl"] = (trades["exit_price"] - trades["entry_price"]) * 20.0
+    trades["costs"] = COSTS_PER_TRADE
     trades["pnl"] = trades["gross_pnl"] - trades["costs"]
 
     class _R:
@@ -113,6 +155,8 @@ def synthetic_result(n_days: int = 900, n_trades: int = 300, seed: int = 7):
     r.returns = returns
     r.trades = trades
     r.equity = (1 + returns).cumprod() * 100_000
+    r.config = BacktestConfig(slippage_ticks=1.0, commission_per_side=COMMISSION,
+                              flat_by_close=True, variants_tested=3)
     return r
 
 
@@ -336,23 +380,71 @@ def test_scorecard() -> None:
 # --------------------------------------------------------------------------
 def test_html(tmp: Path) -> None:
     print("\nHTML report")
-    result = synthetic_result()
-    m = clearing_metrics()
+    bars = synthetic_bars()
+    result = synthetic_result(bars)
+    m = clearing_metrics(trade_count=len(result.trades))
     audit = audit_acceptance_gates(m, FULL_ROBUSTNESS, {"sharpe": 1.45})
 
-    out = generate_html_report(result, m, audit, tmp / "report_version_a.html",
+    out = generate_html_report(bars, result, m, audit,
+                               tmp / "report_version_a.html",
+                               strat_name="sma_crossover",
                                version_label="Version A · rule-based")
     html = out.read_text(encoding="utf-8")
 
     check("the file was written", out.exists(), f"{out.stat().st_size / 1e6:.2f} MB")
     check("it is a complete HTML document",
           html.startswith("<!DOCTYPE html>") and html.rstrip().endswith("</html>"))
+    problems = _unbalanced(html)
+    check("the generated markup is balanced", not problems, "; ".join(problems[:3]))
+    check("every section rendered", html.count('<div class="card">') == 7,
+          f"{html.count('<div class=' + chr(34) + 'card' + chr(34) + '>')} cards")
     check("gate badges for all three gates are present",
           all(g in html for g in ("GATE 1", "GATE 2", "GATE 3")))
     check("the alpha metrics table is present", "Alpha metrics" in html)
-    check("the monthly matrix is present", "Monthly returns" in html)
+    check("the monthly heatmap is present",
+          "Monthly returns" in html and "background:rgba(" in html)
+    check("the heatmap carries a legend and prints every value",
+          'class="ramp"' in html and "colour is intensity only" in html)
     check("the trade log is present", "Trade log" in html)
     check("provenance is present", "Provenance" in html)
+    check("the strategy name is the header",
+          "<h1>sma_crossover" in html.replace("\n", ""))
+
+    # (g) The logic card. Stops are the entry that matters most: the engine
+    # models none, and a reader who assumes an unstated stop is reading a
+    # different strategy.
+    check("the strategy logic card is present", "Strategy logic" in html)
+    for label in ("Entry trigger", "Exit rule", "Stops / targets",
+                  "Session flatten", "Fill price", "Costs charged"):
+        check(f"the logic card states {label.lower()}", label in html)
+    check("it states that no stop-loss is modelled", "NONE MODELLED" in html)
+    check("it names the fill bar, not the signal bar",
+          "NEXT bar&#x27;s open" in html or "NEXT bar's open" in html)
+    check("session flatten reads off the config, not a guess",
+          "20:00 UTC" in html)
+
+    # (e) Trade log columns, search, and sort.
+    for col in ("Entry price", "Exit price", "Return %", "Fees $",
+                "Slippage $", "Net P&amp;L $"):
+        check(f"the trade log has a {col} column", f">{col}<" in html)
+    check("the trade log is searchable", 'id="trade-search"' in html)
+    check("the trade log is sortable",
+          html.count('aria-sort="none"') == 9 and 'data-sort="0"' in html)
+    check("rows carry numeric sort keys, not rendered text",
+          'data-v="' in html)
+
+    # Fees and slippage are split out of the engine's single cost figure.
+    check("commission is reported per round trip",
+          f">{2 * COMMISSION:,.2f}<" in html, f"{2 * COMMISSION:.2f}")
+    check("slippage is the remainder of the cost figure",
+          f">{SLIP_PER_TRADE:,.2f}<" in html, f"{SLIP_PER_TRADE:.2f}")
+
+    # (h) The trade inspector.
+    check("the trade inspector modal is present", 'id="trade-modal"' in html)
+    check("rows are clickable and keyboard-reachable",
+          'data-trade="0"' in html and 'role="button"' in html)
+    check("the bar windows are embedded, not fetched",
+          "window.INSPECTOR=" in html and "candlestick" in html)
 
     # Self-contained: plotly inlined, nothing fetched at render time. A CDN
     # script tag renders an empty rectangle the first time the file is opened
@@ -370,53 +462,199 @@ def test_html(tmp: Path) -> None:
     check("no external script tag", not ext_scripts, str(ext_scripts[:2]))
     check("no external stylesheet tag", not ext_links, str(ext_links[:2]))
 
-    # Interpolated strings are escaped.
+    # Interpolated strings are escaped - including the description, which now
+    # comes from a module docstring and is therefore attacker-adjacent in the
+    # one case that matters: a strategy a model just wrote.
     evil = clearing_metrics()
     evil["meta"] = dict(evil["meta"], strategy='x<script>alert(1)</script>')
-    esc = generate_html_report(result, evil, audit, tmp / "escaped.html")
+    esc = generate_html_report(bars, result, evil, audit, tmp / "escaped.html",
+                               strat_description="<img src=x onerror=alert(2)>")
     body = esc.read_text(encoding="utf-8")
     check("interpolated names are HTML-escaped",
           "<script>alert(1)</script>" not in body and "&lt;script&gt;" in body)
+    check("the description is escaped too",
+          "<img src=x" not in body and "&lt;img src=x" in body)
 
     # A report with no audit must not read as a cleared strategy.
-    no_audit = generate_html_report(result, m, None, tmp / "noaudit.html")
+    no_audit = generate_html_report(bars, result, m, None, tmp / "noaudit.html")
     head = no_audit.read_text(encoding="utf-8").split("Alpha metrics")[0]
     check("no gate audit renders as 'no claim', never as a pass",
           "no claim" in head and ">PASS<" not in head)
 
     # The trade log cap has to announce itself.
-    capped = generate_html_report(result, m, audit, tmp / "capped.html",
+    capped = generate_html_report(bars, result, m, audit, tmp / "capped.html",
                                   max_trade_rows=25)
     cap_html = capped.read_text(encoding="utf-8")
     check("a truncated trade log says so on the page",
-          "Showing the first 25" in cap_html and "300" in cap_html)
+          "Showing the first 25" in cap_html
+          and f"{len(result.trades):,}" in cap_html)
     check("and it really is truncated",
-          cap_html.count("<tr>") < html.count("<tr>"))
+          cap_html.count('data-trade="') < html.count('data-trade="'))
+    check("the inspector is truncated with it — no orphan windows",
+          '"trades":[' in cap_html
+          and cap_html.count('data-trade="') == 25)
+
+    # Without bars, every other section still renders and the inspector says
+    # it is unavailable rather than silently vanishing.
+    no_bars = generate_html_report(None, result, m, audit, tmp / "nobars.html")
+    nb = no_bars.read_text(encoding="utf-8")
+    check("a report without bars still renders", "Trade log" in nb)
+    check("and says the inspector is unavailable",
+          "Pass the bars frame" in nb and 'id="trade-modal"' not in nb)
 
     # Degrades rather than raising on an empty result.
     class _Empty:
         returns = pd.Series(dtype=float)
         trades = pd.DataFrame()
         equity = pd.Series(dtype=float)
+        config = None
 
-    empty = generate_html_report(_Empty(), {"meta": {}}, None, tmp / "empty.html")
+    empty = generate_html_report(None, _Empty(), {"meta": {}}, None,
+                                 tmp / "empty.html")
     check("an empty result produces a report instead of a traceback",
           empty.exists() and "nothing to plot" in empty.read_text(encoding="utf-8"))
 
 
+def _unbalanced(markup: str) -> list[str]:
+    """
+    Tags left open or closed out of order in the markup WE generate.
+
+    The inlined plotly bundle is stripped first: minified JavaScript is full of
+    angle brackets that are not markup, and parsing them as tags reports
+    failures that do not exist. What remains is this module's own output, which
+    a browser will silently paper over if it is wrong - a stray unclosed div
+    swallows every card below it and the page still "renders".
+    """
+    from html.parser import HTMLParser
+
+    void = {"meta", "br", "hr", "img", "input", "link", "source", "col"}
+    body = re.sub(r"<script[^>]*>.*?</script>", "", markup, flags=re.S)
+
+    class _P(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__()
+            self.stack: list[str] = []
+            self.err: list[str] = []
+
+        def handle_starttag(self, tag, attrs):
+            if tag not in void:
+                self.stack.append(tag)
+
+        def handle_endtag(self, tag):
+            if not self.stack:
+                self.err.append(f"</{tag}> with nothing open")
+            elif self.stack[-1] != tag:
+                self.err.append(f"</{tag}> closes <{self.stack[-1]}>")
+                if tag in self.stack:
+                    while self.stack and self.stack.pop() != tag:
+                        pass
+            else:
+                self.stack.pop()
+
+    p = _P()
+    p.feed(body)
+    return p.err + [f"<{t}> never closed" for t in p.stack]
+
+
+def test_inspector_payload(tmp: Path) -> None:
+    """The windows the modal draws, checked against the bars they came from."""
+    print("\nTrade inspector payload")
+    bars = synthetic_bars(n=1_200)
+    result = synthetic_result(bars, n_trades=12)
+    trades = result.trades
+    ts = pd.DatetimeIndex(bars["ts"])
+
+    ins = build_inspector(bars, trades)
+    B, T = ins["bars"], ins["trades"]
+    check("one window per trade", len(T) == len(trades), f"{len(T)} windows")
+
+    # The epoch-unit trap: pandas indexes are microsecond-resolution here, so
+    # asi8 // 1e6 yields SECONDS and every candle lands in 1970.
+    first = pd.to_datetime(B["t"][0], unit="ms", utc=True)
+    check("timestamps are epoch milliseconds",
+          first.year == ts[0].year, str(first))
+
+    ok_align = True
+    for i in range(len(T)):
+        t = T[i]
+        e_time = pd.to_datetime(B["t"][t["e"]], unit="ms", utc=True)
+        x_time = pd.to_datetime(B["t"][t["x"]], unit="ms", utc=True)
+        if (e_time != trades["entry_time"].iloc[i]
+                or x_time != trades["exit_time"].iloc[i]
+                or not (t["lo"] <= t["e"] <= t["x"] <= t["hi"])):
+            ok_align = False
+            break
+    check("every window's entry and exit point at the right bars", ok_align)
+
+    widths = [t["hi"] - t["lo"] + 1 for t in T]
+    holds = [t["x"] - t["e"] for t in T]
+    check("each window is 20 bars before the entry to 10 after the exit",
+          all(w == h + 31 for w, h in zip(widths, holds))
+          or T[0]["lo"] == 0,        # the first trade can be clipped at the start
+          f"widths {widths[:3]}")
+    check("prices match the bars they were taken from",
+          B["o"][T[0]["e"]] == round(float(trades["entry_price"].iloc[0]), 6))
+
+    # Overlapping windows are shared, not duplicated per trade.
+    check("overlapping windows are deduplicated",
+          ins["n"] <= sum(widths), f"{ins['n']} bars vs {sum(widths)} naive")
+
+    # Degenerate inputs return an empty payload rather than half a chart.
+    check("no bars -> empty payload", build_inspector(None, trades)["trades"] == [])
+    check("no trades -> empty payload", build_inspector(bars, None)["trades"] == [])
+    shuffled = bars.iloc[::-1]
+    check("an out-of-order frame is refused, not searchsorted blindly",
+          build_inspector(shuffled, trades)["trades"] == [])
+
+
+def test_inspector_dom(tmp: Path) -> None:
+    """
+    Run the report's own JavaScript against a stub DOM.
+
+    Python can prove the modal markup is on the page. Only this can prove that
+    clicking a row draws the right bars - an off-by-one in the window slice
+    renders a beautiful chart of the wrong trade.
+    """
+    print("\nTrade inspector behaviour (node)")
+    harness = REPO / "tests" / "inspector_dom_test.js"
+    node = shutil.which("node")
+    if node is None:
+        print("  SKIP  node is not installed — the DOM harness did not run")
+        return
+
+    bars = synthetic_bars(n=800)
+    result = synthetic_result(bars, n_trades=13)
+    m = clearing_metrics(trade_count=13)
+    page = generate_html_report(bars, result, m, audit_acceptance_gates(m),
+                                tmp / "dom.html", strat_name="sma_crossover")
+    proc = subprocess.run([node, str(harness), str(page)],
+                          capture_output=True, text=True, cwd=REPO)
+    for line in proc.stdout.strip().splitlines():
+        if line.strip().startswith(("PASS", "FAIL")):
+            print("  " + line.strip())
+    if proc.returncode != 0:
+        print(proc.stdout[-2000:])
+        print(proc.stderr[-2000:])
+    check("the trade log's JavaScript passes its own suite",
+          proc.returncode == 0,
+          f"{proc.stdout.count('PASS')} checks")
+
+
 def test_write_dual_reports(tmp: Path) -> None:
     print("\nwrite_dual_reports")
+    bars = synthetic_bars(n=1_500)
     a, b = clearing_metrics(), clearing_metrics(sharpe=1.10, trade_count=180)
     dual = {
-        "version_a": {"metrics": a, "result": synthetic_result(seed=1),
+        "version_a": {"metrics": a, "result": synthetic_result(bars, seed=1, n_trades=20),
                       "gate_audit": audit_acceptance_gates(a, FULL_ROBUSTNESS,
                                                            {"sharpe": 1.45}, version="A")},
-        "version_b": {"metrics": b, "result": synthetic_result(seed=2),
+        "version_b": {"metrics": b, "result": synthetic_result(bars, seed=2, n_trades=8),
                       "gate_audit": audit_acceptance_gates(b, version="B")},
         "comparison": {"b_beats_a": False, "sharpe_delta": -0.5},
         "meta": a["meta"],
     }
-    out = write_dual_reports(dual, out_dir=tmp / "run", max_trade_rows=50)
+    out = write_dual_reports(dual, bars=bars, out_dir=tmp / "run",
+                             max_trade_rows=50)
 
     check("report_version_a.html was written",
           out["report_version_a"].name == "report_version_a.html"
@@ -424,9 +662,14 @@ def test_write_dual_reports(tmp: Path) -> None:
     check("report_version_b.html was written",
           out["report_version_b"].name == "report_version_b.html"
           and out["report_version_b"].exists())
+    a_html = out["report_version_a"].read_text(encoding="utf-8")
+    b_html = out["report_version_b"].read_text(encoding="utf-8")
     check("the two reports are labelled A and B",
-          "Version A" in out["report_version_a"].read_text(encoding="utf-8")
-          and "Version B" in out["report_version_b"].read_text(encoding="utf-8"))
+          "Version A" in a_html and "Version B" in b_html)
+    check("both carry their own trade inspector",
+          "window.INSPECTOR=" in a_html and "window.INSPECTOR=" in b_html)
+    check("each inspector holds that version's own trades",
+          a_html.count('data-trade="') == 20 and b_html.count('data-trade="') == 8)
 
     snap = json.loads(out["metrics_json"].read_text(encoding="utf-8"))
     check("dual_metrics.json is valid JSON with both versions",
@@ -437,7 +680,7 @@ def test_write_dual_reports(tmp: Path) -> None:
 
     # The default destination is <root>/<name>_<timestamp>/, so a re-run never
     # overwrites the evidence a promotion decision was made on.
-    auto = write_dual_reports(dual, strat_name="sma_crossover",
+    auto = write_dual_reports(dual, bars=bars, strat_name="sma_crossover",
                               artifacts_root=tmp / "artifacts", max_trade_rows=10)
     check("the default directory is <strat>_<timestamp>",
           auto["dir"].name.startswith("sma_crossover_")
@@ -659,6 +902,8 @@ def main() -> int:
         test_gate3()
         test_scorecard()
         test_html(tmp / "html")
+        test_inspector_payload(tmp / "html")
+        test_inspector_dom(tmp / "html")
         test_write_dual_reports(tmp / "dual")
         test_inspect_source()
         test_promote_version_a(tmp / "pa")
