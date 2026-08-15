@@ -312,10 +312,11 @@ def _sortino(returns: pd.Series) -> float:
     Sortino ratio, delegated to `backtest.report.sortino`.
 
     Delegated rather than reimplemented because the denominator convention is a
-    real choice - downside deviation over losing periods only, versus over all
-    periods - and the two differ by roughly sqrt(n_all / n_down). A second
-    local implementation would make the dashboard and the CLI report disagree
-    about the same backtest.
+    real choice - shortfalls averaged over all periods, versus over losing
+    periods only - and the two differ by roughly sqrt(n_all / n_down), which on
+    a sparse trader is large enough to invert the ranking. A second local
+    implementation would make the dashboard and the CLI report disagree about
+    the same backtest.
     """
     if returns is None or len(returns) < 2:
         return float("nan")

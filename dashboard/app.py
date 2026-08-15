@@ -652,10 +652,10 @@ def render_tear_sheet(run: dict) -> None:
     r1[2].metric("Calmar", fmt(metrics.get("calmar")))
 
     st.caption(
-        "Sortino uses `backtest.report.sortino` — downside deviation over "
-        "LOSING days only. For a strategy that trades rarely, most days are "
-        "flat and excluded, so this reads below Sharpe rather than above it. "
-        "That is the convention, not a defect."
+        "Ratios are annualized on 252 trading days. Sortino uses the "
+        "institutional denominator — squared shortfalls over ALL periods, so a "
+        "strategy that is mostly flat is credited for the rarity of its losing "
+        "days rather than judged only on their dispersion."
     )
 
     r2 = st.columns(3)

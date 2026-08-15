@@ -113,12 +113,30 @@ def sharpe(returns: pd.Series, rf: float = 0.0) -> float:
 
 
 def sortino(returns: pd.Series, rf: float = 0.0) -> float:
-    excess = returns - rf / TRADING_DAYS
-    downside = excess[excess < 0]
-    if len(downside) < 2:
+    """
+    Sortino ratio on the institutional denominator.
+
+    Downside deviation is sqrt(sum(min(0, r)^2) / N_total) - the sum of squared
+    shortfalls divided by the count of ALL periods, not just the losing ones.
+
+    The denominator convention is not cosmetic. Dividing by the count of losing
+    days only takes the dispersion of a strategy's bad days and ignores how
+    rare they were, so a strategy that trades 25 times in 1,558 sessions is
+    scored on the handful of days it lost and the ~98% of flat days vanish. On
+    a real ES/NQ run that inverted the ratio - Sortino 0.28 against a Sharpe of
+    0.53 - which reads as a strategy with unusually ugly downside when the
+    truth is that it is mostly flat. Over all periods, rarity counts in the
+    strategy's favour, which is the property the ratio is supposed to have and
+    what Vectorbt Pro and the standard references compute.
+    """
+    if returns is None or len(returns) == 0:
         return float("nan")
-    dd = downside.std(ddof=1)
-    if dd == 0:
+    excess = returns - rf / TRADING_DAYS
+    shortfall = excess.clip(upper=0.0)
+    dd = float(np.sqrt((shortfall ** 2).sum() / len(excess)))
+    # No losing period at all: undefined, not infinite. An inf here would rank
+    # a two-trade sample above every real strategy in a sweep.
+    if dd == 0 or np.isnan(dd):
         return float("nan")
     return float(excess.mean() / dd * np.sqrt(TRADING_DAYS))
 
