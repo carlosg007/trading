@@ -798,6 +798,14 @@ _TRADE_COLS = [
     ("#", "num", "Trade number, in exit order"),
     ("Entry time", "txt", "UTC"),
     ("Exit time", "txt", "UTC"),
+    # Long or short, stamped by the engine from vectorbt's own trade record. It
+    # is a column rather than a colour because the two sides read identically
+    # otherwise: a short that made money and a long that lost it have the same
+    # entry and exit prices and opposite P&L, and nothing else on the row says
+    # which happened. Blank on a strategy whose trades carry no direction at
+    # all, rather than defaulting to "long" - a guess printed as a fact is the
+    # thing this report exists not to do.
+    ("Side", "txt", "Long or short, as executed"),
     ("Entry price", "num", "The raw bar open, before slippage"),
     ("Exit price", "num", "The raw bar open, before slippage"),
     ("Return %", "num", "Price return from entry to exit, signed by direction"),
@@ -848,10 +856,13 @@ def _trades_html(trades: pd.DataFrame | None, result: Any = None,
         costs = _num(row.get("costs"))
         f_val = fees.iloc[i] if fees is not None else float("nan")
         s_val = slip.iloc[i] if slip is not None else costs
+        side = str(row.get("direction") or "").lower()
+        side = side if side in ("long", "short") else ""
         cells = [
             f'<td class="num" data-v="{i + 1}">{i + 1}</td>',
             f'<td class="mono" data-v="{_esc(entry_t)}">{_esc(entry_t)}</td>',
             f'<td class="mono" data-v="{_esc(exit_t)}">{_esc(exit_t)}</td>',
+            f'<td data-v="{_esc(side)}">{_esc(side.upper())}</td>',
             cell(row.get("entry_price")),
             cell(row.get("exit_price")),
             cell(rets.iloc[i] if len(rets) else float("nan"), "{:,.3f}",

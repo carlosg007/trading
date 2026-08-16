@@ -487,12 +487,19 @@ def test_html(tmp: Path) -> None:
           "long-format" not in qcard and "signal_fn" not in qcard)
 
     # (e) Trade log columns, search, and sort.
-    for col in ("Entry price", "Exit price", "Return %", "Fees $",
+    for col in ("Side", "Entry price", "Exit price", "Return %", "Fees $",
                 "Slippage $", "Net P&amp;L $"):
         check(f"the trade log has a {col} column", f">{col}<" in html)
     check("the trade log is searchable", 'id="trade-search"' in html)
+    # Counted against the declared column list rather than a frozen number, so
+    # adding a column (Side arrived when the engine learned to go short) does
+    # not fail a check about sortability.
+    from backtest.report_html import _TRADE_COLS
     check("the trade log is sortable",
-          html.count('aria-sort="none"') == 9 and 'data-sort="0"' in html)
+          html.count('aria-sort="none"') == len(_TRADE_COLS)
+          and 'data-sort="0"' in html,
+          f"{html.count('aria-sort=' + chr(34) + 'none' + chr(34))} sortable "
+          f"headers vs {len(_TRADE_COLS)} declared columns")
     check("rows carry numeric sort keys, not rendered text",
           'data-v="' in html)
 

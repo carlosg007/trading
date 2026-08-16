@@ -366,8 +366,9 @@ UTC). `wide(df, field)` pivots when a column per symbol is needed.
 trades, equity, breach, stats)`.
 
 - **The engine reads the bars; you pass the strategy, not the signals.**
-  `signal_fn(bars) -> (entries, exits)` is called once per symbol with that
-  symbol's bars alone. There is deliberately no way to hand it a pre-built
+  `signal_fn(bars) -> (entries, exits)` — or, since 2026-08-16,
+  `-> (entries, exits, short_entries, short_exits)` — is called once per symbol
+  with that symbol's bars alone. There is deliberately no way to hand it a pre-built
   multi-symbol frame with signals already computed. That signature existed until
   2026-08-13 and was a trap: `get_bars` returns rows sorted by `(ts, symbol)`,
   so the frame **interleaves instruments**, and a strategy doing
@@ -410,10 +411,28 @@ trades, equity, breach, stats)`.
   standard deviation toward a 365-day year while the sqrt(252) stays put. On a
   20-session synthetic run that alone moved Sharpe from -15.08 to -11.26.
 - **Costs are mandatory:** slippage and commissions applied at this layer.
-- **Numba:** `clean_signals` compiles its two-state machine via `njit`
+- **Long AND short, from 2026-08-16.** A strategy returns two masks or four;
+  `unpack_signals` accepts both and fills the short pair with False for the
+  two-mask form. Signals are resolved by ONE three-state machine
+  (`_clean_signals_ls_loop`: flat / long / short) — `clean_signals` delegates to
+  it with empty short masks, so there is no second resolver to disagree with the
+  first. Three rules it will not guess at: a bar signalling both sides while
+  flat takes NEITHER; an opposite entry while in a position is DROPPED, never a
+  reversal (a reversal would leave no flat bar for `_chunk_bounds` to cut on);
+  and each closed trade's `direction` is stamped from vectorbt's own record,
+  never inferred from the sign of the P&L. The long-only `direction="longonly"`
+  call is kept as a separate branch from the four-mask one, so adding shorts
+  changed no number in any existing backtest. There is no `direction="both"`:
+  vectorbtpro refuses `direction` alongside short signal arrays, and the four
+  masks ARE the both-directions mode.
+- **Still no stop or target ORDERS, in either direction.** A stop is an exit
+  signal detected on the breaching bar and filled at the NEXT bar's open. The
+  risk machinery lives in the strategy module (`_walk`), not here.
+- **Numba:** `clean_signals` compiles its three-state machine via `njit`
   (`cache=True, nogil=True`) and falls back to the interpreted loop when numba
   is absent. `tests/test_clean_signals.py` checks it against a pure-Python
-  oracle.
+  two-state oracle (`_clean_signals_loop`, kept for exactly that), which also
+  pins the long-only reduction exhaustively at every length up to 10.
 
 **`backtest/specs.py`** — contract multiplier, tick size, commission per symbol.
 A wrong multiplier silently scales every P&L figure for that symbol and the
@@ -640,7 +659,7 @@ always on the record), and `evaluate_incubator_sync` (parses NT8 fill logs from
 rate). Connection profile in `live/config.json`; the shipped webhook URL is a
 placeholder and the dispatcher refuses to POST to it.
 
-**`strategies/`** — Signal logic only: take bars, return `(entries, exits)`. No
+**`strategies/`** — Signal logic only: take bars, return signal masks. No
 cost handling, no session logic, no data access. `approved_incubator/` stages
 strategies under evaluation; see its README for the required `meta.json`.
 
@@ -648,11 +667,40 @@ The loader (`agents/tier3_workers.load_strategy`) accepts either form:
 
 ```python
 make_signal_fn(**params) -> signal_fn     # preferred when parameterised
-signal_fn(bars) -> (entries, exits)       # when it takes none
+signal_fn(bars) -> masks                  # when it takes none
 ```
 
-`bars` is ONE symbol's DataFrame, oldest to newest. Return two boolean Series
-aligned to it. A module may declare `TIMEFRAME`, `SYMBOLS`, and `DEFAULT_PARAMS`.
+`bars` is ONE symbol's DataFrame, oldest to newest. Return boolean Series
+aligned to it, in one of the two shapes the engine accepts:
+
+```python
+(entries, exits)                                  # long only
+(entries, exits, short_entries, short_exits)      # bidirectional
+```
+
+Neither is deprecated. A long-only strategy returns two — `ema_crossover` does,
+and that keeps the compatibility path exercised by a real module rather than
+only by a test. Anything else (a three-tuple, a bare Series) RAISES: silently
+taking the first two masks of a three-tuple is how a strategy's short side
+disappears into a plausible long-only equity curve. A module may declare
+`TIMEFRAME`, `SYMBOLS`, and `DEFAULT_PARAMS`.
+
+**A short is not a long with the sign flipped, and every layer has to know it.**
+The places where a mirrored rule is wrong rather than merely unwritten, all of
+them silent:
+
+- The stop sits ABOVE the fill and the target BELOW it; the trailing stop
+  ratchets DOWN, tracking the low-water mark since the fill. A short stop
+  placed below the fill is breached by the fill bar itself.
+- `gross_pnl` is `entry - exit` per contract.
+- Slippage is charged on the side the order CROSSED, not on whether it opened
+  or closed: buys are long entries and short exits, sells are long exits and
+  short entries (`_cost_arrays`).
+- The ML filter's training label is signed by side
+  (`_label_baseline_trades(..., direction=)`). Labelling shorts with the long
+  formula teaches the classifier the edge exactly inverted, and Version B comes
+  back smooth and backwards. A bidirectional strategy gets one classifier per
+  side, each trained only on its own completed trades.
 
 ### Every new strategy implements all four
 
@@ -662,7 +710,7 @@ permission to write another. **Any strategy Claude creates carries all four**,
 because each one closes a specific way a result goes wrong silently:
 
 ```python
-def signal_fn(bars: pd.DataFrame, **params) -> tuple[pd.Series, pd.Series]: ...
+def signal_fn(bars: pd.DataFrame, **params) -> tuple[pd.Series, ...]: ...
 def indicators(bars: pd.DataFrame, **params) -> dict[str, pd.Series]: ...
 LOGIC = {"concept": ..., "entry": ..., "exit": ...}
 PARAM_GRID = {"ema_period": [15, 20, 30], "atr_mult": [2.0, 2.5, 3.0]}
@@ -789,8 +837,9 @@ what the engine can actually do:
   not have.** Check every line of it against the engine before writing the
   module, and state the gap in the module's docstring rather than approximating
   it silently:
-  - **There are no stop or target ORDERS.** `from_signals` is driven by two
-    boolean masks and fills them at the next bar's open. A stop can only be
+  - **There are no stop or target ORDERS.** `from_signals` is driven by
+    boolean masks — two for a long-only strategy, four for a bidirectional
+    one — and fills them at the next bar's open. A stop can only be
     expressed as an exit signal, so it is detected on the bar that breaches it
     and filled one bar later — not at the stop price. Say so on the module, or
     every drawdown figure it produces will be read as something it is not.
@@ -1017,8 +1066,12 @@ pipeline), `STRATEGY_FAMILIES.md`, `PORTFOLIO.md` (correlation clusters),
   tuple[pd.Series, pd.Series]`, which is what the engine
   (`backtest/engine.py`) and the loader (`agents/tier3_workers.load_strategy`)
   actually call. `ENGINE_ADAPTER` no longer reshapes arguments; it binds params
-  and forces the return to boolean. **This is the one contract** — a strategy
-  module that takes unpacked arrays is now wrong, not merely unconventional.
+  and forces the return to boolean. A strategy module that takes unpacked
+  arrays is wrong, not merely unconventional. **Synthesis stays LONG ONLY** —
+  the prompt still asks for the two-mask return, which the engine accepts
+  unchanged. Extending it to four masks means teaching the model the short
+  side's mirrored risk rules, and a model that emits shorts unprompted is
+  strictly worse than one that does not.
 - `mdlib/lake.py` needs the `source` parameter to route between `databento` and
   `nt8`; the NT8 tree (27 symbols, 563 files, written by
   `data_pull/ingest_nt8.py`) is currently unreachable through the reader.

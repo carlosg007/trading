@@ -713,6 +713,12 @@ _SCORECARD_ROWS = [
     ("Net return %", "total_return_pct", "{:.2f}", "high"),
     ("CAGR %", "annualized_return_pct", "{:.2f}", "high"),
     ("Trades", "trade_count", "{:,.0f}", "none"),
+    # The split under the total. "none" because neither side is the better
+    # one - the row is here so a two-sided result cannot be read as if it were
+    # one-sided, or a one-sided result mistaken for a strategy whose short
+    # signals simply never triggered. Both read 0 on a long-only run.
+    ("  · long", "long_trades", "{:,.0f}", "none"),
+    ("  · short", "short_trades", "{:,.0f}", "none"),
     ("Total costs $", "total_costs", "{:,.0f}", "none"),
 ]
 

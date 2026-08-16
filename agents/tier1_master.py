@@ -792,7 +792,8 @@ def run_dual_version_backtest(strategy_code: str,
     """
     import numpy as np
 
-    from backtest.engine import BacktestConfig, _assemble_result, _simulate, clean_signals
+    from backtest.engine import (BacktestConfig, _assemble_result, _simulate,
+                                 clean_signals_ls, unpack_signals)
     from agents.tier3_workers import apply_ml_signal_filter, summarize_result
 
     config = cfg or BacktestConfig()
@@ -832,26 +833,28 @@ def run_dual_version_backtest(strategy_code: str,
     signal_fn, info = _resolve_strategy(strategy_code, params)
 
     # -- Version A: the rule-based baseline --------------------------------
-    entries, exits = signal_fn(bars)
-    if len(entries) != len(bars) or len(exits) != len(bars):
-        raise ValueError(
-            f"signal_fn returned {len(entries)}/{len(exits)} signals for "
-            f"{len(bars)} bars")
-    entries = pd.Series(entries).reset_index(drop=True).fillna(False).astype(bool)
-    exits = pd.Series(exits).reset_index(drop=True).fillna(False).astype(bool)
+    # Two masks or four - see `backtest.engine.unpack_signals`. A long-only
+    # strategy comes back with all-False short masks and everything below is
+    # the run it always was.
+    entries, exits, s_entries, s_exits = unpack_signals(signal_fn(bars),
+                                                        len(bars))
 
     if config.flat_by_close:
         from backtest.engine import apply_flat_by_close
         entries, exits = apply_flat_by_close(bars, entries, exits,
                                              config.session_close_utc)
+        s_entries, s_exits = apply_flat_by_close(bars, s_entries, s_exits,
+                                                 config.session_close_utc)
 
-    entries_a, exits_a = clean_signals(entries, exits)
+    entries_a, exits_a, s_entries_a, s_exits_a = clean_signals_ls(
+        entries, exits, s_entries, s_exits)
 
     days = pd.DatetimeIndex(np.unique(
         pd.DatetimeIndex(bars["ts"]).values.astype("datetime64[D]"))
     ).tz_localize("UTC")
 
-    trades_a = _simulate(bars, entries_a, exits_a, symbol, config)
+    trades_a = _simulate(bars, entries_a, exits_a, symbol, config,
+                         s_entries_a, s_exits_a)
     result_a = _assemble_result([trades_a] if not trades_a.empty else [],
                                 days, config)
 
@@ -864,10 +867,20 @@ def run_dual_version_backtest(strategy_code: str,
     if ml:
         filtered, exits_b = apply_ml_signal_filter(
             bars, entries_a, exits_a, symbol=symbol, cfg=config,
-            threshold=threshold)
-        entries_b, exits_b = clean_signals(filtered, exits_b)
+            threshold=threshold, direction="long")
+        # The short side gets its own classifier, trained on its own completed
+        # trades with the short P&L sign. Reusing the long filter here would
+        # score every short against a model whose training set is entirely
+        # longs; passing the shorts through unfiltered would label the run
+        # "ML-filtered" while half its trades never met the classifier.
+        s_filtered, s_exits_b = apply_ml_signal_filter(
+            bars, s_entries_a, s_exits_a, symbol=symbol, cfg=config,
+            threshold=threshold, direction="short")
+        entries_b, exits_b, s_entries_b, s_exits_b = clean_signals_ls(
+            filtered, exits_b, s_filtered, s_exits_b)
 
-        trades_b = _simulate(bars, entries_b, exits_b, symbol, config)
+        trades_b = _simulate(bars, entries_b, exits_b, symbol, config,
+                             s_entries_b, s_exits_b)
         result_b = _assemble_result([trades_b] if not trades_b.empty else [],
                                     days, config)
         metrics_b = summarize_result(result_b)

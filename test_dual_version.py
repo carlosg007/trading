@@ -135,13 +135,14 @@ def test_filter_is_causal_and_subtractive(bars: pd.DataFrame) -> None:
     changed when bars after s were deleted, it was reading the future.
     """
     print("\nFilter behaviour")
-    from backtest.engine import clean_signals
+    from backtest.engine import clean_signals, unpack_signals
     from agents.tier3_workers import load_strategy
 
     fn, _ = load_strategy(STRATEGY, {"fast_window": 10, "slow_window": 30})
-    e, x = fn(bars)
-    e = pd.Series(e).reset_index(drop=True)
-    x = pd.Series(x).reset_index(drop=True)
+    # STRATEGY is long-only, so the short pair comes back empty; going through
+    # the engine's unpacker anyway means this script keeps working if it is ever
+    # pointed at a bidirectional module, instead of raising on the tuple width.
+    e, x, _se, _sx = unpack_signals(fn(bars), len(bars))
     e, x = clean_signals(e, x)
 
     kept, kept_exits = apply_ml_signal_filter(bars, e, x, symbol=SYMBOL,

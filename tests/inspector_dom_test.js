@@ -179,8 +179,14 @@ nodes['trade-search'].fire('input');
 check('clearing the search restores every row',
   rows.filter((r) => r.style.display !== 'none').length === rows.length);
 
-/* Sort - column 8 is net P&L, which is signed and numeric */
-const pnlCol = 8;
+/* Sort - net P&L, which is signed and numeric. Found by its header rather
+   than hardcoded: the column order is a presentation decision that changes
+   (a Side column was added when the engine learned to go short), and an index
+   frozen here would silently start sorting a different column. */
+const pnlCol = headRow.cells.findIndex(
+  (c) => /Net P&(amp;)?L/.test(c.textContent));
+check('the trade log has a net P&L column to sort', pnlCol >= 0,
+  'header: ' + headRow.cells.map((c) => c.textContent).join(' | '));
 const th = headRow.cells[pnlCol];
 th.fire('click');
 let order = tbody.rows.map((r) => parseFloat(r.cells[pnlCol].getAttribute('data-v')));

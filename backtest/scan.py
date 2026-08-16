@@ -91,8 +91,9 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from backtest.engine import (BacktestConfig, TRADE_COLUMNS,   # noqa: E402
-                             _assemble_result, _cost_arrays, apply_flat_by_close,
-                             clean_signals)
+                             _assemble_result, _cost_arrays, _shift_to_fill,
+                             apply_flat_by_close, clean_signals_ls,
+                             unpack_signals)
 from backtest.report import PASS, audit_acceptance_gates       # noqa: E402
 from backtest.specs import get_spec                            # noqa: E402
 
@@ -181,50 +182,40 @@ def expand_grid(grid: dict[str, Iterable]) -> list[dict[str, Any]]:
     return [dict(zip(keys, combo)) for combo in itertools.product(*axes)]
 
 
-def _shift_to_fill(signals: pd.Series) -> np.ndarray:
-    """
-    A signal on bar i executes on bar i+1, exactly as `_simulate` does it.
-
-    np.roll wraps the last element to the front, where it is cleared - which is
-    the "no next bar to fill on" case. Duplicated from the engine rather than
-    imported because it is three lines living inside `_simulate`'s loop; if it
-    ever stops matching, `tests/test_scan.py` fails on the trade list.
-    """
-    out = np.roll(np.asarray(signals, dtype=bool), 1)
-    out[0] = False
-    return out
-
-
 def _combo_signals(strategy_path: str | Path,
                    bars: pd.DataFrame,
                    base_params: dict,
                    combo: dict,
-                   cfg: BacktestConfig) -> tuple[np.ndarray, np.ndarray]:
+                   cfg: BacktestConfig) -> tuple[np.ndarray, np.ndarray,
+                                                 np.ndarray, np.ndarray]:
     """
-    Fill-bar entries and exits for one parameter combination.
+    Fill-bar signals for one parameter combination, all four masks.
 
     The module is re-imported and re-bound per combination through
     `load_strategy`, so a combination the strategy rejects - `fast_window >=
     slow_window` on the SMA baseline - raises here and is recorded as REJECTED
     rather than being swept as though it were a valid point in the space.
+
+    Everything from unpacking to the one-bar shift is the ENGINE's own code
+    (`unpack_signals`, `apply_flat_by_close`, `clean_signals_ls`,
+    `_shift_to_fill`), so a swept column is prepared exactly the way a run is.
+    A long-only strategy comes back with two all-False short masks and the
+    sweep proceeds as it always has.
     """
     from agents.tier3_workers import load_strategy
 
     fn, _info = load_strategy(strategy_path, {**base_params, **combo})
-    entries, exits = fn(bars)
-    if len(entries) != len(bars) or len(exits) != len(bars):
-        raise ValueError(
-            f"signal_fn returned {len(entries)}/{len(exits)} signals for "
-            f"{len(bars)} bars")
-
-    entries = pd.Series(entries).reset_index(drop=True).fillna(False).astype(bool)
-    exits = pd.Series(exits).reset_index(drop=True).fillna(False).astype(bool)
+    entries, exits, s_entries, s_exits = unpack_signals(fn(bars), len(bars))
 
     if cfg.flat_by_close:
         entries, exits = apply_flat_by_close(bars, entries, exits,
                                              cfg.session_close_utc)
-    entries, exits = clean_signals(entries, exits)
-    return _shift_to_fill(entries), _shift_to_fill(exits)
+        s_entries, s_exits = apply_flat_by_close(bars, s_entries, s_exits,
+                                                 cfg.session_close_utc)
+    entries, exits, s_entries, s_exits = clean_signals_ls(
+        entries, exits, s_entries, s_exits)
+    return (_shift_to_fill(entries), _shift_to_fill(exits),
+            _shift_to_fill(s_entries), _shift_to_fill(s_exits))
 
 
 def _batch_columns(n_bars: int, n_cols: int, max_cells: int) -> list[tuple[int, int]]:
@@ -238,17 +229,28 @@ def _simulate_columns(bars: pd.DataFrame,
                       exi: np.ndarray,
                       symbol: str,
                       cfg: BacktestConfig,
-                      max_cells: int = MAX_CELLS) -> list[pd.DataFrame]:
+                      max_cells: int = MAX_CELLS,
+                      s_ent: np.ndarray | None = None,
+                      s_exi: np.ndarray | None = None) -> list[pd.DataFrame]:
     """
     One trade list per column, from batched multi-column `from_signals` calls.
 
-    `ent` and `exi` are (bars x columns) boolean arrays ALREADY shifted to the
-    fill bar. Slippage is a per-bar fraction of price and does not depend on the
-    column, so it broadcasts; fees do depend on the column, because the fee
-    fraction is quoted against the FILL price and a bar where one column enters
-    and another exits has two different fills. A single shared fee array would
-    charge one of those columns the wrong side's fill and the error would be a
-    fraction of a tick - invisible in the totals, wrong in every one of them.
+    All four mask arguments are (bars x columns) boolean arrays ALREADY shifted
+    to the fill bar. Slippage is a per-bar fraction of price and does not depend
+    on the column, so it broadcasts; fees do depend on the column, because the
+    fee fraction is quoted against the FILL price and a bar where one column
+    enters and another exits has two different fills. A single shared fee array
+    would charge one of those columns the wrong side's fill and the error would
+    be a fraction of a tick - invisible in the totals, wrong in every one of
+    them. With shorts in play the same argument decides the SIDE of the fill as
+    well, which is why the short masks reach `_cost_arrays` per column rather
+    than being assumed away.
+
+    `s_ent` / `s_exi` omitted (or all False) keeps the long-only
+    `direction="longonly"` call, exactly as the engine does, so sweeping a
+    long-only strategy produces the numbers it always did. With shorts present
+    the four-mask long/short mode is used and `direction` is not passed at all -
+    vectorbtpro refuses the two together.
     """
     if vbt is None:
         raise ImportError(
@@ -260,6 +262,11 @@ def _simulate_columns(bars: pd.DataFrame,
     index = pd.DatetimeIndex(pd.to_datetime(bars["ts"], utc=True))
     n_bars, n_cols = ent.shape
 
+    zeros = np.zeros_like(ent)
+    s_ent = zeros if s_ent is None else s_ent
+    s_exi = zeros if s_exi is None else s_exi
+    bidirectional = bool(s_ent.any())
+
     out: list[pd.DataFrame] = [pd.DataFrame(columns=TRADE_COLUMNS)
                                for _ in range(n_cols)]
 
@@ -267,7 +274,9 @@ def _simulate_columns(bars: pd.DataFrame,
         cols = [f"c{j}" for j in range(lo, hi)]
         e_df = pd.DataFrame(ent[:, lo:hi], index=index, columns=cols)
         x_df = pd.DataFrame(exi[:, lo:hi], index=index, columns=cols)
-        if not e_df.to_numpy().any():
+        se_df = pd.DataFrame(s_ent[:, lo:hi], index=index, columns=cols)
+        sx_df = pd.DataFrame(s_exi[:, lo:hi], index=index, columns=cols)
+        if not e_df.to_numpy().any() and not se_df.to_numpy().any():
             continue
 
         # _cost_arrays is the engine's, called once per column so the fee
@@ -277,12 +286,13 @@ def _simulate_columns(bars: pd.DataFrame,
         slippage = None
         fees = {}
         for j, col in zip(range(lo, hi), cols):
-            s, f, size = _cost_arrays(bars, ent[:, j], exi[:, j], symbol, cfg)
+            s, f, size = _cost_arrays(bars, ent[:, j], exi[:, j], symbol, cfg,
+                                      s_ent[:, j], s_exi[:, j])
             slippage = s if slippage is None else slippage
             fees[col] = f
         price = pd.Series(px, index=index)
 
-        pf = vbt.Portfolio.from_signals(
+        common = dict(
             close=price,
             entries=e_df,
             exits=x_df,
@@ -297,9 +307,15 @@ def _simulate_columns(bars: pd.DataFrame,
             # the columns independent, which is the whole premise of sweeping
             # them in one call.
             init_cash=np.inf,
-            direction="longonly",
             accumulate=False,
         )
+        if bidirectional:
+            # No `direction=`: vectorbtpro refuses it alongside short signal
+            # arrays. The four masks ARE the long/short mode.
+            pf = vbt.Portfolio.from_signals(**common, short_entries=se_df,
+                                            short_exits=sx_df)
+        else:
+            pf = vbt.Portfolio.from_signals(**common, direction="longonly")
 
         rec = pf.trades.records
         rec = rec[rec["status"] == 1]     # closed only - an open position at
@@ -309,13 +325,19 @@ def _simulate_columns(bars: pd.DataFrame,
                 exit_i = part["exit_idx"].to_numpy()
                 entry_px = px[entry_i]
                 exit_px = px[exit_i]
-                gross = (exit_px - entry_px) * spec.multiplier * cfg.contracts
+                # 0 = Long, 1 = Short, from vectorbt's own record - the same
+                # stamp the engine makes, for the same reason: the sign of the
+                # P&L cannot tell a losing long from a winning short.
+                is_short = part["direction"].to_numpy() == 1
+                per_contract = np.where(is_short, entry_px - exit_px,
+                                        exit_px - entry_px)
+                gross = per_contract * spec.multiplier * cfg.contracts
                 pnl = part["pnl"].to_numpy()
                 out[lo + int(col_i)] = pd.DataFrame({
                     "entry_time": index[entry_i],
                     "exit_time": index[exit_i],
                     "symbol": symbol,
-                    "direction": "long",
+                    "direction": np.where(is_short, "short", "long"),
                     "entry_price": entry_px,
                     "exit_price": exit_px,
                     "gross_pnl": gross,
@@ -323,7 +345,7 @@ def _simulate_columns(bars: pd.DataFrame,
                     "pnl": pnl,
                 })
 
-        del pf, rec, e_df, x_df, fees, price
+        del pf, rec, common, e_df, x_df, se_df, sx_df, fees, price
         gc.collect()
 
     return out
@@ -367,10 +389,13 @@ def scan_symbol(strategy_path: str | Path,
     rejected: list[dict] = []
     ent_cols: list[np.ndarray] = []
     exi_cols: list[np.ndarray] = []
+    s_ent_cols: list[np.ndarray] = []
+    s_exi_cols: list[np.ndarray] = []
 
     for combo in combos:
         try:
-            e, x = _combo_signals(strategy_path, bars, base_params, combo, cfg)
+            e, x, se, sx = _combo_signals(strategy_path, bars, base_params,
+                                          combo, cfg)
         except Exception as exc:                                # noqa: BLE001
             # A strategy that refuses a combination is not a failure of the
             # sweep. sma_crossover raises on fast >= slow, which is most of a
@@ -382,6 +407,8 @@ def scan_symbol(strategy_path: str | Path,
         valid.append(dict(combo))
         ent_cols.append(e)
         exi_cols.append(x)
+        s_ent_cols.append(se)
+        s_exi_cols.append(sx)
 
     if not valid:
         raise ScanError(
@@ -391,11 +418,14 @@ def scan_symbol(strategy_path: str | Path,
 
     ent = np.column_stack(ent_cols)
     exi = np.column_stack(exi_cols)
-    del ent_cols, exi_cols
+    s_ent = np.column_stack(s_ent_cols)
+    s_exi = np.column_stack(s_exi_cols)
+    del ent_cols, exi_cols, s_ent_cols, s_exi_cols
 
     trade_lists = _simulate_columns(bars, ent, exi, symbol, cfg,
-                                    max_cells=max_cells)
-    del ent, exi
+                                    max_cells=max_cells,
+                                    s_ent=s_ent, s_exi=s_exi)
+    del ent, exi, s_ent, s_exi
 
     days = pd.DatetimeIndex(np.unique(
         pd.DatetimeIndex(bars["ts"]).values.astype("datetime64[D]"))

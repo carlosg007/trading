@@ -461,6 +461,13 @@ def summarize_result(result: BacktestResult,
         "win_rate": _win_rate(trades),
         "profit_factor": _profit_factor(trades),
         "trade_count": int(stats.get("n_trades", len(trades))),
+        # The long/short split, carried so a two-sided result can be read as
+        # one. A strategy whose trades are 90% one side is a one-sided strategy
+        # paying for a second set of signals, and no pooled ratio above can
+        # show that. Both are 0 on a long-only run, which is the truth about it
+        # rather than a missing field.
+        "long_trades": int(stats.get("n_long", 0)),
+        "short_trades": int(stats.get("n_short", 0)),
         "breach": dict(result.breach or {}),
         "n_days": int(len(result.equity)) if result.equity is not None else 0,
     }
@@ -486,6 +493,7 @@ def _empty_metrics(reason: str) -> dict[str, Any]:
         "sortino": float("nan"), "calmar": float("nan"), "metrics_basis": {},
         "max_drawdown_pct": float("nan"), "win_rate": float("nan"),
         "profit_factor": float("nan"), "trade_count": 0,
+        "long_trades": 0, "short_trades": 0,
         "breach": {}, "n_days": 0,
     }
 
@@ -1073,7 +1081,8 @@ def _label_baseline_trades(bars: pd.DataFrame,
                            entries: pd.Series,
                            exits: pd.Series,
                            symbol: str | None,
-                           cfg: BacktestConfig | None) -> dict[str, np.ndarray]:
+                           cfg: BacktestConfig | None,
+                           direction: str = "long") -> dict[str, np.ndarray]:
     """
     Resolve the baseline's signals into labelled trades.
 
@@ -1090,7 +1099,18 @@ def _label_baseline_trades(bars: pd.DataFrame,
     Costs enter the label when `symbol` is supplied. They change the sign of
     marginal trades, and a filter trained on gross outcomes learns to keep
     trades that lose money after commission.
+
+    `direction` is "long" or "short" and sets the SIGN of the gross P&L. It is
+    a required distinction rather than a convenience: a short's gross is
+    `entry - exit`, so labelling a short trade list with the long formula marks
+    every winner a loser and every loser a winner. The classifier then learns
+    the edge exactly inverted, suppresses the trades that would have made money
+    and keeps the ones that lost - and Version B comes back with a smooth,
+    plausible, precisely backwards equity curve. Nothing raises.
     """
+    if direction not in ("long", "short"):
+        raise ValueError(
+            f"direction must be 'long' or 'short'; got {direction!r}")
     ent = np.roll(entries.to_numpy(dtype=bool), 1)
     exi = np.roll(exits.to_numpy(dtype=bool), 1)
     ent[0] = False
@@ -1107,8 +1127,8 @@ def _label_baseline_trades(bars: pd.DataFrame,
     entry_px = px[e_idx]
     exit_px = px[x_idx]
 
-    # Long-only, matching the engine's entries/exits simulation.
-    gross = exit_px - entry_px
+    # Signed by the side, matching the engine's own trade P&L.
+    gross = (exit_px - entry_px) if direction == "long" else (entry_px - exit_px)
     if symbol is not None:
         spec = get_spec(symbol)
         config = cfg or BacktestConfig()
@@ -1133,7 +1153,8 @@ def apply_ml_signal_filter(bars: pd.DataFrame,
                            cfg: BacktestConfig | None = None,
                            threshold: float = 0.50,
                            min_train_trades: int = MIN_TRAIN_TRADES,
-                           random_state: int = 0) -> tuple[pd.Series, pd.Series]:
+                           random_state: int = 0,
+                           direction: str = "long") -> tuple[pd.Series, pd.Series]:
     """
     Version B of the Dual-Version Mandate: suppress the baseline's entries the
     classifier expects to lose.
@@ -1180,6 +1201,23 @@ def apply_ml_signal_filter(bars: pd.DataFrame,
         Keep the entry when P(win) >= this. 0.50 is "more likely than not".
 
     Returns (entries, exits), boolean Series on the input index.
+
+    Direction
+    ---------
+    This filters ONE side. `direction` says which, and it reaches
+    `_label_baseline_trades`, where it sets the sign of the gross P&L a label
+    is computed from - see there for why a mislabelled side produces a
+    confidently inverted filter rather than an error.
+
+    A bidirectional strategy therefore calls this twice, once per side, and
+    gets TWO classifiers rather than one trained across both. That is
+    deliberate: each side is fitted only on its own completed trades, so a
+    short is never scored by a model whose entire training set is longs, and a
+    long-only run is bit-for-bit the run it was before shorts existed. The cost
+    is that neither model can learn from the other side's evidence, which
+    roughly halves each one's training sample on a strategy that trades both
+    ways evenly - so `min_train_trades` bites later on each side, and Version B
+    stays identical to Version A for longer.
     """
     try:
         from sklearn.ensemble import HistGradientBoostingClassifier
@@ -1196,7 +1234,8 @@ def apply_ml_signal_filter(bars: pd.DataFrame,
             f"signals and bars disagree on length: {len(entries)}/{len(exits)} "
             f"signals for {len(bars)} bars")
 
-    trades = _label_baseline_trades(bars, entries, exits, symbol, cfg)
+    trades = _label_baseline_trades(bars, entries, exits, symbol, cfg,
+                                    direction=direction)
     kept = entries.to_numpy(dtype=bool).copy()
     signal_bars = np.flatnonzero(kept)
 

@@ -35,16 +35,31 @@ below, the run is the finding — do not edit this block to match it.
                  AND EMA(fast) crosses ABOVE EMA(slow)     (the trigger)
                  AND ATR(14) > SMA(ATR(14), 20)            (expanding vol)
                  AND the bar starts between 09:30 and 15:30 America/New_York.
-       Short Entry:  LONG ONLY. See "The short side is specified out" below.
-       Take Profit:  fill price + tp_atr_mult x ATR(14), or None.
-       Stop Loss:    sl_atr_mult x ATR(14), trailing or fixed.
+       Short Entry:  close < EMA(trend_period)            (anchor regime)
+                 AND EMA(fast) crosses BELOW EMA(slow)     (the trigger)
+                 AND ATR(14) > SMA(ATR(14), 20)            (expanding vol)
+                 AND the bar starts between 09:30 and 15:30 America/New_York.
+       Take Profit:  long  fill price + tp_atr_mult x ATR(14), or None.
+                     short fill price - tp_atr_mult x ATR(14), or None.
+       Stop Loss:    sl_atr_mult x ATR(14) from the fill, trailing or fixed.
+                     Trailing ratchets UP behind a long and DOWN in front of a
+                     short, and never widens on either side.
        Session Rules: entry signals 09:30-15:30 America/New_York; the exit
                       signal fires on the last bar that STARTS before 16:00
                       America/New_York — the 15:45 bar on 15m — so the fill
-                      lands on the 16:00 open and nothing is held past the
-                      bell.
+                      lands on the 16:00 open and NEITHER a long nor a short is
+                      held past the bell.
        Execution Fill: next-bar open with contract-specific slippage and
                       commission.
+
+    AMENDED 2026-08-16. Section 4 originally read "Short Entry: LONG ONLY",
+    because the engine had no channel that could mark a signal as a short — see
+    "The short side" below. That limit is gone, and the mirrored rules recorded
+    here from the start are now what the module computes. This is the ONE kind
+    of edit this block admits: the specification changing on purpose, dated, and
+    still written before the backtest that judges it. Every number produced by
+    this module before that date describes the long-only strategy and is not
+    comparable to one produced after it.
 
     5. BACKTEST EXECUTION CONTROLS
        In-Sample Period:   2013-01-01 to 2022-12-31
@@ -111,29 +126,42 @@ So read `trend_period` as "the anchor trend, expressed in 15m bars", not as a
 belongs in the reader as a second timeframe with an explicit one-bar shift, not
 in here.
 
-The short side is specified out
--------------------------------
-The request this module was written from described a symmetric long/short
-system. It is LONG ONLY, and that is a limit of the engine rather than a view
-about the market.
+The short side
+--------------
+This module is SYMMETRIC: the short rules are the long rules mirrored, and both
+are computed here. Until 2026-08-16 it was long only, and the reason is worth
+keeping because it explains the shape of the code. The engine drove
+`vbt.Portfolio.from_signals` with `direction="longonly"` hardcoded and the
+strategy contract was two boolean masks with no channel that could mark one as a
+short — so a short setup emitted into `entries` was BOUGHT, its P&L arrived with
+the sign inverted, and nothing raised. A plausible equity curve, exactly
+backwards. The mirrored rules were written into the specification block and
+deliberately left uncomputed rather than approximated into the long masks.
 
-`backtest/engine.py` drives `vbt.Portfolio.from_signals` with
-`direction="longonly"` hardcoded, and `_assemble_result` stamps every trade row
-`direction="long"`. The strategy contract is two boolean masks, `(entries,
-exits)`, with no channel that could mark one as a short. A short setup emitted
-into `entries` is BOUGHT, so its P&L arrives with the sign inverted and nothing
-raises — a plausible equity curve that is exactly backwards.
+The engine now carries four masks and stamps each closed trade with the side
+vectorbt actually took, so the mirror is implemented rather than described.
 
-The mirrored rules are stated in the specification block above so the intent
-survives; they are not implemented, and no part of this module computes them.
-Adding shorts is a change to the engine's signal contract, not to this file.
+What the symmetry assumes, and it is an assumption rather than a finding: that
+the same `sl_atr_mult`, the same `tp_atr_mult` and the same anchor length
+describe both sides. Index futures do not behave symmetrically — downside moves
+are faster and more volatile — so a stop distance calibrated on longs is a
+different amount of risk on a short. The alternative is per-side risk
+parameters, which doubles the grid and makes a winning cell ambiguous about
+which side earned it. Read a two-sided result with `n_long` and `n_short` from
+the engine's stats in front of you: a strategy whose trades are 90% one side is
+a one-sided strategy paying for a second set of signals, and the pooled Sharpe
+cannot show that.
 
 Contract — the one `backtest.engine` and `agents.tier3_workers` both call:
 
-    signal_fn(bars: pd.DataFrame, **params) -> tuple[pd.Series, pd.Series]
+    signal_fn(bars: pd.DataFrame, **params)
+        -> tuple[pd.Series, pd.Series, pd.Series, pd.Series]
 
 `bars` is ONE symbol's OHLCV frame, oldest to newest, lowercase columns, with a
-`ts` column in UTC. Returns `(entries, exits)` as boolean Series on bars.index.
+`ts` column in UTC. Returns `(long_entries, long_exits, short_entries,
+short_exits)` as boolean Series on bars.index — the four-mask form. The engine
+also accepts the two-mask `(entries, exits)` long-only form from strategies that
+do not go short; see `backtest.engine.unpack_signals`.
 
 Never hand this a multi-symbol frame. `get_bars` sorts by `(ts, symbol)`, so an
 EMA over the concatenation blends unrelated contracts and produces signals that
@@ -142,17 +170,21 @@ per symbol precisely so that cannot happen.
 
 Risk parameters
 ---------------
-    sl_atr_mult   stop distance, in ATR(14) multiples. Required, > 0.
-    tp_atr_mult   take-profit distance, in ATR(14) multiples above the FILL
-                  price. `None` means no take-profit is modelled at all — not
-                  a take-profit at infinity, and the tear sheet says so.
-    trailing      True  → the stop ratchets with the high-water mark since the
-                          fill and never widens.
-                  False → the stop is fixed at `fill price - sl_atr_mult x ATR`
-                          and never moves in either direction.
+    sl_atr_mult   stop distance, in ATR(14) multiples. Required, > 0. Below the
+                  fill on a long, above it on a short.
+    tp_atr_mult   take-profit distance, in ATR(14) multiples from the FILL
+                  price — above it on a long, below it on a short. `None` means
+                  no take-profit is modelled at all — not a take-profit at
+                  infinity, and the tear sheet says so.
+    trailing      True  → the stop ratchets with the extreme price since the
+                          fill and never widens: the high-water mark on a long,
+                          the low-water mark on a short.
+                  False → the stop is fixed at `fill price -/+ sl_atr_mult x
+                          ATR` and never moves in either direction.
 
-Both distances are frozen at `ATR(14)` as measured on the SIGNAL bar and never
-re-measured.
+All three apply to BOTH sides at the same magnitude — see "The short side"
+above for what that assumes. Both distances are frozen at `ATR(14)` as measured
+on the SIGNAL bar and never re-measured.
 
 Read this before reading the equity curve
 -----------------------------------------
@@ -177,20 +209,29 @@ trade count read without knowing them is being read wrong.
    the one-bar lag above, not a resolution of the ambiguity: on those bars the
    modelled fill is neither the stop price nor the target price.
 
-3. THE TRAILING STOP IS A HIGH-WATER TRAIL, NOT A FIXED OFFSET FROM ENTRY.
-   With `trailing=True` the level is the highest price reached since the
-   position went live, minus the frozen distance. The high-water mark starts on
-   the FILL bar, not the signal bar — including the signal bar's high would
-   credit the position with a price it never held through and set the first
-   stop too far away. With `trailing=False` the anchor is the actual fill
-   price, `open` on the fill bar, and not the signal bar's close.
+3. THE TRAILING STOP IS AN EXTREME-PRICE TRAIL, NOT A FIXED OFFSET FROM ENTRY.
+   With `trailing=True` the level on a long is the highest price reached since
+   the position went live minus the frozen distance, and on a short the LOWEST
+   price reached since then plus it. Either way it moves only in the position's
+   favour and never widens. The water mark starts on the FILL bar, not the
+   signal bar — including the signal bar's extreme would credit the position
+   with a price it never held through and set the first stop too far away. With
+   `trailing=False` the anchor is the actual fill price, `open` on the fill bar,
+   and not the signal bar's close.
 
-4. THERE IS NO EXIT ON THE TREND OR THE CROSSOVER REVERSING. This is the one
-   that most often surprises a reader, because the entry has three conditions
-   and none of them is also an exit. A position is held through the close
-   falling back below the anchor EMA, through EMA(fast) crossing back below
-   EMA(slow), and through volatility contracting again. It leaves on the stop,
-   the target, or the bell, and on nothing else.
+4. THERE IS NO EXIT ON THE TREND OR THE CROSSOVER REVERSING, AND NO REVERSAL
+   FROM ONE SIDE STRAIGHT INTO THE OTHER. This is the one that most often
+   surprises a reader, because the entry has three conditions and none of them
+   is also an exit. A long is held through the close falling back below the
+   anchor EMA, through EMA(fast) crossing back below EMA(slow), and through
+   volatility contracting again — and the mirror holds for a short. A position
+   leaves on the stop, the target, or the bell, and on nothing else.
+
+   In particular the opposite side's entry trigger is NOT an exit. A short
+   setup firing while the long is open is ignored by the walk, the long runs to
+   its own stop or the bell, and the short is not taken at all unless another
+   trigger fires once the position is flat. Reversing on the spot would be a
+   different strategy with a different trade count.
 
    That is a deliberate reading of the specification, which enumerates the
    exits and lists none of those three. It is defensible on its own terms —
@@ -200,17 +241,17 @@ trade count read without knowing them is being read wrong.
    in mind, and read a change in `sl_atr_mult` as a change to the only
    discretionary exit the strategy has.
 
-   `_walk` keeps its `sig_exit` argument regardless, and this module passes an
-   all-False array into it. The slot stays so the kernel remains identical to
-   `ema_crossover`'s, which `tests/test_risk_params.py` pins; wiring a
-   crossunder into it is a one-line change if the specification ever gains
-   that exit.
+   `_walk` keeps a `sig_exit` argument per side regardless, and this module
+   passes an all-False array into both. The slots stay so the kernel remains
+   identical to `ema_crossover`'s, which `tests/test_risk_params.py` pins;
+   wiring the opposite crossover into them is a one-line change if the
+   specification ever gains that exit.
 
 5. THE EXITS ARE COMPUTED IN THIS MODULE, NOT BY THE ENGINE. A trailing stop is
    path-dependent, so it cannot be a stateless boolean mask over bars, and once
    the walk exists the fixed stop and the target belong in it too rather than
-   being split across layers that could disagree. `_walk` below resolves
-   entries, the stop, the target and the session flatten together. That is why
+   being split across layers that could disagree. `_walk` below resolves both
+   sides' entries, stops, targets and the session flatten together. That is why
    this module contains session logic at all, which strategies otherwise must
    not.
 
@@ -344,30 +385,39 @@ LOGIC = {
                "imbalance runs, and ATR above its own 20-period average says "
                "real size is participating rather than the market rotating "
                "inside a range. Take the trigger only when both agree with "
-               "it.",
+               "it. The same reasoning runs in both directions, so the short "
+               "rules are the long rules mirrored.",
     "entry": "Go Long when all four hold on the same bar: the close is above "
              "the Trend EMA ({trend_period}); the Fast EMA ({fast_period}) "
              "crosses up through the Slow EMA ({slow_period}) on this bar; "
              "ATR 14 is above its own 20-period average, so volatility is "
              "expanding; and the bar starts between 09:30 and 15:30 New York "
-             "time. Long only — no short is taken. The fill is the next "
-             "bar's open.",
+             "time. Go Short on the exact mirror: the close BELOW the Trend "
+             "EMA, the Fast EMA crossing DOWN through the Slow EMA on this "
+             "bar, the same volatility expansion and the same entry window. "
+             "Only one position is held at a time and it is never reversed on "
+             "the spot — a short trigger while the long is open is ignored, "
+             "and vice versa. The fill is the next bar's open.",
     # Written so that every bound value reads correctly, including
     # `tp_atr_mult=None` and either setting of `trailing`. The card cannot
     # branch — `_describe_strategy` only substitutes `{param}` slots — so the
     # sentence states both arms and names the setting that chose between them.
-    "exit": "Exit at whichever comes first. (1) A stop {sl_atr_mult} x ATR 14 "
-            "away — with trailing={trailing}, True means it trails the "
-            "highest price reached since the fill and never widens, False "
-            "means it sits fixed that far below the fill price. (2) A "
-            "take-profit {tp_atr_mult} x ATR 14 above the fill price, where "
+    "exit": "Exit at whichever comes first, and the rules are mirrored for a "
+            "short. (1) A stop {sl_atr_mult} x ATR 14 away from the fill — "
+            "below it on a long, above it on a short — with "
+            "trailing={trailing}, where True means it follows the best price "
+            "reached since the fill (the high on a long, the low on a short) "
+            "and never widens, and False means it sits fixed that far from "
+            "the fill price. (2) A take-profit {tp_atr_mult} x ATR 14 from the "
+            "fill price — above it on a long, below it on a short — where "
             "None means NO take-profit is modelled at all. (3) The last bar "
             "starting before 16:00 New York time, so the fill lands on the "
-            "16:00 open and no position is carried past the bell. There is NO "
-            "exit on the trend or the crossover reversing: the position is "
-            "held through both, and the stop is the only discretionary way "
-            "out of a losing trade. Every exit fills at the NEXT bar's open, "
-            "so neither the stop nor the target is a fill at its own price — "
+            "16:00 open and no position, long or short, is carried past the "
+            "bell. There is NO exit on the trend or the crossover reversing, "
+            "and no reversal into the opposite side: the position is held "
+            "through both, and the stop is the only discretionary way out of "
+            "a losing trade. Every exit fills at the NEXT bar's open, so "
+            "neither the stop nor the target is a fill at its own price — "
             "both carry a one-bar lag, and on a bar that breaches both the "
             "modelled fill is neither level.",
 }
@@ -466,8 +516,10 @@ def _session_masks(ts: pd.Series) -> tuple[np.ndarray, np.ndarray]:
 # --------------------------------------------------------------------------
 # The position walk
 # --------------------------------------------------------------------------
-def _walk_loop(entry_ok: np.ndarray,
-               sig_exit: np.ndarray,
+def _walk_loop(long_entry_ok: np.ndarray,
+               short_entry_ok: np.ndarray,
+               long_sig_exit: np.ndarray,
+               short_sig_exit: np.ndarray,
                open_: np.ndarray,
                high: np.ndarray,
                low: np.ndarray,
@@ -476,75 +528,116 @@ def _walk_loop(entry_ok: np.ndarray,
                sl_mult: float,
                tp_mult: float,
                trailing: bool) -> tuple[np.ndarray, np.ndarray,
+                                        np.ndarray, np.ndarray,
                                         np.ndarray, np.ndarray]:
     """
-    Two-state machine over the bars: flat, or long under a stop and a target.
+    THREE-state machine over the bars: flat, long, or short — each side under
+    its own stop and target.
 
-    Character-for-character the same machine as `ema_crossover._walk_loop`.
-    `tests/test_risk_params.py` runs the two functions on identical arrays and
-    requires identical output, so the copies cannot drift apart silently — do
-    not "improve" this one alone.
+    This kernel is DUPLICATED VERBATIM in `ema_crossover.py` and
+    `ema_trend_filter.py`, by the same convention that duplicates `_wilder`,
+    `_atr` and `_session_masks` across this directory: strategy modules are
+    loaded from a file path and are deliberately self-contained.
+    `tests/test_risk_params.py` runs the copies on identical arrays, in both
+    directions, and requires identical output — do not "improve" one alone.
 
-    `sig_exit` is the signal-driven exit: in `ema_crossover` it is the downward
-    crossover. THIS module passes an all-False array, because its specification
-    enumerates the exits and lists no signal exit at all — see point 4 of the
-    module docstring. The argument stays in the signature so the kernel remains
-    the shared one rather than a fork of it.
-
-    A trailing stop cannot be a stateless mask. Its level is the highest price
-    since ENTRY minus a fixed distance, so bar i's exit condition depends on
+    A trailing stop cannot be a stateless mask. Its level is the extreme price
+    since ENTRY offset by a fixed distance, so bar i's exit condition depends on
     which earlier bar opened the position — which depends on every entry before
-    it. The fixed stop and the take-profit are anchored on the FILL PRICE,
-    which is `open` on the bar after the signal, so they are path-dependent for
-    the same reason.
+    it. The fixed stop and the take-profit are anchored on the FILL PRICE, which
+    is `open` on the bar after the signal, so they are path-dependent for the
+    same reason. This walks the bars once and resolves entries, stops, targets
+    and the session flatten together rather than splitting them across layers
+    that could disagree.
 
     The timeline matches the engine's. An entry signal on bar i is filled at
     bar i+1's open, so the position is live from bar i+1, the fill price is
-    `open_[i + 1]`, and the high-water mark starts there — NOT on the signal
-    bar. Both distances are frozen at `mult * ATR` as measured on the SIGNAL
-    bar and never re-measured as volatility changes.
+    `open_[i + 1]`, and the extreme-price mark starts there — NOT on the signal
+    bar. Both distances are frozen at `mult * ATR` as measured on the SIGNAL bar
+    and never re-measured as volatility changes.
 
-    `tp_mult` is NaN when no take-profit is modelled, rather than a sentinel
-    like 0 or a huge number. NaN propagates into `target` and every comparison
-    against it is False, so the target simply never fires and the drawn line is
-    a gap — a take-profit at 10,000 x ATR would be a line a reader could see
-    and a level the search could still, in principle, reach.
+    The two sides, written out rather than folded into a sign flip, because a
+    reader has to be able to check them against the specification by eye:
 
-    `trailing` selects the stop anchor and nothing else:
-        True   level = (highest high since the fill) - dist,  ratcheting
-        False  level = (fill price) - dist,                   constant
+        LONG    stop     fill - dist    trailing: (highest high since fill) - dist
+                target   fill + dist
+                exits    low  <= stop   or  high >= target
+        SHORT   stop     fill + dist    trailing: (lowest low   since fill) + dist
+                target   fill - dist
+                exits    high >= stop   or  low  <= target
+
+    The trailing stop never widens on either side: it ratchets UP behind a long
+    and DOWN in front of a short, tracking the best price the position has seen.
+
+    Both sides also exit on their own `sig_exit` mask and on `flat_bar`.
+
+    `sl_mult` and `tp_mult` are shared by the two sides. That is a modelling
+    choice, not an oversight: a strategy whose short stop is a different width
+    from its long stop is two strategies sharing a name, and the sweep could not
+    tell which side a winning cell belongs to.
+
+    `tp_mult` is NaN when no take-profit is modelled, rather than a sentinel like
+    0 or a huge number. NaN propagates into `target` and every comparison against
+    it is False, so the target simply never fires on either side and the drawn
+    line is a gap — a take-profit at 10,000 x ATR would be a line a reader could
+    see and a level the search could still, in principle, reach.
+
+    A bar carrying BOTH a long and a short entry signal while flat takes
+    NEITHER, matching `backtest.engine._clean_signals_ls_loop`. The strategy has
+    asked to be long and short at once and choosing a side here would bury a coin
+    flip inside the kernel. A well-formed strategy cannot produce it — a close
+    cannot be both above and below the same anchor — so the branch exists to make
+    a malformed one visible as a missing trade rather than a plausible one-sided
+    curve.
+
+    A position is never reversed directly. The walk enters only from flat, so a
+    short signal arriving while long is ignored; the long must exit first, on its
+    stop, its target, its signal exit or the bell.
 
     Exits are checked from the fill bar onward, never on the signal bar itself.
 
-    Returns `(entries, exits, stop_level, tp_level)`. Both levels are live for
-    every bar the position is open and NaN everywhere else — they are what the
-    tear sheet draws, so the lines a reader sees breached are the arrays the
-    exits were taken from rather than a second reconstruction of them.
+    Returns `(long_entries, long_exits, short_entries, short_exits, stop_level,
+    tp_level)`. Both levels are live for every bar a position is open, on
+    whichever side it is open, and NaN everywhere else — they are what the tear
+    sheet draws, so the lines a reader sees breached are the arrays the exits
+    were taken from rather than a second reconstruction of them.
     """
-    n = entry_ok.shape[0]
-    entries = np.zeros(n, dtype=np.bool_)
-    exits = np.zeros(n, dtype=np.bool_)
+    n = long_entry_ok.shape[0]
+    long_entries = np.zeros(n, dtype=np.bool_)
+    long_exits = np.zeros(n, dtype=np.bool_)
+    short_entries = np.zeros(n, dtype=np.bool_)
+    short_exits = np.zeros(n, dtype=np.bool_)
     stop_level = np.full(n, np.nan)
     tp_level = np.full(n, np.nan)
 
-    pos = False
+    state = 0                            # 0 flat, 1 long, -1 short
     fill_i = 0
     stop_dist = 0.0
     tp_dist = np.nan
     entry_px = np.nan
-    hw = 0.0
+    hw = 0.0                             # highest high since the fill (long)
+    lw = 0.0                             # lowest low since the fill (short)
 
     for i in range(n):
-        if not pos:
-            if entry_ok[i]:
-                entries[i] = True
-                pos = True
+        if state == 0:
+            go_long = long_entry_ok[i]
+            go_short = short_entry_ok[i]
+            if go_long and go_short:
+                continue                 # ambiguous bar: take neither side
+            if go_long or go_short:
                 fill_i = i + 1
                 stop_dist = sl_mult * atr[i]
                 # NaN in, NaN out: no take-profit stays no take-profit.
                 tp_dist = tp_mult * atr[i]
                 entry_px = np.nan
                 hw = -np.inf
+                lw = np.inf
+                if go_long:
+                    long_entries[i] = True
+                    state = 1
+                else:
+                    short_entries[i] = True
+                    state = -1
             continue
 
         if i < fill_i:
@@ -555,34 +648,54 @@ def _walk_loop(entry_ok: np.ndarray,
             # the signal bar's close, which the position never traded at.
             entry_px = open_[i]
 
-        if trailing:
-            if high[i] > hw:
-                hw = high[i]
-            level = hw - stop_dist
+        if state == 1:
+            if trailing:
+                if high[i] > hw:
+                    hw = high[i]
+                level = hw - stop_dist
+            else:
+                level = entry_px - stop_dist
+
+            target = entry_px + tp_dist   # NaN when no target is modelled
+            stop_level[i] = level
+            tp_level[i] = target
+
+            hit_stop = low[i] <= level
+            # False whenever `target` is NaN, which is how "no take-profit" is
+            # expressed. Every comparison against NaN is False in both numba and
+            # numpy, so the interpreted fallback cannot disagree with the
+            # compiled loop about it.
+            hit_tp = high[i] >= target
+
+            # A bar that breaches both produces one exit on this bar either way,
+            # and the engine fills it at the next bar's open regardless — so the
+            # intrabar race between the stop and the target is not resolved here
+            # because it cannot change the result. On those bars the modelled
+            # fill is neither the stop price nor the target price.
+            if hit_stop or hit_tp or long_sig_exit[i] or flat_bar[i]:
+                long_exits[i] = True
+                state = 0
         else:
-            level = entry_px - stop_dist
+            if trailing:
+                if low[i] < lw:
+                    lw = low[i]
+                level = lw + stop_dist
+            else:
+                level = entry_px + stop_dist
 
-        target = entry_px + tp_dist          # NaN when no target is modelled
-        stop_level[i] = level
-        tp_level[i] = target
+            target = entry_px - tp_dist   # NaN when no target is modelled
+            stop_level[i] = level
+            tp_level[i] = target
 
-        hit_stop = low[i] <= level
-        # False whenever `target` is NaN, which is how "no take-profit" is
-        # expressed. Every comparison against NaN is False in both numba and
-        # numpy, so the interpreted fallback cannot disagree with the compiled
-        # loop about it.
-        hit_tp = high[i] >= target
+            hit_stop = high[i] >= level
+            hit_tp = low[i] <= target     # False when target is NaN
 
-        # A bar that breaches both produces one exit on this bar either way,
-        # and the engine fills it at the next bar's open regardless — so the
-        # intrabar race between the stop and the target is not resolved here
-        # because it cannot change the result. On those bars the modelled fill
-        # is neither the stop price nor the target price.
-        if hit_stop or hit_tp or sig_exit[i] or flat_bar[i]:
-            exits[i] = True
-            pos = False
+            if hit_stop or hit_tp or short_sig_exit[i] or flat_bar[i]:
+                short_exits[i] = True
+                state = 0
 
-    return entries, exits, stop_level, tp_level
+    return (long_entries, long_exits, short_entries, short_exits,
+            stop_level, tp_level)
 
 
 try:                                    # pragma: no cover - env dependent
@@ -709,25 +822,39 @@ def _signal_arrays(bars: pd.DataFrame, fast_period: int, slow_period: int,
     # that bar `above` may flip from False to True purely because the averages
     # came into existence, which is a fact about the warm-up and not about
     # price. `fill_value=False` keeps bar 0 out for the same reason.
+    # `above` and `below` are deliberately BOTH built as explicit comparisons
+    # rather than one being `~` the other. `~above` is true wherever the fast
+    # EMA merely fails to be above the slow one, which includes exact equality
+    # and every warm-up bar — so a short trigger defined as the negation of the
+    # long one would fire on ties and on the first bar the averages exist.
     above = (s["fast"] > s["slow"]) & ready
-    cross_up = (above & ~above.shift(1, fill_value=False)
-                & ready.shift(1, fill_value=False))
+    below = (s["fast"] < s["slow"]) & ready
 
-    in_regime = close > s["trend"]              # the anchor trend agrees
+    prev_ready = ready.shift(1, fill_value=False)
+    cross_up = above & ~above.shift(1, fill_value=False) & prev_ready
+    cross_down = below & ~below.shift(1, fill_value=False) & prev_ready
+
+    long_regime = close > s["trend"]            # the anchor trend agrees, up
+    short_regime = close < s["trend"]           # and the mirror of it, down
     expanding = s["atr"] > s["atr_ma"]          # real size is participating
 
-    entry_ok = (in_regime & cross_up & expanding & ready).to_numpy(dtype=bool)
-    entry_ok = entry_ok & np.asarray(entry_window)
+    window = np.asarray(entry_window)
+    long_entry_ok = (long_regime & cross_up & expanding
+                     & ready).to_numpy(dtype=bool) & window
+    short_entry_ok = (short_regime & cross_down & expanding
+                      & ready).to_numpy(dtype=bool) & window
 
-    # No signal exit. The specification enumerates the exits and lists only the
-    # stop, the target and the session flatten — the position is deliberately
-    # held through the trend and the crossover reversing (docstring point 4).
-    # The array exists because `_walk` keeps the shared kernel's signature; it
-    # is all-False, so the walk's `sig_exit[i]` branch is never taken.
+    # No signal exit, on either side. The specification enumerates the exits and
+    # lists only the stop, the target and the session flatten — a position is
+    # deliberately held through the trend and the crossover reversing (docstring
+    # point 4). The arrays exist because `_walk` keeps the shared kernel's
+    # signature; both are all-False, so neither `sig_exit[i]` branch is taken.
     sig_exit = np.zeros(len(bars), dtype=bool)
 
-    entries, exits, stop, target = _walk(
-        entry_ok,
+    entries, exits, s_entries, s_exits, stop, target = _walk(
+        long_entry_ok,
+        short_entry_ok,
+        sig_exit,
         sig_exit,
         bars["open"].to_numpy(dtype=float),
         bars["high"].to_numpy(dtype=float),
@@ -741,7 +868,7 @@ def _signal_arrays(bars: pd.DataFrame, fast_period: int, slow_period: int,
         _tp_distance_mult(tp_atr_mult),
         bool(trailing),
     )
-    return s, entries, exits, stop, target
+    return s, entries, exits, s_entries, s_exits, stop, target
 
 
 def signal_fn(bars: pd.DataFrame,
@@ -750,19 +877,25 @@ def signal_fn(bars: pd.DataFrame,
               trend_period: int = 800,
               sl_atr_mult: float = 2.0,
               tp_atr_mult: float | None = 3.0,
-              trailing: bool = True) -> tuple[pd.Series, pd.Series]:
+              trailing: bool = True) -> tuple[pd.Series, pd.Series,
+                                              pd.Series, pd.Series]:
     """
     Take the crossover only with the anchor trend and expanding volatility;
-    exit on the stop, the target, or the bell.
+    exit on the stop, the target, or the bell. Both directions.
 
-    Long only — see the module docstring for why the specification's short side
-    is not implemented.
+    Returns the FOUR-MASK form of the strategy contract:
 
-    The entry is a bar-level EVENT: the crossover fires on the bar where
-    EMA(fast) first closes above EMA(slow), so a long run of bars with fast
-    above slow produces one signal rather than a signal every bar. The walk
-    enters only when flat, so a second crossover while a position is open is
-    ignored rather than pyramided.
+        (long_entries, long_exits, short_entries, short_exits)
+
+    all boolean Series on `bars.index`. `backtest.engine.unpack_signals` accepts
+    this alongside the older two-mask long-only form.
+
+    The entry is a bar-level EVENT: the long fires on the bar where EMA(fast)
+    first closes above EMA(slow), the short on the bar where it first closes
+    below, so a long run of bars on one side produces one signal rather than a
+    signal every bar. The walk enters only when flat, so a second crossover
+    while a position is open is ignored rather than pyramided, and a short
+    trigger arriving while long is ignored rather than reversing the position.
 
     Every comparison at bar i uses only bars <= i. The engine then fills at bar
     i+1's open, so nothing here can see a price it would not have had.
@@ -770,12 +903,14 @@ def signal_fn(bars: pd.DataFrame,
     _validate(fast_period, slow_period, trend_period, sl_atr_mult, tp_atr_mult,
               trailing)
 
-    _s, entries, exits, _stop, _target = _signal_arrays(
+    _s, entries, exits, s_entries, s_exits, _stop, _target = _signal_arrays(
         bars, fast_period, slow_period, trend_period, sl_atr_mult, tp_atr_mult,
         trailing)
 
     return (pd.Series(entries, index=bars.index),
-            pd.Series(exits, index=bars.index))
+            pd.Series(exits, index=bars.index),
+            pd.Series(s_entries, index=bars.index),
+            pd.Series(s_exits, index=bars.index))
 
 
 def indicators(bars: pd.DataFrame,
@@ -799,6 +934,14 @@ def indicators(bars: pd.DataFrame,
     NaN while flat and the report renders that as a gap, which is the honest
     drawing: there is no stop level when there is no position.
 
+    ONE stop line and ONE target line serve both directions, because only one
+    position is ever open: each is the level of whichever side is live, so the
+    stop sits below the candles inside a long and above them inside a short.
+    The gap between two segments is where the position was flat, and a segment
+    that jumps from below the price to above it is the strategy changing sides,
+    not a stop being moved. Two separate long/short lines would each be NaN for
+    most of the chart and read as a level that existed and was never approached.
+
     The take-profit line is OMITTED ENTIRELY when `tp_atr_mult` is None. An
     all-NaN series would render as an empty legend entry, which reads as a
     target that exists and never got close — the opposite of the truth.
@@ -818,7 +961,7 @@ def indicators(bars: pd.DataFrame,
     _validate(fast_period, slow_period, trend_period, sl_atr_mult, tp_atr_mult,
               trailing)
 
-    s, _entries, _exits, stop, target = _signal_arrays(
+    s, _entries, _exits, _se, _sx, stop, target = _signal_arrays(
         bars, fast_period, slow_period, trend_period, sl_atr_mult, tp_atr_mult,
         trailing)
 
@@ -853,7 +996,8 @@ def make_signal_fn(fast_period: int = 9,
     _validate(fast_period, slow_period, trend_period, sl_atr_mult, tp_atr_mult,
               trailing)
 
-    def _bound(bars: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+    def _bound(bars: pd.DataFrame) -> tuple[pd.Series, pd.Series,
+                                            pd.Series, pd.Series]:
         return signal_fn(bars, fast_period=fast_period,
                          slow_period=slow_period,
                          trend_period=trend_period,

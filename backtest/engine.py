@@ -71,6 +71,29 @@ not tick VALUE.
 
 The loop this replaced is kept as `_simulate_legacy` and is the oracle in
 tests/test_engine_vbt.py: the two must agree trade-for-trade.
+
+Long and short
+--------------
+A strategy may return two masks or four:
+
+    signal_fn(bars) -> (entries, exits)
+    signal_fn(bars) -> (entries, exits, short_entries, short_exits)
+
+`unpack_signals` accepts both and fills the short pair with False for the
+two-mask form, so every strategy written before this existed runs unchanged
+AND produces the same numbers as it did - the long-only vectorbt call is kept
+distinct rather than routed through the four-mask one. Signals are resolved by
+a single three-state machine (`_clean_signals_ls_loop`: flat, long, short), so
+there is no second resolver that could disagree with the first about what an
+unmatched exit means, and every closed trade is stamped `direction` from
+vectorbt's own record rather than from the sign of its P&L.
+
+What the engine still does NOT do is any of the risk machinery. There are no
+stop or target ORDERS in it, in either direction: a stop is an exit signal,
+detected on the bar that breaches it and filled at the NEXT bar's open. A
+strategy that wants a stop, a target or a trailing level - long or short -
+computes it in its own module (see `strategies/experimental/ema_trend_filter`)
+and emits the resulting exit.
 """
 
 from __future__ import annotations
@@ -220,6 +243,12 @@ def apply_flat_by_close(bars: pd.DataFrame,
 
     An entry on the final bar would be opened and closed in the same bar, so
     those are suppressed rather than left to produce a guaranteed cost.
+
+    This works on ONE side's pair of masks. A bidirectional strategy calls it
+    twice - once for `(entries, exits)` and once for `(short_entries,
+    short_exits)` - because the rule is identical per side: block the side's
+    entry on the last bar of the session and force its exit there. Taking a
+    short pair through the long-named arguments is correct and not a misuse.
     """
     ts = pd.to_datetime(bars["ts"], utc=True)
     close_t = pd.Timestamp(f"2000-01-01 {session_close_utc}", tz="UTC").time()
@@ -236,6 +265,79 @@ def apply_flat_by_close(bars: pd.DataFrame,
     exits[is_last.values] = True
     entries[is_last.values] = False
     return entries, exits
+
+
+def _clean_signals_ls_loop(le: np.ndarray, lx: np.ndarray,
+                           se: np.ndarray, sx: np.ndarray
+                           ) -> tuple[np.ndarray, np.ndarray,
+                                      np.ndarray, np.ndarray]:
+    """
+    Walk the signals as a THREE-state machine: flat (0), long (1), short (-1).
+
+    This is the production resolver for every backtest, long-only ones
+    included - `clean_signals` calls it with all-False short masks. There is
+    deliberately only one state machine: two of them (one for longs, one for
+    shorts) would be two things that can drift apart, and a drift here silently
+    adds or removes trades from every backtest rather than raising.
+
+    The rules, and what each one is refusing to guess:
+
+      * From FLAT, the first long entry opens a long and the first short entry
+        opens a short.
+      * From FLAT with BOTH firing on the same bar, NEITHER is taken. The bar
+        is ambiguous - the strategy has asked to be long and short at once -
+        and picking a side by argument order would bury a coin flip inside the
+        engine. A well-formed strategy cannot produce this (a close cannot be
+        both above and below the same anchor EMA), so the branch exists to make
+        a malformed one visible as a missing trade rather than as a plausible
+        one-sided equity curve.
+      * From LONG, only a long exit closes; from SHORT, only a short exit. A
+        short entry arriving while long is DROPPED, not treated as a reversal.
+        Reversing would open the new position at the same bar's fill with no
+        flat bar in between, which `_pair_trades` (and therefore chunking)
+        assumes cannot happen. A strategy that wants to reverse must emit the
+        closing exit itself.
+      * Everything else is dropped: an entry while already in a position would
+        double-count it, and an exit while flat would book a trade that was
+        never opened.
+
+    With `se` and `sx` all False this reduces EXACTLY to `_clean_signals_loop`
+    below - the short branches are unreachable and the ambiguity branch cannot
+    fire - which is what `tests/test_clean_signals.py` checks exhaustively for
+    every input up to length 10, since it compares `clean_signals` against that
+    interpreted two-state oracle.
+
+    Note the state checks are `elif`: an exit on the same bar as the entry does
+    not close it, which is what `_simulate_legacy` and `_pair_trades` also
+    assume.
+    """
+    n = le.shape[0]
+    kle = np.zeros(n, dtype=np.bool_)
+    klx = np.zeros(n, dtype=np.bool_)
+    kse = np.zeros(n, dtype=np.bool_)
+    ksx = np.zeros(n, dtype=np.bool_)
+
+    state = 0                       # 0 flat, 1 long, -1 short
+    for i in range(n):
+        if state == 0:
+            if le[i] and se[i]:
+                continue            # ambiguous bar: take neither side
+            if le[i]:
+                kle[i] = True
+                state = 1
+            elif se[i]:
+                kse[i] = True
+                state = -1
+        elif state == 1:
+            if lx[i]:
+                klx[i] = True
+                state = 0
+        else:
+            if sx[i]:
+                ksx[i] = True
+                state = 0
+
+    return kle, klx, kse, ksx
 
 
 def _clean_signals_loop(e: np.ndarray, x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -257,7 +359,15 @@ def _clean_signals_loop(e: np.ndarray, x: np.ndarray) -> tuple[np.ndarray, np.nd
     was 9x SLOWER than even this interpreted loop, because it degenerates into
     a Python loop per trade.
 
-    So the loop is kept and compiled instead - see _clean_signals_fast.
+    So the loop is kept and compiled instead - see _clean_signals_ls_fast.
+
+    THIS FUNCTION IS NO LONGER THE PRODUCTION PATH. `clean_signals` routes
+    through the three-state `_clean_signals_ls_loop` above, which reduces to
+    this one when there are no short signals. It is kept as the long-only
+    ORACLE: tests/test_clean_signals.py checks the production resolver against
+    it exhaustively at every length up to 10, so the two-state behaviour that
+    every existing strategy depends on cannot change when the short branches
+    are edited.
     """
     n = e.shape[0]
     ke = np.zeros(n, dtype=np.bool_)
@@ -284,8 +394,38 @@ def _clean_signals_loop(e: np.ndarray, x: np.ndarray) -> tuple[np.ndarray, np.nd
 #
 # Falls back to the interpreted function if numba is missing, so this module
 # stays importable and correct - just slower - in an environment without it.
-_clean_signals_fast = (njit(cache=True, nogil=True)(_clean_signals_loop)
-                       if njit is not None else _clean_signals_loop)
+_clean_signals_ls_fast = (njit(cache=True, nogil=True)(_clean_signals_ls_loop)
+                          if njit is not None else _clean_signals_ls_loop)
+
+
+def _bool_array(s) -> np.ndarray:
+    """A signal series as a contiguous bool array. NaN counts as no signal."""
+    return np.ascontiguousarray(pd.Series(s).fillna(False).astype(bool).to_numpy())
+
+
+def clean_signals_ls(entries: pd.Series,
+                     exits: pd.Series,
+                     short_entries: pd.Series,
+                     short_exits: pd.Series
+                     ) -> tuple[pd.Series, pd.Series, pd.Series, pd.Series]:
+    """
+    Resolve four masks into executable long AND short signals.
+
+    The bidirectional form of `clean_signals`. See `_clean_signals_ls_loop`
+    for the state machine and for what it refuses to guess - in particular
+    that a short entry arriving while long is dropped rather than treated as a
+    reversal.
+
+    NaN counts as no signal.
+    """
+    kle, klx, kse, ksx = _clean_signals_ls_fast(
+        _bool_array(entries), _bool_array(exits),
+        _bool_array(short_entries), _bool_array(short_exits))
+
+    return (pd.Series(kle, index=entries.index),
+            pd.Series(klx, index=exits.index),
+            pd.Series(kse, index=short_entries.index),
+            pd.Series(ksx, index=short_exits.index))
 
 
 def clean_signals(entries: pd.Series, exits: pd.Series) -> tuple[pd.Series, pd.Series]:
@@ -293,22 +433,24 @@ def clean_signals(entries: pd.Series, exits: pd.Series) -> tuple[pd.Series, pd.S
     Remove signals that cannot execute: an entry with no prior exit, and an
     exit with no open position. Prevents double-counting.
 
+    The long-only form, and the one every pre-existing strategy goes through.
+    It delegates to `clean_signals_ls` with empty short masks rather than
+    carrying a second copy of the state machine, so the two cannot disagree
+    about what an unmatched exit means.
+
     Every trade in every backtest passes through here, and a full-lake run
     calls it on 109.8M bars, so the scan is compiled - 12-44x faster than the
     interpreted loop depending on signal density, and unlike a searchsorted
     rewrite it does not degrade as signals get denser.
     tests/test_clean_signals.py proves the equivalence exhaustively for every
-    input up to length 10, and at full scale beyond it.
+    input up to length 10, and at full scale beyond it - which now also pins
+    the three-state resolver's long-only reduction.
 
     NaN counts as no signal.
     """
-    e = np.ascontiguousarray(entries.fillna(False).astype(bool).to_numpy())
-    x = np.ascontiguousarray(exits.fillna(False).astype(bool).to_numpy())
-
-    ke, kx = _clean_signals_fast(e, x)
-
-    return (pd.Series(ke, index=entries.index),
-            pd.Series(kx, index=exits.index))
+    empty = pd.Series(np.zeros(len(entries), dtype=bool), index=entries.index)
+    ke, kx, _se, _sx = clean_signals_ls(entries, exits, empty, empty)
+    return ke, kx
 
 
 # --------------------------------------------------------------------------
@@ -341,7 +483,10 @@ def _cost_arrays(bars: pd.DataFrame,
                  entries: np.ndarray,
                  exits: np.ndarray,
                  symbol: str,
-                 cfg: BacktestConfig) -> tuple[np.ndarray, np.ndarray, float]:
+                 cfg: BacktestConfig,
+                 short_entries: np.ndarray | None = None,
+                 short_exits: np.ndarray | None = None
+                 ) -> tuple[np.ndarray, np.ndarray, float]:
     """
     Per-bar slippage and fee arrays for vectorbt, plus the position size.
 
@@ -369,6 +514,23 @@ def _cost_arrays(bars: pd.DataFrame,
 
     tick_size is looked up per bar, so a contract whose tick changed mid-
     history (ZT, 2019-01-13) is charged the tick that was actually in force.
+
+    Direction and which way the fill is adjusted
+    -------------------------------------------
+    The fee denominator is the FILL price, and the fill is a tick on the side
+    the order actually crossed. That side is set by whether the order BUYS or
+    SELLS, not by whether it opens or closes a position:
+
+        buys   long entries  and short exits    ->  px * (1 + slippage)
+        sells  long exits    and short entries  ->  px * (1 - slippage)
+
+    Passing a short entry through the long-entry branch would put the fill a
+    tick on the wrong side. The error is a fraction of a tick per trade -
+    far too small to notice in a total, wrong in every one of them - which is
+    why the short masks are arguments here rather than assumed away.
+
+    `short_entries` and `short_exits` default to None, which means a long-only
+    run; the arithmetic then reduces exactly to the pre-bidirectional version.
     """
     spec = get_spec(symbol)
     px = bars["open"].to_numpy(dtype=float)
@@ -381,11 +543,37 @@ def _cost_arrays(bars: pd.DataFrame,
 
     commission = (cfg.commission_per_side
                   if cfg.commission_per_side is not None else spec.commission)
-    fill = np.where(entries, px * (1 + slippage),
-                    np.where(exits, px * (1 - slippage), px))
+
+    zeros = np.zeros(len(px), dtype=bool)
+    se = zeros if short_entries is None else np.asarray(short_entries, dtype=bool)
+    sx = zeros if short_exits is None else np.asarray(short_exits, dtype=bool)
+
+    buys = np.asarray(entries, dtype=bool) | sx
+    sells = np.asarray(exits, dtype=bool) | se
+
+    fill = np.where(buys, px * (1 + slippage),
+                    np.where(sells, px * (1 - slippage), px))
     fees = (commission * cfg.contracts) / (size * fill)
 
     return slippage, fees, size
+
+
+def _shift_to_fill(signals) -> np.ndarray:
+    """
+    A signal on bar i executes on bar i+1.
+
+    Acting on the bar that produced the signal is lookahead bias, and it is the
+    single most common way a backtest lies. `from_signals` fills on the bar it
+    sees a signal, so every mask is shifted forward one bar before it is handed
+    over and `price` is that bar's open.
+
+    np.roll wraps the last element to the front, where it is cleared - which is
+    exactly the "no next bar to fill on" case: a signal on the final bar cannot
+    be executed and is dropped.
+    """
+    out = np.roll(np.asarray(signals, dtype=bool), 1)
+    out[0] = False
+    return out
 
 
 def _pair_trades(ent: np.ndarray, exi: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -484,7 +672,9 @@ def _simulate(bars: pd.DataFrame,
               entries: pd.Series,
               exits: pd.Series,
               symbol: str,
-              cfg: BacktestConfig) -> pd.DataFrame:
+              cfg: BacktestConfig,
+              short_entries: pd.Series | None = None,
+              short_exits: pd.Series | None = None) -> pd.DataFrame:
     """
     Produce a trade list with vectorbt Pro, one batch of bars at a time.
 
@@ -498,6 +688,28 @@ def _simulate(bars: pd.DataFrame,
     Costs are handed to vectorbt as per-bar arrays rather than applied
     afterwards, so they broadcast across the index inside the compiled
     simulation. See _cost_arrays for the unit conversions.
+
+    Direction
+    ---------
+    `short_entries` / `short_exits` are optional. Omitted (or all False), the
+    call is the long-only one it has always been - `direction="longonly"`,
+    every trade stamped `"long"`. Supplied with any signal in them, vectorbt is
+    driven in its LONG/SHORT SIGNAL MODE: all four masks are passed and
+    `direction` is NOT passed at all, because vectorbtpro refuses the two
+    together ("Direction and short signal arrays cannot be used together"). The
+    four-mask form IS the both-directions form; there is no
+    `direction="both"` to combine with it.
+
+    The two paths are kept distinct rather than always running the four-mask
+    call, so that adding shorts to the engine cannot change a single number in
+    an existing long-only backtest. `tests/test_risk_params.py` pins the
+    equivalence in the other direction: an all-False short pair through the
+    four-mask path produces the same trades as the long-only path.
+
+    Each closed trade is stamped `direction` from vectorbt's own trade record
+    (0 = Long, 1 = Short), never inferred from the sign of the P&L - a losing
+    long and a winning short are indistinguishable that way. `gross_pnl` is
+    signed with it: a short's gross is `entry_price - exit_price` per contract.
 
     Batching
     --------
@@ -521,18 +733,27 @@ def _simulate(bars: pd.DataFrame,
     px = bars["open"].to_numpy(dtype=float)
     index = pd.DatetimeIndex(pd.to_datetime(bars["ts"], utc=True))
 
-    # Shift signals one bar forward: signal on bar i executes on bar i+1.
-    # np.roll wraps the last element to the front, where it is cleared - which
-    # is exactly the "no next bar to fill on" case.
-    ent = np.roll(entries.to_numpy(dtype=bool), 1)
-    exi = np.roll(exits.to_numpy(dtype=bool), 1)
-    ent[0] = False
-    exi[0] = False
+    # Signal on bar i executes on bar i+1; see _shift_to_fill.
+    ent = _shift_to_fill(entries.to_numpy(dtype=bool))
+    exi = _shift_to_fill(exits.to_numpy(dtype=bool))
+    zeros = np.zeros(len(px), dtype=bool)
+    s_ent = zeros if short_entries is None else _shift_to_fill(
+        short_entries.to_numpy(dtype=bool))
+    s_exi = zeros if short_exits is None else _shift_to_fill(
+        short_exits.to_numpy(dtype=bool))
 
-    if not ent.any():
+    bidirectional = bool(s_ent.any())
+
+    if not ent.any() and not bidirectional:
         return pd.DataFrame(columns=TRADE_COLUMNS)
 
-    e_idx, x_idx = _pair_trades(ent, exi)
+    # Chunk boundaries are placed where the strategy is FLAT, which after
+    # `clean_signals_ls` means flat on both sides: entries and exits strictly
+    # alternate across the union of the two directions, so the union is what
+    # `_pair_trades` has to see. Pairing the long masks alone would treat a bar
+    # inside an open short as flat and cut a chunk through it, dropping the
+    # trade - the exact failure chunking is built to avoid.
+    e_idx, x_idx = _pair_trades(ent | s_ent, exi | s_exi)
     bounds = _chunk_bounds(len(px), cfg.chunk_size, e_idx, x_idx)
     del e_idx, x_idx
 
@@ -540,17 +761,19 @@ def _simulate(bars: pd.DataFrame,
 
     for lo, hi in bounds:
         ent_c = ent[lo:hi]
-        if not ent_c.any():           # no trade can start here; skip the call
+        s_ent_c = s_ent[lo:hi]
+        if not ent_c.any() and not s_ent_c.any():   # no trade starts here
             continue
         exi_c = exi[lo:hi]
+        s_exi_c = s_exi[lo:hi]
         px_c = px[lo:hi]
         index_c = index[lo:hi]
 
         slippage, fees, size = _cost_arrays(bars.iloc[lo:hi], ent_c, exi_c,
-                                            symbol, cfg)
+                                            symbol, cfg, s_ent_c, s_exi_c)
         price = pd.Series(px_c, index=index_c)
 
-        pf = vbt.Portfolio.from_signals(
+        common = dict(
             close=price,
             entries=pd.Series(ent_c, index=index_c),
             exits=pd.Series(exi_c, index=index_c),
@@ -566,9 +789,19 @@ def _simulate(bars: pd.DataFrame,
             # account. It also makes chunks independent: no cash balance
             # carries across a boundary to change later position sizing.
             init_cash=np.inf,
-            direction="longonly",
             accumulate=False,
         )
+        if bidirectional:
+            # No `direction=` here: vectorbtpro raises "Direction and short
+            # signal arrays cannot be used together". The four masks ARE the
+            # long/short mode.
+            pf = vbt.Portfolio.from_signals(
+                **common,
+                short_entries=pd.Series(s_ent_c, index=index_c),
+                short_exits=pd.Series(s_exi_c, index=index_c),
+            )
+        else:
+            pf = vbt.Portfolio.from_signals(**common, direction="longonly")
 
         rec = pf.trades.records
         rec = rec[rec["status"] == 1]    # closed only; an open position at the
@@ -582,14 +815,21 @@ def _simulate(bars: pd.DataFrame,
             # the cost.
             entry_px = px_c[entry_i]
             exit_px = px_c[exit_i]
-            gross = (exit_px - entry_px) * spec.multiplier * cfg.contracts
+
+            # vectorbt's TradeDirection: 0 = Long, 1 = Short. Read from the
+            # record rather than inferred - the sign of the P&L cannot tell a
+            # losing long from a winning short.
+            is_short = rec["direction"].to_numpy() == 1
+            per_contract = np.where(is_short, entry_px - exit_px,
+                                    exit_px - entry_px)
+            gross = per_contract * spec.multiplier * cfg.contracts
             pnl = rec["pnl"].to_numpy()
 
             frames.append(pd.DataFrame({
                 "entry_time": index_c[entry_i],
                 "exit_time": index_c[exit_i],
                 "symbol": symbol,
-                "direction": "long",
+                "direction": np.where(is_short, "short", "long"),
                 "entry_price": entry_px,
                 "exit_price": exit_px,
                 "gross_pnl": gross,
@@ -599,7 +839,8 @@ def _simulate(bars: pd.DataFrame,
 
         # The portfolio holds the whole simulation. Drop it before building
         # the next one rather than letting two coexist at the peak.
-        del pf, rec, price, slippage, fees, ent_c, exi_c, px_c, index_c
+        del pf, rec, common, price, slippage, fees
+        del ent_c, exi_c, s_ent_c, s_exi_c, px_c, index_c
         if len(bounds) > 1:
             gc.collect()
 
@@ -614,13 +855,21 @@ def _simulate_legacy(bars: pd.DataFrame,
                      entries: pd.Series,
                      exits: pd.Series,
                      symbol: str,
-                     cfg: BacktestConfig) -> pd.DataFrame:
+                     cfg: BacktestConfig,
+                     short_entries: pd.Series | None = None,
+                     short_exits: pd.Series | None = None) -> pd.DataFrame:
     """
     The pre-vectorbt loop, kept as the reference implementation.
 
     Not used in a run. It is the oracle the vectorbt path is tested against -
     slow but obviously correct, which is what makes it worth keeping. See
     tests/test_engine_vbt.py.
+
+    It walks the same three states `_clean_signals_ls_loop` does, so it is an
+    oracle for short trades as well as long ones. A short's gross P&L is
+    `entry_price - exit_price` per contract: written out explicitly here rather
+    than folded into a sign flip, because this loop exists to be read and
+    checked by hand.
 
     Note it charges a single scalar tick value for every bar, so it cannot
     reproduce the vectorbt path on a contract whose tick changed mid-history.
@@ -632,30 +881,50 @@ def _simulate_legacy(bars: pd.DataFrame,
     op = bars["open"].to_numpy(dtype=float)
     e = entries.to_numpy(dtype=bool)
     x = exits.to_numpy(dtype=bool)
+    n = len(ts)
+    zeros = np.zeros(n, dtype=bool)
+    se = zeros if short_entries is None else short_entries.to_numpy(dtype=bool)
+    sx = zeros if short_exits is None else short_exits.to_numpy(dtype=bool)
 
     trades = []
-    in_pos = False
+    state = 0                        # 0 flat, 1 long, -1 short
     entry_i = -1
 
-    for i in range(len(ts) - 1):
-        if not in_pos and e[i]:
-            entry_i = i + 1          # fill next bar open
-            in_pos = True
-        elif in_pos and x[i]:
-            exit_i = i + 1
-            gross = (op[exit_i] - op[entry_i]) * spec.multiplier * cfg.contracts
-            trades.append({
-                "entry_time": ts[entry_i],
-                "exit_time": ts[exit_i],
-                "symbol": symbol,
-                "direction": "long",
-                "entry_price": op[entry_i],
-                "exit_price": op[exit_i],
-                "gross_pnl": gross,
-                "costs": cost,
-                "pnl": gross - cost,
-            })
-            in_pos = False
+    def _close(exit_i: int) -> None:
+        long_side = state == 1
+        per_contract = (op[exit_i] - op[entry_i] if long_side
+                        else op[entry_i] - op[exit_i])
+        gross = per_contract * spec.multiplier * cfg.contracts
+        trades.append({
+            "entry_time": ts[entry_i],
+            "exit_time": ts[exit_i],
+            "symbol": symbol,
+            "direction": "long" if long_side else "short",
+            "entry_price": op[entry_i],
+            "exit_price": op[exit_i],
+            "gross_pnl": gross,
+            "costs": cost,
+            "pnl": gross - cost,
+        })
+
+    for i in range(n - 1):
+        if state == 0:
+            if e[i] and se[i]:
+                continue             # ambiguous bar, same rule as the resolver
+            if e[i]:
+                entry_i = i + 1      # fill next bar open
+                state = 1
+            elif se[i]:
+                entry_i = i + 1
+                state = -1
+        elif state == 1:
+            if x[i]:
+                _close(i + 1)
+                state = 0
+        else:
+            if sx[i]:
+                _close(i + 1)
+                state = 0
 
     return pd.DataFrame(trades, columns=TRADE_COLUMNS if not trades else None)
 
@@ -736,6 +1005,21 @@ def _assemble_result(all_trades: list[pd.DataFrame],
                                      kind="stable")
                         .reset_index(drop=True))
 
+        # Every closed trade carries its side. The stamp itself is made in
+        # `_simulate`, from vectorbt's own trade record, because that is the
+        # only place the record exists - by the time the frames arrive here the
+        # information would have to be re-derived, and the only thing left to
+        # re-derive it from is the sign of the P&L, which cannot tell a losing
+        # long from a winning short. This is the check that the stamp survived:
+        # an unlabelled or mislabelled row would flow into the tear sheet, the
+        # leaderboard and the dispatcher as a long.
+        bad = set(pd.unique(trades["direction"].astype("object"))) - {"long",
+                                                                      "short"}
+        if bad:
+            raise ValueError(
+                f"trades carry unrecognised direction values {sorted(bad)}; "
+                f"every closed trade must be stamped 'long' or 'short'.")
+
     returns, equity = _daily_returns(trades, days, cfg.initial_capital)
 
     breach = (check_trailing_drawdown(equity, cfg.trailing_drawdown_pct)
@@ -749,6 +1033,12 @@ def _assemble_result(all_trades: list[pd.DataFrame],
     m = report_daily_metrics(equity, cfg.initial_capital, cfg.risk_free_rate)
     stats = {
         "n_trades": len(trades),
+        # The long/short split. A bidirectional strategy whose edge is entirely
+        # on one side is a one-sided strategy paying for a second set of
+        # signals, and the pooled Sharpe cannot show that. Zero on a long-only
+        # run, which is the truth about it rather than a missing field.
+        "n_long": int((trades["direction"] == "long").sum()) if not trades.empty else 0,
+        "n_short": int((trades["direction"] == "short").sum()) if not trades.empty else 0,
         "total_return_pct": float((equity.iloc[-1] / cfg.initial_capital - 1) * 100),
         "sharpe": m["sharpe"],
         "sortino": m["sortino"],
@@ -768,6 +1058,54 @@ def _assemble_result(all_trades: list[pd.DataFrame],
 # --------------------------------------------------------------------------
 # Entry point
 # --------------------------------------------------------------------------
+def unpack_signals(out, n: int, index=None
+                   ) -> tuple[pd.Series, pd.Series, pd.Series, pd.Series]:
+    """
+    Accept either strategy contract and return all four masks.
+
+        (entries, exits)                                   long-only
+        (entries, exits, short_entries, short_exits)       bidirectional
+
+    A two-tuple gets all-False short masks, so every strategy written before
+    the engine could go short keeps running unchanged and unchanged in its
+    numbers. That backward compatibility is load-bearing rather than polite:
+    `strategies/approved_incubator/` holds promoted modules that are recorded
+    byte for byte against the metrics they were backtested on, and a contract
+    change that forced an edit to those files would break the one property
+    that makes a promotion evidence.
+
+    A tuple of any other length raises. Silently taking the first two elements
+    of a three-tuple is how a strategy's short side disappears into a plausible
+    long-only equity curve.
+
+    Every mask is validated to the bar count here rather than deeper in, so a
+    strategy that returns a short side of the wrong length is caught before its
+    signals are mixed into a simulation.
+    """
+    if not isinstance(out, tuple) or len(out) not in (2, 4):
+        got = (f"a {len(out)}-tuple" if isinstance(out, tuple)
+               else type(out).__name__)
+        raise ValueError(
+            f"signal_fn must return (entries, exits) or (entries, exits, "
+            f"short_entries, short_exits); got {got}.")
+
+    if len(out) == 2:
+        e, x = out
+        se = sx = np.zeros(n, dtype=bool)
+    else:
+        e, x, se, sx = out
+
+    names = ("entries", "exits", "short_entries", "short_exits")
+    masks = []
+    for name, raw in zip(names, (e, x, se, sx)):
+        if len(raw) != n:
+            raise ValueError(
+                f"signal_fn returned {len(raw)} {name} for {n} bars.")
+        s = pd.Series(raw).reset_index(drop=True).fillna(False).astype(bool)
+        masks.append(s if index is None else s.set_axis(index))
+    return tuple(masks)
+
+
 def run_backtest(symbols: str | list[str],
                  tf: str,
                  signal_fn,
@@ -792,9 +1130,15 @@ def run_backtest(symbols: str | list[str],
         Any timeframe `mdlib.lake` serves - "1m", "1d" natively, the rest
         derived.
     signal_fn
-        `signal_fn(bars) -> (entries, exits)`, the `strategies/` contract. It
-        receives ONE symbol's bars, positionally indexed from 0, and returns
-        two boolean Series aligned to them.
+        The `strategies/` contract, in either of its two forms:
+
+            signal_fn(bars) -> (entries, exits)
+            signal_fn(bars) -> (entries, exits, short_entries, short_exits)
+
+        It receives ONE symbol's bars, positionally indexed from 0, and returns
+        boolean Series aligned to them. The two-mask form is long-only and is
+        what every strategy written before the engine could go short returns;
+        it is not deprecated. See `unpack_signals`.
     **lake_kwargs
         Passed to `iter_bars`: session_merge, exclude_degraded,
         exclude_rolls, respect_coverage.
@@ -843,29 +1187,26 @@ def run_backtest(symbols: str | list[str],
 
     for sym, g in iter_bars(symbols, tf, start, end, **lake_kwargs):
         n_symbols += 1
-        e, x = signal_fn(g)
-
-        if len(e) != len(g) or len(x) != len(g):
-            raise ValueError(
-                f"{sym}: signal_fn returned {len(e)}/{len(x)} signals "
-                f"for {len(g)} bars."
-            )
-
-        e = pd.Series(e).reset_index(drop=True)
-        x = pd.Series(x).reset_index(drop=True)
+        try:
+            e, x, se, sx = unpack_signals(signal_fn(g), len(g))
+        except ValueError as err:
+            raise ValueError(f"{sym}: {err}") from err
 
         day_parts.append(
             np.unique(pd.DatetimeIndex(g["ts"]).values.astype("datetime64[D]")))
 
         if cfg.flat_by_close:
+            # Once per side - the rule is the same for both, and a short left
+            # open through the bell is the same breach as a long.
             e, x = apply_flat_by_close(g, e, x, cfg.session_close_utc)
+            se, sx = apply_flat_by_close(g, se, sx, cfg.session_close_utc)
 
-        e, x = clean_signals(e, x)
-        t = _simulate(g, e, x, sym, cfg)
+        e, x, se, sx = clean_signals_ls(e, x, se, sx)
+        t = _simulate(g, e, x, sym, cfg, se, sx)
         if not t.empty:
             all_trades.append(t)
 
-        del g, e, x, t
+        del g, e, x, se, sx, t
         gc.collect()
 
     if n_symbols == 0:

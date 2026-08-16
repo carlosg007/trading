@@ -130,7 +130,7 @@ def _baseline():
     return mod
 
 
-def signal_fn(bars: pd.DataFrame, **params) -> tuple[pd.Series, pd.Series]:
+def signal_fn(bars: pd.DataFrame, **params):
     """
     Version B: the baseline's signals, with losing entries suppressed.
 
@@ -140,6 +140,13 @@ def signal_fn(bars: pd.DataFrame, **params) -> tuple[pd.Series, pd.Series]:
     contract multiplier, tick size and commission the filter's training labels
     are net of. Without it the classifier learns from gross outcomes and keeps
     trades that lose money after costs.
+
+    Returns whichever shape the baseline returns: two masks for a long-only
+    strategy, four for a bidirectional one. A bidirectional baseline gets one
+    classifier per side, each trained on its own completed trades with its own
+    P&L sign - see `apply_ml_signal_filter`. Filtering only the long side here
+    would ship a promoted Version B whose shorts never met the filter it is
+    named for.
     """
     threshold = params.pop("threshold", ML_THRESHOLD)
     cfg = params.pop("cfg", None) or BacktestConfig()
@@ -147,7 +154,12 @@ def signal_fn(bars: pd.DataFrame, **params) -> tuple[pd.Series, pd.Series]:
     merged = dict(DEFAULT_PARAMS)
     merged.update(params)
 
-    entries, exits = _baseline().signal_fn(bars, **merged)
+    out = _baseline().signal_fn(bars, **merged)
+    if len(out) == 4:
+        entries, exits, s_entries, s_exits = out
+    else:
+        entries, exits = out
+        s_entries = s_exits = None
 
     symbol = None
     if "symbol" in bars.columns:
@@ -162,15 +174,24 @@ def signal_fn(bars: pd.DataFrame, **params) -> tuple[pd.Series, pd.Series]:
     if symbol is None and SYMBOLS:
         symbol = SYMBOLS[0]
 
+    def _b(s):
+        return pd.Series(s).fillna(False).astype(bool)
+
     entries, exits = apply_ml_signal_filter(
-        bars, entries, exits, symbol=symbol, cfg=cfg, threshold=threshold)
-    return (pd.Series(entries).fillna(False).astype(bool),
-            pd.Series(exits).fillna(False).astype(bool))
+        bars, entries, exits, symbol=symbol, cfg=cfg, threshold=threshold,
+        direction="long")
+    if s_entries is None:
+        return _b(entries), _b(exits)
+
+    s_entries, s_exits = apply_ml_signal_filter(
+        bars, _b(s_entries), _b(s_exits), symbol=symbol, cfg=cfg,
+        threshold=threshold, direction="short")
+    return _b(entries), _b(exits), _b(s_entries), _b(s_exits)
 
 
 def make_signal_fn(**params):
     """Bind parameters for `agents.tier3_workers.load_strategy`."""
-    def _bound(bars: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+    def _bound(bars: pd.DataFrame):
         return signal_fn(bars, **params)
 
     return _bound
