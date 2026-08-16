@@ -717,6 +717,7 @@ def run_dual_version_backtest(strategy_code: str,
                               cfg: Any = None,
                               params: dict[str, Any] | None = None,
                               threshold: float = 0.50,
+                              ml: bool = True,
                               robustness: dict[str, Any] | None = None,
                               holdout: dict[str, Any] | None = None,
                               emit_reports: bool = True,
@@ -751,6 +752,17 @@ def run_dual_version_backtest(strategy_code: str,
         resample is how a 15m result gets reported as a 1m one.
     threshold
         P(win) at or above which Version B keeps an entry.
+    ml
+        Run Version B at all. `ml=False` returns `version_b: None` and a
+        comparison whose every comparative field is None under
+        `ml_evaluated: False` - not `b_beats_a: False`, which is not the same
+        thing as a Version B that ran and lost. A caller reading a missing B
+        as a defeated B would
+        credit the baseline with a win nobody contested. It exists for the
+        multi-asset batch, where the classifier refits once per completed trade
+        and 27 symbols of that is hours, not minutes. Note the Dual-Version
+        Mandate still wants B before anything is adopted; skipping it defers
+        that comparison, it does not settle it.
     robustness, holdout
         Optional per-version evidence for Gates 2 and 3, keyed by version:
         `{"A": {...}, "B": {...}}`. See
@@ -846,17 +858,21 @@ def run_dual_version_backtest(strategy_code: str,
     # -- Version B: the same signals, ML-filtered ---------------------------
     # Filtering the CLEANED signals, not the raw ones, so the trades the
     # classifier learns from are exactly the trades Version A took.
-    filtered, exits_b = apply_ml_signal_filter(
-        bars, entries_a, exits_a, symbol=symbol, cfg=config,
-        threshold=threshold)
-    entries_b, exits_b = clean_signals(filtered, exits_b)
+    result_b = None
+    metrics_b = None
+    entries_b = None
+    if ml:
+        filtered, exits_b = apply_ml_signal_filter(
+            bars, entries_a, exits_a, symbol=symbol, cfg=config,
+            threshold=threshold)
+        entries_b, exits_b = clean_signals(filtered, exits_b)
 
-    trades_b = _simulate(bars, entries_b, exits_b, symbol, config)
-    result_b = _assemble_result([trades_b] if not trades_b.empty else [],
-                                days, config)
+        trades_b = _simulate(bars, entries_b, exits_b, symbol, config)
+        result_b = _assemble_result([trades_b] if not trades_b.empty else [],
+                                    days, config)
+        metrics_b = summarize_result(result_b)
 
     metrics_a = summarize_result(result_a)
-    metrics_b = summarize_result(result_b)
 
     meta = {
         "strategy": info["module"],
@@ -869,14 +885,16 @@ def run_dual_version_backtest(strategy_code: str,
         "end": str(bars["ts"].iloc[-1]),
         "costs_included": True,
         "initial_capital": config.initial_capital,
-        "ml_threshold": threshold,
+        "ml_threshold": threshold if ml else None,
+        "ml_evaluated": bool(ml),
         # Plain-English sentences the module declares about itself, with the
         # bound parameters filled in. Presentation only - the tear sheet's
         # strategy card reads these, and nothing else does.
         "logic": info.get("logic") or {},
     }
     for m in (metrics_a, metrics_b):
-        m["meta"] = meta
+        if m is not None:
+            m["meta"] = meta
 
     # Gate audit per version. Gates 2 and 3 report NOT EVALUATED unless the
     # caller supplied the walk-forward, bootstrap and holdout evidence, because
@@ -887,22 +905,38 @@ def run_dual_version_backtest(strategy_code: str,
     ho = holdout or {}
     audit_a = audit_acceptance_gates(metrics_a, rb.get("A"), ho.get("A"),
                                      version="A", name=info["module"])
-    audit_b = audit_acceptance_gates(metrics_b, rb.get("B"), ho.get("B"),
-                                     version="B", name=info["module"])
+    audit_b = (audit_acceptance_gates(metrics_b, rb.get("B"), ho.get("B"),
+                                      version="B", name=info["module"])
+               if ml else None)
 
-    suppressed = int(entries_a.sum() - entries_b.sum())
+    if ml:
+        comparison = {
+            "ml_evaluated": True,
+            "entries_a": int(entries_a.sum()),
+            "entries_b": int(entries_b.sum()),
+            "entries_suppressed": int(entries_a.sum() - entries_b.sum()),
+            "sharpe_delta": metrics_b["sharpe"] - metrics_a["sharpe"],
+            "b_beats_a": bool(metrics_b["sharpe"] > metrics_a["sharpe"]),
+        }
+    else:
+        # Every field a caller would compare on is None rather than 0 or False.
+        # `b_beats_a: False` here would read as "the filter was tried and lost".
+        comparison = {
+            "ml_evaluated": False,
+            "entries_a": int(entries_a.sum()),
+            "entries_b": None,
+            "entries_suppressed": None,
+            "sharpe_delta": None,
+            "b_beats_a": None,
+        }
+
     out = {
         "version_a": {"label": "A · rule-based", "metrics": metrics_a,
                       "result": result_a, "gate_audit": audit_a},
-        "version_b": {"label": "B · ML-filtered", "metrics": metrics_b,
-                      "result": result_b, "gate_audit": audit_b},
-        "comparison": {
-            "entries_a": int(entries_a.sum()),
-            "entries_b": int(entries_b.sum()),
-            "entries_suppressed": suppressed,
-            "sharpe_delta": metrics_b["sharpe"] - metrics_a["sharpe"],
-            "b_beats_a": bool(metrics_b["sharpe"] > metrics_a["sharpe"]),
-        },
+        "version_b": ({"label": "B · ML-filtered", "metrics": metrics_b,
+                       "result": result_b, "gate_audit": audit_b}
+                      if ml else None),
+        "comparison": comparison,
         "reports": None,
         "meta": meta,
     }

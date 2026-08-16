@@ -603,18 +603,29 @@ def _gate_line(audit: dict, key: str) -> str:
     return (audit or {}).get("gates", {}).get(key, {}).get("status", NOT_EVALUATED)
 
 
-def format_dual_scorecard(metrics_a: dict, metrics_b: dict,
+def format_dual_scorecard(metrics_a: dict, metrics_b: dict | None,
                           gate_audit_a: dict | None = None,
                           gate_audit_b: dict | None = None,
                           label_a: str = "A · rule-based",
                           label_b: str = "B · ML-filtered") -> str:
-    """The scorecard as a string, so it can be tested and written to a file."""
+    """
+    The scorecard as a string, so it can be tested and written to a file.
+
+    `metrics_b=None` means Version B was not run (`--ml` off on the batch
+    runner). The B and B−A columns are then omitted entirely rather than
+    printed as `n/a`: a column of dashes next to a header reading
+    "B · ML-filtered" invites the reading that the filter ran and produced
+    nothing, and the whole point of the mandate is that a missing comparison
+    is not a settled one. An empty dict is a Version B that ran and scored
+    nothing measurable, which is a different finding and still prints.
+    """
     W = 78
+    dual = metrics_b is not None
     L: list[str] = []
     add = L.append
 
     add("=" * W)
-    add("DUAL-VERSION SCORECARD")
+    add("DUAL-VERSION SCORECARD" if dual else "SCORECARD · VERSION A ONLY")
     add("=" * W)
 
     meta = (metrics_a or {}).get("meta") or (metrics_b or {}).get("meta") or {}
@@ -625,28 +636,36 @@ def format_dual_scorecard(metrics_a: dict, metrics_b: dict,
             f"{str(meta.get('end', '?'))[:19]}")
         add(f"Costs included: {'yes' if meta.get('costs_included') else 'NO — results are not comparable to live'}")
     add("")
-    add(f"  {'Metric':<22}{label_a:>20}{label_b:>20}{'B − A':>14}")
+    if dual:
+        add(f"  {'Metric':<22}{label_a:>20}{label_b:>20}{'B − A':>14}")
+    else:
+        add(f"  {'Metric':<22}{label_a:>20}")
     add("  " + "-" * (W - 4))
     for label, key, fmt, better in _SCORECARD_ROWS:
-        add(f"  {label:<22}{_cell(metrics_a, key, fmt):>20}"
-            f"{_cell(metrics_b, key, fmt):>20}"
-            f"{_delta_cell(metrics_a, metrics_b, key, fmt, better):>14}")
+        row = f"  {label:<22}{_cell(metrics_a, key, fmt):>20}"
+        if dual:
+            row += (f"{_cell(metrics_b, key, fmt):>20}"
+                    f"{_delta_cell(metrics_a, metrics_b, key, fmt, better):>14}")
+        add(row)
 
     add("")
     add("-" * W)
     add("ACCEPTANCE GATES")
     add("-" * W)
-    add(f"  {'Gate':<40}{'A':>18}{'B':>18}")
+    add(f"  {'Gate':<40}{'A':>18}" + (f"{'B':>18}" if dual else ""))
     for gk in ("gate1", "gate2", "gate3"):
         name = GATE_NAMES[gk]
         add(f"  {name:<40}{_gate_line(gate_audit_a, gk):>18}"
-            f"{_gate_line(gate_audit_b, gk):>18}")
+            + (f"{_gate_line(gate_audit_b, gk):>18}" if dual else ""))
     add("  " + "-" * (W - 4))
     add(f"  {'OVERALL':<40}{(gate_audit_a or {}).get('status', NOT_EVALUATED):>18}"
-        f"{(gate_audit_b or {}).get('status', NOT_EVALUATED):>18}")
+        + (f"{(gate_audit_b or {}).get('status', NOT_EVALUATED):>18}"
+           if dual else ""))
 
     # Per-criterion detail, so a FAIL says which number failed and by how much.
-    for audit, label in ((gate_audit_a, label_a), (gate_audit_b, label_b)):
+    detail = ((gate_audit_a, label_a), (gate_audit_b, label_b)) if dual \
+        else ((gate_audit_a, label_a),)
+    for audit, label in detail:
         if not audit:
             continue
         add("")
@@ -661,7 +680,9 @@ def format_dual_scorecard(metrics_a: dict, metrics_b: dict,
                 if c.get("note"):
                     add(f"        ! {c['note']}")
 
-    incomplete = [lbl for audit, lbl in ((gate_audit_a, "A"), (gate_audit_b, "B"))
+    audited = ([(gate_audit_a, "A"), (gate_audit_b, "B")] if dual
+               else [(gate_audit_a, "A")])
+    incomplete = [lbl for audit, lbl in audited
                   if audit and audit["status"] == NOT_EVALUATED]
     if incomplete:
         add("")
@@ -674,6 +695,14 @@ def format_dual_scorecard(metrics_a: dict, metrics_b: dict,
     add("VERDICT")
     add("-" * W)
     sa, sb = _pick(metrics_a, "sharpe"), _pick(metrics_b, "sharpe")
+    if not dual:
+        add(f"  Version A Sharpe {sa:.2f}. Version B was NOT RUN, so the "
+            f"Dual-Version")
+        add("  Mandate's comparison has not been made — not made is not lost.")
+        add("  Re-run with --ml before reading this as a result for the "
+            "baseline.")
+        add("=" * W)
+        return "\n".join(L)
     if math.isnan(sa) or math.isnan(sb):
         add("  Sharpe is undefined for at least one version — no comparison.")
     elif sb > sa:
@@ -689,7 +718,7 @@ def format_dual_scorecard(metrics_a: dict, metrics_b: dict,
     return "\n".join(L)
 
 
-def print_dual_scorecard(metrics_a: dict, metrics_b: dict,
+def print_dual_scorecard(metrics_a: dict, metrics_b: dict | None,
                          gate_audit_a: dict | None = None,
                          gate_audit_b: dict | None = None,
                          label_a: str = "A · rule-based",

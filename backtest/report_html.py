@@ -1357,7 +1357,8 @@ def write_dual_reports(dual: dict,
                        timestamp: str | None = None,
                        strat_description: str | None = None,
                        max_trade_rows: int = MAX_TRADE_ROWS,
-                       indicators: Any = None) -> dict[str, Any]:
+                       indicators: Any = None,
+                       prefix: str = "") -> dict[str, Any]:
     """
     Write `report_version_a.html` and `report_version_b.html` for a dual run.
 
@@ -1371,14 +1372,28 @@ def write_dual_reports(dual: dict,
     `indicators` are shared for the same reason: Version B filters Version A's
     entries, it does not recompute them, so both charts draw the same lines.
 
+    `prefix` names the files `report_<prefix>_version_a.html` and
+    `dual_metrics_<prefix>.json`. The multi-asset batch passes the symbol,
+    because one directory holds one run and a run covers many contracts — an
+    unprefixed NQ report and an unprefixed ES report written to the same folder
+    would leave only the second, with nothing raising and a leaderboard row
+    still pointing at both.
+
+    `dual["version_b"]` may be None (`run_dual_version_backtest(ml=False)`).
+    No Version B report is written then, and the snapshot records
+    `version_b: null` rather than an empty metrics block — a reader must not be
+    able to mistake a Version B that was never run for one that ran and scored
+    nothing.
+
     Without `out_dir`, the destination is
     `<artifacts_root>/<strat_name>_<timestamp>/`. The timestamp is part of the
     directory rather than the filename so a re-run never overwrites the
     evidence a promotion decision was made on.
     """
-    va, vb = dual["version_a"], dual["version_b"]
+    va, vb = dual["version_a"], dual.get("version_b")
     meta = dual.get("meta", {}) or {}
     name = strat_name or meta.get("strategy") or "strategy"
+    tag = f"_{prefix}" if prefix else ""
 
     if out_dir is None:
         stamp = timestamp or datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -1388,17 +1403,18 @@ def write_dual_reports(dual: dict,
     paths = {
         "version_a": generate_html_report(
             bars, va.get("result"), va.get("metrics", {}), va.get("gate_audit"),
-            out_dir / "report_version_a.html", strat_name=name,
+            out_dir / f"report{tag}_version_a.html", strat_name=name,
             strat_description=strat_description,
             version_label="Version A · rule-based", max_trade_rows=max_trade_rows,
             indicators=indicators),
-        "version_b": generate_html_report(
+    }
+    if vb is not None:
+        paths["version_b"] = generate_html_report(
             bars, vb.get("result"), vb.get("metrics", {}), vb.get("gate_audit"),
-            out_dir / "report_version_b.html", strat_name=name,
+            out_dir / f"report{tag}_version_b.html", strat_name=name,
             strat_description=strat_description,
             version_label="Version B · ML-filtered", max_trade_rows=max_trade_rows,
-            indicators=indicators),
-    }
+            indicators=indicators)
 
     # The metrics snapshot promote.py locks into meta.json. Written next to the
     # reports so a promotion always cites numbers from a specific run rather
@@ -1408,17 +1424,19 @@ def write_dual_reports(dual: dict,
         "comparison": dual.get("comparison", {}),
         "version_a": {"metrics": _jsonable(va.get("metrics", {})),
                       "gate_audit": _jsonable(va.get("gate_audit"))},
-        "version_b": {"metrics": _jsonable(vb.get("metrics", {})),
-                      "gate_audit": _jsonable(vb.get("gate_audit"))},
+        "version_b": ({"metrics": _jsonable(vb.get("metrics", {})),
+                       "gate_audit": _jsonable(vb.get("gate_audit"))}
+                      if vb is not None else None),
         "generated_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "reports": {k: str(v) for k, v in paths.items()},
     }
-    snap_path = out_dir / "dual_metrics.json"
+    snap_path = out_dir / f"dual_metrics{tag}.json"
     snap_path.write_text(json.dumps(snapshot, indent=2, default=str),
                          encoding="utf-8")
 
     return {"dir": out_dir, "report_version_a": paths["version_a"],
-            "report_version_b": paths["version_b"], "metrics_json": snap_path}
+            "report_version_b": paths.get("version_b"),
+            "metrics_json": snap_path}
 
 
 def _jsonable(obj: Any) -> Any:
