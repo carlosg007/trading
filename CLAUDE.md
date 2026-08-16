@@ -242,7 +242,7 @@ python3 backtest/status.py --watch 5    # redraw until the job leaves RUNNING
 # decision rests on.
 python3 backtest/promote.py --strat sma_crossover --version A \
   --source strategies/experimental/sma_crossover.py \
-  --metrics /mnt/backtest/artifacts/batch_sma_crossover_<ts>/dual_metrics_NQ.json
+  --metrics /mnt/backtest/artifacts/sma_crossover_<ts>/dual_metrics_NQ.json
 
 # Data manifest: path, size, SHA-256, row count, ts range per file.
 # Answers "have the bytes changed?"; validate_lake.py answers "is it sane?".
@@ -447,17 +447,49 @@ runs.
   returns interleaves instruments — a `rolling(200)` over it averages 27
   contracts and the equity curve still looks plausible. The runner reads
   through `iter_bars` and asserts the frame it got carries one symbol.
-- **Artifacts land in `/mnt/backtest/artifacts/batch_<strat>_<timestamp>/`**:
+- **Artifacts land in `/mnt/backtest/artifacts/<strat_name>_<timestamp>/`**:
   `report_<SYMBOL>_version_a.html` (and `_version_b` with `--ml`),
   `dual_metrics_<SYMBOL>.json`, `scan_<SYMBOL>.csv` with `--scan`,
   `summary_leaderboard.csv`, `job.json`, and `run.log` with `--bg`.
-- **`summary_leaderboard.csv`** carries one row per symbol per version:
-  parameters, `variants_tested`, the scan's selection rule, the full metric
-  set, all three gate statuses, the contract specs used, and the paths to the
-  report and the metrics snapshot. It is REWRITTEN from scratch after every
-  symbol, sorted by Sharpe within version with errored rows last, so a batch
-  killed at symbol 14 leaves a complete leaderboard of 14 rather than a
-  half-written line.
+- **`summary_leaderboard.csv`** carries **one row per symbol**, Version A and
+  Version B side by side, in this column order:
+
+  ```text
+  timestamp strategy symbol tf params
+  sharpe_a pf_a win_rate_a max_dd_a trades_a gate1_a
+  sharpe_b gate1_b selected_version html_report
+  status error variants_tested scan_selection
+  ```
+
+  `timestamp` is the run's stamp, identical on every row and equal to the
+  directory's, so leaderboards from several runs concatenate and group cleanly.
+  `sharpe_b` and `gate1_b` are **blank** when `--ml` was off, not `NOT
+  EVALUATED` — a version that never ran did not reach a gate, and one token for
+  both would make a skipped B look like a B whose robustness run is merely
+  outstanding. `html_report` names the selected version's tear sheet; its
+  sibling is one substitution away in the same directory.
+
+  **`selected_version` records which version led IN-SAMPLE and nothing more.**
+  It is not a promotion, not a gate result, and not the Dual-Version Mandate's
+  verdict — that needs B to beat A out-of-sample, which no run this script
+  performs can establish. Values are `A`, `B`, `A (B not run)` and
+  `NONE (no measurable Sharpe)`; a tie leaves A selected, because B has to beat
+  A and a tie is not a beat. `promote.py` still refuses a version whose gate
+  audit is not PASS, whatever this column says.
+
+  The last four columns sit **after** the declared schema rather than inside
+  it, so a reader slicing the first fifteen gets exactly the specified file.
+  They are there because dropping them would make the CSV lie rather than
+  merely make it shorter: without `status`/`error` a symbol that failed to load
+  reads as a strategy that produced nothing, and without `variants_tested` a
+  `--scan` Sharpe is the best of an unstated N.
+
+  It is REWRITTEN from scratch after every symbol, sorted by `sharpe_a` with
+  errored rows last, so a batch killed at symbol 14 leaves a complete
+  leaderboard of 14 rather than a half-written line. Sorted on A rather than on
+  the selected version because A is the column every row has — ranking on a
+  mixture would put a symbol whose ML filter happened to run above one where it
+  did not, which is a fact about the flags rather than about the market.
 - **One bad contract does not end the batch.** A missing spec, an empty slice
   of the lake or a strategy that raises on one symbol's data is recorded as an
   `ERROR` row and the loop moves on. The process exits 1 if anything failed.
@@ -547,6 +579,31 @@ signal_fn(bars) -> (entries, exits)       # when it takes none
 `bars` is ONE symbol's DataFrame, oldest to newest. Return two boolean Series
 aligned to it. A module may declare `TIMEFRAME`, `SYMBOLS`, and `DEFAULT_PARAMS`.
 
+### Every new strategy implements all four
+
+The loader tolerates a module that declares none of the following — several
+pre-existing ones do, and the tolerance is what keeps them loadable. It is not
+permission to write another. **Any strategy Claude creates carries all four**,
+because each one closes a specific way a result goes wrong silently:
+
+```python
+def signal_fn(bars: pd.DataFrame, **params) -> tuple[pd.Series, pd.Series]: ...
+def indicators(bars: pd.DataFrame, **params) -> dict[str, pd.Series]: ...
+LOGIC = {"concept": ..., "entry": ..., "exit": ...}
+PARAM_GRID = {"ema_period": [15, 20, 30], "atr_mult": [2.0, 2.5, 3.0]}
+```
+
+| Declaration | Without it |
+|---|---|
+| `signal_fn` | The engine cannot call the module at all. This is **the** contract — a module taking unpacked arrays is wrong, not merely unconventional. |
+| `indicators` | The trade inspector draws no lines, and the only way to see why a trade fired is to recompute the series somewhere else — where it is free to disagree with the signals and draw a crossover a bar from where the entry actually happened. |
+| `LOGIC` | The tear sheet's strategy card says "not declared". The alternative is inferring the rules from the trades, which is a guess printed as a fact. |
+| `PARAM_GRID` | `--scan` has nothing to sweep, so the parameters are whichever ones got typed first and were never compared against anything. |
+
+Write `indicators` in the same module and from the same column `signal_fn`
+reads. A second implementation living in the report would be free to disagree
+with this one, with nothing raising.
+
 A module may also declare the search space `backtest/run.py --scan` sweeps. It
 lives here because this module is the only place that knows what its parameters
 mean and what its signature will accept — `load_strategy` rejects unknown
@@ -584,6 +641,72 @@ nothing raising.
   a pure rule-based baseline (e.g. an SMA crossover); **Version B** adds an ML
   filter over the same signals. ML is adopted only if B beats A out-of-sample.
   *Note: LightGBM is not currently in `requirements.txt`.*
+
+---
+
+## The Strategy Request Template
+
+**Every strategy starts from a filled-in copy of this block. It is mandatory.**
+No module gets written from a one-line prompt — "try a mean reversion on ES" does
+not say over what period, against what costs, at what timeframe, or what would
+count as it working, and every one of those gets decided anyway. Decided
+silently, after the fact, by whoever is looking at the equity curve. A
+specification written before the backtest is the only version of it that cannot
+be adjusted to fit the result.
+
+The sections are ordered the way a strategy is judged: why it should work, what
+it trades, the rules, what they cost, and what would settle it.
+
+```markdown
+### STRATEGY SPECIFICATION & BACKTEST REQUEST
+
+**1. Hypothesis & Market Rationale**
+   - What inefficiency is being harvested, and why it persists
+   - Strategy family (see docs/STRATEGY_FAMILIES.md)
+
+**2. Universe & Data**
+   - Symbols:              NQ,ES  |  ALL
+   - Timeframe:            15m
+   - In-sample period:     2010-01-01 -> 2023-08-16
+   - Holdout (untouched):  final 3 years
+
+**3. Signal Logic (plain English)**
+   - Core concept:
+   - Entry trigger:
+   - Exit rule:
+   - Filters / regime conditions:
+
+**4. Risk & Execution**
+   - Stop / target:          none modelled unless stated
+   - Session flatten:        --flat-by-close ?
+   - Contracts:              1
+   - Slippage / commission:  1 tick each way + specs.py
+
+**5. Parameter Space & Acceptance**
+   - PARAM_GRID:
+   - Variants expected:
+   - Gates that must clear:  1 in-sample / 2 robustness / 3 holdout
+```
+
+Notes on filling it in, and on what each section is defending against:
+
+- **Section 1** is the part that cannot be recovered later. A strategy with no
+  stated reason for existing is indistinguishable from one found by searching
+  until something looked good, and the two fail differently in live markets.
+- **Section 2** names the holdout **before** the run. Reserving the last three
+  years afterwards is not reserving them — by then they have been seen.
+- **Section 3** becomes the module's `LOGIC` block close to verbatim. If a rule
+  cannot be stated here in plain English, it cannot be stated on the tear
+  sheet's strategy card either, and nobody deciding whether to trade it will be
+  able to read what it does.
+- **Section 4** is where the silent assumptions live. The engine models **no
+  stop and no take-profit** unless the strategy's own signals produce them, so
+  "none modelled" is the default and a drawdown read on the assumption of an
+  unstated stop is being read wrong.
+- **Section 5** fixes the size of the search before it runs. `--scan` reports
+  `variants_tested`, and a Sharpe read without knowing how many variants
+  produced it is not a measurement. Stating the gates up front is what stops
+  the acceptance criteria from being revised down to meet the result.
 
 ---
 
@@ -645,7 +768,7 @@ completed backtest is not thrown away over a busy NFS mount. Pass
 
 The batch runner passes `prefix=<SYMBOL>`, so its files are
 `report_<SYMBOL>_version_a.html` and `dual_metrics_<SYMBOL>.json` in
-`batch_<strat>_<timestamp>/`. One directory holds one run and a run covers many
+`<strat_name>_<timestamp>/`. One directory holds one run and a run covers many
 contracts; unprefixed, the second symbol's report would overwrite the first
 with nothing raising.
 
@@ -676,7 +799,7 @@ drawdown figure read on the assumption of an unstated stop is being read wrong.
 ```bash
 python3 backtest/promote.py --strat sma_crossover --version A \
     --source strategies/experimental/sma_crossover.py \
-    --metrics /mnt/backtest/artifacts/batch_sma_crossover_<ts>/dual_metrics_NQ.json
+    --metrics /mnt/backtest/artifacts/sma_crossover_<ts>/dual_metrics_NQ.json
 ```
 
 Promotion is per strategy, and a batch covers many contracts. Name the symbol
