@@ -149,7 +149,7 @@ def load_strategy(strategy_path: str | Path,
         signal_fn(bars)                            when it takes none
 
     Returns `(bound_signal_fn, module_info)`. `module_info` carries the
-    module's declared TIMEFRAME and SYMBOLS if it sets them.
+    module's declared TIMEFRAME, SYMBOLS and PARAM_GRID if it sets them.
 
     Two optional declarations are picked up for the tear sheet, and only for
     the tear sheet - neither can change a signal:
@@ -191,6 +191,11 @@ def load_strategy(strategy_path: str | Path,
         "timeframe": getattr(module, "TIMEFRAME", None),
         "symbols": getattr(module, "SYMBOLS", None),
         "default_params": dict(getattr(module, "DEFAULT_PARAMS", {}) or {}),
+        # The search space `backtest.scan` sweeps under --scan. Read here for
+        # the same reason as SYMBOLS and TIMEFRAME - the module is the one
+        # place that knows what its own parameters mean, and a grid written
+        # anywhere else would drift from the signature it has to bind against.
+        "param_grid": dict(getattr(module, "PARAM_GRID", {}) or {}),
     }
 
     factory = getattr(module, "make_signal_fn", None)
