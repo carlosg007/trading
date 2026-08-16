@@ -219,10 +219,11 @@ bt-status  # = .venv/bin/python3 ~/src/trading/backtest/status.py
 streamlit run dashboard/app.py
 
 # Tests. No pytest config - each is a script that exits non-zero on failure.
-# Ten suites. The first five, and test_batch_runner, need neither the lake nor
-# a network (test_batch_runner's --symbols checks skip, loudly, without it).
-# test_report_gates.py shells out to `node` for the trade inspector's own
-# checks and skips them, loudly, when node is absent.
+# Twelve suites. Everything except test_streaming_lake, test_engine_batching
+# and test_engine_vbt runs without the lake or a network (test_batch_runner's
+# --symbols checks and test_intraday_vol_mr's real-bar section skip, loudly,
+# without it). test_report_gates.py shells out to `node` for the trade
+# inspector's own checks and skips them, loudly, when node is absent.
 python tests/test_tier1.py              # intent routing, vault, synthesis errors
 python tests/test_tier2.py              # compliance, robustness, lifecycle
 python tests/test_tier3_workers.py      # worker tools, metrics, RAM ceiling
@@ -233,6 +234,8 @@ python tests/test_streaming_lake.py     # iter_bars and the streaming engine
 python tests/test_engine_batching.py    # chunked == unchunked, trade for trade
 python tests/test_engine_vbt.py         # vectorbt P&L == the legacy loop oracle
 python tests/test_batch_runner.py       # scan == engine, leaderboard, job tracker
+python tests/test_intraday_vol_mr.py    # the band-fade walk, against hand answers
+python tests/test_risk_params.py        # TP/SL/trailing walk, grid, leaderboard
 
 # Dual-version integration on real bars (needs the lake). Pin the thread count:
 # the ML filter refits per completed trade on a few dozen rows, and on a
@@ -482,10 +485,14 @@ runs.
   sharpe_a pf_a win_rate_a max_dd_a trades_a gate1_a
   sharpe_b gate1_b selected_version html_report
   status error variants_tested scan_selection
+  sl_atr_mult tp_atr_mult trailing
   ```
 
   `timestamp` is the run's stamp, identical on every row and equal to the
   directory's, so leaderboards from several runs concatenate and group cleanly.
+  `params` is the **full effective set** the signals were bound to — the
+  module's `DEFAULT_PARAMS` with `--param` and `--scan`'s winner layered over
+  them, not just what the CLI was handed.
   `sharpe_b` and `gate1_b` are **blank** when `--ml` was off, not `NOT
   EVALUATED` — a version that never ran did not reach a gate, and one token for
   both would make a skipped B look like a B whose robustness run is merely
@@ -500,12 +507,20 @@ runs.
   A and a tie is not a beat. `promote.py` still refuses a version whose gate
   audit is not PASS, whatever this column says.
 
-  The last four columns sit **after** the declared schema rather than inside
+  The last seven columns sit **after** the declared schema rather than inside
   it, so a reader slicing the first fifteen gets exactly the specified file.
   They are there because dropping them would make the CSV lie rather than
   merely make it shorter: without `status`/`error` a symbol that failed to load
   reads as a strategy that produced nothing, and without `variants_tested` a
   `--scan` Sharpe is the best of an unstated N.
+
+  `sl_atr_mult`, `tp_atr_mult` and `trailing` lift the winning **risk**
+  settings out of the `params` string into columns that filter and sort, which
+  is how "did the take-profit earn its place across contracts" gets answered.
+  A **blank** cell means the strategy declares no such parameter; the literal
+  word `None` under `tp_atr_mult` means it has one and this run modelled **no
+  take-profit at all**. Those are different statements and must not collapse
+  into one.
 
   It is REWRITTEN from scratch after every symbol, sorted by `sharpe_a` with
   errored rows last, so a batch killed at symbol 14 leaves a complete
@@ -548,6 +563,26 @@ highest Sharpe **among the combinations whose Gate 1 audit is PASS**.
   written to `cfg.variants_tested` and carried onto every report and every
   leaderboard row. A swept Sharpe is selected in-sample on the bars it is
   scored on; read without N it is not a measurement.
+- **Risk parameters sweep like any other.** Nothing in the scanner knows
+  whether a parameter is an indicator period or a stop multiplier — the
+  strategy module decides that. Two consequences, both silent when wrong:
+  - `None` is a legitimate grid VALUE (`tp_atr_mult: [2.5, 5.0, None]` searches
+    "no take-profit" as one of its points). pandas turns floats-and-`None` into
+    float64-and-NaN, and `NaN == None` is False, so the winner is matched with
+    `_same_value`, not `==`. Without it the winning row is never flagged
+    `selected` and the CSV shows a sweep with no winner beside a run that used
+    one. `scan_symbol` raises if the winner cannot be matched back at all.
+  - **Risk axes multiply.** Adding 4 stops × 5 targets × 2 trailing flags to a
+    48-cell indicator grid is 1,920 fits to one sample. `run.py` prints the
+    cell count before it sweeps and warns past `SIZE_WARN` (200). Nothing is
+    refused — a grid somebody deliberately wrote is theirs to run — but the
+    operator sees which claim they asked for before it starts.
+- **Ties break on the shallower drawdown.** Sharpe is the ranking metric
+  because it IS the risk-adjusted return; ranking on raw return would pick
+  whichever set took the most risk to get there. Ties are real once risk is
+  swept — a target no bar ever reaches and `tp_atr_mult=None` produce the same
+  trade list — and between two identical Sharpes the smaller `abs(max
+  drawdown)` wins rather than whichever the grid declared first.
 
 **`backtest/status.py`** — the job tracker, both halves. `JobTracker` is what
 the runner writes (atomically: temp file, then `os.replace`); `main()` is what
@@ -858,10 +893,23 @@ whose evidence the decision rests on — the snapshot records which contract
 produced the numbers.
 
 Writes `strategies/approved_incubator/<strat>/` — `strat.py`, `meta.json`
-(version, symbol, timeframe, params, locked metrics snapshot, gate statuses,
-SHA-256, timestamp), plus `baseline.py` for Version B — and commits that
-directory alone.
+(version, symbol, timeframe, params, `params_source`, the `risk` block, locked
+metrics snapshot, gate statuses, SHA-256, timestamp), plus `baseline.py` for
+Version B — and commits that directory alone.
 
+- **`meta.json` records the RUN's parameters, not the module's.** `params` is
+  the module's `DEFAULT_PARAMS` with the metrics snapshot's `meta.params`
+  layered over it and any explicit `--params` on top; `params_source` says
+  which layer won. That ordering matters as soon as `--scan` sweeps anything:
+  the promoted Sharpe came from the winning grid cell, and recording the
+  defaults beside it would describe a strategy nobody backtested — a stop
+  distance that never ran, sitting next to metrics that assume one that did.
+- **The `risk` block repeats the stop, target and trailing flag** under names
+  a reader (and the CrossTrade governance layer) can find without knowing what
+  a given strategy called its periods. Three states are kept distinct:
+  `"NOT DECLARED"` — the strategy has no such parameter; `null` — it has one
+  and this run modelled it off, which for `tp_atr_mult` means no take-profit at
+  all; or the value.
 - **Version A is promoted byte for byte** and its SHA-256 recorded, so the
   promoted file provably *is* the file that was backtested. A strategy cleaned
   up on the way through is a different strategy.
