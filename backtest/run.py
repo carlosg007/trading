@@ -1,26 +1,58 @@
 #!/usr/bin/env python3
 """
-run.py - run one strategy through the dual-version workflow, end to end.
+run.py - the multi-asset batch runner.
 
 Location:  ~/src/trading/backtest/run.py
 
-    python3 backtest/run.py --strat sma_crossover --symbol NQ --tf 1d
-    python3 backtest/run.py --strat sma_crossover --symbol NQ --tf 15m \\
-        --start 2018-01-01 --end 2023-12-31 --param fast_window=10
+    python3 backtest/run.py --strat sma_crossover --symbols NQ --tf 1d
+    python3 backtest/run.py --strat sma_crossover --symbols NQ,ES,CL --tf 15m
+    python3 backtest/run.py --strat sma_crossover --symbols ALL --scan --bg
+    bt-run --strat sma_crossover --symbols NQ,ES --tf 1d --ml
 
-The five documented steps, in order:
+Each symbol is a SEPARATE backtest
+----------------------------------
+The loop below runs one contract at a time and pools nothing. There is no
+blended portfolio anywhere in this file, and that is a correctness constraint
+rather than a stylistic one:
 
+  * `mdlib.lake.get_bars` returns rows sorted by `(ts, symbol)`, so a
+    concatenated frame INTERLEAVES instruments. A `close.rolling(200).mean()`
+    over that averages 27 different contracts into every window. The signals
+    come out the right length and the right dtype, nothing raises, and the
+    equity curve looks plausible - it produced 608,079 trades where the correct
+    per-symbol signals give 86,035. Bars are read through `iter_bars`, one
+    symbol at a time, precisely so that frame is never built.
+  * P&L is contract-specific. `backtest/specs.py` supplies the multiplier, the
+    tick size and the commission per symbol, and `_cost_arrays` looks them up
+    per simulation. A pooled run would have to pick one multiplier, and a wrong
+    multiplier silently rescales every P&L figure while the backtest still
+    looks fine.
+  * A 27-symbol equity curve answers a portfolio question. This runner answers
+    a per-market one: does the edge exist on THIS contract. Those are different
+    questions and the second has to be settled first.
+
+Cross-sectional work still matters - a daily strategy on ES alone over 16 years
+is 100-200 trades, too thin to separate skill from luck. The answer is running
+the same strategy across many symbols and reading the leaderboard, which is
+what this does. It is not the same thing as merging their trades.
+
+The five documented steps, per symbol
+-------------------------------------
     1. console scorecard and gate audit - Version A
     2. standalone HTML report with the trade inspector - Version A
-    3. console scorecard and gate audit - Version B
-    4. standalone HTML report with the trade inspector - Version B
+    3. console scorecard and gate audit - Version B      (--ml)
+    4. standalone HTML report with the trade inspector - Version B  (--ml)
     5. the four-choice menu
 
-Steps 1-4 happen here. Step 5 is printed and stops: nothing is promoted
-without a human, and this script has no path that promotes anything. The
-scorecard renders A and B as two columns of one table, so 1 and 3 arrive
-together with a B-minus-A delta between them - which is the comparison the
-Dual-Version Mandate is actually about.
+Steps 1-4 happen here, per symbol. Step 5 is printed once at the end and stops:
+nothing is promoted without a human, and this script has no path that promotes
+anything.
+
+Version B is OFF by default (`--ml` turns it on). The classifier refits once
+per completed trade, and 27 symbols of that is hours rather than minutes. A
+skipped Version B is reported as NOT RUN everywhere it appears - never as a
+Version B that scored nothing - because a comparison that was not made is not a
+comparison the baseline won.
 
 What this does NOT do
 ---------------------
@@ -29,12 +61,25 @@ final three years. Those are separate runs, this is not them, and they report
 NOT EVALUATED here. That is not a pass. A strategy leaving this script with
 Gate 1 green has cleared one gate of three.
 
-The run is IN-SAMPLE over whatever period is asked for. Reserve the last three
-years or the holdout is not a holdout.
+The run is IN-SAMPLE over whatever period is asked for, and `--scan` makes that
+sharper rather than softer: the winning parameters were selected on the very
+bars they are scored on. The number of combinations tested is carried onto
+every report and every leaderboard row for that reason.
 
-Bars come from `mdlib.lake.iter_bars`, one symbol at a time - never `get_bars`,
-whose frame interleaves symbols and would have a rolling mean averaging across
-contracts.
+Outputs
+-------
+`/mnt/backtest/artifacts/batch_<strat>_<timestamp>/` holds
+
+    report_<SYMBOL>_version_a.html      one per symbol
+    report_<SYMBOL>_version_b.html      one per symbol, with --ml
+    dual_metrics_<SYMBOL>.json          the snapshot promote.py locks in
+    scan_<SYMBOL>.csv                   every parameter combination, with --scan
+    summary_leaderboard.csv             one row per symbol per version
+    job.json                            the finished progress record
+    run.log                             stdout, with --bg
+
+The timestamp is on the directory, so a re-run never overwrites the evidence an
+earlier promotion decision was made on.
 """
 
 from __future__ import annotations
@@ -49,8 +94,11 @@ for _var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
     os.environ.setdefault(_var, "1")
 
 import argparse                                                   # noqa: E402
+import subprocess                                                 # noqa: E402
 import sys                                                        # noqa: E402
+import time                                                       # noqa: E402
 import traceback                                                  # noqa: E402
+from datetime import datetime, timezone                           # noqa: E402
 from pathlib import Path                                          # noqa: E402
 
 import pandas as pd                                               # noqa: E402
@@ -59,15 +107,36 @@ REPO = Path(__file__).resolve().parent.parent
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from agents.tier1_master import run_dual_version_backtest          # noqa: E402
-from agents.tier3_workers import load_strategy                     # noqa: E402
-from backtest.engine import BacktestConfig                         # noqa: E402
-from backtest.report import print_dual_scorecard                   # noqa: E402
-from mdlib.lake import iter_bars                                   # noqa: E402
+from agents.tier1_master import (_strategy_indicators,            # noqa: E402
+                                 run_dual_version_backtest)
+from agents.tier3_workers import load_strategy                    # noqa: E402
+from backtest.engine import BacktestConfig                        # noqa: E402
+from backtest.report import NOT_EVALUATED, print_dual_scorecard   # noqa: E402
+from backtest.report_html import write_dual_reports               # noqa: E402
+from backtest.specs import SPECS, get_spec                        # noqa: E402
+from backtest.status import DONE, FAILED, JobTracker              # noqa: E402
+from mdlib.lake import available_symbols, iter_bars               # noqa: E402
 
 SEARCH_DIRS = ("strategies/experimental", "strategies")
+ARTIFACTS_ROOT = Path(os.environ.get("BT_ARTIFACTS", "/mnt/backtest/artifacts"))
+
+# One row per symbol per version. Everything a reader needs to judge a row
+# without opening the report it points at - including how many parameter sets
+# it was selected from, because a Sharpe read without that is not a
+# measurement.
+LEADERBOARD_COLUMNS = [
+    "symbol", "version", "status", "timeframe", "params", "variants_tested",
+    "scan_selection", "sharpe", "sortino", "calmar", "profit_factor",
+    "win_rate_pct", "max_drawdown_pct", "total_return_pct", "cagr_pct",
+    "trades", "total_costs", "gate1", "gate2", "gate3", "gate_overall",
+    "bars", "start", "end", "multiplier", "tick_size", "commission_per_side",
+    "elapsed_s", "report_html", "metrics_json", "error",
+]
 
 
+# --------------------------------------------------------------------------
+# Resolution
+# --------------------------------------------------------------------------
 def resolve_strategy(name: str) -> Path:
     """
     A module path from either a path or a bare strategy name.
@@ -117,35 +186,186 @@ def parse_param(text: str) -> tuple[str, object]:
     return key, raw
 
 
+def parse_symbols(text: str | None, module_symbols: list | None) -> list[str]:
+    """
+    `NQ`, `NQ,ES,CL`, or `ALL`, falling back to the module's own SYMBOLS.
+
+    Every symbol is checked against the lake AND against `backtest/specs.py`
+    before a single bar is read. Both checks are up front on purpose: a batch
+    over 27 contracts takes long enough that discovering the twentieth has no
+    contract spec, after the first nineteen have run, wastes the run. A missing
+    spec is fatal rather than skippable - the multiplier is what turns a price
+    move into a dollar, and there is no defensible default for it.
+    """
+    if text:
+        raw = text.strip()
+        if raw.upper() == "ALL":
+            symbols = list(available_symbols())
+        else:
+            symbols = [s.strip().upper() for s in raw.split(",") if s.strip()]
+    elif module_symbols:
+        symbols = [str(s).strip().upper() for s in module_symbols]
+    else:
+        raise SystemExit(
+            "--symbols is required: the module declares no SYMBOLS, and the "
+            "symbol sets the contract multiplier, tick size and commission. "
+            "Guessing it would silently rescale every P&L figure.")
+
+    # Preserve the requested order, drop repeats. A symbol listed twice would
+    # otherwise be backtested twice and appear twice on the leaderboard.
+    seen, ordered = set(), []
+    for s in symbols:
+        if s not in seen:
+            seen.add(s)
+            ordered.append(s)
+
+    try:
+        in_lake = set(available_symbols())
+    except Exception as e:                                      # noqa: BLE001
+        raise SystemExit(f"could not list the lake: {type(e).__name__}: {e}")
+
+    missing = [s for s in ordered if s not in in_lake]
+    if missing:
+        raise SystemExit(
+            f"not in the lake: {', '.join(missing)}. Available: "
+            f"{', '.join(sorted(in_lake))}")
+
+    if not ordered:
+        raise SystemExit("--symbols resolved to nothing. Pass a symbol, a "
+                         "comma-separated list, or ALL.")
+
+    unspecced = [s for s in ordered if s not in SPECS]
+    if unspecced:
+        raise SystemExit(
+            f"no contract spec for: {', '.join(unspecced)}. Add them to "
+            f"backtest/specs.py - a backtest cannot compute P&L without the "
+            f"multiplier, and a default would silently rescale every figure.")
+
+    return ordered
+
+
 def load_bars(symbol: str, tf: str, start: str | None,
               end: str | None) -> pd.DataFrame:
-    """One symbol's bars, oldest first, exactly as the engine would read them."""
+    """
+    One symbol's bars, oldest first, exactly as the engine would read them.
+
+    `iter_bars` rather than `get_bars`: one frame, one instrument, no
+    interleaving, and peak RAM tracks the largest single symbol rather than the
+    lake.
+    """
     for sym, frame in iter_bars([symbol], tf, start, end):
         if sym == symbol and len(frame):
             return frame.reset_index(drop=True)
-    raise SystemExit(
+    raise ValueError(
         f"the lake returned no {tf} bars for {symbol} over "
-        f"{start or 'the start of history'} → {end or 'the end'}.")
+        f"{start or 'the start of history'} → {end or 'the end'}")
 
 
+# --------------------------------------------------------------------------
+# Leaderboard
+# --------------------------------------------------------------------------
+def _gate(audit: dict | None, key: str) -> str:
+    return (audit or {}).get("gates", {}).get(key, {}).get("status",
+                                                           NOT_EVALUATED)
+
+
+def leaderboard_row(symbol: str, version: str, metrics: dict | None,
+                    audit: dict | None, **extra) -> dict:
+    """
+    One leaderboard row.
+
+    `win_rate` is a fraction in `summarize_result` and a percent here, which is
+    the only unit conversion on this path; everything else is carried through
+    unchanged so a row and its report cannot disagree.
+    """
+    m = metrics or {}
+    win_rate = m.get("win_rate_pct")
+    if win_rate is None and m.get("win_rate") is not None:
+        win_rate = float(m["win_rate"]) * 100
+    row = {
+        "symbol": symbol,
+        "version": version,
+        "status": "OK",
+        "sharpe": m.get("sharpe"),
+        "sortino": m.get("sortino"),
+        "calmar": m.get("calmar"),
+        "profit_factor": m.get("profit_factor"),
+        "win_rate_pct": win_rate,
+        "max_drawdown_pct": m.get("max_drawdown_pct"),
+        "total_return_pct": m.get("total_return_pct"),
+        "cagr_pct": m.get("annualized_return_pct"),
+        "trades": m.get("trade_count"),
+        "total_costs": m.get("total_costs"),
+        "gate1": _gate(audit, "gate1"),
+        "gate2": _gate(audit, "gate2"),
+        "gate3": _gate(audit, "gate3"),
+        "gate_overall": (audit or {}).get("status", NOT_EVALUATED),
+    }
+    row.update(extra)
+    return {c: row.get(c) for c in LEADERBOARD_COLUMNS}
+
+
+def write_leaderboard(rows: list[dict], out_dir: Path) -> Path:
+    """
+    Rewrite `summary_leaderboard.csv` from scratch after every symbol.
+
+    Rewritten rather than appended so the file is always a complete, sorted
+    view of everything finished so far - a batch killed at symbol 14 leaves a
+    readable leaderboard of 14, not a half-written line. Sorted by Sharpe
+    within version, with errored rows last: a leaderboard whose top row is a
+    symbol that failed to load is not a leaderboard.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / "summary_leaderboard.csv"
+    df = pd.DataFrame(rows, columns=LEADERBOARD_COLUMNS)
+    if not df.empty:
+        df = df.assign(_err=df["status"].ne("OK"))
+        df = (df.sort_values(["_err", "version", "sharpe"],
+                             ascending=[True, True, False],
+                             na_position="last", kind="stable")
+                .drop(columns="_err")
+                .reset_index(drop=True))
+    df.to_csv(path, index=False)
+    return path
+
+
+# --------------------------------------------------------------------------
+# CLI
+# --------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
-        description="Run a strategy as Version A and Version B and write both "
-                    "tear sheets.",
+        description="Backtest a strategy across one or many contracts, one "
+                    "independent simulation each, and write a tear sheet and "
+                    "a leaderboard row for every one.",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--strat", required=True,
                     help="strategy name (searched under strategies/) or a path "
                          "to a .py module")
-    ap.add_argument("--symbol", help="contract to run. Defaults to the "
-                                     "module's first declared SYMBOLS entry.")
+    ap.add_argument("--symbols", help="one symbol (NQ), a comma-separated list "
+                                      "(NQ,ES,CL), or ALL for every symbol in "
+                                      "the lake. Defaults to the module's "
+                                      "SYMBOLS.")
+    ap.add_argument("--symbol", dest="symbols_legacy",
+                    help=argparse.SUPPRESS)   # the pre-batch spelling
     ap.add_argument("--tf", help="timeframe. Defaults to the module's "
-                                 "TIMEFRAME. 1m and 1d are stored; the rest "
-                                 "are derived by the lake reader.")
+                                 "TIMEFRAME, then 15m. 1m and 1d are stored; "
+                                 "the rest are derived by the lake reader.")
+    ap.add_argument("--scan", action="store_true",
+                    help="sweep the module's PARAM_GRID per symbol and keep "
+                         "the highest-Sharpe set that clears Gate 1")
+    ap.add_argument("--bg", action="store_true",
+                    help="detach and run the batch as a background process. "
+                         "Track it with bt-status.")
+    ap.add_argument("--ml", action="store_true",
+                    help="also run Version B (the ML filter) per symbol. Off "
+                         "by default: the classifier refits per completed "
+                         "trade, which across many symbols is hours.")
     ap.add_argument("--start", help="first bar, e.g. 2016-01-01")
     ap.add_argument("--end", help="last bar, e.g. 2023-12-31")
     ap.add_argument("--param", action="append", default=[], metavar="K=V",
                     help="strategy parameter, repeatable. Merges over the "
-                         "module's DEFAULT_PARAMS.")
+                         "module's DEFAULT_PARAMS, and pins that parameter "
+                         "under --scan only if the grid does not sweep it.")
     ap.add_argument("--threshold", type=float, default=0.50,
                     help="P(win) at or above which Version B keeps an entry "
                          "(default: 0.50)")
@@ -162,12 +382,13 @@ def build_parser() -> argparse.ArgumentParser:
                          "(Portfolio A / intraday setting)")
     ap.add_argument("--variants-tested", type=int, default=None,
                     help="how many variants this result was selected from. "
-                         "Carried onto the report — a Sharpe read without it "
-                         "is not a measurement.")
-    ap.add_argument("--out", help="directory for the reports. Defaults to "
-                                  "/mnt/backtest/artifacts/<strat>_<timestamp>/")
+                         "Carried onto every report. --scan fills it in with "
+                         "the size of the grid it actually evaluated.")
+    ap.add_argument("--out", help="directory for the artifacts. Defaults to "
+                                  "<artifacts>/batch_<strat>_<timestamp>/")
     ap.add_argument("--no-reports", action="store_true",
-                    help="skip the HTML tear sheets and print the scorecard only")
+                    help="skip the HTML tear sheets; scorecards and the "
+                         "leaderboard are still written")
     return ap
 
 
@@ -180,14 +401,208 @@ Next step — your call. Nothing here promotes anything.
     python3 backtest/promote.py --strat {strat} --version A \\
         --source {source} \\
         --metrics {metrics}
+
+Promotion is per strategy, and this run covered {n} contract(s). Pick the
+symbol whose evidence you are promoting on and pass that symbol's
+dual_metrics_<SYMBOL>.json — the file records which contract produced the
+numbers.
 """
 
 
+# --------------------------------------------------------------------------
+# Background launch
+# --------------------------------------------------------------------------
+def relaunch_detached(art_dir: Path) -> int:
+    """
+    Re-exec this script without --bg, detached, with stdout in the run's log.
+
+    `start_new_session` puts the child in its own session, so it survives the
+    terminal that started it closing - which is the point of --bg. The argv is
+    the user's own, minus --bg and with --out pinned to the directory the
+    parent already created, so the parent can print where the log will be
+    before the child has written a byte to it.
+    """
+    argv = [a for a in sys.argv[1:] if a != "--bg"]
+    # Both spellings, or `--out=/x` would slip past the check and the child
+    # would be handed a second --out. argparse takes the last one, which is
+    # this one, so the user's own choice would be silently discarded.
+    if not any(a == "--out" or a.startswith("--out=") for a in argv):
+        argv += ["--out", str(art_dir)]
+
+    art_dir.mkdir(parents=True, exist_ok=True)
+    log = art_dir / "run.log"
+    with open(log, "wb") as fh:
+        proc = subprocess.Popen(
+            [sys.executable, str(Path(__file__).resolve()), *argv],
+            stdout=fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+            cwd=str(REPO), start_new_session=True)
+
+    print(f"Batch detached.  pid {proc.pid}")
+    print(f"  artifacts : {art_dir}")
+    print(f"  log       : {log}")
+    print(f"  progress  : bt-status          (or python3 backtest/status.py)")
+    print(f"              bt-status --watch  to follow it")
+    return 0
+
+
+# --------------------------------------------------------------------------
+# One symbol
+# --------------------------------------------------------------------------
+def run_symbol(symbol: str,
+               path: Path,
+               info: dict,
+               args: argparse.Namespace,
+               tf: str,
+               params: dict,
+               art_dir: Path,
+               strat_name: str) -> list[dict]:
+    """
+    One contract, start to finish: bars, optional sweep, A (and B), reports.
+
+    Returns the leaderboard rows for this symbol - one for Version A, plus one
+    for Version B when it ran. Raises nothing a caller has to catch for control
+    flow; the batch loop catches everything so one bad contract cannot end a
+    27-symbol run.
+    """
+    t0 = time.time()
+    spec = get_spec(symbol)
+
+    print("\n" + "=" * 78)
+    print(f"{symbol}  ·  {tf}  ·  {strat_name}")
+    print("=" * 78)
+    print(f"  contract   : x{spec.multiplier:g} per point, tick {spec.tick_size:g} "
+          f"(${spec.tick_value:.2f}), ${spec.commission:.2f}/side")
+
+    bars = load_bars(symbol, tf, args.start, args.end)
+    # Belt and braces on the constraint the whole file is built around. The
+    # reader yields one symbol per frame; if that ever changed, every rolling
+    # window below would quietly start averaging across contracts.
+    if "symbol" in bars.columns and bars["symbol"].nunique() > 1:
+        raise ValueError(f"{symbol}: the lake returned an interleaved frame "
+                         f"({bars['symbol'].nunique()} symbols)")
+    print(f"  bars       : {len(bars):,}  "
+          f"{bars['ts'].iloc[0]} → {bars['ts'].iloc[-1]}")
+
+    cfg = BacktestConfig(
+        initial_capital=args.capital,
+        contracts=args.contracts,
+        slippage_ticks=args.slippage_ticks,
+        flat_by_close=args.flat_by_close,
+        variants_tested=args.variants_tested,
+        notes=f"backtest/run.py batch {symbol} {tf}")
+
+    run_params = dict(params)
+    scan_selection = None
+    if args.scan:
+        from backtest.scan import format_scan_summary, scan_symbol, write_scan_table
+
+        grid = info.get("param_grid") or {}
+        print("  scanning   : "
+              + ", ".join(f"{k}={v!r}" for k, v in grid.items()))
+        scan = scan_symbol(path, bars, symbol, cfg, grid,
+                           base_params=params, strat_name=strat_name)
+        print(format_scan_summary(scan))
+        write_scan_table(scan, art_dir)
+        scan_selection = scan["selection"]
+        if scan["winner"]:
+            run_params = {**params, **scan["winner"]["params"]}
+        # The search is part of the result. Selecting the best of N in-sample
+        # and reporting the Sharpe without N is the headline failure this
+        # project is built to avoid, so the count goes onto the config the
+        # reported run uses, not just into the scan CSV.
+        if args.variants_tested is None:
+            cfg.variants_tested = scan["evaluated"]
+
+    print(f"  parameters : {run_params or '(module defaults)'}")
+
+    # Rebind against the parameters this run actually uses. `info` was bound to
+    # the CLI's --param at startup, and under --scan the winning set is not
+    # those: drawing the overlay from the stale binding would put a Fast SMA(10)
+    # line under trades taken by a Fast SMA(20) crossover, with the chart a bar
+    # or two away from where the entry fired and nothing raising. The line a
+    # reader watches cross has to be the array the entry came from.
+    run_fn, run_info = load_strategy(path, run_params)
+    del run_fn
+
+    out = run_dual_version_backtest(
+        str(path), bars, freq=tf, symbol=symbol, cfg=cfg, params=run_params,
+        threshold=args.threshold, ml=args.ml,
+        emit_reports=False, strat_name=strat_name)
+
+    a = out["version_a"]
+    b = out["version_b"]
+
+    # Steps 1 and 3. Version A is the left column, because Version B only means
+    # anything measured against it.
+    print()
+    print_dual_scorecard(a["metrics"], b["metrics"] if b else None,
+                         a["gate_audit"], b["gate_audit"] if b else None)
+
+    # Steps 2 and 4. Prefixed with the symbol: one directory holds the whole
+    # batch, and an unprefixed NQ report and an unprefixed ES report would
+    # leave only the second with nothing raising.
+    reports, report_error = {}, None
+    if not args.no_reports:
+        try:
+            reports = write_dual_reports(
+                out, bars=bars, out_dir=art_dir, strat_name=strat_name,
+                indicators=_strategy_indicators(run_info, bars), prefix=symbol)
+            print("\n  Version A  : " + str(reports["report_version_a"]))
+            if reports.get("report_version_b"):
+                print("  Version B  : " + str(reports["report_version_b"]))
+            print("  Metrics    : " + str(reports["metrics_json"]))
+        except Exception as e:                                  # noqa: BLE001
+            # Recorded, printed, and the run continues. A completed backtest is
+            # not thrown away because an NFS mount was busy.
+            report_error = f"{type(e).__name__}: {e}"
+            print(f"\n[!] {symbol}: reports were NOT written: {report_error}",
+                  file=sys.stderr, flush=True)
+
+    meta = out["meta"]
+    common = {
+        "timeframe": tf,
+        "params": str(meta.get("params") or {}),
+        "variants_tested": cfg.variants_tested,
+        "scan_selection": scan_selection,
+        "bars": meta.get("bars"),
+        "start": meta.get("start"),
+        "end": meta.get("end"),
+        "multiplier": spec.multiplier,
+        "tick_size": spec.tick_size,
+        "commission_per_side": spec.commission,
+        "elapsed_s": round(time.time() - t0, 1),
+        "metrics_json": str(reports.get("metrics_json") or ""),
+        "error": report_error,
+    }
+
+    rows = [leaderboard_row(
+        symbol, "A", a["metrics"], a["gate_audit"],
+        report_html=str(reports.get("report_version_a") or ""), **common)]
+    if b is not None:
+        rows.append(leaderboard_row(
+            symbol, "B", b["metrics"], b["gate_audit"],
+            report_html=str(reports.get("report_version_b") or ""), **common))
+        cmp_ = out["comparison"]
+        print(f"\n  The filter suppressed {cmp_['entries_suppressed']:,} of "
+              f"{cmp_['entries_a']:,} entries. B beats A on Sharpe: "
+              f"{cmp_['b_beats_a']}.")
+    else:
+        print("\n  Version B (ML filter) was NOT RUN. Pass --ml to evaluate it; "
+              "until then the\n  Dual-Version Mandate's comparison is "
+              "outstanding, not settled.")
+
+    return rows
+
+
+# --------------------------------------------------------------------------
+# Batch
+# --------------------------------------------------------------------------
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
     path = resolve_strategy(args.strat)
     params = dict(parse_param(p) for p in args.param)
+    strat_name = path.parent.name if path.stem == "strat" else path.stem
 
     # Loaded once up front, purely to read its declarations and to fail on a
     # broken module before a lake read that can take minutes.
@@ -197,97 +612,111 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{type(e).__name__}: {e}", file=sys.stderr)
         return 1
 
-    symbol = args.symbol or (info.get("symbols") or [None])[0]
-    tf = args.tf or info.get("timeframe") or "1d"
-    if symbol is None:
-        print("--symbol is required: the module declares no SYMBOLS, and the "
-              "symbol sets the contract multiplier, tick size and commission. "
-              "Guessing it would silently rescale every P&L figure.",
-              file=sys.stderr)
+    symbols = parse_symbols(args.symbols or args.symbols_legacy,
+                            info.get("symbols"))
+    tf = args.tf or info.get("timeframe") or "15m"
+
+    if args.scan and not info.get("param_grid"):
+        print(f"--scan was passed but {strat_name} declares no PARAM_GRID, so "
+              f"there is nothing to sweep.\nAdd one to the module, or drop "
+              f"--scan.", file=sys.stderr)
         return 1
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    art_dir = Path(args.out) if args.out else ARTIFACTS_ROOT / f"batch_{strat_name}_{stamp}"
+
+    if args.bg:
+        return relaunch_detached(art_dir)
+
+    art_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Strategy   : {path.relative_to(REPO) if path.is_relative_to(REPO) else path}")
-    print(f"Symbol     : {symbol}   Timeframe: {tf}")
+    print(f"Symbols    : {len(symbols)} — {', '.join(symbols)}")
+    print(f"Timeframe  : {tf}")
     print(f"Parameters : {info.get('bound_params') or '(module defaults)'}")
+    print(f"Scan       : {'PARAM_GRID sweep per symbol' if args.scan else 'off'}")
+    print(f"Version B  : {'on' if args.ml else 'off (--ml to evaluate the ML filter)'}")
     print(f"Indicators : "
           f"{'declared — drawn on the trade inspector' if info.get('indicator_fn') else 'none declared'}")
-    print(f"\nReading {symbol} {tf} bars"
-          f"{f' {args.start} → {args.end}' if args.start or args.end else ''}…")
+    print(f"Artifacts  : {art_dir}")
+    print("\nEach symbol is an independent simulation on its own contract "
+          "spec. Nothing is pooled.")
 
-    try:
-        bars = load_bars(symbol, tf, args.start, args.end)
-    except SystemExit:
-        raise
-    except Exception:
-        print("\nLAKE READ FAILED:\n", file=sys.stderr)
-        traceback.print_exc()
-        return 1
-    print(f"{len(bars):,} bars, {bars['ts'].iloc[0]} → {bars['ts'].iloc[-1]}\n")
+    job = JobTracker(job_id=art_dir.name, strategy=strat_name, symbols=symbols,
+                     timeframe=tf, artifact_dir=art_dir, scan=args.scan,
+                     ml=args.ml)
+    job.start()
 
-    cfg = BacktestConfig(
-        initial_capital=args.capital,
-        contracts=args.contracts,
-        slippage_ticks=args.slippage_ticks,
-        flat_by_close=args.flat_by_close,
-        variants_tested=args.variants_tested,
-        notes=f"backtest/run.py {symbol} {tf}")
+    rows: list[dict] = []
+    failures = 0
+    # Written before the loop as well as inside it, so a batch that dies on its
+    # very first symbol still leaves a leaderboard file rather than nothing.
+    board = write_leaderboard(rows, art_dir)
+    for symbol in symbols:
+        job.start_symbol(symbol)
+        try:
+            new_rows = run_symbol(symbol, path, info, args, tf, params,
+                                  art_dir, strat_name)
+            rows.extend(new_rows)
+            a_row = new_rows[0]
+            job.finish_symbol(symbol, {
+                "status": "OK",
+                "sharpe": a_row["sharpe"],
+                "profit_factor": a_row["profit_factor"],
+                "trades": a_row["trades"],
+                "max_drawdown_pct": a_row["max_drawdown_pct"],
+                "gate1": a_row["gate1"],
+                "error": a_row["error"],
+            })
+        except Exception as e:                                  # noqa: BLE001
+            # One contract's failure is one contract's failure. A missing spec,
+            # an empty slice of the lake or a strategy that raises on this
+            # symbol's data must not end a 27-symbol batch that has been
+            # running for an hour - the row records what happened and the loop
+            # moves on.
+            failures += 1
+            reason = f"{type(e).__name__}: {e}"
+            print(f"\n[!] {symbol} FAILED: {reason}", file=sys.stderr)
+            traceback.print_exc()
+            rows.append(leaderboard_row(
+                symbol, "A", None, None, status="ERROR", timeframe=tf,
+                params=str(params), error=reason))
+            job.finish_symbol(symbol, {"status": "ERROR", "error": reason})
 
-    print("Running Version A (rule-based) and Version B (ML-filtered) under "
-          "identical costs…")
-    try:
-        out = run_dual_version_backtest(
-            str(path), bars, freq=tf, symbol=symbol, cfg=cfg, params=params,
-            threshold=args.threshold,
-            emit_reports=not args.no_reports,
-            report_dir=args.out,
-            strat_name=path.parent.name if path.stem == "strat" else path.stem)
-    except Exception:
-        print("\nTHE RUN RAISED:\n", file=sys.stderr)
-        traceback.print_exc()
-        return 1
+        board = write_leaderboard(rows, art_dir)
 
-    a, b = out["version_a"], out["version_b"]
+    job.finish(DONE if failures < len(symbols) else FAILED,
+               error=None if not failures else f"{failures} symbol(s) failed")
+    job.snapshot(art_dir)
 
-    # Steps 1 and 3: the scorecard puts both versions side by side with the
-    # gate table under them. Version A is the left column, because Version B
-    # only means anything measured against it.
-    print_dual_scorecard(a["metrics"], b["metrics"],
-                         a["gate_audit"], b["gate_audit"])
+    print("\n" + "=" * 78)
+    print("BATCH COMPLETE")
+    print("=" * 78)
+    ok = len([r for r in rows if r["status"] == "OK" and r["version"] == "A"])
+    print(f"  {ok}/{len(symbols)} symbols completed"
+          + (f", {failures} failed" if failures else ""))
+    print(f"  Leaderboard : {board}")
+    print(f"  Artifacts   : {art_dir}")
+    print("\n  Read each logic card before its metrics. It states what the "
+          "engine actually did —\n  fills on the next bar's open, no "
+          "stop-loss, no take-profit — and the trade inspector\n  draws the "
+          "strategy's own indicator lines over the candles of any trade you "
+          "click.")
+    print("\n  Every result here is IN-SAMPLE. Gates 2 and 3 report NOT "
+          "EVALUATED, which is not a\n  pass: the walk-forward, the bootstrap "
+          "and the held-back final three years are\n  separate runs, and this "
+          "script does not touch them.")
+    if args.scan:
+        print("\n  --scan selected each symbol's parameters on the same bars "
+              "it scored them on.\n  Every leaderboard row carries the number "
+              "of combinations that produced it.")
 
-    # Steps 2 and 4.
-    reports = out.get("reports") or {}
-    metrics_path = "<dual_metrics.json>"
-    if reports.get("error"):
-        print(f"\n[!] HTML reports were NOT written: {reports['error']}",
-              file=sys.stderr)
-    elif reports:
-        print("\nReports")
-        print(f"  Version A : {reports['report_version_a']}")
-        print(f"  Version B : {reports['report_version_b']}")
-        print(f"  Metrics   : {reports['metrics_json']}")
-        print("  Read the strategy logic card before the metrics. It states "
-              "what the engine actually did —\n  fills on the next bar's open, "
-              "no stop-loss, no take-profit — and the trade inspector draws "
-              "the\n  strategy's own indicator lines over the candles of any "
-              "trade you click.")
-        metrics_path = str(reports["metrics_json"])
-    elif args.no_reports:
-        print("\n(--no-reports: no tear sheets were written.)")
-
-    cmp_ = out["comparison"]
-    print(f"\nThe filter suppressed {cmp_['entries_suppressed']:,} of "
-          f"{cmp_['entries_a']:,} entries. B beats A on Sharpe: "
-          f"{cmp_['b_beats_a']}.")
-    print("This run is IN-SAMPLE. B winning here is not the evidence the "
-          "mandate asks for — that is\nthe held-back final three years, which "
-          "this script does not touch.")
-
-    # Step 5.
     print(MENU.format(
-        strat=path.parent.name if path.stem == "strat" else path.stem,
+        strat=strat_name,
         source=path.relative_to(REPO) if path.is_relative_to(REPO) else path,
-        metrics=metrics_path))
-    return 0
+        metrics=str(art_dir / f"dual_metrics_{symbols[0]}.json"),
+        n=len(symbols)))
+    return 0 if failures == 0 else 1
 
 
 if __name__ == "__main__":
