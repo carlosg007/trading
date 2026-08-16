@@ -24,11 +24,11 @@ below, the run is the finding — do not edit this block to match it.
                            EMA(trend_period), ATR(14), and SMA(ATR(14), 20).
        Default Parameters: fast_period=9, slow_period=21, trend_period=800,
                            sl_atr_mult=2.0, tp_atr_mult=3.0, trailing=True
-       PARAM_GRID:         see below — 162 combinations. The requested grid
-                           was 81; `tp_atr_mult=None` and the `trailing` axis
-                           are required by repo convention and the widest
-                           target was dropped to stay under the 200-cell
-                           bound. The reasoning is recorded at PARAM_GRID.
+       PARAM_GRID:         see below — 162 combinations. The target axis
+                           carries no `None` point, which is a departure from
+                           the convention the other risk-swept modules follow;
+                           the reasoning and what it costs are recorded at
+                           PARAM_GRID.
 
     4. ENTRY & EXIT EXECUTION RULES
        Long Entry:   close > EMA(trend_period)            (anchor regime)
@@ -263,10 +263,10 @@ DEFAULT_PARAMS = {"fast_period": 9, "slow_period": 21, "trend_period": 800,
 
 # The search space `backtest/run.py --scan` sweeps, declared here because this
 # module is the only place that knows what these parameters mean and what the
-# signature will accept. 3 x 3 x 3 x 3 x 2 = 162 combinations, every one of
+# signature will accept. 3 x 3 x 1 x 3 x 3 x 2 = 162 combinations, every one of
 # them valid (every fast value is below every slow value, and every slow value
-# is below the default trend period), so the scan reports 162 evaluated rather
-# than 162 attempted and some rejected.
+# is below 800), so the scan reports 162 evaluated rather than 162 attempted
+# and some rejected.
 #
 # 162 is inside, but near, the bound at which a search can still be reported
 # honestly. Each combination is a fit to the same in-sample bars, and the best
@@ -275,33 +275,41 @@ DEFAULT_PARAMS = {"fast_period": 9, "slow_period": 21, "trend_period": 800,
 # leaderboard row for exactly that reason. `tests/test_risk_params.py` caps
 # this at 200 cells.
 #
-# THE TARGET AXIS IS THREE POINTS, NOT FOUR, AND `None` IS ONE OF THEM.
-# The specification this module was written from asked for
-# `tp_atr_mult: [2.0, 3.0, 4.0]` with no `trailing` axis. Both of those
-# conflict with a repo convention that is load-bearing rather than stylistic:
-# `None` has to be a searched point so that "does the take-profit earn its
-# place at all" is something the sweep ANSWERS rather than something the grid
-# assumes, and `trailing` has to be swept for the same reason. Honouring both
-# on top of the requested axes would be 3 x 3 x 3 x 4 x 2 = 216 cells, past the
-# 200-cell bound — and raising that bound to fit the grid would be fitting the
-# honesty check to the search instead of the other way round.
+# THIS GRID SEARCHES NO "NO TAKE-PROFIT" POINT, AND THAT IS A REAL GAP.
+# `ema_crossover` puts `None` in its target axis so that "does the take-profit
+# earn its place at all?" is a question the sweep ANSWERS. This grid was
+# specified without it, deliberately and after the point was raised, so the
+# question is not asked here: every one of the 162 cells exits on a target, and
+# the winner is the best target rather than evidence that having one beats
+# having none.
 #
-# So the widest target, 4.0, is the point that gives way. 2.0 and 3.0 are kept
-# (3.0 is also the default, so the swept winner stays comparable to a default
-# run) and `None` takes the third slot. The periods and the stop multipliers
-# are exactly as specified.
+# What that costs, concretely. Point 4 of the module docstring notes there is
+# no signal exit, so the target and the stop are the ENTIRE discretionary exit
+# rule. Without a `None` cell the sweep cannot distinguish "the 2.0 x ATR
+# target is the edge" from "any target is worse than letting the stop and the
+# bell decide, and 2.0 is merely the least bad". If the scan's top cells all
+# cluster at the widest target, that is the shape a missing `None` point would
+# leave and it should be read as a reason to run one, not as a result.
 #
-# `trend_period` is NOT swept, and its absence is a decision rather than an
-# oversight. The anchor length is the strategy's premise: a sweep that moves it
-# is searching over which trend to believe in, which is a different claim from
-# "this trigger works inside this trend". It stays pinned at its
-# DEFAULT_PARAMS value for every cell, and the leaderboard's `params` column
-# records the value that ran.
+# Adding `None` as a fourth target value is 216 cells, past the 200-cell bound.
+# The cheap way to ask the question without growing the grid is a single
+# out-of-band run at the winning cell with `--param tp_atr_mult=None`, compared
+# against the swept winner. `tests/test_risk_params.py` records the exemption
+# per module rather than dropping the check, so this stays a decision on the
+# record instead of a convention that quietly eroded.
+#
+# `trend_period` is a ONE-VALUE axis: it is pinned at 800 rather than searched.
+# The anchor length is the strategy's premise, and a sweep that moves it is
+# searching over which trend to believe in — a different claim from "this
+# trigger works inside this trend". Declaring it here rather than omitting it
+# makes the pinned value explicit in the scan output and in the leaderboard's
+# `params` column, at no cost to the cell count.
 PARAM_GRID = {
     "fast_period": [5, 9, 13],
     "slow_period": [21, 34, 50],
+    "trend_period": [800],
     "sl_atr_mult": [1.0, 1.5, 2.0],
-    "tp_atr_mult": [2.0, 3.0, None],
+    "tp_atr_mult": [2.0, 3.0, 4.0],
     "trailing": [True, False],
 }
 

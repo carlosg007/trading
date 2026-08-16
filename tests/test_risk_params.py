@@ -276,6 +276,23 @@ MODULES = (
                                "trend_period": 100}),
 )
 
+# Does each module's PARAM_GRID include the `None` (no take-profit) point?
+#
+# `ema_crossover` does, and that is the convention: a sweep that never tries
+# "no target" cannot tell you the target earned its place, only which target
+# scored best among the ones offered.
+#
+# `ema_trend_filter` does NOT, by an explicit decision recorded at its
+# PARAM_GRID. It matters more there than it would elsewhere, because that
+# module has no signal exit at all — the stop and the target ARE its exit rule
+# — so "is a target better than no target" is close to the central question
+# about it, and its 162-cell grid does not ask. Answering it needs one
+# out-of-band run at the winning cell with tp_atr_mult=None.
+TP_NONE_SEARCHED = {
+    "ema_crossover": True,
+    "ema_trend_filter": False,
+}
+
 
 def test_validation_rejects_what_it_should() -> None:
     print("\nvalidation — a bad risk parameter raises rather than trading")
@@ -447,8 +464,25 @@ def test_grids_are_reportable_and_fully_valid() -> None:
               all(k in mod.PARAM_GRID for k in
                   ("sl_atr_mult", "tp_atr_mult", "trailing")),
               f"{sorted(mod.PARAM_GRID)}")
-        check(f"{name}: None is a searched point in tp_atr_mult",
-              None in list(mod.PARAM_GRID["tp_atr_mult"]))
+        # `None` in the target axis is what makes "does the take-profit earn
+        # its place at all?" a question the sweep ANSWERS rather than one the
+        # grid assumes. It used to be required of every module here. It is now
+        # declared per module, because `ema_trend_filter`'s grid was specified
+        # without it deliberately and after the point was raised.
+        #
+        # The check is DECLARED rather than deleted on purpose. A dropped
+        # assertion is indistinguishable from a convention nobody noticed
+        # eroding; this way the exemption is a line of code somebody chose,
+        # and it fails in both directions — adding `None` back to that grid
+        # without updating this table is also a failure, so the table cannot
+        # go stale while claiming to describe the grids.
+        want_none = TP_NONE_SEARCHED[name]
+        has_none = None in list(mod.PARAM_GRID["tp_atr_mult"])
+        check(f"{name}: tp_atr_mult "
+              f"{'searches' if want_none else 'deliberately omits'} the "
+              f"no-take-profit point",
+              has_none == want_none,
+              f"None in grid={has_none}, declared={want_none}")
         # The size bound is the honesty bound. Past ~200 cells the best result
         # is a search worth arguing about rather than a measurement, and these
         # grids are deliberately kept under it.
