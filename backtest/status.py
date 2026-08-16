@@ -219,15 +219,25 @@ def format_elapsed(seconds: float) -> str:
     return f"{s}s"
 
 
+FILL, EMPTY = "█", "░"
+
+
 def progress_bar(done: int, total: int, width: int = 40) -> str:
-    """`[####------] 12/27  44%`."""
+    """
+    `[████░░░░] 12/27  44.4%`.
+
+    Block characters rather than ASCII hashes: at a glance the bar is a bar
+    rather than a run of punctuation, and both glyphs occupy one cell in every
+    monospace font this will be read in, so the bar's width does not change as
+    it fills.
+    """
     total = max(0, int(total or 0))
     done = max(0, min(int(done or 0), total))
     if total == 0:
-        return f"[{'-' * width}] 0/0"
+        return f"[{EMPTY * width}] 0/0"
     filled = int(round(width * done / total))
     pct = 100.0 * done / total
-    return (f"[{'#' * filled}{'-' * (width - filled)}] "
+    return (f"[{FILL * filled}{EMPTY * (width - filled)}] "
             f"{done}/{total}  {pct:5.1f}%")
 
 
