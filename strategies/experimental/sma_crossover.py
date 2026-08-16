@@ -28,6 +28,18 @@ TIMEFRAME = "1d"
 SYMBOLS = ["NQ"]
 DEFAULT_PARAMS = {"fast_window": 10, "slow_window": 30}
 
+# The search space `backtest/run.py --scan` sweeps, declared here because this
+# module is the only place that knows what these parameters mean and what the
+# signature will accept. Kept coarse and few on purpose: nine combinations over
+# 4,000 daily bars is a search whose result can be reported honestly, and a
+# 400-cell grid over the same bars is a machine for manufacturing an in-sample
+# Sharpe. Every combination here is valid - fast is always below slow - so the
+# scan reports nine evaluated rather than nine attempted and four rejected.
+PARAM_GRID = {
+    "fast_window": [5, 10, 20],
+    "slow_window": [30, 50, 100],
+}
+
 # Plain-English description for the tear sheet's strategy card, written for a
 # reader deciding whether to trade this - not for whoever maintains the module.
 # `{param}` slots are filled with the run's own bound parameters, so the card
