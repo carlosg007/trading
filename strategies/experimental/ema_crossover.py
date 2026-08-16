@@ -300,7 +300,13 @@ def _walk_loop(entry_ok: np.ndarray,
 try:                                    # pragma: no cover - env dependent
     from numba import njit
 
-    _walk = njit(cache=True, nogil=True)(_walk_loop)
+    # No `cache=True`. `load_strategy` imports this module from a file path, so
+    # it is not importable by name. Compiling still works and numba writes the
+    # cache; it is the LOAD in a later process that fails, with
+    # `ModuleNotFoundError: No module named '<dynamic>'`, which is why the
+    # first run after a cache wipe looks clean and the second one dies.
+    # `backtest/engine.py` keeps its cache because it is imported normally.
+    _walk = njit(nogil=True)(_walk_loop)
 except ImportError:                     # pragma: no cover - env dependent
     # Same function, interpreted. `backtest.engine.clean_signals` degrades the
     # same way, and the fallback has to exist because a missing compiler must
