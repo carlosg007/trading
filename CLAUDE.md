@@ -182,12 +182,22 @@ There is no linter config or build step. Scripts are run directly.
 
 Run from the repo root.
 
+Two shell aliases live in `~/.bashrc`. Both name `.venv/bin/python3` explicitly
+rather than `python3`, because outside an activated venv `python3` is
+`/usr/bin/python3` and has neither pandas nor vectorbtpro:
+
+```bash
+bt-run     # = .venv/bin/python3 ~/src/trading/backtest/run.py
+bt-status  # = .venv/bin/python3 ~/src/trading/backtest/status.py
+```
+
 ```bash
 # CIO Command Center dashboard (frontend scaffold; agent backend is mocked)
 streamlit run dashboard/app.py
 
 # Tests. No pytest config - each is a script that exits non-zero on failure.
-# Nine suites, 658 checks. The first five need neither the lake nor a network.
+# Ten suites. The first five, and test_batch_runner, need neither the lake nor
+# a network (test_batch_runner's --symbols checks skip, loudly, without it).
 # test_report_gates.py shells out to `node` for the trade inspector's own
 # checks and skips them, loudly, when node is absent.
 python tests/test_tier1.py              # intent routing, vault, synthesis errors
@@ -199,25 +209,40 @@ python tests/test_clean_signals.py      # per-symbol signals vs the interleaved 
 python tests/test_streaming_lake.py     # iter_bars and the streaming engine
 python tests/test_engine_batching.py    # chunked == unchunked, trade for trade
 python tests/test_engine_vbt.py         # vectorbt P&L == the legacy loop oracle
+python tests/test_batch_runner.py       # scan == engine, leaderboard, job tracker
 
 # Dual-version integration on real bars (needs the lake). Pin the thread count:
 # the ML filter refits per completed trade on a few dozen rows, and on a
 # 16-core box each fit's thread pool costs far more than the fit.
 OMP_NUM_THREADS=1 python test_dual_version.py
 
-# Run one strategy through the whole dual-version workflow: lake -> A and B
-# under identical costs -> console scorecard + gate audit -> both tear sheets
-# -> the four-choice menu. Steps 1-4 of the workflow below; it promotes nothing.
-# Pins the thread count itself. Symbol and timeframe default to the module's
-# SYMBOLS / TIMEFRAME.
-python3 backtest/run.py --strat sma_crossover --symbol NQ --tf 1d
-python3 backtest/run.py --strat sma_crossover --tf 15m \
-  --start 2018-01-01 --end 2023-12-31 --param fast_window=10 --variants-tested 1
+# The multi-asset batch runner. One INDEPENDENT simulation per contract, on
+# that contract's own specs - nothing is ever pooled into a blended portfolio.
+# Steps 1-4 of the workflow below, per symbol; it promotes nothing. Pins the
+# thread count itself. Symbols default to the module's SYMBOLS, timeframe to
+# its TIMEFRAME and then 15m. Aliased to `bt-run`.
+python3 backtest/run.py --strat sma_crossover --symbols NQ,ES --tf 1d
+python3 backtest/run.py --strat sma_crossover --symbols ALL --tf 15m \
+  --start 2018-01-01 --end 2023-12-31 --scan --bg
+python3 backtest/run.py --strat sma_crossover --symbols NQ --ml   # also Version B
+
+#   --symbols  one (NQ), a list (NQ,ES,CL), or ALL for all 27 lake symbols
+#   --scan     sweep the module's PARAM_GRID per symbol (see the scanner below)
+#   --ml       also run Version B. OFF by default: the classifier refits once
+#              per completed trade, and 27 symbols of that is hours. A skipped
+#              Version B reports as NOT RUN everywhere, never as a zero.
+#   --bg       detach and run as a background daemon; follow it with bt-status
+
+# What the running batch is doing right now. Aliased to `bt-status`.
+python3 backtest/status.py              # one snapshot
+python3 backtest/status.py --watch 5    # redraw until the job leaves RUNNING
 
 # Promote a version into the incubator and commit it (see the workflow below).
+# The batch writes one snapshot per symbol, so name the contract the promotion
+# decision rests on.
 python3 backtest/promote.py --strat sma_crossover --version A \
   --source strategies/experimental/sma_crossover.py \
-  --metrics /mnt/backtest/artifacts/sma_crossover_<ts>/dual_metrics.json
+  --metrics /mnt/backtest/artifacts/batch_sma_crossover_<ts>/dual_metrics_NQ.json
 
 # Data manifest: path, size, SHA-256, row count, ts range per file.
 # Answers "have the bytes changed?"; validate_lake.py answers "is it sane?".
@@ -407,13 +432,78 @@ searchable/sortable trade log, and the click-to-inspect candlestick modal.
   draws the wrong trade, or a line sliced one bar out of step with the candles
   under it.
 
-**`backtest/run.py`** — the CLI that drives the dual-version workflow on real
-bars: resolves a strategy by name, reads one symbol through `iter_bars`, runs
-Version A and Version B under identical costs, prints the scorecard and the gate
-audit, writes both tear sheets, and stops at the four-choice menu. It promotes
-nothing and has no code path that could — that decision is a human's. Gates 2
-and 3 are NOT EVALUATED here; a walk-forward, a bootstrap and the 3-year holdout
-are separate runs.
+**`backtest/run.py`** — the multi-asset batch runner. Resolves a strategy by
+name, then loops: reads ONE symbol through `iter_bars`, optionally sweeps its
+`PARAM_GRID`, runs Version A (and Version B with `--ml`) under identical costs,
+prints the scorecard and the gate audit, writes that symbol's tear sheets, and
+appends its leaderboard row — then the next symbol. It stops at the four-choice
+menu, promotes nothing, and has no code path that could. Gates 2 and 3 are NOT
+EVALUATED here; a walk-forward, a bootstrap and the 3-year holdout are separate
+runs.
+
+- **Symbols are never blended.** Each contract is its own simulation on its own
+  `backtest/specs.py` multiplier, tick size and commission. A pooled frame
+  would have to pick one multiplier, and the concatenated frame `get_bars`
+  returns interleaves instruments — a `rolling(200)` over it averages 27
+  contracts and the equity curve still looks plausible. The runner reads
+  through `iter_bars` and asserts the frame it got carries one symbol.
+- **Artifacts land in `/mnt/backtest/artifacts/batch_<strat>_<timestamp>/`**:
+  `report_<SYMBOL>_version_a.html` (and `_version_b` with `--ml`),
+  `dual_metrics_<SYMBOL>.json`, `scan_<SYMBOL>.csv` with `--scan`,
+  `summary_leaderboard.csv`, `job.json`, and `run.log` with `--bg`.
+- **`summary_leaderboard.csv`** carries one row per symbol per version:
+  parameters, `variants_tested`, the scan's selection rule, the full metric
+  set, all three gate statuses, the contract specs used, and the paths to the
+  report and the metrics snapshot. It is REWRITTEN from scratch after every
+  symbol, sorted by Sharpe within version with errored rows last, so a batch
+  killed at symbol 14 leaves a complete leaderboard of 14 rather than a
+  half-written line.
+- **One bad contract does not end the batch.** A missing spec, an empty slice
+  of the lake or a strategy that raises on one symbol's data is recorded as an
+  `ERROR` row and the loop moves on. The process exits 1 if anything failed.
+- **`--ml` is opt-in.** Version B refits its classifier once per completed
+  trade; across many symbols that is hours. A skipped Version B is reported as
+  NOT RUN in the scorecard, the snapshot and the leaderboard — never as a
+  Version B that scored nothing, because a comparison that was not made is not
+  one the baseline won.
+
+**`backtest/scan.py`** — the vectorbt-native parameter sweep behind `--scan`. A
+strategy declares `PARAM_GRID = {"ema_period": [15, 20, 30], ...}`; every
+combination becomes a COLUMN of a single `vbt.Portfolio.from_signals` call, so a
+27-cell grid costs roughly one backtest rather than 27. The winner is the
+highest Sharpe **among the combinations whose Gate 1 audit is PASS**.
+
+- **The scanner's numbers are the engine's numbers.** Per-column trade lists are
+  built from the engine's own `_cost_arrays` and `_assemble_result`, with the
+  same one-bar signal shift and next-bar-open fill, so a column's metrics are
+  what `_simulate` would have produced for those parameters alone —
+  `tests/test_batch_runner.py` asserts it trade for trade. Fees are per column
+  because the fee fraction is quoted against the FILL price, and a bar where
+  one column enters while another exits has two different fills.
+- **Columns are batched** (`MAX_CELLS`) so peak RAM tracks bars × columns-per-
+  batch. `_simulate` batches bars for the same reason; this batches columns.
+- **A combination the strategy rejects is counted, not dropped.**
+  `sma_crossover` raises on `fast >= slow`, and a sweep that silently skipped
+  those would report a 9-cell search that tested 6.
+- **When nothing clears Gate 1** the highest Sharpe overall is returned with
+  `selection` set to `HIGHEST SHARPE · NO COMBINATION CLEARED GATE 1`. That
+  string goes into the leaderboard verbatim — the run still has to report
+  something, and labelling it is the alternative to inventing a pass.
+- **The search is part of the result.** The number of combinations evaluated is
+  written to `cfg.variants_tested` and carried onto every report and every
+  leaderboard row. A swept Sharpe is selected in-sample on the bars it is
+  scored on; read without N it is not a measurement.
+
+**`backtest/status.py`** — the job tracker, both halves. `JobTracker` is what
+the runner writes (atomically: temp file, then `os.replace`); `main()` is what
+`bt-status` reads. `active_job.json` is a single well-known path
+(`$BT_ACTIVE_JOB`, default `/mnt/backtest/artifacts/active_job.json`) holding
+job id, strategy, symbol counts, the symbol currently evaluating, start time and
+a mini-scorecard per completed symbol. It is a progress indicator, not evidence
+— each batch overwrites it, and the copy that stays with the reports is
+`job.json` in the run's own directory. A job whose state is RUNNING but whose
+PID is gone reads as **STALE**, because a bar frozen at 12/27 looks identical
+whether the run is slow or dead.
 
 **`backtest/promote.py`** — promotes one version into
 `strategies/approved_incubator/<strat>/` and commits it. See the workflow below.
@@ -456,6 +546,19 @@ signal_fn(bars) -> (entries, exits)       # when it takes none
 
 `bars` is ONE symbol's DataFrame, oldest to newest. Return two boolean Series
 aligned to it. A module may declare `TIMEFRAME`, `SYMBOLS`, and `DEFAULT_PARAMS`.
+
+A module may also declare the search space `backtest/run.py --scan` sweeps. It
+lives here because this module is the only place that knows what its parameters
+mean and what its signature will accept — `load_strategy` rejects unknown
+parameter names, so a stale key raises rather than being quietly ignored:
+
+```python
+PARAM_GRID = {"ema_period": [15, 20, 30], "atr_mult": [2.0, 2.5, 3.0]}
+```
+
+Keep it coarse and small. Nine combinations over 4,000 daily bars is a search
+whose result can be reported honestly; a 400-cell grid over the same bars is a
+machine for manufacturing an in-sample Sharpe.
 
 Two further declarations are optional, read by the loader, and used **only by
 the tear sheet** — neither can change a signal:
@@ -527,7 +630,10 @@ and the whole point of the mandate is that B is only interesting relative to A.
 
 `print_dual_scorecard(metrics_a, metrics_b, audit_a, audit_b)` renders both
 columns side by side with a `B − A` delta, the gate table, per-criterion detail
-for every FAIL, and the verdict.
+for every FAIL, and the verdict. Passing `metrics_b=None` (Version B was not
+run) drops the B and `B − A` columns entirely and says so in the verdict — a
+column of `n/a` under a header reading "B · ML-filtered" invites the reading
+that the filter ran and produced nothing.
 
 `report_version_a.html` and `report_version_b.html`, plus `dual_metrics.json`,
 land in `/mnt/backtest/artifacts/<strat_name>_<timestamp>/`. The timestamp is on
@@ -536,6 +642,12 @@ earlier promotion decision was made on. A write failure is recorded in
 `result["reports"]["error"]` and printed to stderr — never raised, because a
 completed backtest is not thrown away over a busy NFS mount. Pass
 `emit_reports=False` to skip.
+
+The batch runner passes `prefix=<SYMBOL>`, so its files are
+`report_<SYMBOL>_version_a.html` and `dual_metrics_<SYMBOL>.json` in
+`batch_<strat>_<timestamp>/`. One directory holds one run and a run covers many
+contracts; unprefixed, the second symbol's report would overwrite the first
+with nothing raising.
 
 Each report carries the gate badges, the alpha metrics, the equity and
 underwater curves, the strategy logic card, the monthly heatmap, a searchable
@@ -564,8 +676,12 @@ drawdown figure read on the assumption of an unstated stop is being read wrong.
 ```bash
 python3 backtest/promote.py --strat sma_crossover --version A \
     --source strategies/experimental/sma_crossover.py \
-    --metrics /mnt/backtest/artifacts/sma_crossover_<ts>/dual_metrics.json
+    --metrics /mnt/backtest/artifacts/batch_sma_crossover_<ts>/dual_metrics_NQ.json
 ```
+
+Promotion is per strategy, and a batch covers many contracts. Name the symbol
+whose evidence the decision rests on — the snapshot records which contract
+produced the numbers.
 
 Writes `strategies/approved_incubator/<strat>/` — `strat.py`, `meta.json`
 (version, symbol, timeframe, params, locked metrics snapshot, gate statuses,
@@ -628,7 +744,12 @@ never OOS validation.
 commissions and slippage (default 1 tick each way) are applied.
 
 **Cross-sectional by default.** A daily strategy on ES alone over 16 years is
-~100-200 trades — too thin to separate skill from luck. Pass a symbol list.
+~100-200 trades — too thin to separate skill from luck. Pass a symbol list:
+`bt-run --strat <name> --symbols ALL`. That runs 27 independent backtests and
+gives you a leaderboard, which is the cross-sectional evidence. It is NOT the
+same as merging their trades into one equity curve, and nothing in the runner
+does that — an edge has to exist on a contract before a portfolio of them means
+anything.
 
 **Intraday work respects `intraday_start_year`.** Pre-2013 1-minute data is
 sparse for ten symbols — volume reconciles exactly against daily bars, but a 30m
