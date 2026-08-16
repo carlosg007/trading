@@ -226,8 +226,24 @@ def test_no_exit_is_checked_on_the_signal_bar() -> None:
 # --------------------------------------------------------------------------
 # 2. The parameter contract
 # --------------------------------------------------------------------------
-def synthetic(n: int = 1500, seed: int = 5) -> pd.DataFrame:
-    """A 15m frame with enough drift for a trend module to find entries."""
+def synthetic(n: int = 4000, seed: int = 5) -> pd.DataFrame:
+    """
+    A 15m frame with enough drift for a trend module to find entries.
+
+    `n` is 4000 because 1500 was not enough, and the way it was not enough is
+    the point. Both modules gate entries to 09:30-15:30 ET, which is a quarter
+    of a 24-hour futures session, and `ema_trend_filter` additionally needs a
+    crossover, the anchor trend and expanding volatility to line up on the same
+    bar. At 1500 bars that yielded TWO trades, and neither of them ever reached
+    a 1.0 x ATR target — so `test_risk_params_change_the_trades` compared a
+    take-profit run against a no-take-profit run, got identical exits, and the
+    check passed or failed on whether two arbitrary trades happened to hit a
+    level rather than on whether the parameter reaches the simulation.
+
+    A check that cannot fail when the code is broken is worse than no check.
+    4000 bars gives seven entries at these settings, which is enough for the
+    stop, the target and the trailing flag each to change the exit array.
+    """
     rng = np.random.default_rng(seed)
     ts = pd.date_range("2022-03-01 13:30", periods=n, freq="15min", tz="UTC")
     px = 100 + np.cumsum(rng.normal(0.02, 0.4, n))
@@ -241,9 +257,23 @@ def synthetic(n: int = 1500, seed: int = 5) -> pd.DataFrame:
     })
 
 
+# The non-risk parameters each module is bound with. Order matters as well as
+# content: `test_indicators_track_the_settings` calls `_signal_arrays` with
+# `*base.values()`, so these must be listed in the module's own positional
+# order.
+#
+# `ema_trend_filter` is exercised at trend_period=100 rather than at its
+# DEFAULT_PARAMS value of 800. That is a fixture decision, not a claim about
+# the strategy: EMA(800) stays NaN until bar 799, so on a 4000-bar frame it
+# spends a fifth of the sample warming up and yields four entries instead of
+# seven. Nothing here tests the anchor length — these cases test that the risk
+# parameters reach the simulation — so the shorter anchor buys trades to
+# measure that on. The 800-bar default is exercised where it matters, against
+# real bars, by the runner.
 MODULES = (
     ("ema_crossover", EC, {"fast_period": 9, "slow_period": 21}),
-    ("ema_trend_filter", ETF, {"trend_period": 100, "pullback_period": 20}),
+    ("ema_trend_filter", ETF, {"fast_period": 9, "slow_period": 21,
+                               "trend_period": 100}),
 )
 
 
