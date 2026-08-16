@@ -83,6 +83,14 @@ import numpy as np
 import pandas as pd
 
 from .specs import get_spec
+# The ratio definitions live in backtest.report and are imported rather than
+# reimplemented here. A second local Sharpe would be free to disagree with the
+# one the tear sheet prints for the same run, with nothing raising - and the
+# daily-close standardization these depend on is exactly the kind of detail
+# that drifts between two copies. report.py imports nothing from this package,
+# so the dependency is one-way.
+from .report import daily_metrics as report_daily_metrics
+from .report import daily_returns as report_daily_returns
 
 # Imported lazily-ish: everything in this module except _simulate is plain
 # pandas and stays importable (and testable) without vectorbt installed.
@@ -123,6 +131,13 @@ class BacktestConfig:
     # Costs. Defaults come from backtest/specs.py per symbol; these override.
     commission_per_side: float | None = None   # dollars per contract
     slippage_ticks: float = 1.0                # each way
+
+    # Annual risk-free rate as a fraction (0.04 for 4%), subtracted from the
+    # DAILY returns as rf / 252 before Sharpe and Sortino. Zero by default:
+    # these are futures strategies scored on the edge, and a non-zero rate
+    # would quietly rank a 2015 backtest against a different hurdle than a
+    # 2023 one. Set it deliberately, and it is recorded in stats["basis"].
+    risk_free_rate: float = 0.0
 
     # Portfolio A constraints
     flat_by_close: bool = False
@@ -649,12 +664,19 @@ def _daily_returns(trades: pd.DataFrame,
                    days: pd.DatetimeIndex,
                    initial_capital: float) -> tuple[pd.Series, pd.Series]:
     """
-    Convert a trade list into a daily return series.
+    Convert a trade list into a DAILY equity curve and a daily return series.
+
+    This is where the engine's metric frequency is fixed, and it is fixed at
+    one point per session regardless of the timeframe the bars were read at. A
+    15m backtest and a 1d backtest of the same strategy therefore produce
+    return series that are directly comparable and that sqrt(252) correctly
+    annualizes - see `backtest.report.daily_returns` for what goes wrong when
+    a ratio is annualized at the wrong root.
 
     P&L is attributed to the exit date, which is when it is realised. Every
-    calendar day in the backtest window appears, including flat days - a
-    strategy that trades rarely should show that in its return series rather
-    than compressing time.
+    session in the backtest window appears, including flat days - a strategy
+    that trades rarely should show that in its return series rather than
+    compressing time. Sessions the market did not trade never appear at all.
 
     `days` is the sorted set of session dates covered by the bars. It is
     accumulated per symbol in run_backtest rather than derived here, so
@@ -670,7 +692,10 @@ def _daily_returns(trades: pd.DataFrame,
         daily_pnl = daily_pnl.add(by_day.reindex(idx).fillna(0.0), fill_value=0.0)
 
     equity = initial_capital + daily_pnl.cumsum()
-    returns = equity.pct_change().fillna(0.0)
+    # Seeded on the starting capital so the first session is scored rather than
+    # consumed as the base of the series. The returned series keeps one entry
+    # per session, exactly as before.
+    returns = report_daily_returns(equity, initial_capital)
     return returns, equity
 
 
@@ -716,13 +741,21 @@ def _assemble_result(all_trades: list[pd.DataFrame],
     breach = (check_trailing_drawdown(equity, cfg.trailing_drawdown_pct)
               if cfg.trailing_drawdown_pct else {})
 
-    dd = equity / equity.cummax() - 1.0
-    sd = returns.std(ddof=1)
+    # Sharpe, Sortino and Calmar all come out of ONE call on ONE daily equity
+    # series, so they cannot end up sampled at different frequencies. `basis`
+    # records which frequency, annualization factor and risk-free rate
+    # produced them and is carried into the scorecard JSON - a ratio whose
+    # sampling is not stated is not reproducible.
+    m = report_daily_metrics(equity, cfg.initial_capital, cfg.risk_free_rate)
     stats = {
         "n_trades": len(trades),
         "total_return_pct": float((equity.iloc[-1] / cfg.initial_capital - 1) * 100),
-        "sharpe": float(returns.mean() / sd * np.sqrt(252)) if sd else float("nan"),
-        "max_dd_pct": float(dd.min() * 100),
+        "sharpe": m["sharpe"],
+        "sortino": m["sortino"],
+        "calmar": m["calmar"],
+        "annualized_return_pct": m["annualized_return_pct"],
+        "max_dd_pct": m["max_dd_pct"],
+        "basis": m["basis"],
         "total_costs": float(trades["costs"].sum()) if not trades.empty else 0.0,
         "gross_pnl": float(trades["gross_pnl"].sum()) if not trades.empty else 0.0,
         "net_pnl": float(trades["pnl"].sum()) if not trades.empty else 0.0,

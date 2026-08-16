@@ -219,7 +219,7 @@ bt-status  # = .venv/bin/python3 ~/src/trading/backtest/status.py
 streamlit run dashboard/app.py
 
 # Tests. No pytest config - each is a script that exits non-zero on failure.
-# Twelve suites. Everything except test_streaming_lake, test_engine_batching
+# Thirteen suites. Everything except test_streaming_lake, test_engine_batching
 # and test_engine_vbt runs without the lake or a network (test_batch_runner's
 # --symbols checks and test_intraday_vol_mr's real-bar section skip, loudly,
 # without it). test_report_gates.py shells out to `node` for the trade
@@ -236,6 +236,7 @@ python tests/test_engine_vbt.py         # vectorbt P&L == the legacy loop oracle
 python tests/test_batch_runner.py       # scan == engine, leaderboard, job tracker
 python tests/test_intraday_vol_mr.py    # the band-fade walk, against hand answers
 python tests/test_risk_params.py        # TP/SL/trailing walk, grid, leaderboard
+python tests/test_daily_metrics.py      # the daily-close metric frequency contract
 
 # Dual-version integration on real bars (needs the lake). Pin the thread count:
 # the ML filter refits per completed trade on a few dozen rows, and on a
@@ -392,6 +393,22 @@ trades, equity, breach, stats)`.
   31 December is silently dropped, which flatters results.
 - **Fills are at the next bar's open, never the signal bar's close.** Acting on
   the bar that produced the signal is lookahead bias.
+- **Every risk-adjusted ratio is computed on DAILY CLOSES**, whatever timeframe
+  the bars were read at. `_daily_returns` collapses the equity curve to one
+  point per session, and `_assemble_result` derives Sharpe, Sortino and Calmar
+  from that one series via `backtest.report.daily_metrics` — so a 15m run and a
+  1d run of the same strategy are directly comparable, and the sqrt(252) in
+  `report.sharpe` is applied at the frequency it actually annualizes. Handing
+  those functions an intraday return series does not raise; it just returns a
+  number scaled by the wrong root. The sampling frequency, annualization
+  factor, risk-free rate (`BacktestConfig.risk_free_rate`, 0 by default) and
+  day count travel with the numbers as `stats["basis"]`, and reach the
+  scorecard JSON as `metrics_basis`.
+  **"Daily" means one point per session date PRESENT IN THE DATA, not
+  `.resample("1D").last().ffill()`** — a calendar resample invents weekend and
+  holiday rows that carry a return of exactly 0.0, dragging the mean and
+  standard deviation toward a 365-day year while the sqrt(252) stays put. On a
+  20-session synthetic run that alone moved Sharpe from -15.08 to -11.26.
 - **Costs are mandatory:** slippage and commissions applied at this layer.
 - **Numba:** `clean_signals` compiles its two-state machine via `njit`
   (`cache=True, nogil=True`) and falls back to the interpreted loop when numba

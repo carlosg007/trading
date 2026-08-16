@@ -77,6 +77,10 @@ if str(_REPO) not in sys.path:
 from backtest.engine import (BacktestConfig, BacktestResult,  # noqa: E402
                              _pair_trades, round_turn_cost, run_backtest)
 from backtest.report import sortino as report_sortino  # noqa: E402
+from backtest.report import (annualized_return_pct  # noqa: E402
+                             as report_annualized_return_pct)
+from backtest.report import calmar as report_calmar  # noqa: E402
+from backtest.report import to_daily_equity as report_to_daily_equity  # noqa: E402
 from backtest.specs import get_spec  # noqa: E402
 
 ARTIFACTS = Path("/mnt/backtest/artifacts")
@@ -364,21 +368,17 @@ def _profit_factor(trades: pd.DataFrame) -> float:
 
 def _annualized_return_pct(equity: pd.Series, initial_capital: float) -> float:
     """
-    CAGR from the equity curve, in percent.
+    CAGR from the equity curve, in percent. Delegated to
+    `backtest.report.annualized_return_pct`.
 
-    Uses trading days rather than calendar days because the curve is indexed on
-    sessions. Returns NaN rather than a complex number when equity has gone to
-    or below zero.
+    Delegated for the same reason `_sortino` is: the equity curve is first
+    collapsed onto daily closes, and a second local copy of that step would be
+    free to drift from the one the engine and the tear sheet use.
     """
     if equity is None or len(equity) < 2:
         return float("nan")
-    final = float(equity.iloc[-1])
-    if final <= 0 or initial_capital <= 0:
-        return float("nan")
-    years = len(equity) / TRADING_DAYS
-    if years <= 0:
-        return float("nan")
-    return float(((final / initial_capital) ** (1.0 / years) - 1.0) * 100.0)
+    return report_annualized_return_pct(report_to_daily_equity(equity),
+                                        initial_capital)
 
 
 def _sortino(returns: pd.Series) -> float:
@@ -399,17 +399,10 @@ def _sortino(returns: pd.Series) -> float:
 
 def _calmar(annualized_return_pct: float, max_drawdown_pct: float) -> float:
     """
-    CAGR over the absolute max drawdown, both already in percent.
-
-    NaN when there was no drawdown: a strategy that never drew down has an
-    undefined Calmar, not an infinite one, and an inf here reads as a headline
-    result rather than as a degenerate sample.
+    CAGR over the absolute max drawdown, both already in percent. Delegated to
+    `backtest.report.calmar`.
     """
-    if math.isnan(annualized_return_pct) or math.isnan(max_drawdown_pct):
-        return float("nan")
-    if max_drawdown_pct == 0:
-        return float("nan")
-    return float(annualized_return_pct / abs(max_drawdown_pct))
+    return report_calmar(annualized_return_pct, max_drawdown_pct)
 
 
 def summarize_result(result: BacktestResult,
@@ -432,9 +425,17 @@ def summarize_result(result: BacktestResult,
     stats = result.stats or {}
     final_equity = (float(result.equity.iloc[-1])
                     if result.equity is not None and len(result.equity) else float("nan"))
-    annualized_pct = _annualized_return_pct(result.equity,
-                                            result.config.initial_capital)
     max_dd_pct = float(stats.get("max_dd_pct", float("nan")))
+    # The engine already computed these off its daily equity curve and recorded
+    # the basis they were sampled on. Preferring its numbers - rather than
+    # recomputing from `result.returns` - is what keeps the scorecard JSON
+    # identical to the stats the run was judged on. The fallbacks are for a
+    # BacktestResult assembled by hand, which is how several tests build one.
+    annualized_pct = float(stats.get(
+        "annualized_return_pct",
+        _annualized_return_pct(result.equity, result.config.initial_capital)))
+    sortino_val = float(stats.get("sortino", _sortino(result.returns)))
+    calmar_val = float(stats.get("calmar", _calmar(annualized_pct, max_dd_pct)))
     out: dict[str, Any] = {
         "ok": True,
         # Equity at or below zero is a blown account, not a bad quarter. It is
@@ -450,8 +451,12 @@ def summarize_result(result: BacktestResult,
         "total_return_pct": float(stats.get("total_return_pct", float("nan"))),
         "annualized_return_pct": annualized_pct,
         "sharpe": float(stats.get("sharpe", float("nan"))),
-        "sortino": _sortino(result.returns),
-        "calmar": _calmar(annualized_pct, max_dd_pct),
+        "sortino": sortino_val,
+        "calmar": calmar_val,
+        # How the three ratios above were sampled. Travels into the scorecard
+        # JSON so a Sharpe is never read without knowing the frequency and the
+        # risk-free rate behind it.
+        "metrics_basis": dict(stats.get("basis", {})),
         "max_drawdown_pct": max_dd_pct,
         "win_rate": _win_rate(trades),
         "profit_factor": _profit_factor(trades),
@@ -478,7 +483,7 @@ def _empty_metrics(reason: str) -> dict[str, Any]:
         "total_pnl": float("nan"), "gross_pnl": float("nan"),
         "total_costs": float("nan"), "total_return_pct": float("nan"),
         "annualized_return_pct": float("nan"), "sharpe": float("nan"),
-        "sortino": float("nan"), "calmar": float("nan"),
+        "sortino": float("nan"), "calmar": float("nan"), "metrics_basis": {},
         "max_drawdown_pct": float("nan"), "win_rate": float("nan"),
         "profit_factor": float("nan"), "trade_count": 0,
         "breach": {}, "n_days": 0,

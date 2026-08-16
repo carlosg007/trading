@@ -78,16 +78,32 @@ def prepare_returns(df: pd.DataFrame) -> pd.Series:
     s[date_col] = pd.to_datetime(s[date_col])
     s = s.sort_values(date_col).set_index(date_col)
 
+    eq_col = next((cols[c] for c in ("equity", "value", "nav", "balance")
+                   if c in cols), None)
+
     if ret_col is not None:
         r = s[ret_col].astype(float)
-    else:
-        # Fall back to deriving returns from an equity curve
-        eq_col = next((cols[c] for c in ("equity", "value", "nav", "balance") if c in cols), None)
-        if eq_col is None:
-            sys.exit(f"No returns or equity column found. Columns: {list(df.columns)}")
+    elif eq_col is not None:
         r = s[eq_col].astype(float).pct_change()
+    else:
+        sys.exit(f"No returns or equity column found. Columns: {list(df.columns)}")
 
-    return r.dropna()
+    r = r.dropna()
+
+    # Every ratio below annualizes with sqrt(TRADING_DAYS), so a file saved at
+    # an intraday frequency has to be collapsed onto daily closes before any of
+    # them is computed. Nothing about a 15m return series announces itself -
+    # it is the right dtype with a sane-looking index - so the check is made
+    # here, once, rather than trusted to whoever produced the parquet.
+    if is_intraday(r.index):
+        equity = (s[eq_col].astype(float) if eq_col is not None
+                  else equity_curve(r))
+        r = daily_returns(equity)
+        print(f"  note: input is intraday ({len(s)} rows over "
+              f"{r.index.normalize().nunique()} sessions) - metrics are "
+              f"computed on daily closes.", file=sys.stderr)
+
+    return r
 
 
 # --------------------------------------------------------------------------
@@ -140,6 +156,148 @@ def sortino(returns: pd.Series, rf: float = 0.0) -> float:
     if dd == 0 or np.isnan(dd):
         return float("nan")
     return float(excess.mean() / dd * np.sqrt(TRADING_DAYS))
+
+
+# --------------------------------------------------------------------------
+# Daily standardization
+#
+# Every ratio in this module annualizes with sqrt(TRADING_DAYS), so every ratio
+# in this module requires a DAILY return series. Handing `sharpe` a 15m return
+# series neither raises nor looks wrong - it silently reports a number scaled
+# by the wrong root, because sqrt(252) does not annualize 6,552 bars a year.
+# These helpers put an equity curve onto daily closes first, so the
+# annualization factor matches the sampling frequency.
+#
+# "Daily" here means one point per SESSION DATE PRESENT IN THE DATA, carrying
+# that session's LAST observation. It deliberately does NOT mean
+# `.resample("1D").last().ffill()`. A calendar resample manufactures rows for
+# weekends and exchange holidays - days the market never traded - and each one
+# carries a return of exactly 0.0. Those zeros pull the mean and the standard
+# deviation toward a 365-day year while the sqrt(252) factor stays put, so the
+# ratio moves for a reason that has nothing to do with the strategy. Measured
+# on a 20-session synthetic run, padding weekends that way turned a Sharpe of
+# -15.08 into -11.26. Grouping on the dates actually present also skips
+# holidays for free, which a `B`-frequency resample would still invent.
+# --------------------------------------------------------------------------
+def is_intraday(index: pd.DatetimeIndex) -> bool:
+    """True when the index carries more than one observation on some date."""
+    if not isinstance(index, pd.DatetimeIndex) or len(index) < 2:
+        return False
+    return len(index) > index.normalize().nunique()
+
+
+def to_daily_equity(equity: pd.Series) -> pd.Series:
+    """
+    Collapse an equity / portfolio-value curve onto daily closes: the last
+    value observed in each session, indexed on that session's date.
+
+    Idempotent. A curve already carrying one point per session comes back with
+    its index normalized to midnight and nothing else changed, so this is safe
+    to apply to a series that is already daily rather than something a caller
+    has to know whether to skip.
+    """
+    if equity is None or len(equity) == 0:
+        return equity
+    if not isinstance(equity.index, pd.DatetimeIndex):
+        raise TypeError("to_daily_equity needs a DatetimeIndex, got "
+                        f"{type(equity.index).__name__}.")
+    daily = equity.groupby(equity.index.normalize()).last()
+    daily.index.name = equity.index.name
+    return daily
+
+
+def daily_returns(equity: pd.Series,
+                  initial_capital: float | None = None) -> pd.Series:
+    """
+    Daily simple returns off an equity curve, standardized onto daily closes.
+
+    `initial_capital` seeds the curve one step before its first session, so
+    that session's return is a real measurement instead of a dropped NaN.
+    Without a seed `pct_change` has no prior close to compare the opening
+    session against, and that session's P&L is spent establishing the base of
+    the series rather than being scored in it. Usually a no-op - most
+    strategies need a warm-up before their first exit - but it is not a no-op
+    for a strategy that closes a trade on day one, and the difference is
+    invisible in the output.
+    """
+    daily = to_daily_equity(equity)
+    if daily is None or len(daily) == 0:
+        return pd.Series(dtype=float)
+    if initial_capital is not None:
+        step = (daily.index[1] - daily.index[0] if len(daily) > 1
+                else pd.Timedelta(days=1))
+        seed = pd.Series([float(initial_capital)], index=[daily.index[0] - step])
+        daily = pd.concat([seed, daily])
+    return daily.pct_change().dropna()
+
+
+def annualized_return_pct(daily_equity: pd.Series,
+                          initial_capital: float) -> float:
+    """
+    CAGR from a daily equity curve, in percent.
+
+    Years are counted in SESSIONS (len / TRADING_DAYS) rather than in calendar
+    days, because the curve is indexed on sessions and a calendar denominator
+    would charge the strategy for the weekends its index does not contain.
+    NaN rather than a complex number when equity reached or passed zero.
+    """
+    if daily_equity is None or len(daily_equity) < 2:
+        return float("nan")
+    final = float(daily_equity.iloc[-1])
+    if final <= 0 or initial_capital <= 0:
+        return float("nan")
+    years = len(daily_equity) / TRADING_DAYS
+    if years <= 0:
+        return float("nan")
+    return float(((final / initial_capital) ** (1.0 / years) - 1.0) * 100.0)
+
+
+def calmar(annualized_pct: float, max_drawdown_pct: float) -> float:
+    """
+    CAGR over the absolute max drawdown, both already in percent.
+
+    NaN when there was no drawdown: a strategy that never drew down has an
+    undefined Calmar, not an infinite one, and an inf here reads as a headline
+    result rather than as the degenerate sample it is. Drawdown is taken on
+    magnitude because the engine signs it negative.
+    """
+    if math.isnan(annualized_pct) or math.isnan(max_drawdown_pct):
+        return float("nan")
+    if max_drawdown_pct == 0:
+        return float("nan")
+    return float(annualized_pct / abs(max_drawdown_pct))
+
+
+def daily_metrics(equity: pd.Series,
+                  initial_capital: float,
+                  rf: float = 0.0) -> dict:
+    """
+    The three risk-adjusted ratios, all off ONE daily equity series.
+
+    Single entry point so Sharpe, Sortino and Calmar cannot end up sampled at
+    different frequencies - which is exactly how a scorecard ends up printing
+    a daily Sharpe next to an intraday Sortino with nothing raising. `basis`
+    travels with the numbers so a reader can see which frequency and which
+    risk-free rate produced them.
+    """
+    daily_eq = to_daily_equity(equity)
+    rets = daily_returns(equity, initial_capital)
+    dd = (daily_eq / daily_eq.cummax() - 1.0) if daily_eq is not None and len(daily_eq) else None
+    max_dd_pct = float(dd.min() * 100) if dd is not None and len(dd) else float("nan")
+    ann_pct = annualized_return_pct(daily_eq, initial_capital)
+    return {
+        "sharpe": sharpe(rets, rf) if len(rets) else float("nan"),
+        "sortino": sortino(rets, rf) if len(rets) else float("nan"),
+        "calmar": calmar(ann_pct, max_dd_pct),
+        "annualized_return_pct": ann_pct,
+        "max_dd_pct": max_dd_pct,
+        "basis": {
+            "frequency": "daily_close",
+            "annualization_factor": TRADING_DAYS,
+            "risk_free_rate": float(rf),
+            "n_days": int(len(rets)),
+        },
+    }
 
 
 def drawdown_series(returns: pd.Series) -> pd.Series:
