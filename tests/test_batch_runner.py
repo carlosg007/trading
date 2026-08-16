@@ -75,8 +75,9 @@ from backtest.engine import (BacktestConfig, _assemble_result, _simulate,
                              clean_signals)
 from backtest.report import NOT_EVALUATED, format_dual_scorecard
 from backtest.report_html import write_dual_reports
-from backtest.run import (LEADERBOARD_COLUMNS, leaderboard_row, parse_param,
-                          parse_symbols, write_leaderboard)
+from backtest.run import (LEADERBOARD_COLUMNS, SEL_A, SEL_A_ONLY, SEL_B,
+                          SEL_NONE, leaderboard_row, parse_param, parse_symbols,
+                          select_version, write_leaderboard)
 from backtest.scan import (SELECTED_GATE1, SELECTED_NO_GATE1, ScanError,
                            _batch_columns, expand_grid, format_scan_summary,
                            scan_symbol, write_scan_table)
@@ -401,45 +402,95 @@ def test_ml_off_is_absent_not_zero(tmp: Path) -> None:
 # --------------------------------------------------------------------------
 # Leaderboard
 # --------------------------------------------------------------------------
+DECLARED_SCHEMA = [
+    "timestamp", "strategy", "symbol", "tf", "params",
+    "sharpe_a", "pf_a", "win_rate_a", "max_dd_a", "trades_a", "gate1_a",
+    "sharpe_b", "gate1_b", "selected_version", "html_report",
+]
+
+
+def _audit(gate1: str) -> dict:
+    return {"status": gate1,
+            "gates": {"gate1": {"status": gate1},
+                      "gate2": {"status": NOT_EVALUATED},
+                      "gate3": {"status": NOT_EVALUATED}}}
+
+
 def test_leaderboard(tmp: Path) -> None:
     print("\nsummary_leaderboard.csv")
 
-    audit = {"status": "FAIL",
-             "gates": {"gate1": {"status": "FAIL"},
-                       "gate2": {"status": NOT_EVALUATED},
-                       "gate3": {"status": NOT_EVALUATED}}}
+    audit = _audit("FAIL")
     metrics = {"sharpe": 0.9, "sortino": 1.4, "calmar": 0.3,
                "profit_factor": 1.8, "win_rate": 0.52, "max_drawdown_pct": -12.0,
                "total_return_pct": 40.0, "annualized_return_pct": 5.0,
                "trade_count": 88, "total_costs": 900.0}
+    reports = {"report_version_a": "/art/report_NQ_version_a.html",
+               "report_version_b": "/art/report_NQ_version_b.html"}
 
-    row = leaderboard_row("NQ", "A", metrics, audit, timeframe="1d",
-                          multiplier=20.0, tick_size=0.25)
-    check("every declared column is present, and only those",
+    row = leaderboard_row("20260816_120000", "sma_crossover", "NQ", "1d",
+                          metrics, audit, reports=reports, params="{'f': 10}")
+    check("the declared fifteen columns lead, in the declared order",
+          list(row)[:15] == DECLARED_SCHEMA, str(list(row)[:15]))
+    check("every column is present, and only those",
           list(row) == LEADERBOARD_COLUMNS)
     check("win_rate is converted to a percent exactly once",
-          row["win_rate_pct"] == 52.0, str(row["win_rate_pct"]))
-    check("gate statuses are carried per gate",
-          (row["gate1"], row["gate2"], row["gate3"], row["gate_overall"])
-          == ("FAIL", NOT_EVALUATED, NOT_EVALUATED, "FAIL"))
-    check("contract specs are on the row",
-          row["multiplier"] == 20.0 and row["tick_size"] == 0.25)
+          row["win_rate_a"] == 52.0, str(row["win_rate_a"]))
+    check("Version A's gate 1 is carried",
+          row["gate1_a"] == "FAIL" and row["trades_a"] == 88
+          and row["pf_a"] == 1.8 and row["max_dd_a"] == -12.0)
+    check("the run stamp and strategy identify the run",
+          row["timestamp"] == "20260816_120000"
+          and row["strategy"] == "sma_crossover" and row["tf"] == "1d")
 
-    good = [leaderboard_row("NQ", "A", {**metrics, "sharpe": 0.5}, audit),
-            leaderboard_row("ES", "A", {**metrics, "sharpe": 1.9}, audit),
-            leaderboard_row("CL", "A", {**metrics, "sharpe": 1.1}, audit),
-            leaderboard_row("GC", "A", None, None, status="ERROR",
-                            error="no bars"),
-            leaderboard_row("ES", "B", {**metrics, "sharpe": 2.5}, audit)]
+    # Version B absent vs Version B present, and what each says.
+    check("with no Version B, its columns are blank rather than NOT EVALUATED",
+          row["sharpe_b"] is None and row["gate1_b"] is None,
+          "a skipped B must not read like a B awaiting robustness evidence")
+    check("selected_version says B was never run",
+          row["selected_version"] == SEL_A_ONLY, row["selected_version"])
+    check("html_report points at Version A's tear sheet",
+          row["html_report"] == reports["report_version_a"])
+
+    with_b = leaderboard_row("t", "s", "NQ", "1d", metrics, audit,
+                             metrics_b={"sharpe": 1.4}, audit_b=_audit("PASS"),
+                             reports=reports)
+    check("a winning B is selected and its own report is named",
+          with_b["selected_version"] == SEL_B
+          and with_b["sharpe_b"] == 1.4 and with_b["gate1_b"] == "PASS"
+          and with_b["html_report"] == reports["report_version_b"])
+    losing_b = leaderboard_row("t", "s", "NQ", "1d", metrics, audit,
+                               metrics_b={"sharpe": 0.1}, audit_b=_audit("FAIL"),
+                               reports=reports)
+    check("a losing B leaves A selected",
+          losing_b["selected_version"] == SEL_A
+          and losing_b["html_report"] == reports["report_version_a"])
+
+    # select_version on its own, including the cases that produce no number.
+    nan = float("nan")
+    check("select_version handles an unmeasurable Sharpe on either side",
+          (select_version({"sharpe": nan}, None) == SEL_NONE
+           and select_version({"sharpe": nan}, {"sharpe": nan}) == SEL_NONE
+           and select_version({"sharpe": 1.0}, {"sharpe": nan}) == SEL_A
+           and select_version({"sharpe": nan}, {"sharpe": 1.0}) == SEL_B))
+    check("an equal Sharpe leaves A selected, not B",
+          select_version({"sharpe": 1.0}, {"sharpe": 1.0}) == SEL_A,
+          "B has to BEAT A, and a tie is not a beat")
+
+    good = [leaderboard_row("t", "s", "NQ", "1d", {**metrics, "sharpe": 0.5}, audit),
+            leaderboard_row("t", "s", "ES", "1d", {**metrics, "sharpe": 1.9}, audit),
+            leaderboard_row("t", "s", "CL", "1d", {**metrics, "sharpe": 1.1}, audit),
+            leaderboard_row("t", "s", "GC", "1d", None, None, status="ERROR",
+                            selected_version=SEL_NONE, error="no bars")]
     path = write_leaderboard(good, tmp / "board")
     df = pd.read_csv(path)
 
     check("the file is written where the reports are",
           path.name == "summary_leaderboard.csv" and path.exists())
-    check("every row survives", len(df) == 5, f"{len(df)}")
-    a_rows = df[(df["version"] == "A") & (df["status"] == "OK")]
-    check("Version A rows are sorted by Sharpe, best first",
-          list(a_rows["symbol"]) == ["ES", "CL", "NQ"], str(list(a_rows["symbol"])))
+    check("one row per symbol", len(df) == 4, f"{len(df)}")
+    ok_rows = df[df["status"] == "OK"]
+    check("rows are sorted by Version A's Sharpe, best first",
+          list(ok_rows["symbol"]) == ["ES", "CL", "NQ"],
+          str(list(ok_rows["symbol"])))
     check("errored rows sort last, never on top",
           df["status"].iloc[-1] == "ERROR" and df["symbol"].iloc[-1] == "GC")
     check("the error reason is on the row", df["error"].iloc[-1] == "no bars")
@@ -554,11 +605,18 @@ def test_job_tracker(tmp: Path) -> None:
 def test_status_readout(tmp: Path) -> None:
     print("\nthe status readout")
 
-    check("progress bar at zero", progress_bar(0, 27).endswith("0/27    0.0%"),
-          progress_bar(0, 27))
+    check("progress bar at zero", progress_bar(0, 27).endswith("0/27    0.0%")
+          and progress_bar(0, 27).count("█") == 0, progress_bar(0, 27))
     check("progress bar part way", "12/27" in progress_bar(12, 27)
-          and progress_bar(12, 27).count("#") == 18, progress_bar(12, 27))
-    check("progress bar complete", progress_bar(27, 27).count("-") == 0)
+          and progress_bar(12, 27).count("█") == 18, progress_bar(12, 27))
+    check("progress bar complete", progress_bar(27, 27).count("░") == 0
+          and progress_bar(27, 27).count("█") == 40)
+    # The bracketed box, not the whole line - the "12/27" tail legitimately
+    # changes width as the count passes 10.
+    boxes = {progress_bar(i, 27).split("]")[0] + "]" for i in range(28)}
+    check("the bar box keeps its width as it fills",
+          len({len(b) for b in boxes}) == 1,
+          "block glyphs are one cell each, so the box never shifts")
     check("a zero-symbol job does not divide by zero", "0/0" in progress_bar(0, 0))
     check("elapsed formatting",
           (format_elapsed(43), format_elapsed(843), format_elapsed(8043))
