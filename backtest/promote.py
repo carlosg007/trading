@@ -30,6 +30,22 @@ Version A promotes the source module byte for byte, and records its SHA-256.
 The file that gets promoted is then provably the file that was backtested -
 a "cleaned up on the way through" strategy is a different strategy.
 
+The parameters recorded are the RUN's, not the module's
+-------------------------------------------------------
+`meta.json` reads `params` out of the metrics snapshot when one is supplied,
+layered over the module's DEFAULT_PARAMS and under any explicit `--params`.
+That ordering matters as soon as `--scan` sweeps anything: the run's Sharpe
+came from the winning grid cell, and recording the module's defaults beside it
+would describe a strategy nobody backtested - with a stop distance that never
+ran sitting next to metrics that assume one that did. `params_source` in
+meta.json says which layer won.
+
+The stop, the take-profit and the trailing flag are repeated in a `risk` block
+so they can be read without knowing what a given strategy called its periods.
+Three states are kept distinct there: `"NOT DECLARED"` (the strategy has no
+such parameter), `null` (it has one and this run modelled it off - for
+`tp_atr_mult` that means no take-profit at all), and a value.
+
 Version B is the baseline plus the causal ML filter, which is a pipeline
 rather than a file. `baseline.py` is the verbatim source; `strat.py` is a
 generated wrapper that applies `agents.tier3_workers.apply_ml_signal_filter`
@@ -53,6 +69,13 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 INCUBATOR = REPO_ROOT / "strategies" / "approved_incubator"
+
+# The risk parameters lifted into their own `risk` block in meta.json. Named
+# rather than discovered, so a strategy that invents `stop_mult` shows up as
+# NOT DECLARED and prompts a question, instead of silently contributing an
+# extra key nobody reads. `backtest/run.py` puts the same three on the
+# leaderboard, and `strategies/experimental/*.py` spell them the same way.
+RISK_KEYS = ("sl_atr_mult", "tp_atr_mult", "trailing")
 
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -247,6 +270,56 @@ def load_metrics(path: Path | None, version: str) -> tuple[dict | None, dict | N
         f"tell which numbers belong to Version {version.upper()}")
 
 
+def snapshot_params(metrics: dict | None) -> dict:
+    """
+    The parameters the promoted run ACTUALLY used, out of the metrics snapshot.
+
+    This is the fix for a gap that mattered as soon as `--scan` started
+    sweeping risk parameters. `inspect_source` reads the module's
+    DEFAULT_PARAMS, which are the values somebody typed while writing the file
+    - under `--scan` the run used a different set entirely, chosen from the
+    grid. Recording the defaults in meta.json would state a stop multiplier the
+    backtest never ran, next to a metrics block from the run that used the
+    winning one. Nothing would raise, and the promoted strategy would be a
+    strategy nobody measured.
+
+    `run_dual_version_backtest` writes the bound set to `metrics["meta"]
+    ["params"]`, which is the same dict the tear sheet's logic card was
+    rendered from. A snapshot without that block returns `{}`, and the caller
+    falls back to the module's declarations - the old behaviour.
+    """
+    meta = (metrics or {}).get("meta") or {}
+    params = meta.get("params")
+    return dict(params) if isinstance(params, dict) else {}
+
+
+def risk_settings(params: dict) -> dict[str, Any]:
+    """
+    The stop / target / trailing settings, called out of the parameter set.
+
+    They are already in `meta["params"]`; this repeats them under a name a
+    reader and the CrossTrade governance layer can find without knowing what a
+    given strategy called its periods. The values are what actually ran, so
+    this is the record of the risk the promoted numbers were earned under.
+
+    Three states, deliberately distinguished, because collapsing any two of
+    them would misdescribe the promoted strategy:
+
+        absent from the dict  -> "NOT DECLARED"; the strategy has no such
+                                 parameter and models that risk control not at
+                                 all.
+        present and None      -> None; the strategy HAS the parameter and this
+                                 run swept it off. For `tp_atr_mult` that means
+                                 no take-profit was modelled - the position
+                                 runs to the stop, the signal exit or the bell.
+        present with a value  -> the value.
+    """
+    out: dict[str, Any] = {}
+    for key in RISK_KEYS:
+        out[key] = params[key] if key in params else "NOT DECLARED"
+    return out
+
+
 # --------------------------------------------------------------------------
 # Writing
 # --------------------------------------------------------------------------
@@ -296,8 +369,23 @@ def promote(strat: str,
 
     symbols = ([symbol] if symbol else list(info["symbols"] or []))
     tf = timeframe or info["timeframe"]
+
+    # Three layers, weakest first. The middle one is the important addition:
+    # under `--scan` the run's parameters are the winning grid cell, not the
+    # module's DEFAULT_PARAMS, and promoting the defaults beside that run's
+    # metrics would record a strategy nobody backtested. `--params` still wins,
+    # because an operator correcting the record on purpose outranks a file.
+    from_snapshot = snapshot_params(metrics)
     merged_params = dict(info["params"] or {})
+    merged_params.update(from_snapshot)
     merged_params.update(params or {})
+
+    if from_snapshot:
+        params_source = f"locked from {metrics_path.name}"
+    elif params:
+        params_source = "--params"
+    else:
+        params_source = f"{source.name} DEFAULT_PARAMS"
 
     stamp = datetime.now(timezone.utc)
     written: list[Path] = []
@@ -338,6 +426,14 @@ def promote(strat: str,
         "symbols": symbols,
         "timeframe": tf,
         "params": merged_params,
+        "params_source": params_source,
+        # The stop, the target and the trailing flag the promoted numbers were
+        # earned under, repeated where they can be found without knowing what
+        # this strategy called its periods. `NOT DECLARED` means the strategy
+        # has no such parameter; a literal null under `tp_atr_mult` means it
+        # has one and this run modelled no take-profit. Those are different
+        # facts about what a live account would be running.
+        "risk": risk_settings(merged_params),
         "source": source.as_posix(),
         "source_sha256": source_sha,
         "promoted_sha256": promoted_sha,
@@ -496,6 +592,11 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  symbols        {meta['symbols'] or 'NOT RECORDED'}")
     print(f"  timeframe      {meta['timeframe'] or 'NOT RECORDED'}")
     print(f"  params         {meta['params'] or '{}'}")
+    print(f"                 ({meta['params_source']})")
+    risk = meta["risk"]
+    print("  risk           "
+          + ", ".join(f"{k}={'no take-profit modelled' if k == 'tp_atr_mult' and v is None else v}"
+                      for k, v in risk.items()))
     print(f"  metrics        {meta['metrics_status']}")
     print(f"  gate audit     {meta['gate_audit_status']}"
           + ("  (OVERRIDDEN with --force)" if meta["gates_overridden"] else ""))
