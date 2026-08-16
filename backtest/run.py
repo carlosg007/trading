@@ -87,16 +87,27 @@ earlier promotion decision was made on.
     sharpe_a pf_a win_rate_a max_dd_a trades_a gate1_a
     sharpe_b gate1_b selected_version html_report
     status error variants_tested scan_selection
+    sl_atr_mult tp_atr_mult trailing
 
 `timestamp` is the RUN's stamp, identical on every row and equal to the
 directory's, so leaderboards from several runs can be concatenated and grouped.
-`selected_version` records which version led IN-SAMPLE - it is not a promotion
-and not the Dual-Version Mandate's verdict, which requires B to beat A
-out-of-sample and cannot be established by any run this script performs. The
-last four columns sit after the declared schema rather than inside it: without
+`params` is the FULL effective parameter set the signals were bound to - the
+module's defaults with `--param` and `--scan`'s winner layered over them, not
+just what the CLI was handed. `selected_version` records which version led
+IN-SAMPLE - it is not a promotion and not the Dual-Version Mandate's verdict,
+which requires B to beat A out-of-sample and cannot be established by any run
+this script performs.
+
+The last seven columns sit after the declared schema rather than inside it, so
+a reader slicing the first fifteen gets exactly the specified file. Without
 `status`/`error` a symbol that failed to load reads as a strategy that produced
-nothing, and without `variants_tested` a `--scan` Sharpe is the best of an
-unstated N.
+nothing; without `variants_tested` a `--scan` Sharpe is the best of an unstated
+N; and `sl_atr_mult`/`tp_atr_mult`/`trailing` lift the winning risk settings out
+of the `params` string into columns that can be filtered and sorted, which is
+how "did the take-profit earn its place across contracts" gets answered. In
+those three, a BLANK cell means the strategy declares no such parameter, while
+the literal word `None` in `tp_atr_mult` means the strategy modelled no
+take-profit - two different statements that must not collapse into one.
 """
 
 from __future__ import annotations
@@ -152,8 +163,8 @@ LEADERBOARD_COLUMNS = [
     "sharpe_b", "gate1_b", "selected_version", "html_report",
     # Appended, after the declared columns and never among them. A reader
     # slicing the fifteen names above gets exactly the schema that was
-    # specified; these four exist because dropping them would make the file
-    # lie rather than merely make it shorter:
+    # specified; these exist because dropping them would make the file lie
+    # rather than merely make it shorter:
     #   status/error   - a symbol that failed to load has no Sharpe, and a row
     #                    of blanks with no reason beside it reads as a strategy
     #                    that produced nothing rather than a run that broke.
@@ -161,8 +172,24 @@ LEADERBOARD_COLUMNS = [
     #                  - under --scan the Sharpe is the best of N, chosen
     #                    in-sample. Reporting it without N is the single thing
     #                    this project's conventions exist to prevent.
+    #   sl_atr_mult/tp_atr_mult/trailing
+    #                  - the winning RISK settings, lifted out of `params` into
+    #                    columns of their own. They are already inside the
+    #                    `params` string, but a leaderboard is read by
+    #                    filtering and sorting, and "did the target earn its
+    #                    place across contracts" is the question a risk sweep
+    #                    exists to answer. Blank for a strategy that declares
+    #                    no such parameters - blank means "this strategy has no
+    #                    such setting", never "the setting was off".
     "status", "error", "variants_tested", "scan_selection",
+    "sl_atr_mult", "tp_atr_mult", "trailing",
 ]
+
+# The risk parameters promoted to their own leaderboard columns. Named here
+# rather than discovered, so a strategy that invents `stop_mult` gets a blank
+# column and an obvious question instead of a quietly missing one. `promote.py`
+# reads the same three names out of the metrics snapshot.
+RISK_PARAMS = ("sl_atr_mult", "tp_atr_mult", "trailing")
 
 # `selected_version` values. It records which version LED IN-SAMPLE and nothing
 # more. It is not a promotion, not a gate result, and not the Dual-Version
@@ -397,9 +424,40 @@ def leaderboard_row(timestamp: str, strategy: str, symbol: str, tf: str,
         "error": None,
         "variants_tested": None,
         "scan_selection": None,
+        "sl_atr_mult": None,
+        "tp_atr_mult": None,
+        "trailing": None,
     }
     row.update(extra)
     return {c: row.get(c) for c in LEADERBOARD_COLUMNS}
+
+
+def risk_columns(bound_params: dict | None) -> dict:
+    """
+    The winning risk settings, for their own leaderboard columns.
+
+    Read from the strategy's BOUND parameters - the module's DEFAULT_PARAMS
+    with the CLI's `--param` and `--scan`'s winner layered over them - rather
+    than from the CLI arguments alone. A run with neither flag uses the
+    module's defaults, and reporting those as blank would say "no stop was
+    modelled" about a strategy that stopped out of half its trades.
+
+    A parameter the strategy does not declare stays None, which the CSV writes
+    as an empty cell. Blank therefore means "this strategy has no such
+    setting". `tp_atr_mult=None` is a DIFFERENT statement - "no take-profit was
+    modelled" - and is written as the word so the two cannot be confused.
+    """
+    bound = bound_params or {}
+    out: dict[str, object] = {}
+    for k in RISK_PARAMS:
+        if k not in bound:
+            out[k] = None
+            continue
+        v = bound[k]
+        # `str(None)` rather than None, so this column distinguishes "the
+        # strategy swept the target off" from "the strategy has no target".
+        out[k] = "None" if v is None else v
+    return out
 
 
 def write_leaderboard(rows: list[dict], out_dir: Path) -> Path:
@@ -594,11 +652,28 @@ def run_symbol(symbol: str,
     run_params = dict(params)
     scan_selection = None
     if args.scan:
-        from backtest.scan import format_scan_summary, scan_symbol, write_scan_table
+        from backtest.scan import (SIZE_WARN, expand_grid,       # noqa: F401
+                                   format_scan_summary, scan_symbol,
+                                   write_scan_table)
 
         grid = info.get("param_grid") or {}
         print("  scanning   : "
               + ", ".join(f"{k}={v!r}" for k, v in grid.items()))
+        # The size of the search, before it runs rather than after. Risk axes
+        # multiply onto indicator axes, so a grid that looks like five short
+        # lists is routinely several hundred fits to one sample of bars, and
+        # the best of several hundred is a different claim from the best of
+        # nine. It is printed always and flagged past SIZE_WARN; nothing is
+        # refused, because a grid somebody deliberately wrote is theirs to run.
+        cells = len(expand_grid(grid))
+        print(f"  grid size  : {cells:,} combination(s) per symbol")
+        if cells > SIZE_WARN:
+            print(f"\n  [!] {cells:,} combinations is a large in-sample "
+                  f"search. The winning Sharpe is the best\n"
+                  f"      of {cells:,} fits to these same bars, and that is "
+                  f"how it has to be read — the count\n"
+                  f"      is carried onto every report and every leaderboard "
+                  f"row as variants_tested.\n", file=sys.stderr, flush=True)
         scan = scan_symbol(path, bars, symbol, cfg, grid,
                            base_params=params, strat_name=strat_name)
         print(format_scan_summary(scan))
@@ -665,10 +740,16 @@ def run_symbol(symbol: str,
         metrics_b=b["metrics"] if b else None,
         audit_b=b["gate_audit"] if b else None,
         reports=reports,
-        params=str(meta.get("params") or {}),
+        # The FULL effective set, not just what the CLI passed: under --scan
+        # this is the winning combination, and under neither flag it is the
+        # module's own defaults. `run_info["bound_params"]` is what the signal
+        # function was actually bound to, so a row and the report it points at
+        # cannot disagree about which parameters produced the numbers.
+        params=str(run_info.get("bound_params") or meta.get("params") or {}),
         variants_tested=cfg.variants_tested,
         scan_selection=scan_selection,
-        error=report_error)
+        error=report_error,
+        **risk_columns(run_info.get("bound_params")))
 
     if b is not None:
         cmp_ = out["comparison"]

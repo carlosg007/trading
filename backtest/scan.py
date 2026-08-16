@@ -13,6 +13,22 @@ set with the highest Sharpe **among those that clear Gate 1**. The winning set
 is then re-run through the ordinary dual-version path, so the numbers that
 reach a report come from the same code that produces every other number here.
 
+Nothing here knows or cares whether a parameter is an indicator period or a
+risk setting. A grid that sweeps `sl_atr_mult`, `tp_atr_mult` and `trailing`
+alongside `fast_period` is swept exactly like one that does not - the strategy
+module is what decides which of its parameters mean what. Two consequences of
+that are worth stating, because both are silent when they go wrong:
+
+  * `None` is a legitimate grid VALUE (`tp_atr_mult: [2.5, 5.0, None]` means
+    "no take-profit" is one of the points searched). pandas turns a column of
+    floats-and-None into float64-and-NaN, and `NaN == None` is False, so the
+    winner has to be matched with `_same_value` below rather than `==`.
+  * A wider grid is a bigger in-sample search, not a better one. Risk axes
+    multiply: adding 4 stops x 5 targets x 2 trailing flags to a 48-cell
+    indicator grid is 1,920 fits to one sample. `expand_grid` refuses nothing,
+    but `run.py` prints the cell count before it sweeps and warns past
+    `SIZE_WARN`, and `variants_tested` carries the number onto every report.
+
 Why the grid lives in the strategy module
 -----------------------------------------
 The module is the only place that knows what its parameters mean and what its
@@ -104,9 +120,42 @@ SELECTED_GATE1 = "GATE 1 PASS · highest Sharpe"
 SELECTED_NO_GATE1 = "HIGHEST SHARPE · NO COMBINATION CLEARED GATE 1"
 SELECTED_NONE = "NO COMBINATION PRODUCED A MEASURABLE SHARPE"
 
+# Grid size past which `run.py` warns before sweeping. Not a limit - refusing
+# to run a grid somebody deliberately wrote would be the wrong call, and the
+# count is reported either way. It is the point at which "the best of N" stops
+# being a measurement and starts being a search worth arguing about: 108 cells
+# over one symbol's in-sample bars is defensible, 640 is a different claim, and
+# the operator should see which one they asked for before it runs.
+SIZE_WARN = 200
+
 
 class ScanError(RuntimeError):
     """The grid could not be swept at all."""
+
+
+def _same_value(a: Any, b: Any) -> bool:
+    """
+    Grid-value equality that survives the round trip through a DataFrame.
+
+    `None` is a real point in a risk grid - `tp_atr_mult: [2.5, 5.0, None]`
+    searches "no take-profit" as one of its combinations. pandas stores that
+    column as float64 with NaN, and both `NaN == None` and `NaN == NaN` are
+    False, so plain `==` would fail to flag the winning row as selected in
+    exactly the case where the winner is the no-take-profit configuration. The
+    `selected` column would then be all-False and the scan CSV would show a
+    sweep with no winner while `run.py` went on to use one.
+
+    Booleans are compared with `==` deliberately rather than with `is`: pandas
+    stores a bool column as np.bool_, and `np.True_ is True` is False.
+    """
+    a_null = a is None or (isinstance(a, float) and a != a)
+    b_null = b is None or (isinstance(b, float) and b != b)
+    if a_null or b_null:
+        return a_null and b_null
+    try:
+        return bool(a == b)
+    except Exception:                                           # noqa: BLE001
+        return False
 
 
 def expand_grid(grid: dict[str, Iterable]) -> list[dict[str, Any]]:
@@ -367,6 +416,15 @@ def scan_symbol(strategy_path: str | Path,
         failed = [c["label"] for c in gate1["checks"] if c["status"] != PASS]
         rows.append({
             **combo,
+            # The whole combination as one unambiguous field, alongside the
+            # per-parameter columns. Those columns go through a DataFrame,
+            # where `tp_atr_mult=None` becomes NaN and writes to CSV as an
+            # empty cell - indistinguishable from "not recorded". This column
+            # writes `None` as the word, so the no-take-profit combination is
+            # readable in the file rather than only in this process. It also
+            # matches the leaderboard's `params` column verbatim, so a scan row
+            # and a leaderboard row can be lined up by string.
+            "params": str(dict(combo)),
             "sharpe": metrics["sharpe"],
             "sortino": metrics["sortino"],
             "profit_factor": metrics["profit_factor"],
@@ -394,16 +452,46 @@ def scan_symbol(strategy_path: str | Path,
 
     winner = None
     if pool:
-        best = max(pool, key=lambda r: r["sharpe"])
+        # Sharpe first - it IS the risk-adjusted return, which is what the
+        # selection is supposed to maximise, and ranking on raw return would
+        # pick the parameter set that took the most risk to get there.
+        #
+        # Shallower drawdown breaks ties, and ties are not hypothetical once
+        # risk parameters are swept: a take-profit that no bar ever reaches and
+        # `tp_atr_mult=None` produce the SAME trade list and therefore the same
+        # Sharpe to the last digit. Left to `max` alone the winner would be
+        # whichever the grid happened to declare first. Between two identical
+        # Sharpes the one that got there through a smaller drawdown is the
+        # better risk-adjusted result, and `abs` is required because the engine
+        # signs drawdowns negative - comparing raw would prefer the DEEPEST.
+        def _rank(r: dict) -> tuple[float, float]:
+            dd = r.get("max_drawdown_pct")
+            dd = float("inf") if dd is None or pd.isna(dd) else abs(float(dd))
+            return (float(r["sharpe"]), -dd)
+
+        best = max(pool, key=_rank)
         winner = {
             "params": {k: best[k] for k in valid[0]},
             "metrics": best["_metrics"],
             "gate1": best["gate1"],
             "sharpe": best["sharpe"],
         }
+        # `_same_value` rather than `==`: a winning `tp_atr_mult=None` comes
+        # back out of the DataFrame as NaN, and NaN equals nothing.
         table["selected"] = [
-            all(row.get(k) == v for k, v in winner["params"].items())
+            all(_same_value(row.get(k), v)
+                for k, v in winner["params"].items())
             for _, row in table.iterrows()]
+        if not bool(table["selected"].any()):
+            # Unreachable unless a parameter value does not survive the round
+            # trip through the frame at all. Loud rather than silent: a scan
+            # CSV with no selected row next to a run that used a winner is a
+            # discrepancy somebody will spend an afternoon on.
+            raise ScanError(
+                f"the winning combination {winner['params']} could not be "
+                f"matched back to a row of the scan table for {symbol}. The "
+                f"CSV would show a sweep with no winner while the run used "
+                f"one.")
     else:
         table["selected"] = False
 
@@ -442,17 +530,27 @@ def format_scan_summary(scan: dict, top: int = 5) -> str:
                  f"{scan['rejected'][0]['reason']})")
     table = scan["table"]
     head = table.head(top)
+    # `params` is excluded with the metric columns, not listed with the
+    # parameters: it is the whole combination as one string and printing it
+    # beside the per-parameter columns would render every row twice.
     param_cols = [c for c in table.columns
-                  if c not in ("sharpe", "sortino", "profit_factor", "trades",
-                               "max_drawdown_pct", "total_return_pct",
-                               "total_costs", "gate1", "gate1_shortfalls",
-                               "selected")]
-    L.append(f"    {'params':<34}{'Sharpe':>9}{'PF':>8}{'trades':>9}"
+                  if c not in ("params", "sharpe", "sortino", "profit_factor",
+                               "trades", "max_drawdown_pct",
+                               "total_return_pct", "total_costs", "gate1",
+                               "gate1_shortfalls", "selected")]
+    # Wide enough for five parameters, which is what a grid carrying risk axes
+    # alongside indicator ones has. Longer than this is truncated with an
+    # ellipsis rather than wrapped - the full set is in `params` in the CSV,
+    # and a console table that reflows is harder to scan than a clipped one.
+    W = 58
+    L.append(f"    {'params':<{W}}{'Sharpe':>9}{'PF':>8}{'trades':>9}"
              f"{'maxDD%':>9}  gate1")
     for _, r in head.iterrows():
         params = ", ".join(f"{c}={r[c]}" for c in param_cols)
+        if len(params) > W - 1:
+            params = params[:W - 2] + "…"
         mark = "*" if r.get("selected") else " "
-        L.append(f"  {mark} {params:<34}{r['sharpe']:>9.2f}"
+        L.append(f"  {mark} {params:<{W}}{r['sharpe']:>9.2f}"
                  f"{r['profit_factor']:>8.2f}{int(r['trades']):>9,}"
                  f"{r['max_drawdown_pct']:>9.2f}  {r['gate1']}")
     if len(table) > top:
