@@ -654,59 +654,87 @@ silently, after the fact, by whoever is looking at the equity curve. A
 specification written before the backtest is the only version of it that cannot
 be adjusted to fit the result.
 
-The sections are ordered the way a strategy is judged: why it should work, what
-it trades, the rules, what they cost, and what would settle it.
+The sections run from what the module must declare through to how it is run and
+what would settle it. Sections 2, 3 and 4 map onto the module's `LOGIC` block,
+its `PARAM_GRID` and its `signal_fn`; sections 1 and 5 are the run.
 
-```markdown
+```text
 ### STRATEGY SPECIFICATION & BACKTEST REQUEST
 
-**1. Hypothesis & Market Rationale**
-   - What inefficiency is being harvested, and why it persists
-   - Strategy family (see docs/STRATEGY_FAMILIES.md)
+================================================================================
+1. STRATEGY METADATA
+================================================================================
+- Strategy Name:        intraday_vol_mr
+- Strategy Archetype:   Mean-Reversion
+- Primary Timeframe:    15m
+- Target Assets:        Multi: NQ,ES,CL,GC  (or ALL)
 
-**2. Universe & Data**
-   - Symbols:              NQ,ES  |  ALL
-   - Timeframe:            15m
-   - In-sample period:     2010-01-01 -> 2023-08-16
-   - Holdout (untouched):  final 3 years
+================================================================================
+2. CORE CONCEPT & HYPOTHESIS (Plain English)
+================================================================================
+- Concept: <what inefficiency is harvested, and why it persists>
 
-**3. Signal Logic (plain English)**
-   - Core concept:
-   - Entry trigger:
-   - Exit rule:
-   - Filters / regime conditions:
+================================================================================
+3. INDICATORS & PARAMETER GRID (VectorBT Scan)
+================================================================================
+- Indicators:            <one line each, with the exact period>
+- Default Parameters:    <name = value>
+- Parameter Search Grid (`PARAM_GRID`):   <name: [values]>
 
-**4. Risk & Execution**
-   - Stop / target:          none modelled unless stated
-   - Session flatten:        --flat-by-close ?
-   - Contracts:              1
-   - Slippage / commission:  1 tick each way + specs.py
+================================================================================
+4. ENTRY & EXIT EXECUTION RULES
+================================================================================
+- Long Entry:            <condition>
+- Short Entry:           <condition, or "Long Only">
+- Take Profit:           <condition>
+- Stop Loss:             <condition, or "none modelled">
+- Session Rules:         <entry window, flatten time, in a named timezone>
+- Execution Fill:        Next-bar open with contract-specific slippage & commission
 
-**5. Parameter Space & Acceptance**
-   - PARAM_GRID:
-   - Variants expected:
-   - Gates that must clear:  1 in-sample / 2 robustness / 3 holdout
+================================================================================
+5. BACKTEST EXECUTION CONTROLS
+================================================================================
+- In-Sample Period:      2015-01-01 to 2022-12-31
+- Phase 3 Holdout Check: YES / NO   (must NOT overlap the in-sample period)
+- ML Filter Comparison (Version B): YES / NO
+- Run Mode:              Multi-Asset Runner (`bt-run`)
 ```
 
-Notes on filling it in, and on what each section is defending against:
+What each section is defending against, and where it has to be checked against
+what the engine can actually do:
 
-- **Section 1** is the part that cannot be recovered later. A strategy with no
+- **Section 2** is the part that cannot be recovered later. A strategy with no
   stated reason for existing is indistinguishable from one found by searching
-  until something looked good, and the two fail differently in live markets.
-- **Section 2** names the holdout **before** the run. Reserving the last three
-  years afterwards is not reserving them — by then they have been seen.
-- **Section 3** becomes the module's `LOGIC` block close to verbatim. If a rule
-  cannot be stated here in plain English, it cannot be stated on the tear
-  sheet's strategy card either, and nobody deciding whether to trade it will be
-  able to read what it does.
-- **Section 4** is where the silent assumptions live. The engine models **no
-  stop and no take-profit** unless the strategy's own signals produce them, so
-  "none modelled" is the default and a drawdown read on the assumption of an
-  unstated stop is being read wrong.
-- **Section 5** fixes the size of the search before it runs. `--scan` reports
+  until something looked good, and the two fail differently in live markets. It
+  becomes the module's `LOGIC["concept"]` close to verbatim.
+- **Section 3** fixes the size of the search before it runs. `--scan` reports
   `variants_tested`, and a Sharpe read without knowing how many variants
-  produced it is not a measurement. Stating the gates up front is what stops
-  the acceptance criteria from being revised down to meet the result.
+  produced it is not a measurement.
+- **Section 4 is where a request most often asks for something the engine does
+  not have.** Check every line of it against the engine before writing the
+  module, and state the gap in the module's docstring rather than approximating
+  it silently:
+  - **There are no stop or target ORDERS.** `from_signals` is driven by two
+    boolean masks and fills them at the next bar's open. A stop can only be
+    expressed as an exit signal, so it is detected on the bar that breaches it
+    and filled one bar later — not at the stop price. Say so on the module, or
+    every drawdown figure it produces will be read as something it is not.
+  - **A trailing stop cannot be a stateless mask at all.** Its level depends on
+    the high since entry, which depends on which bar opened the position. It
+    needs a state machine inside the module (see
+    `strategies/experimental/intraday_vol_mr.py::_walk`), and that machine must
+    start its high-water mark at the FILL bar, not the signal bar.
+  - **Session times must be converted through a named zone**, not a fixed UTC
+    offset. `--flat-by-close` uses a fixed `session_close_utc`, so it is right
+    in one half of the year and an hour off in the other; a module doing its
+    own session logic should use `America/New_York` and say that the flag is
+    then redundant.
+- **Section 5's holdout must not overlap the in-sample period.** This is the
+  one line in the template that can invalidate everything above it. Reserving
+  the last three years after the run is not reserving them — by then they have
+  been seen — and an in-sample window that runs into the holdout has spent it
+  before Gate 3 is ever evaluated. Check the two date ranges against each other
+  before starting.
 
 ---
 
