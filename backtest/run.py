@@ -68,18 +68,35 @@ every report and every leaderboard row for that reason.
 
 Outputs
 -------
-`/mnt/backtest/artifacts/batch_<strat>_<timestamp>/` holds
+`/mnt/backtest/artifacts/<strat_name>_<timestamp>/` holds
 
     report_<SYMBOL>_version_a.html      one per symbol
     report_<SYMBOL>_version_b.html      one per symbol, with --ml
     dual_metrics_<SYMBOL>.json          the snapshot promote.py locks in
     scan_<SYMBOL>.csv                   every parameter combination, with --scan
-    summary_leaderboard.csv             one row per symbol per version
+    summary_leaderboard.csv             ONE row per symbol, A and B side by side
     job.json                            the finished progress record
     run.log                             stdout, with --bg
 
 The timestamp is on the directory, so a re-run never overwrites the evidence an
 earlier promotion decision was made on.
+
+`summary_leaderboard.csv` columns, in order:
+
+    timestamp strategy symbol tf params
+    sharpe_a pf_a win_rate_a max_dd_a trades_a gate1_a
+    sharpe_b gate1_b selected_version html_report
+    status error variants_tested scan_selection
+
+`timestamp` is the RUN's stamp, identical on every row and equal to the
+directory's, so leaderboards from several runs can be concatenated and grouped.
+`selected_version` records which version led IN-SAMPLE - it is not a promotion
+and not the Dual-Version Mandate's verdict, which requires B to beat A
+out-of-sample and cannot be established by any run this script performs. The
+last four columns sit after the declared schema rather than inside it: without
+`status`/`error` a symbol that failed to load reads as a strategy that produced
+nothing, and without `variants_tested` a `--scan` Sharpe is the best of an
+unstated N.
 """
 
 from __future__ import annotations
@@ -125,13 +142,37 @@ ARTIFACTS_ROOT = Path(os.environ.get("BT_ARTIFACTS", "/mnt/backtest/artifacts"))
 # it was selected from, because a Sharpe read without that is not a
 # measurement.
 LEADERBOARD_COLUMNS = [
-    "symbol", "version", "status", "timeframe", "params", "variants_tested",
-    "scan_selection", "sharpe", "sortino", "calmar", "profit_factor",
-    "win_rate_pct", "max_drawdown_pct", "total_return_pct", "cagr_pct",
-    "trades", "total_costs", "gate1", "gate2", "gate3", "gate_overall",
-    "bars", "start", "end", "multiplier", "tick_size", "commission_per_side",
-    "elapsed_s", "report_html", "metrics_json", "error",
+    # The declared schema, in the declared order. One row per SYMBOL, with
+    # Version A and Version B side by side - not one row per version - because
+    # the question a leaderboard answers is "which contract, and did the filter
+    # earn its place there", and that comparison has to be readable across a
+    # row rather than by pairing two of them up by eye.
+    "timestamp", "strategy", "symbol", "tf", "params",
+    "sharpe_a", "pf_a", "win_rate_a", "max_dd_a", "trades_a", "gate1_a",
+    "sharpe_b", "gate1_b", "selected_version", "html_report",
+    # Appended, after the declared columns and never among them. A reader
+    # slicing the fifteen names above gets exactly the schema that was
+    # specified; these four exist because dropping them would make the file
+    # lie rather than merely make it shorter:
+    #   status/error   - a symbol that failed to load has no Sharpe, and a row
+    #                    of blanks with no reason beside it reads as a strategy
+    #                    that produced nothing rather than a run that broke.
+    #   variants_tested/scan_selection
+    #                  - under --scan the Sharpe is the best of N, chosen
+    #                    in-sample. Reporting it without N is the single thing
+    #                    this project's conventions exist to prevent.
+    "status", "error", "variants_tested", "scan_selection",
 ]
+
+# `selected_version` values. It records which version LED IN-SAMPLE and nothing
+# more. It is not a promotion, not a gate result, and not the Dual-Version
+# Mandate's verdict - that requires B to beat A out-of-sample, which no run this
+# script performs can establish. promote.py still refuses a version whose gate
+# audit is not PASS, whatever this column says.
+SEL_A = "A"
+SEL_B = "B"
+SEL_A_ONLY = "A (B not run)"
+SEL_NONE = "NONE (no measurable Sharpe)"
 
 
 # --------------------------------------------------------------------------
@@ -269,37 +310,93 @@ def _gate(audit: dict | None, key: str) -> str:
                                                            NOT_EVALUATED)
 
 
-def leaderboard_row(symbol: str, version: str, metrics: dict | None,
-                    audit: dict | None, **extra) -> dict:
+def _win_rate_pct(metrics: dict) -> float | None:
     """
-    One leaderboard row.
+    Win rate as a percent.
 
-    `win_rate` is a fraction in `summarize_result` and a percent here, which is
-    the only unit conversion on this path; everything else is carried through
-    unchanged so a row and its report cannot disagree.
+    `summarize_result` stores it as a fraction. This is the only unit
+    conversion anywhere on the leaderboard path; every other figure is carried
+    through untouched so a row and the report it points at cannot disagree.
     """
-    m = metrics or {}
-    win_rate = m.get("win_rate_pct")
-    if win_rate is None and m.get("win_rate") is not None:
-        win_rate = float(m["win_rate"]) * 100
+    pct = metrics.get("win_rate_pct")
+    if pct is not None:
+        return pct
+    frac = metrics.get("win_rate")
+    return None if frac is None else float(frac) * 100
+
+
+def select_version(metrics_a: dict | None, metrics_b: dict | None) -> str:
+    """
+    Which version led IN-SAMPLE. Not a promotion and not a mandate verdict.
+
+    Version B is adopted only if it beats A OUT-OF-SAMPLE, and no run this
+    script performs can establish that - the filter was fitted walk-forward on
+    the very period it is being scored over. So `B` here means "B's in-sample
+    Sharpe was higher", which is a fact about this run and not a
+    recommendation. When B was never run the value says so explicitly rather
+    than defaulting to `A`: an uncontested A is not a winning A.
+    """
+    sa = (metrics_a or {}).get("sharpe")
+    if metrics_b is None:
+        return SEL_A_ONLY if sa is not None and not pd.isna(sa) else SEL_NONE
+    sb = metrics_b.get("sharpe")
+    a_ok = sa is not None and not pd.isna(sa)
+    b_ok = sb is not None and not pd.isna(sb)
+    if not a_ok and not b_ok:
+        return SEL_NONE
+    if not b_ok:
+        return SEL_A
+    if not a_ok:
+        return SEL_B
+    return SEL_B if float(sb) > float(sa) else SEL_A
+
+
+def leaderboard_row(timestamp: str, strategy: str, symbol: str, tf: str,
+                    metrics_a: dict | None, audit_a: dict | None,
+                    metrics_b: dict | None = None,
+                    audit_b: dict | None = None,
+                    reports: dict | None = None,
+                    **extra) -> dict:
+    """
+    One row per symbol, Version A and Version B side by side.
+
+    `gate1_b` is left blank rather than filled with NOT EVALUATED when Version
+    B did not run. NOT EVALUATED is a statement about a gate that was reached
+    and had no evidence behind it; a version that never ran did not reach it,
+    and printing the same token for both would make a skipped B look like a B
+    whose robustness run is merely outstanding.
+
+    `html_report` is the SELECTED version's tear sheet. Its sibling is one
+    substitution away - the filenames are `report_<SYMBOL>_version_a.html` and
+    `..._version_b.html` in the same directory - so naming one loses nothing.
+    """
+    a = metrics_a or {}
+    reports = reports or {}
+    selected = extra.pop("selected_version", None) or select_version(metrics_a,
+                                                                    metrics_b)
+    report = (reports.get("report_version_b") if selected == SEL_B
+              else reports.get("report_version_a"))
+
     row = {
+        "timestamp": timestamp,
+        "strategy": strategy,
         "symbol": symbol,
-        "version": version,
+        "tf": tf,
+        "params": None,
+        "sharpe_a": a.get("sharpe"),
+        "pf_a": a.get("profit_factor"),
+        "win_rate_a": _win_rate_pct(a),
+        "max_dd_a": a.get("max_drawdown_pct"),
+        "trades_a": a.get("trade_count"),
+        "gate1_a": _gate(audit_a, "gate1") if audit_a else None,
+        "sharpe_b": (metrics_b or {}).get("sharpe") if metrics_b else None,
+        "gate1_b": _gate(audit_b, "gate1") if audit_b else None,
+        "selected_version": selected,
+        "html_report": str(report) if report else None,
         "status": "OK",
-        "sharpe": m.get("sharpe"),
-        "sortino": m.get("sortino"),
-        "calmar": m.get("calmar"),
-        "profit_factor": m.get("profit_factor"),
-        "win_rate_pct": win_rate,
-        "max_drawdown_pct": m.get("max_drawdown_pct"),
-        "total_return_pct": m.get("total_return_pct"),
-        "cagr_pct": m.get("annualized_return_pct"),
-        "trades": m.get("trade_count"),
-        "total_costs": m.get("total_costs"),
-        "gate1": _gate(audit, "gate1"),
-        "gate2": _gate(audit, "gate2"),
-        "gate3": _gate(audit, "gate3"),
-        "gate_overall": (audit or {}).get("status", NOT_EVALUATED),
+        "error": None,
+        "variants_tested": None,
+        "scan_selection": None,
     }
     row.update(extra)
     return {c: row.get(c) for c in LEADERBOARD_COLUMNS}
@@ -311,17 +408,20 @@ def write_leaderboard(rows: list[dict], out_dir: Path) -> Path:
 
     Rewritten rather than appended so the file is always a complete, sorted
     view of everything finished so far - a batch killed at symbol 14 leaves a
-    readable leaderboard of 14, not a half-written line. Sorted by Sharpe
-    within version, with errored rows last: a leaderboard whose top row is a
-    symbol that failed to load is not a leaderboard.
+    readable leaderboard of 14, not a half-written line.
+
+    Sorted by Version A's Sharpe, best first, with errored symbols last. Sorted
+    on A rather than on the selected version because A is the column every row
+    has: ranking on a mixture of A and B Sharpes would put a symbol whose ML
+    filter happened to run above one where it did not, which is a fact about
+    the flags rather than about the market.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "summary_leaderboard.csv"
     df = pd.DataFrame(rows, columns=LEADERBOARD_COLUMNS)
     if not df.empty:
         df = df.assign(_err=df["status"].ne("OK"))
-        df = (df.sort_values(["_err", "version", "sharpe"],
-                             ascending=[True, True, False],
+        df = (df.sort_values(["_err", "sharpe_a"], ascending=[True, False],
                              na_position="last", kind="stable")
                 .drop(columns="_err")
                 .reset_index(drop=True))
@@ -385,7 +485,7 @@ def build_parser() -> argparse.ArgumentParser:
                          "Carried onto every report. --scan fills it in with "
                          "the size of the grid it actually evaluated.")
     ap.add_argument("--out", help="directory for the artifacts. Defaults to "
-                                  "<artifacts>/batch_<strat>_<timestamp>/")
+                                  "<artifacts>/<strat_name>_<timestamp>/")
     ap.add_argument("--no-reports", action="store_true",
                     help="skip the HTML tear sheets; scorecards and the "
                          "leaderboard are still written")
@@ -455,14 +555,14 @@ def run_symbol(symbol: str,
                tf: str,
                params: dict,
                art_dir: Path,
-               strat_name: str) -> list[dict]:
+               strat_name: str,
+               stamp: str) -> dict:
     """
     One contract, start to finish: bars, optional sweep, A (and B), reports.
 
-    Returns the leaderboard rows for this symbol - one for Version A, plus one
-    for Version B when it ran. Raises nothing a caller has to catch for control
-    flow; the batch loop catches everything so one bad contract cannot end a
-    27-symbol run.
+    Returns this symbol's single leaderboard row, with Version A and Version B
+    side by side. It raises freely; the batch loop catches everything, so one
+    bad contract cannot end a 27-symbol run.
     """
     t0 = time.time()
     spec = get_spec(symbol)
@@ -559,39 +659,32 @@ def run_symbol(symbol: str,
                   file=sys.stderr, flush=True)
 
     meta = out["meta"]
-    common = {
-        "timeframe": tf,
-        "params": str(meta.get("params") or {}),
-        "variants_tested": cfg.variants_tested,
-        "scan_selection": scan_selection,
-        "bars": meta.get("bars"),
-        "start": meta.get("start"),
-        "end": meta.get("end"),
-        "multiplier": spec.multiplier,
-        "tick_size": spec.tick_size,
-        "commission_per_side": spec.commission,
-        "elapsed_s": round(time.time() - t0, 1),
-        "metrics_json": str(reports.get("metrics_json") or ""),
-        "error": report_error,
-    }
+    row = leaderboard_row(
+        timestamp=stamp, strategy=strat_name, symbol=symbol, tf=tf,
+        metrics_a=a["metrics"], audit_a=a["gate_audit"],
+        metrics_b=b["metrics"] if b else None,
+        audit_b=b["gate_audit"] if b else None,
+        reports=reports,
+        params=str(meta.get("params") or {}),
+        variants_tested=cfg.variants_tested,
+        scan_selection=scan_selection,
+        error=report_error)
 
-    rows = [leaderboard_row(
-        symbol, "A", a["metrics"], a["gate_audit"],
-        report_html=str(reports.get("report_version_a") or ""), **common)]
     if b is not None:
-        rows.append(leaderboard_row(
-            symbol, "B", b["metrics"], b["gate_audit"],
-            report_html=str(reports.get("report_version_b") or ""), **common))
         cmp_ = out["comparison"]
         print(f"\n  The filter suppressed {cmp_['entries_suppressed']:,} of "
               f"{cmp_['entries_a']:,} entries. B beats A on Sharpe: "
               f"{cmp_['b_beats_a']}.")
+        print(f"  In-sample lead: Version {row['selected_version']}. That is a "
+              f"fact about this run, not a\n  promotion — the mandate adopts B "
+              f"only if it beats A out-of-sample.")
     else:
         print("\n  Version B (ML filter) was NOT RUN. Pass --ml to evaluate it; "
               "until then the\n  Dual-Version Mandate's comparison is "
               "outstanding, not settled.")
 
-    return rows
+    print(f"  ({round(time.time() - t0, 1)}s)")
+    return row
 
 
 # --------------------------------------------------------------------------
@@ -623,7 +716,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    art_dir = Path(args.out) if args.out else ARTIFACTS_ROOT / f"batch_{strat_name}_{stamp}"
+    art_dir = (Path(args.out) if args.out
+               else ARTIFACTS_ROOT / f"{strat_name}_{stamp}")
 
     if args.bg:
         return relaunch_detached(art_dir)
@@ -655,18 +749,17 @@ def main(argv: list[str] | None = None) -> int:
     for symbol in symbols:
         job.start_symbol(symbol)
         try:
-            new_rows = run_symbol(symbol, path, info, args, tf, params,
-                                  art_dir, strat_name)
-            rows.extend(new_rows)
-            a_row = new_rows[0]
+            row = run_symbol(symbol, path, info, args, tf, params,
+                             art_dir, strat_name, stamp)
+            rows.append(row)
             job.finish_symbol(symbol, {
                 "status": "OK",
-                "sharpe": a_row["sharpe"],
-                "profit_factor": a_row["profit_factor"],
-                "trades": a_row["trades"],
-                "max_drawdown_pct": a_row["max_drawdown_pct"],
-                "gate1": a_row["gate1"],
-                "error": a_row["error"],
+                "sharpe": row["sharpe_a"],
+                "profit_factor": row["pf_a"],
+                "trades": row["trades_a"],
+                "max_drawdown_pct": row["max_dd_a"],
+                "gate1": row["gate1_a"],
+                "error": row["error"],
             })
         except Exception as e:                                  # noqa: BLE001
             # One contract's failure is one contract's failure. A missing spec,
@@ -679,8 +772,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"\n[!] {symbol} FAILED: {reason}", file=sys.stderr)
             traceback.print_exc()
             rows.append(leaderboard_row(
-                symbol, "A", None, None, status="ERROR", timeframe=tf,
-                params=str(params), error=reason))
+                timestamp=stamp, strategy=strat_name, symbol=symbol, tf=tf,
+                metrics_a=None, audit_a=None, status="ERROR",
+                selected_version=SEL_NONE, params=str(params), error=reason))
             job.finish_symbol(symbol, {"status": "ERROR", "error": reason})
 
         board = write_leaderboard(rows, art_dir)
@@ -692,7 +786,7 @@ def main(argv: list[str] | None = None) -> int:
     print("\n" + "=" * 78)
     print("BATCH COMPLETE")
     print("=" * 78)
-    ok = len([r for r in rows if r["status"] == "OK" and r["version"] == "A"])
+    ok = len([r for r in rows if r["status"] == "OK"])
     print(f"  {ok}/{len(symbols)} symbols completed"
           + (f", {failures} failed" if failures else ""))
     print(f"  Leaderboard : {board}")
