@@ -96,6 +96,27 @@ pass an AST check before execution — no file, network, or OS access, no
 `eval`/`exec`/`__import__`/`open`. Never bypass that gate to "just try" a
 generated strategy.
 
+**The Execution Boundary — backtests do not run inside the Claude Code session.**
+**NEVER** execute a full strategy backtest from this session: no `backtest/run.py`
+against the real lake, and no multi-symbol run, in the foreground or with
+`--bg`. Claude Code's responsibilities stop at the five below, and the operator
+runs the backtest in their own shell.
+
+1. Writing strategy modules and infrastructure code.
+2. Running fast static checks and the AST security validator.
+3. Running unit tests on small synthetic fixtures.
+4. Committing changes to git.
+5. Printing the exact manual CLI command for the operator to run in their
+   regular shell.
+
+The boundary is about who owns the result, not about how long the job takes. A
+run launched from an agent session has no operator watching the console
+scorecard or the gate audit, and step 5 of the dual-version workflow — the
+four-choice menu — exists precisely so a human sees the evidence before anything
+is promoted. Detaching with `--bg` does not satisfy the boundary; it only moves
+the same unattended run off the terminal. Print the command instead, with the
+flags, symbols, timeframe and date window spelled out, and stop there.
+
 **Commit before large changes.** `git status` first. The repo is the only backup
 for code.
 
