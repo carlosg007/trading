@@ -679,7 +679,41 @@ highest Sharpe **among the combinations whose Gate 1 audit is PASS**.
   whichever set took the most risk to get there. Ties are real once risk is
   swept — a target no bar ever reaches and `tp_atr_mult=None` produce the same
   trade list — and between two identical Sharpes the smaller `abs(max
-  drawdown)` wins rather than whichever the grid declared first.
+  drawdown)` wins rather than whichever the grid declared first. The rule and
+  its tie-break live in ONE function, `_select_best_row`, shared by the sweep
+  and by the CSV rebuild below — a second copy would be free to disagree about
+  which row won, and the two would be compared by nobody.
+- **`--reuse-scan` rebuilds the export without re-fitting the grid**, from the
+  `scan_<SYMBOL>.csv` files already in the artifact directory. It reads no bars
+  and runs no simulation: it re-derives the winner with `_select_best_row` and
+  writes `best_params_<SYMBOL>_<TF>.json`. The grid is the expensive half of
+  Stage 2 and the export is the cheap one, and they used to fail together — a
+  crash in the export cost six fully-swept configurations (2 contracts × 3
+  timeframes × 1,296 cells) that had already written their tables. It is for
+  recovering an export, **not** for a rerun: `--start`/`--end`/`--param` are
+  recorded from the CLI and never checked against the table, so naming a
+  different window there writes a file that misdescribes its own bars.
+  - **The `params` column is what it reads, not the per-parameter columns.**
+    That column is `str(dict(combo))` and is the only field that survives the
+    round trip intact — pandas reads a `tp_atr_mult` column of floats-and-`None`
+    back as float64 with NaN, and binding NaN to a strategy is not the run that
+    was swept. `parse_param_dict` restores the types from any of the four
+    shapes a parameter set is written in here (native dict, that Python repr, a
+    JSON object, and the console's `fast_period=13, …` form); it RAISES on
+    input it cannot read rather than returning `{}`, because an empty dict
+    silently binds the module's defaults while the run is reported under the
+    winner's name.
+  - **A table that disagrees with the rule is refused.** If the CSV's own
+    `selected` flag names a different row than `_select_best_row` picks, the
+    rebuild raises instead of writing a `best_params` pointing at one row
+    beside a table flagging another.
+  - **A rebuilt file says so** — `rebuilt_from` and `rebuilt_note`. Its
+    `combinations` and `rejected` counts are FLOORS: combinations the strategy
+    rejected were never written to the CSV, so a rebuild cannot know them.
+    `variants_tested` is unaffected (it has always been the number evaluated),
+    and `in_sample` carries only the metrics the table held — win rate, Calmar
+    and the day count are omitted rather than defaulted, because a zero win
+    rate beside a profitable profit factor is a number nobody computed.
 
 **`backtest/event_calendar.py`** — the two ENTRY filters, and the only place
 either is implemented. Named `event_calendar` rather than `calendar` because
