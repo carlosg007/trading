@@ -610,7 +610,9 @@ def format_scan_summary(scan: dict, top: int = 5) -> str:
 # `--scan` uses, and the two would be compared by nobody.
 def write_best_params(scan: dict, strategy: str, symbol: str, tf: str,
                       start: str | None, end: str | None,
-                      base_params: dict, out_dir: Path) -> Path:
+                      base_params: dict, out_dir: Path,
+                      timeframes: list[str] | None = None,
+                      variants_all_timeframes: int | None = None) -> list[Path]:
     """
     `best_params_<SYMBOL>.json` - the winner, and what it was chosen from.
 
@@ -624,6 +626,21 @@ def write_best_params(scan: dict, strategy: str, symbol: str, tf: str,
     Sharpe is the best of N fits to one sample of bars; Stage 3 carries the
     number onto its audit, and a certification that cannot say N is not a
     certification.
+
+    Naming, and why there are sometimes two files
+    ---------------------------------------------
+    Every sweep writes `best_params_<SYMBOL>_<TF>.json`. A single-timeframe
+    run ALSO writes the unsuffixed `best_params_<SYMBOL>.json`, which is what
+    Stage 3 falls back to.
+
+    A MULTI-timeframe run deliberately does not write the unsuffixed file.
+    Writing it would mean picking a timeframe, and picking the highest-Sharpe
+    timeframe is a second selection layer stacked on the parameter sweep: the
+    reported number becomes the best of (cells x timeframes) while
+    `variants_tested` still says cells. Stage 3 is told to name a timeframe
+    instead. `variants_tested_all_timeframes` records the real size of the
+    search either way, so the number is available to anyone who does make that
+    choice by hand.
     """
     from backtest.pipeline import BEST_PARAMS_FILE, write_stage
 
@@ -647,13 +664,28 @@ def write_best_params(scan: dict, strategy: str, symbol: str, tf: str,
         "in_sample": _jsonable_metrics(winner["metrics"]) if winner else None,
         "gate1_in_sample": (winner.get("gate1") or {}).get("status")
         if winner else None,
+        "timeframes_searched": list(timeframes or [tf]),
+        # cells x timeframes. The honest N for anything selected by comparing
+        # timeframes against each other, which `variants_tested` alone
+        # understates by a factor of len(timeframes).
+        "variants_tested_all_timeframes": (
+            variants_all_timeframes
+            if variants_all_timeframes is not None else int(scan["evaluated"])),
     }
     if winner is None:
         payload["warning"] = (
             "no combination produced a measurable Sharpe; `params` falls back "
             "to the base parameters and nothing was selected")
-    return write_stage(Path(out_dir) / BEST_PARAMS_FILE.format(symbol=symbol),
-                       2, strategy, payload)
+
+    out_dir = Path(out_dir)
+    written = [write_stage(
+        out_dir / BEST_PARAMS_FILE.format(symbol=f"{symbol}_{tf}"),
+        2, strategy, payload)]
+    if not timeframes or len(timeframes) == 1:
+        written.append(write_stage(
+            out_dir / BEST_PARAMS_FILE.format(symbol=symbol), 2, strategy,
+            payload))
+    return written
 
 
 def _jsonable_metrics(metrics: dict | None) -> dict | None:
@@ -683,7 +715,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--symbols", default=None,
                    help="NQ, a list NQ,ES,CL, or ALL. Default: the survivors "
                         "Stage 1 wrote to surviving_assets.json.")
-    p.add_argument("--tf", "--timeframe", dest="tf", default=None)
+    p.add_argument("--tf", "--timeframe", dest="tf", default=None,
+                   help="Timeframe, or a comma-separated list: "
+                        "'--tf 1m,5m,15m,30m' sweeps the grid independently at "
+                        "each. Derived timeframes are aggregated from the 1m "
+                        "parquet by the lake reader.")
     p.add_argument("--start", default="2013-01-01",
                    help="In-sample start (default 2013-01-01)")
     p.add_argument("--end", default="2022-12-31",
@@ -710,7 +746,7 @@ def main(argv: list[str] | None = None) -> int:
     from backtest.pipeline import (SURVIVORS_FILE, next_step, pipeline_dir,
                                    read_stage, stage_banner)
     from backtest.run import (load_bars, parse_param, parse_symbols,
-                              resolve_strategy)
+                              parse_timeframes, resolve_strategy)
 
     args = build_parser().parse_args(argv)
     path = resolve_strategy(args.strat)
@@ -749,7 +785,11 @@ def main(argv: list[str] | None = None) -> int:
                   f"the contracts it already failed on.", file=sys.stderr)
             return 1
 
-    tf = args.tf or info.get("timeframe") or "15m"
+    try:
+        timeframes = parse_timeframes(args.tf, info.get("timeframe"))
+    except ValueError as e:
+        print(f"ValueError: {e}", file=sys.stderr)
+        return 1
     grid = info.get("param_grid") or {}
     if not grid:
         print(f"{strat_name} declares no PARAM_GRID, so there is nothing to "
@@ -758,72 +798,113 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     cells = len(expand_grid(grid))
+    total_fits = cells * len(symbols) * len(timeframes)
     print(stage_banner(2, strat_name,
-                       f"{len(symbols)} contract(s) · {tf} · "
+                       f"{len(symbols)} contract(s) × {len(timeframes)} "
+                       f"timeframe(s) · {', '.join(timeframes)} · "
                        f"{args.start} → {args.end}"))
     print(f"  symbols    : {', '.join(symbols)}  (from {source})")
     print(f"  grid       : " + ", ".join(f"{k}={v!r}" for k, v in grid.items()))
-    print(f"  grid size  : {cells:,} combination(s) per contract "
-          f"({cells * len(symbols):,} fits in total)")
+    print(f"  grid size  : {cells:,} combination(s) per contract per timeframe")
+    print(f"  total fits : {total_fits:,} "
+          f"({cells:,} × {len(symbols)} symbol(s) × {len(timeframes)} tf)")
     if cells > SIZE_WARN:
         print(f"\n  [!] {cells:,} combinations is a large in-sample search. "
               f"Every winning Sharpe\n      below is the best of {cells:,} "
               f"fits to one sample of bars, and it has to be\n      read that "
               f"way. The count travels to Stage 3 as variants_tested.\n",
               file=sys.stderr, flush=True)
+    if len(timeframes) > 1:
+        print(f"  [!] Comparing the {len(timeframes)} timeframes against each "
+              f"other afterwards is a\n      SECOND selection layer. Anything "
+              f"chosen that way is the best of\n      {cells * len(timeframes):,}, "
+              f"not the best of {cells:,} — recorded in each file as\n"
+              f"      variants_tested_all_timeframes. No unsuffixed "
+              f"best_params_<SYMBOL>.json\n      is written, so Stage 3 has to "
+              f"be told which timeframe you mean.\n",
+              file=sys.stderr, flush=True)
 
     rows, errors = [], []
-    for i, sym in enumerate(symbols, 1):
-        print(f"\n[{i}/{len(symbols)}] {sym}")
-        print("-" * 78)
-        try:
-            bars = load_bars(sym, tf, args.start, args.end)
-            cfg = BacktestConfig(
-                initial_capital=args.capital, contracts=args.contracts,
-                slippage_ticks=args.slippage_ticks,
-                flat_by_close=args.flat_by_close,
-                notes=f"stage 2 scan {sym} {tf}", **cfg_kwargs)
-            scan = scan_symbol(path, bars, sym, cfg, grid,
-                               base_params=base_params, strat_name=strat_name)
-            print(format_scan_summary(scan))
-            csv = write_scan_table(scan, out_dir)
-            dest = write_best_params(scan, strat_name, sym, tf, args.start,
-                                     args.end, base_params, out_dir)
-            print(f"  table      → {csv}")
-            print(f"  winner     → {dest}")
-            rows.append({"symbol": sym, "selection": scan["selection"],
-                         "winner": (scan["winner"] or {}).get("params"),
-                         "sharpe": (scan["winner"] or {}).get("sharpe"),
-                         "variants_tested": scan["evaluated"]})
-        except Exception as e:                                    # noqa: BLE001
-            errors.append({"symbol": sym, "error": f"{type(e).__name__}: {e}"})
-            print(f"\n[!] {sym}: {type(e).__name__}: {e}", file=sys.stderr)
-            traceback.print_exc(file=sys.stderr)
+    for tf in timeframes:
+        if len(timeframes) > 1:
+            print("\n" + "=" * 78)
+            print(f"TIMEFRAME {tf}")
+            print("=" * 78)
+        for i, sym in enumerate(symbols, 1):
+            print(f"\n[{i}/{len(symbols)}] {sym} · {tf}")
+            print("-" * 78)
+            try:
+                bars = load_bars(sym, tf, args.start, args.end)
+                cfg = BacktestConfig(
+                    initial_capital=args.capital, contracts=args.contracts,
+                    slippage_ticks=args.slippage_ticks,
+                    flat_by_close=args.flat_by_close,
+                    notes=f"stage 2 scan {sym} {tf}", **cfg_kwargs)
+                scan = scan_symbol(path, bars, sym, cfg, grid,
+                                   base_params=base_params,
+                                   strat_name=strat_name)
+                print(format_scan_summary(scan))
+                csv = write_scan_table(scan, out_dir / tf
+                                       if len(timeframes) > 1 else out_dir)
+                dest = write_best_params(
+                    scan, strat_name, sym, tf, args.start, args.end,
+                    base_params, out_dir, timeframes=timeframes,
+                    variants_all_timeframes=scan["evaluated"] * len(timeframes))
+                print(f"  table      → {csv}")
+                for d in dest:
+                    print(f"  winner     → {d}")
+                rows.append({"symbol": sym, "timeframe": tf,
+                             "selection": scan["selection"],
+                             "winner": (scan["winner"] or {}).get("params"),
+                             "sharpe": (scan["winner"] or {}).get("sharpe"),
+                             "variants_tested": scan["evaluated"]})
+            except Exception as e:                                # noqa: BLE001
+                errors.append({"symbol": sym, "timeframe": tf,
+                               "error": f"{type(e).__name__}: {e}"})
+                print(f"\n[!] {sym} {tf}: {type(e).__name__}: {e}",
+                      file=sys.stderr)
+                traceback.print_exc(file=sys.stderr)
 
     W = 78
     print("\n" + "=" * W)
-    print(f"STAGE 2 RESULT · {len(rows)}/{len(symbols)} contract(s) swept")
+    print(f"STAGE 2 RESULT · {len(rows)}/{len(symbols) * len(timeframes)} "
+          f"sweep(s) completed")
     print("=" * W)
     for r in rows:
         sharpe = r["sharpe"]
-        print(f"  {r['symbol']:<6}Sharpe "
+        print(f"  {r['symbol']:<6}{r['timeframe']:<5}Sharpe "
               f"{(sharpe if sharpe is not None else float('nan')):>6.2f}"
-              f"  best of {r['variants_tested']:>4,}   {r['winner']}")
+              f"  best of {r['variants_tested']:>5,}   {r['winner']}")
         if r["selection"] != SELECTED_GATE1:
             print(f"         {r['selection']}")
     for e in errors:
-        print(f"  ERROR {e['symbol']:<6}{e['error']}")
+        print(f"  ERROR {e['symbol']:<6}{e.get('timeframe', ''):<5}{e['error']}")
 
+    if len(timeframes) > 1:
+        print(f"\n  Sorting the rows above by Sharpe picks a timeframe as well "
+              f"as a\n  parameter set. That choice is yours to make and to "
+              f"record: the winner\n  of that comparison is the best of "
+              f"{cells * len(timeframes):,} fits, not of {cells:,}.")
+
+    best_sym = rows[0]["symbol"] if rows else "<none>"
     print(next_step([
         "Stage 3 — certify the gates on the winning parameters. The holdout",
         "window must NOT overlap the in-sample window above:",
         "",
         f"  python3 backtest/audit_gates.py --strat {args.strat} \\",
-        f"      --symbols {','.join(r['symbol'] for r in rows) or '<none>'} "
-        f"--tf {tf} \\",
+        f"      --symbols {','.join(sorted({r['symbol'] for r in rows})) or '<none>'} "
+        f"--tf {timeframes[0]} \\",
         f"      --is-start {args.start} --is-end {args.end} \\",
         "      --holdout-start 2023-01-01 --holdout-end 2026-01-01",
-    ]))
+    ] + ([] if len(timeframes) == 1 else [
+        "",
+        f"--tf takes ONE timeframe there: stage 3 reads "
+        f"best_params_<SYMBOL>_<TF>.json",
+        f"and certifies that timeframe. Repeat it per timeframe you want "
+        f"certified.",
+        f"(shown above with {timeframes[0]}; {best_sym} also has "
+        f"{', '.join(timeframes[1:])})",
+    ])))
     return 1 if errors else 0
 
 

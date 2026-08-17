@@ -570,6 +570,26 @@ TP_NONE_SEARCHED = {
     "ema_trend_filter": False,
 }
 
+# The grid-size bound, per module, declared for the same reason as the table
+# above: a cap that quietly moves is a cap nobody is holding.
+#
+# 200 cells is the honesty bound. Past it the winning Sharpe is the maximum of
+# N draws from one sample of bars, and that maximum climbs with N whether or
+# not anything in the market has changed.
+#
+# `ema_trend_filter` was widened to 864 cells on 2026-08-17 when its grid was
+# specified with three trend lengths, four stops, four targets and both
+# trailing settings. That is an EXEMPTION somebody wrote down, not a relaxation
+# of the rule: it fails in both directions, so shrinking the grid back without
+# updating this line is also a failure, and every other module still has to
+# clear 200. What makes 864 reportable rather than merely permitted is that
+# `variants_tested` travels onto every report, leaderboard row and stage-3
+# audit, and `backtest/scan.py` prints the cell count before it sweeps.
+MAX_GRID_CELLS = {
+    "ema_crossover": 200,
+    "ema_trend_filter": 864,
+}
+
 
 def test_validation_rejects_what_it_should() -> None:
     print("\nvalidation — a bad risk parameter raises rather than trading")
@@ -837,10 +857,21 @@ def test_grids_are_reportable_and_fully_valid() -> None:
               has_none == want_none,
               f"None in grid={has_none}, declared={want_none}")
         # The size bound is the honesty bound. Past ~200 cells the best result
-        # is a search worth arguing about rather than a measurement, and these
-        # grids are deliberately kept under it.
-        check(f"{name}: {len(combos)} combinations, small enough to report",
-              len(combos) <= 200, f"{len(combos)} cells")
+        # is a search worth arguing about rather than a measurement. The cap is
+        # declared per module in MAX_GRID_CELLS, and the check is EXACT rather
+        # than an upper bound so a grid that shrinks below its declared cap
+        # fails too - otherwise the table drifts into describing grids that no
+        # longer exist.
+        cap = MAX_GRID_CELLS[name]
+        check(f"{name}: {len(combos)} combinations, within its declared cap "
+              f"of {cap}", len(combos) <= cap, f"{len(combos)} cells, cap {cap}")
+        if cap > 200:
+            # An exempted grid is pinned EXACTLY, not merely bounded. The
+            # exemption was granted for a specific 864-cell grid; letting it
+            # cover any size up to 864 would make the number in the table a
+            # ceiling nobody chose rather than the grid somebody signed off.
+            check(f"{name}: the >200 exemption pins the exact size, {cap}",
+                  len(combos) == cap, f"{len(combos)} cells, declared {cap}")
 
         rejected = []
         for combo in combos:

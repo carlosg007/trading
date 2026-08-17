@@ -91,6 +91,28 @@ from backtest.run import (load_bars, parse_param, parse_symbols,    # noqa: E402
 from backtest.scan import expand_grid                              # noqa: E402
 
 
+def discover_symbols(out_dir: Path, tf: str | None) -> list[str]:
+    """
+    Which contracts Stage 2 left parameters for.
+
+    `best_params_NQ_15m.json` must resolve to the symbol `NQ`, not to
+    `NQ_15m` — stripping the prefix alone would hand `load_bars` a symbol the
+    lake has never heard of, one stage after the sweep succeeded. The timeframe
+    suffix is matched explicitly when one is known, and otherwise only
+    unsuffixed files are considered rather than guessing where a symbol name
+    ends.
+    """
+    out_dir = Path(out_dir)
+    found: set[str] = set()
+    for p in out_dir.glob("best_params_*.json"):
+        stem = p.stem[len("best_params_"):]
+        if tf and stem.endswith(f"_{tf}"):
+            found.add(stem[: -(len(tf) + 1)])
+        elif "_" not in stem:
+            found.add(stem)
+    return sorted(found)
+
+
 class WindowOverlapError(ValueError):
     """The holdout has already been seen. Nothing downstream can fix that."""
 
@@ -127,7 +149,8 @@ def check_windows(is_start: str | None, is_end: str | None,
 
 
 def load_params(strat_name: str, symbol: str, out_dir: Path,
-                overrides: dict, use_defaults: bool) -> tuple[dict, dict]:
+                overrides: dict, use_defaults: bool,
+                tf: str | None = None) -> tuple[dict, dict]:
     """
     The parameters to certify, and where they came from.
 
@@ -135,30 +158,62 @@ def load_params(strat_name: str, symbol: str, out_dir: Path,
     `--defaults` was passed: certifying the module's defaults while the
     operator believes the sweep's winner was certified is the failure this
     argument exists to make deliberate.
+
+    The TIMEFRAME-SPECIFIC file wins. A multi-timeframe Stage 2 writes
+    `best_params_<SYMBOL>_<TF>.json` per timeframe and deliberately writes no
+    unsuffixed file, so certifying at 5m picks up the 5m sweep's winner rather
+    than whichever timeframe happened to be written last. The unsuffixed file
+    is the fallback for a single-timeframe sweep, which writes both.
+
+    `variants_tested_all_timeframes` is carried through beside
+    `variants_tested`. When a timeframe was itself chosen by comparing
+    leaderboards, the honest N is the larger one, and the audit records both
+    rather than making that judgement here.
     """
-    path = Path(out_dir) / BEST_PARAMS_FILE.format(symbol=symbol)
+    out_dir = Path(out_dir)
+    candidates = []
+    if tf:
+        candidates.append(out_dir / BEST_PARAMS_FILE.format(
+            symbol=f"{symbol}_{tf}"))
+    candidates.append(out_dir / BEST_PARAMS_FILE.format(symbol=symbol))
+    path = next((c for c in candidates if c.exists()), candidates[0])
+
     if use_defaults or not path.exists():
         if not use_defaults:
             raise FileNotFoundError(
-                f"{path} does not exist. It is written by stage 2 "
-                f"(backtest/scan.py) — run that first, or pass --defaults to "
-                f"certify the module's DEFAULT_PARAMS knowing that is what you "
-                f"are certifying.")
+                f"{' or '.join(str(c) for c in candidates)} does not exist. It "
+                f"is written by stage 2 (backtest/scan.py) — run that first, "
+                f"or pass --defaults to certify the module's DEFAULT_PARAMS "
+                f"knowing that is what you are certifying.")
         return dict(overrides), {
             "params_source": "module DEFAULT_PARAMS with --param over them",
             "variants_tested": None,
+            "variants_tested_all_timeframes": None,
             "scan_selection": None,
         }
 
     blob = read_stage(path, 2, strat_name)
     params = {**(blob.get("params") or {}), **overrides}
-    return params, {
+    scanned_tf = blob.get("timeframe")
+    prov = {
         "params_source": f"stage 2 winner ({path.name})"
                          + (" with --param over it" if overrides else ""),
         "variants_tested": blob.get("variants_tested"),
+        "variants_tested_all_timeframes": blob.get(
+            "variants_tested_all_timeframes"),
+        "timeframes_searched": blob.get("timeframes_searched"),
         "scan_selection": blob.get("selection"),
         "scan_in_sample": blob.get("in_sample"),
     }
+    if tf and scanned_tf and scanned_tf != tf:
+        # Only reachable through the unsuffixed fallback. Certifying 5m bars
+        # with a winner selected on 15m bars is a different strategy than the
+        # one the sweep scored, and nothing downstream could detect it.
+        raise ValueError(
+            f"{path.name} holds a winner selected on {scanned_tf} bars, but "
+            f"this audit is running on {tf}. Re-run stage 2 at {tf}, or "
+            f"certify at {scanned_tf}.")
+    return params, prov
 
 
 def _dual(path: Path, bars: pd.DataFrame, symbol: str, tf: str, params: dict,
@@ -221,7 +276,7 @@ def certify_symbol(symbol: str, path: Path, tf: str, args: argparse.Namespace,
 
     overrides = dict(parse_param(p) for p in args.param)
     params, prov = load_params(strat_name, symbol, out_dir, overrides,
-                               args.defaults)
+                               args.defaults, tf=tf)
     print(f"  parameters : {params or '(module defaults)'}")
     print(f"               ({prov['params_source']})")
     n_variants = prov["variants_tested"]
@@ -419,15 +474,24 @@ def main(argv: list[str] | None = None) -> int:
     if args.symbols:
         symbols = parse_symbols(args.symbols, info.get("symbols"))
     else:
-        symbols = sorted(p.stem.replace("best_params_", "")
-                         for p in out_dir.glob("best_params_*.json"))
+        symbols = discover_symbols(out_dir, args.tf or info.get("timeframe"))
         if not symbols:
             print(f"No best_params_*.json in {out_dir}. Run stage 2 "
                   f"(backtest/scan.py) first,\nor name contracts with "
                   f"--symbols.", file=sys.stderr)
             return 1
 
-    tf = args.tf or info.get("timeframe") or "15m"
+    # ONE timeframe. Stage 3 certifies a specific (parameters, timeframe) pair
+    # against a specific holdout; sweeping timeframes here would produce
+    # several audits per contract under one filename.
+    tfs = [t.strip() for t in str(args.tf or "").split(",") if t.strip()]
+    if len(tfs) > 1:
+        print(f"--tf takes ONE timeframe here, got {args.tf!r}. A gate audit "
+              f"certifies one\n(parameters, timeframe) pair against one "
+              f"holdout, and gate_audit_<SYMBOL>.json\nholds one verdict. Run "
+              f"this once per timeframe you want certified.", file=sys.stderr)
+        return 1
+    tf = (tfs[0] if tfs else None) or info.get("timeframe") or "15m"
     grid = info.get("param_grid") or {}
 
     print(stage_banner(3, strat_name, f"{len(symbols)} contract(s) · {tf}"))

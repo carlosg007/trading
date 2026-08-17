@@ -1,6 +1,11 @@
 """
-EMA trend filter — trade the fast/slow crossover only in the anchor trend's
-direction, and only when volatility is expanding.
+EMA trend filter — a confluence scalper: take the fast/slow crossover only when
+the anchor EMA, the session VWAP, RSI and expanding volatility all agree with it.
+
+The module keeps its name because a promoted strategy is recorded against a
+filename and a rename would orphan every artifact and leaderboard row that
+points here. Read the dated amendment in the specification block below for what
+the name no longer covers.
 
 Location:  ~/src/trading/strategies/experimental/ema_trend_filter.py
 
@@ -21,22 +26,27 @@ below, the run is the finding — do not edit this block to match it.
 
     3. INDICATORS & PARAMETER GRID
        Indicators:         EMA(fast_period), EMA(slow_period), the anchor
-                           EMA(trend_period), ATR(14), and SMA(ATR(14), 20).
-       Default Parameters: fast_period=9, slow_period=21, trend_period=800,
-                           sl_atr_mult=2.0, tp_atr_mult=3.0, trailing=True
-       PARAM_GRID:         see below — 162 combinations. The target axis
-                           carries no `None` point, which is a departure from
-                           the convention the other risk-swept modules follow;
-                           the reasoning and what it costs are recorded at
-                           PARAM_GRID.
+                           EMA(trend_period), session VWAP, RSI(14), ATR(14),
+                           and SMA(ATR(14), 20).
+       Default Parameters: fast_period=9, slow_period=21, trend_period=200,
+                           sl_atr_mult=1.5, tp_atr_mult=2.0, trailing=False
+       PARAM_GRID:         see below — 864 combinations. That is four times
+                           the 200-cell bound this repo holds every other grid
+                           to; it was specified deliberately and the cost is
+                           recorded at PARAM_GRID rather than absorbed. The
+                           target axis still carries no `None` point.
 
     4. ENTRY & EXIT EXECUTION RULES
        Long Entry:   close > EMA(trend_period)            (anchor regime)
+                 AND close > session VWAP                  (anchor, intraday)
                  AND EMA(fast) crosses ABOVE EMA(slow)     (the trigger)
+                 AND RSI(14) > 50                          (momentum agrees)
                  AND ATR(14) > SMA(ATR(14), 20)            (expanding vol)
                  AND the bar starts between 09:30 and 15:30 America/New_York.
        Short Entry:  close < EMA(trend_period)            (anchor regime)
+                 AND close < session VWAP                  (anchor, intraday)
                  AND EMA(fast) crosses BELOW EMA(slow)     (the trigger)
+                 AND RSI(14) < 50                          (momentum agrees)
                  AND ATR(14) > SMA(ATR(14), 20)            (expanding vol)
                  AND the bar starts between 09:30 and 15:30 America/New_York.
        Take Profit:  long  fill price + tp_atr_mult x ATR(14), or None.
@@ -51,6 +61,25 @@ below, the run is the finding — do not edit this block to match it.
                       held past the bell.
        Execution Fill: next-bar open with contract-specific slippage and
                       commission.
+
+    AMENDED 2026-08-17. Sections 3 and 4 gained two confluence conditions —
+    the session VWAP as a second trend anchor and RSI(14) against its 50
+    midline as a momentum agreement — and the defaults moved to a shorter
+    anchor and tighter risk (trend 800 -> 200, stop 2.0 -> 1.5, target 3.0 ->
+    2.0, trailing True -> False). The strategy this module describes is now a
+    confluence scalper rather than a filtered swing crossover, and NO NUMBER
+    PRODUCED BEFORE THIS DATE DESCRIBES IT. Do not compare a run from either
+    side of this line against one from the other; they are different
+    strategies sharing a filename.
+
+    What the two additions are for, stated before the backtest that judges
+    them: VWAP is where the session's traded volume actually sits, so "above
+    the anchor EMA but below session VWAP" is a rally the day's participants
+    are not paying for, and the EMA alone cannot see that. RSI against 50 is
+    the cheapest available check that the crossover is not a drift across a
+    flat mean. Both are CONFIRMATIONS, so both can only remove trades — if the
+    trade count does not fall against the 2026-08-16 build, one of them is not
+    binding and should be dropped rather than kept as decoration.
 
     AMENDED 2026-08-16. Section 4 originally read "Short Entry: LONG ONLY",
     because the engine had no channel that could mark a signal as a short — see
@@ -121,10 +150,22 @@ so joining it back onto the 15m frame without shifting it forward hands the
 curve and it inflates every metric. A single-frame proxy cannot have it: every
 value in EMA(800) at bar i is built from closes at or before bar i.
 
-So read `trend_period` as "the anchor trend, expressed in 15m bars", not as a
-1H 200 EMA. If the 1H series is genuinely wanted rather than approximated, it
-belongs in the reader as a second timeframe with an explicit one-bar shift, not
-in here.
+So read `trend_period` as "the anchor trend, expressed in bars of whatever
+timeframe this run is on", not as a 1H 200 EMA. If the 1H series is genuinely
+wanted rather than approximated, it belongs in the reader as a second timeframe
+with an explicit one-bar shift, not in here.
+
+THE ANCHOR'S HORIZON IS NOT FIXED, AND MULTI-TIMEFRAME SCANNING MAKES THAT
+MATTER. `trend_period` counts BARS, so EMA(200) is a little over three hours on
+1m, sixteen hours on 5m, two trading days on 15m and four on 30m. Sweeping
+`--tf 1m,5m,15m,30m` therefore does not test one strategy across four
+resolutions; it tests four different anchor horizons that happen to share a
+parameter value. The winning `(tf, trend_period)` pair is the claim, never
+`trend_period` on its own, and a leaderboard sorted across timeframes is
+comparing strategies rather than sampling rates. The default moved from 800 to
+200 on 2026-08-17, which on the 15m primary timeframe shortened the anchor from
+roughly eight trading days to two — a different premise about what "the trend"
+is, not a tuning change.
 
 The short side
 --------------
@@ -299,59 +340,77 @@ import pandas as pd
 
 TIMEFRAME = "15m"
 SYMBOLS = ["NQ", "ES", "CL", "GC"]
-DEFAULT_PARAMS = {"fast_period": 9, "slow_period": 21, "trend_period": 800,
-                  "sl_atr_mult": 2.0, "tp_atr_mult": 3.0, "trailing": True}
+DEFAULT_PARAMS = {"fast_period": 9, "slow_period": 21, "trend_period": 200,
+                  "sl_atr_mult": 1.5, "tp_atr_mult": 2.0, "trailing": False}
 
-# The search space `backtest/run.py --scan` sweeps, declared here because this
-# module is the only place that knows what these parameters mean and what the
-# signature will accept. 3 x 3 x 1 x 3 x 3 x 2 = 162 combinations, every one of
-# them valid (every fast value is below every slow value, and every slow value
-# is below 800), so the scan reports 162 evaluated rather than 162 attempted
-# and some rejected.
+# The search space `backtest/run.py --scan` and `backtest/scan.py` sweep,
+# declared here because this module is the only place that knows what these
+# parameters mean and what the signature will accept.
 #
-# 162 is inside, but near, the bound at which a search can still be reported
-# honestly. Each combination is a fit to the same in-sample bars, and the best
-# of 162 is a higher number than the best of 9 even when nothing in the market
-# has changed — `variants_tested` is carried onto every report and every
-# leaderboard row for exactly that reason. `tests/test_risk_params.py` caps
-# this at 200 cells.
+# 3 x 3 x 3 x 4 x 4 x 2 = 864 combinations, every one of them valid: every
+# fast value is below every slow value, and every slow value is below every
+# trend value, so the scan reports 864 EVALUATED rather than 864 attempted and
+# some rejected.
+#
+# 864 IS FOUR TIMES THE 200-CELL BOUND THE REST OF THIS REPO KEEPS TO, AND THAT
+# IS NOT A DETAIL. The bound exists because the winning Sharpe of an N-cell
+# search is the maximum of N draws from the same sample of bars, and that
+# maximum grows with N whether or not anything in the market has changed. At
+# 162 cells the previous grid was already near the line. At 864 the top cell
+# should be read as "the best of 864 fits", and the gap between it and the
+# median cell is the part that means something — a grid this wide will produce
+# a good-looking top row on data with no edge in it at all.
+#
+# What keeps that honest rather than merely stated:
+#   * `variants_tested` is written onto every report, every leaderboard row and
+#     every stage-3 audit. A Sharpe from this grid quoted without 864 beside it
+#     is not a measurement.
+#   * `backtest/scan.py` prints the cell count before it sweeps and warns past
+#     SIZE_WARN (200), so the operator sees the size of the claim first.
+#   * `tests/test_risk_params.py` holds a DECLARED per-module cap table. This
+#     module's entry is an exemption somebody wrote down, and it fails in both
+#     directions - shrinking the grid without updating the table is also a
+#     failure - so the bound cannot quietly erode into a convention nobody
+#     noticed.
+#
+# Multiply it by the timeframes before quoting it. `--tf 1m,5m,15m,30m` is 864
+# fits PER timeframe PER contract: 3,456 per symbol, 13,824 across the four
+# target assets. Each timeframe's file records its own count and the
+# cross-timeframe total, because choosing the best timeframe from a leaderboard
+# is another selection layer and it is not free.
 #
 # THIS GRID SEARCHES NO "NO TAKE-PROFIT" POINT, AND THAT IS A REAL GAP.
 # `ema_crossover` puts `None` in its target axis so that "does the take-profit
 # earn its place at all?" is a question the sweep ANSWERS. This grid was
 # specified without it, deliberately and after the point was raised, so the
-# question is not asked here: every one of the 162 cells exits on a target, and
+# question is not asked here: every one of the 864 cells exits on a target, and
 # the winner is the best target rather than evidence that having one beats
 # having none.
 #
-# What that costs, concretely. Point 4 of the module docstring notes there is
-# no signal exit, so the target and the stop are the ENTIRE discretionary exit
-# rule. Without a `None` cell the sweep cannot distinguish "the 2.0 x ATR
-# target is the edge" from "any target is worse than letting the stop and the
-# bell decide, and 2.0 is merely the least bad". If the scan's top cells all
-# cluster at the widest target, that is the shape a missing `None` point would
-# leave and it should be read as a reason to run one, not as a result.
+# What that costs, concretely. There is no signal exit in this module, so the
+# target and the stop are the ENTIRE discretionary exit rule. Without a `None`
+# cell the sweep cannot distinguish "the 2.0 x ATR target is the edge" from
+# "any target is worse than letting the stop and the bell decide, and 2.0 is
+# merely the least bad". If the scan's top cells all cluster at the widest
+# target, that is the shape a missing `None` point would leave and it should be
+# read as a reason to run one, not as a result. The cheap way to ask without
+# growing the grid is a single out-of-band run at the winning cell with
+# `--param tp_atr_mult=None`, compared against the swept winner.
 #
-# Adding `None` as a fourth target value is 216 cells, past the 200-cell bound.
-# The cheap way to ask the question without growing the grid is a single
-# out-of-band run at the winning cell with `--param tp_atr_mult=None`, compared
-# against the swept winner. `tests/test_risk_params.py` records the exemption
-# per module rather than dropping the check, so this stays a decision on the
-# record instead of a convention that quietly eroded.
-#
-# `trend_period` is a ONE-VALUE axis: it is pinned at 800 rather than searched.
-# The anchor length is the strategy's premise, and a sweep that moves it is
-# searching over which trend to believe in — a different claim from "this
-# trigger works inside this trend". Declaring it here rather than omitting it
-# makes the pinned value explicit in the scan output and in the leaderboard's
-# `params` column, at no cost to the cell count.
+# `trend_period` is now a THREE-value axis. It was pinned at 800 until
+# 2026-08-17 on the reasoning that the anchor length is the strategy's premise
+# and sweeping it searches over which trend to believe in. That reasoning still
+# holds and the axis was opened anyway: the search now includes the premise, so
+# a winning cell is a claim about which anchor to believe as well as about the
+# trigger inside it. Read `(trend_period, tf)` together - see the anchor
+# section of the module docstring for why a period alone is not a horizon.
 PARAM_GRID = {
     "fast_period": [5, 9, 13],
-    "slow_period": [21, 34, 50],
-    "trend_period": [800],
-    "sl_atr_mult": [1.0, 1.5, 2.0],
-    "tp_atr_mult": [2.0, 3.0, 4.0],
-    "trailing": [True, False],
+    "slow_period": [15, 21, 34],
+    "trend_period": [200, 400, 800],
+    "sl_atr_mult": [0.8, 1.0, 1.5, 2.0],
+    "tp_atr_mult": [1.5, 2.0, 3.0, 4.0],
+    "trailing": [False, True],
 }
 
 ATR_PERIOD = 14
@@ -362,6 +421,29 @@ ATR_PERIOD = 14
 # add two more axes to a grid whose risk parameters are already the part most
 # able to fit noise.
 ATR_MA_PERIOD = 20
+
+# The momentum agreement. RSI(14) against its 50 midline: above 50 means the
+# average up-move over the last 14 bars outweighs the average down-move, which
+# is the weakest possible statement that the crossover is not a drift across a
+# flat mean. Wilder's smoothing, so this is the RSI every other tool draws.
+#
+# Period and midline are fixed constants rather than swept parameters, for the
+# same reason as the ATR gate: they are the specification's definition of
+# "momentum agrees", and exposing them would add two more axes to a grid that
+# is already four times the honesty bound.
+RSI_PERIOD = 14
+RSI_MIDLINE = 50.0
+
+# Session VWAP resets at the CME open, 18:00 New York time - NOT at midnight,
+# and not at the 09:30 equity open. A futures session runs 18:00 ET to 17:00 ET
+# the following day, so a VWAP restarted at midnight would carry six hours of
+# the previous session's volume into the new one and then discard the rest of
+# it mid-morning. The rule here is the same one
+# `backtest.event_calendar.session_date` applies for `--exclude-days`, and
+# `tests/test_pipeline_filters.py` pins the two against each other: if they
+# disagreed, a run could exclude Monday entries while the VWAP believed those
+# same bars were Sunday.
+SESSION_OPEN_ET_HOUR = 18
 
 # Eastern wall-clock, converted through the zone so both sides of a DST change
 # are right. Entry SIGNALS are taken on bars starting inside this window; the
@@ -378,26 +460,38 @@ SESSION_FLAT_ET = (16, 0)
 # The report never infers any of this from the signal arrays: a description
 # guessed from the trades would be a guess printed as a fact.
 LOGIC = {
-    "concept": "Trend-following on a filtered moving-average crossover. The "
-               "crossover on its own is mostly noise, so two conditions "
-               "decide which crossings are worth paying a round turn for: the "
-               "long-horizon anchor average says which way the day-scale "
-               "imbalance runs, and ATR above its own 20-period average says "
-               "real size is participating rather than the market rotating "
-               "inside a range. Take the trigger only when both agree with "
-               "it. The same reasoning runs in both directions, so the short "
-               "rules are the long rules mirrored.",
-    "entry": "Go Long when all four hold on the same bar: the close is above "
-             "the Trend EMA ({trend_period}); the Fast EMA ({fast_period}) "
-             "crosses up through the Slow EMA ({slow_period}) on this bar; "
-             "ATR 14 is above its own 20-period average, so volatility is "
-             "expanding; and the bar starts between 09:30 and 15:30 New York "
-             "time. Go Short on the exact mirror: the close BELOW the Trend "
-             "EMA, the Fast EMA crossing DOWN through the Slow EMA on this "
-             "bar, the same volatility expansion and the same entry window. "
-             "Only one position is held at a time and it is never reversed on "
-             "the spot — a short trigger while the long is open is ignored, "
-             "and vice versa. The fill is the next bar's open.",
+    "concept": "A confluence scalper built on a moving-average crossover. The "
+               "crossover on its own is mostly noise, so FOUR confirmations "
+               "decide which crossings are worth paying a round turn for. Two "
+               "are about direction: the long-horizon anchor average says "
+               "which way the multi-session imbalance runs, and the session "
+               "VWAP says whether the day's actual traded volume sits below "
+               "the price or above it — a rally above the anchor average but "
+               "below VWAP is one the session's participants are not paying "
+               "for. One is about momentum: RSI on the other side of its 50 "
+               "midline, the weakest available check that the cross is not a "
+               "drift across a flat mean. One is about participation: ATR "
+               "above its own 20-period average, meaning real size arrived "
+               "rather than the market rotating inside a range. Take the "
+               "trigger only when all four agree with it. Every confirmation "
+               "can only REMOVE trades, never add one, so the edge — if there "
+               "is one — is selection rather than prediction. The same "
+               "reasoning runs in both directions, so the short rules are the "
+               "long rules mirrored.",
+    "entry": "Go Long when all six hold on the same bar: the close is above "
+             "the Trend EMA ({trend_period}); the close is above the session "
+             "VWAP, which restarts at the 18:00 New York futures open rather "
+             "than at midnight; the Fast EMA ({fast_period}) crosses up "
+             "through the Slow EMA ({slow_period}) on this bar; RSI 14 is "
+             "above 50; ATR 14 is above its own 20-period average, so "
+             "volatility is expanding; and the bar starts between 09:30 and "
+             "15:30 New York time. Go Short on the exact mirror: the close "
+             "BELOW the Trend EMA, the close BELOW the session VWAP, the Fast "
+             "EMA crossing DOWN through the Slow EMA on this bar, RSI 14 "
+             "below 50, the same volatility expansion and the same entry "
+             "window. Only one position is held at a time and it is never "
+             "reversed on the spot — a short trigger while the long is open "
+             "is ignored, and vice versa. The fill is the next bar's open.",
     # Written so that every bound value reads correctly, including
     # `tp_atr_mult=None` and either setting of `trailing`. The card cannot
     # branch — `_describe_strategy` only substitutes `{param}` slots — so the
@@ -472,6 +566,116 @@ def _sma(series: pd.Series, period: int) -> pd.Series:
     whatever the first few bars happened to do.
     """
     return series.rolling(period, min_periods=period).mean()
+
+
+def _rsi(close: pd.Series, period: int = RSI_PERIOD) -> pd.Series:
+    """
+    Wilder's RSI. NaN until `period` changes exist.
+
+    Built from `close.diff()`, which looks one bar BACKWARD - the change at bar
+    i is close[i] - close[i-1] and uses nothing later. The AST validator flags
+    `diff` only when its argument is negative; the default (+1) is the causal
+    direction.
+
+    Wilder's smoothing rather than a simple mean, for the same reason `_atr`
+    uses it: an "RSI(14)" built on a 14-span EMA is roughly twice as fast as
+    the one every chart package draws, so a 50-crossing here would happen at a
+    different bar from the one a reader sees on their screen.
+
+    The 100 - 100/(1+rs) form is undefined when the average loss is zero. That
+    is a real state - fourteen consecutive up bars - and it means RSI is 100,
+    not missing, so it is filled explicitly rather than left as the inf/NaN the
+    division produces. Filling it wrong in the other direction would suppress
+    an entry at exactly the moment momentum is strongest.
+    """
+    delta = close.diff()
+    gain = delta.clip(lower=0.0)
+    loss = (-delta).clip(lower=0.0)
+
+    avg_gain = _wilder(gain, period)
+    avg_loss = _wilder(loss, period)
+
+    rs = avg_gain / avg_loss
+    rsi = 100.0 - (100.0 / (1.0 + rs))
+    # avg_loss == 0 with a positive average gain is RSI 100; both zero is a
+    # dead-flat window, which is RSI 50 by convention rather than 0/0.
+    flat = (avg_loss == 0) & (avg_gain == 0)
+    no_loss = (avg_loss == 0) & (avg_gain > 0)
+    rsi = rsi.mask(no_loss, 100.0).mask(flat, 50.0)
+    # Warm-up must stay NaN: `_wilder` returns NaN for the first `period` bars
+    # and the masks above would otherwise paint 50.0 over them, opening the
+    # momentum gate before the indicator exists.
+    return rsi.where(avg_gain.notna() & avg_loss.notna())
+
+
+def _session_ordinal(ts: pd.Series) -> np.ndarray:
+    """
+    A distinct integer per CME SESSION, for grouping the VWAP.
+
+    The session opens at 18:00 New York time and runs to 17:00 the next day, so
+    any bar at or after 18:00 ET belongs to the NEXT calendar day's session.
+    Converted through the named zone rather than a fixed UTC offset - 18:00 ET
+    is 23:00 UTC in winter and 22:00 UTC in summer, and a fixed offset would
+    move the reset by an hour for half the year, silently splitting one
+    session's volume across two VWAPs twice a year.
+
+    This is the same rule as `backtest.event_calendar.session_date`, and
+    `tests/test_pipeline_filters.py` asserts the two agree bar for bar. It is
+    reimplemented here rather than imported so this module keeps to numpy and
+    pandas only, which is what `agents.tier3_workers.ALLOWED_IMPORTS` permits a
+    strategy module - the test is what stops the two copies drifting.
+
+    Returns days-since-epoch as an int64 array. The VALUE is meaningless; only
+    the boundaries between distinct values are used.
+
+    The cast goes through `datetime64[D]` rather than dividing `.asi8` by
+    nanoseconds-per-day. pandas 3.0 stores this index at MICROSECOND
+    resolution, so that division returns ~19 for every date in the 2020s -
+    every bar in the lake collapses into one session, the VWAP never resets and
+    accumulates across sixteen years while still looking like a plausible
+    price-scale line. Nothing raises, no length changes, and the only symptom
+    is a slightly wrong confirmation on every trade. `datetime64[D]` states the
+    unit instead of assuming it, and is correct at any resolution pandas picks.
+    """
+    et = pd.DatetimeIndex(pd.to_datetime(ts, utc=True)).tz_convert(
+        "America/New_York")
+    rolled = et.normalize() + pd.to_timedelta(
+        (et.hour >= SESSION_OPEN_ET_HOUR).astype("int64"), unit="D")
+    naive = pd.DatetimeIndex(rolled.tz_localize(None))
+    return np.asarray(naive, dtype="datetime64[D]").astype("int64")
+
+
+def _session_vwap(bars: pd.DataFrame) -> pd.Series:
+    """
+    Volume-weighted average price since the session open, at every bar.
+
+    VWAP = cumsum(typical_price x volume) / cumsum(volume), restarted at each
+    CME session open, where typical price is (high + low + close) / 3 - the
+    standard definition, and the one that makes this comparable to the VWAP on
+    a trading screen.
+
+    CAUSAL, and worth being explicit about because a cumulative statistic is
+    the shape lookahead usually hides in. `cumsum` at bar i sums bars 0..i of
+    the current session and nothing later, so the value at bar i is exactly
+    what a trader watching that bar close would have had. The engine then fills
+    the signal at bar i+1's open. There is no `.shift(-1)`, no reindex from a
+    coarser frame, and no `transform('sum')` over a whole session - that last
+    one is the trap: grouping by session and taking the session TOTAL would
+    hand the 09:35 bar the whole day's volume profile.
+
+    A session whose cumulative volume is still zero has no VWAP - not a VWAP of
+    zero, which would sit far below every price and read as a permanent long
+    confirmation. Those bars are NaN and every comparison against them is
+    False, so no entry can fire on them.
+    """
+    session = _session_ordinal(bars["ts"])
+    typical = (bars["high"] + bars["low"] + bars["close"]) / 3.0
+    volume = bars["volume"].astype(float)
+
+    grouped = pd.Series(session, index=bars.index)
+    cum_pv = (typical * volume).groupby(grouped).cumsum()
+    cum_v = volume.groupby(grouped).cumsum()
+    return (cum_pv / cum_v).where(cum_v > 0)
 
 
 def _session_masks(ts: pd.Series) -> tuple[np.ndarray, np.ndarray]:
@@ -775,6 +979,8 @@ def _series(bars: pd.DataFrame, fast_period: int, slow_period: int,
         "fast": _ema(close, fast_period),
         "slow": _ema(close, slow_period),
         "trend": _ema(close, trend_period),
+        "vwap": _session_vwap(bars),
+        "rsi": _rsi(close, RSI_PERIOD),
         "atr": atr,
         "atr_ma": _sma(atr, ATR_MA_PERIOD),
     }
@@ -808,12 +1014,18 @@ def _signal_arrays(bars: pd.DataFrame, fast_period: int, slow_period: int,
 
     close = bars["close"]
 
-    # Warm-up is NaN in all three EMAs, in ATR and in the ATR average, and
-    # every comparison against NaN is False, so no signal can fire before all
-    # five exist. The explicit notna guard makes that a stated requirement
-    # rather than a property of NaN comparison that a later edit could quietly
-    # lose.
+    # Warm-up is NaN in all three EMAs, in RSI, in ATR and in the ATR average,
+    # and every comparison against NaN is False, so no signal can fire before
+    # all of them exist. The explicit notna guard makes that a stated
+    # requirement rather than a property of NaN comparison that a later edit
+    # could quietly lose.
+    #
+    # VWAP is in this conjunction for a slightly different reason. It is NOT a
+    # warm-up series - it exists from the first bar of every session - but it
+    # IS NaN on any bar whose session has traded no volume yet, and those bars
+    # must not be treated as confirmed in either direction.
     ready = (s["fast"].notna() & s["slow"].notna() & s["trend"].notna()
+             & s["vwap"].notna() & s["rsi"].notna()
              & s["atr"].notna() & s["atr_ma"].notna())
 
     # The crossover as an EVENT, not a state. `above` is False through warm-up
@@ -834,15 +1046,25 @@ def _signal_arrays(bars: pd.DataFrame, fast_period: int, slow_period: int,
     cross_up = above & ~above.shift(1, fill_value=False) & prev_ready
     cross_down = below & ~below.shift(1, fill_value=False) & prev_ready
 
+    # The confluence, one condition per line so the conjunction below reads as
+    # the specification does. Each is built as an explicit comparison rather
+    # than as the negation of its opposite: `~(close > vwap)` is true wherever
+    # the close merely fails to be above VWAP, which includes exact equality
+    # and every NaN bar, so a short condition written as a negation would fire
+    # on ties and on bars where the series does not exist.
     long_regime = close > s["trend"]            # the anchor trend agrees, up
     short_regime = close < s["trend"]           # and the mirror of it, down
+    long_vwap = close > s["vwap"]               # the session's volume agrees
+    short_vwap = close < s["vwap"]
+    long_momo = s["rsi"] > RSI_MIDLINE          # momentum agrees
+    short_momo = s["rsi"] < RSI_MIDLINE
     expanding = s["atr"] > s["atr_ma"]          # real size is participating
 
     window = np.asarray(entry_window)
-    long_entry_ok = (long_regime & cross_up & expanding
-                     & ready).to_numpy(dtype=bool) & window
-    short_entry_ok = (short_regime & cross_down & expanding
-                      & ready).to_numpy(dtype=bool) & window
+    long_entry_ok = (long_regime & long_vwap & cross_up & long_momo
+                     & expanding & ready).to_numpy(dtype=bool) & window
+    short_entry_ok = (short_regime & short_vwap & cross_down & short_momo
+                      & expanding & ready).to_numpy(dtype=bool) & window
 
     # No signal exit, on either side. The specification enumerates the exits and
     # lists only the stop, the target and the session flatten — a position is
@@ -874,10 +1096,10 @@ def _signal_arrays(bars: pd.DataFrame, fast_period: int, slow_period: int,
 def signal_fn(bars: pd.DataFrame,
               fast_period: int = 9,
               slow_period: int = 21,
-              trend_period: int = 800,
-              sl_atr_mult: float = 2.0,
-              tp_atr_mult: float | None = 3.0,
-              trailing: bool = True) -> tuple[pd.Series, pd.Series,
+              trend_period: int = 200,
+              sl_atr_mult: float = 1.5,
+              tp_atr_mult: float | None = 2.0,
+              trailing: bool = False) -> tuple[pd.Series, pd.Series,
                                               pd.Series, pd.Series]:
     """
     Take the crossover only with the anchor trend and expanding volatility;
@@ -916,10 +1138,10 @@ def signal_fn(bars: pd.DataFrame,
 def indicators(bars: pd.DataFrame,
                fast_period: int = 9,
                slow_period: int = 21,
-               trend_period: int = 800,
-               sl_atr_mult: float = 2.0,
-               tp_atr_mult: float | None = 3.0,
-               trailing: bool = True) -> dict[str, pd.Series]:
+               trend_period: int = 200,
+               sl_atr_mult: float = 1.5,
+               tp_atr_mult: float | None = 2.0,
+               trailing: bool = False) -> dict[str, pd.Series]:
     """
     The price-scale series, for the tear sheet to draw over the candles.
 
@@ -946,14 +1168,19 @@ def indicators(bars: pd.DataFrame,
     all-NaN series would render as an empty legend entry, which reads as a
     target that exists and never got close — the opposite of the truth.
 
-    ATR AND ITS AVERAGE ARE DELIBERATELY NOT RETURNED, which means the
-    volatility gate — one of the three entry conditions — is the one thing a
-    reader cannot see on the chart. That is a real gap, and the alternative is
+    ATR, ITS AVERAGE AND RSI ARE DELIBERATELY NOT RETURNED, which means the
+    volatility gate and the momentum gate are the two entry conditions a reader
+    cannot see on the chart. That is a real gap, and the alternative is
     worse: the inspector draws these on the PRICE axis, so a volatility series
     measured in points would sit flat along the bottom of a 20,000-point
     contract, unreadable, while rescaling it to fit would draw a line at prices
-    nothing ever traded at. ATR reaches the reader through the stop and target
-    lines, which is where it changes a decision.
+    nothing ever traded at. RSI is worse still: it is bounded 0-100, so on a
+    20,000-point contract it would be a flat line along the bottom of the
+    chart, and rescaling a 0-100 oscillator onto a price axis draws a
+    "momentum" line at prices that mean nothing. ATR reaches the reader through
+    the stop and target lines, which is where it changes a decision; RSI does
+    not reach the chart at all, and that is a stated gap rather than an
+    oversight. Both are in the entry conditions on the strategy card.
 
     Warm-up stays NaN rather than drawing the averages flat through the first
     bars.
@@ -970,6 +1197,13 @@ def indicators(bars: pd.DataFrame,
         f"Fast EMA ({fast_period})": s["fast"],
         f"Slow EMA ({slow_period})": s["slow"],
         f"Trend EMA ({trend_period})": s["trend"],
+        # VWAP is on the price axis, so it draws honestly beside the candles -
+        # and it is the one confluence condition a reader can check by eye,
+        # since "the close is above the session's volume-weighted average" is
+        # visible as a position on the chart rather than a level off it. It
+        # breaks at each session open, which is the reset and not a gap in the
+        # data.
+        "Session VWAP": s["vwap"],
         f"{kind} Stop ({sl_atr_mult}xATR{ATR_PERIOD})":
             pd.Series(stop, index=bars.index),
     }
@@ -981,10 +1215,10 @@ def indicators(bars: pd.DataFrame,
 
 def make_signal_fn(fast_period: int = 9,
                    slow_period: int = 21,
-                   trend_period: int = 800,
-                   sl_atr_mult: float = 2.0,
-                   tp_atr_mult: float | None = 3.0,
-                   trailing: bool = True):
+                   trend_period: int = 200,
+                   sl_atr_mult: float = 1.5,
+                   tp_atr_mult: float | None = 2.0,
+                   trailing: bool = False):
     """
     Bind parameters for `agents.tier3_workers.load_strategy`.
 

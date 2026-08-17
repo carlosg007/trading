@@ -280,6 +280,12 @@ python3 backtest/baseline.py    --strat X --symbols ALL --tf 15m \
     --start 2013-01-01 --end 2022-12-31       # 1: drop PF<1.0 contracts
 python3 backtest/scan.py        --strat X --tf 15m \
     --start 2013-01-01 --end 2022-12-31       # 2: sweep the survivors
+
+# Stages 1 and 2 take a comma-separated --tf and evaluate each in turn.
+# The lake derives 5m/15m/30m/1h/2h/4h from the 1m parquet, so nothing
+# resamples in the stage. Stages 3 and 4 take ONE timeframe.
+python3 backtest/baseline.py --strat X --symbols ALL --tf 1m,5m,15m,30m \
+    --start 2013-01-01 --end 2022-12-31
 python3 backtest/audit_gates.py --strat X --tf 15m \
     --is-start 2013-01-01 --is-end 2022-12-31 \
     --holdout-start 2023-01-01 --holdout-end 2026-01-01   # 3: certify
@@ -723,6 +729,33 @@ atomically (temp file, `os.replace`) into
 `<BT_ARTIFACTS>/pipeline/<strategy>/`, one directory per strategy rather than
 per run, because the files are a chain and Stage 3 has to find Stage 2's winner
 without being told a timestamp.
+
+**Multi-timeframe scanning.** Stages 1 and 2 accept `--tf 1m,5m,15m,30m` and
+run each timeframe independently; `run.parse_timeframes` validates against
+`mdlib.lake`'s native and DERIVED sets up front, so a typo fails in a second
+rather than several contracts into a sweep. **Nothing resamples in a stage** —
+the reader aggregates the 1m parquet, and a second implementation in a stage
+would be free to disagree with it about bar boundaries and the Sunday merge.
+Three consequences, all of them selection effects that would otherwise go
+unrecorded:
+
+- **A period is not a horizon.** `trend_period=200` is ~3.3 hours on 1m and
+  four trading days on 30m. Sweeping timeframes tests different strategies,
+  not one strategy at several resolutions; the claim is the `(tf, params)`
+  pair.
+- **Stage 1's `surviving` list is a UNION** when several timeframes ran, and
+  the file says so (`surviving_is_union_across_timeframes`). `by_timeframe` is
+  where "did it survive at 15m" is answered.
+- **Stage 2 writes `best_params_<SYMBOL>_<TF>.json` per timeframe and, on a
+  multi-timeframe run, NO unsuffixed file.** Picking the best timeframe off a
+  leaderboard is a second selection layer stacked on the parameter sweep, so
+  Stage 3 has to be told which timeframe it is certifying rather than
+  inheriting whichever was written last. `variants_tested_all_timeframes`
+  records cells × timeframes; `variants_tested` alone understates the search by
+  that factor. Stages 3 and 4 refuse a comma-separated `--tf` — a gate audit
+  certifies one (parameters, timeframe) pair, and a lifecycle run writes one
+  tear sheet per contract. Certifying at a timeframe whose winner was selected
+  on different bars raises rather than proceeding.
 
 **`backtest/baseline.py`** — **Stage 1**. Version A (and B with `--ml`) on
 DEFAULT parameters, one simulation per contract, screening on `profit_factor >=

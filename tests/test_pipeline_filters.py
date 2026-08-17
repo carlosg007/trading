@@ -712,10 +712,14 @@ def test_stage2_to_stage3_handoff(tmp: Path) -> None:
                                "trades": pd.DataFrame()},
                    "gate1": {"status": "PASS"}, "sharpe": 1.4},
     }
-    p = write_best_params(scan, "demo", "NQ", "15m", "2013-01-01",
-                          "2022-12-31", {"atr_mult": 2.0}, d)
-    check("best_params is named for the symbol",
-          p.name == BEST_PARAMS_FILE.format(symbol="NQ"), p.name)
+    written = write_best_params(scan, "demo", "NQ", "15m", "2013-01-01",
+                                "2022-12-31", {"atr_mult": 2.0}, d)
+    names = {w.name for w in written}
+    check("a single-timeframe sweep writes the plain name stage 3 falls back "
+          "to", BEST_PARAMS_FILE.format(symbol="NQ") in names, str(names))
+    check("and the timeframe-suffixed name beside it",
+          BEST_PARAMS_FILE.format(symbol="NQ_15m") in names, str(names))
+    p = d / BEST_PARAMS_FILE.format(symbol="NQ")
 
     blob = json.loads(p.read_text())
     check("params is the FULL effective set, not only the swept axes",
@@ -876,6 +880,293 @@ def test_promote_certification(tmp: Path) -> None:
     check("--require-certification turns that into a refusal", ok, msg[:70])
 
 
+# --------------------------------------------------------------------------
+# 20. The confluence strategy and multi-timeframe scanning
+# --------------------------------------------------------------------------
+def _load_etf():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "_etf_test", REPO / "strategies" / "experimental" / "ema_trend_filter.py")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def globex_bars(days: int = 60, seed: int = 3) -> pd.DataFrame:
+    """15m bars covering the whole 24h Globex day, so sessions actually roll."""
+    rows, px = [], 5000.0
+    rng = np.random.default_rng(seed)
+    for d in pd.bdate_range("2024-01-02", periods=days, tz="UTC"):
+        for k in range(96):
+            ts = d + pd.Timedelta(minutes=15 * k)
+            px *= 1 + rng.normal(0.00004, 0.0009)
+            rows.append((ts, "NQ", px, px * 1.0012, px * 0.9988, px, 500 + k))
+    return pd.DataFrame(rows, columns=["ts", "symbol", "open", "high", "low",
+                                       "close", "volume"])
+
+
+def test_session_vwap() -> None:
+    print("\n20. Session VWAP: resets at the CME open, and is causal")
+    m = _load_etf()
+    bars = globex_bars()
+
+    ordinals = m._session_ordinal(bars["ts"])
+    check("the VWAP session rule is the SAME rule --exclude-days uses",
+          bool((ordinals == np.asarray(session_date(bars["ts"]),
+                                       dtype="datetime64[D]").astype("int64")
+                ).all()))
+    # The bug this check exists for: dividing .asi8 by nanoseconds-per-day on a
+    # microsecond-resolution index collapses every date onto one ordinal, the
+    # VWAP never resets, and the series still looks like a plausible price line.
+    n_sessions = len(set(ordinals.tolist()))
+    check("sixty days of bars produce many sessions, not one",
+          n_sessions > 50, f"{n_sessions} sessions")
+
+    vwap = m._session_vwap(bars)
+    first = pd.Series(ordinals).ne(pd.Series(ordinals).shift()).to_numpy()
+    typical = ((bars["high"] + bars["low"] + bars["close"]) / 3).to_numpy()
+    check("the first bar of each session has VWAP == its own typical price",
+          bool(np.allclose(vwap.to_numpy()[first], typical[first])),
+          f"{int(first.sum())} resets")
+
+    contained = all(
+        vwap[ordinals == sess].min() >= bars["low"][ordinals == sess].min() - 1e-9
+        and vwap[ordinals == sess].max() <= bars["high"][ordinals == sess].max() + 1e-9
+        for sess in set(ordinals.tolist()))
+    check("VWAP never leaves its own session's price range - no volume leaks "
+          "across the reset", contained)
+
+    # Causality, checked directly: recomputing on a truncated frame must give
+    # the same value at the last bar. A session-total (rather than cumulative)
+    # VWAP would fail this at every bar but the last of each session.
+    cut = 4000
+    check("VWAP at bar i is unchanged when every later bar is deleted",
+          abs(float(m._session_vwap(bars.iloc[:cut].reset_index(drop=True)).iloc[-1])
+              - float(vwap.iloc[cut - 1])) < 1e-9)
+
+    zero_vol = bars.copy()
+    zero_vol.loc[:, "volume"] = 0.0
+    check("a session with no traded volume has NaN VWAP, never 0.0",
+          bool(m._session_vwap(zero_vol).isna().all()))
+
+
+def test_rsi() -> None:
+    print("\n21. RSI(14): Wilder, and its undefined ends")
+    m = _load_etf()
+
+    rising = pd.Series(np.arange(1, 40, dtype=float))
+    r = m._rsi(rising, 14)
+    check("fourteen straight up bars give RSI 100, not inf or NaN",
+          float(r.iloc[-1]) == 100.0, str(r.iloc[-1]))
+    falling = pd.Series(np.arange(40, 1, -1, dtype=float))
+    check("straight down gives RSI 0", float(m._rsi(falling, 14).iloc[-1]) == 0.0)
+    flat = pd.Series(np.full(40, 100.0))
+    check("a dead-flat window is RSI 50 by convention, not 0/0",
+          float(m._rsi(flat, 14).iloc[-1]) == 50.0)
+    check("warm-up stays NaN rather than being painted 50",
+          bool(m._rsi(rising, 14).iloc[:14].isna().all()))
+
+    mixed = pd.Series(np.cumsum(np.random.default_rng(5).normal(0, 1, 200)) + 100)
+    rm = m._rsi(mixed, 14).dropna()
+    check("RSI stays inside [0, 100]", bool((rm >= 0).all() and (rm <= 100).all()))
+
+
+def test_confluence_is_subtractive() -> None:
+    print("\n22. The confluence conditions can only REMOVE trades")
+    m = _load_etf()
+    bars = globex_bars(days=90, seed=11)
+
+    e, x, se, sx = m.signal_fn(bars)
+    n_full = int(e.sum() + se.sum())
+
+    # The same module with VWAP and RSI neutralised: every entry the four-way
+    # confluence takes must also be an entry the two-way version would take.
+    # If it were not, one of the new conditions would be ADDING trades, which
+    # a confirmation cannot do.
+    s = m._series(bars, 9, 21, 200)
+    close = bars["close"]
+    ready2 = (s["fast"].notna() & s["slow"].notna() & s["trend"].notna()
+              & s["atr"].notna() & s["atr_ma"].notna())
+    above = (s["fast"] > s["slow"]) & ready2
+    below = (s["fast"] < s["slow"]) & ready2
+    prev_ready = ready2.shift(1, fill_value=False)
+    cross_up = above & ~above.shift(1, fill_value=False) & prev_ready
+    cross_down = below & ~below.shift(1, fill_value=False) & prev_ready
+    window, _flat = m._session_masks(bars["ts"])
+    old_long = ((close > s["trend"]) & cross_up
+                & (s["atr"] > s["atr_ma"]) & ready2).to_numpy() & window
+    old_short = ((close < s["trend"]) & cross_down
+                 & (s["atr"] > s["atr_ma"]) & ready2).to_numpy() & window
+
+    check("the confluence build produced trades to compare", n_full > 0,
+          f"{n_full} entries")
+    check("every confluence LONG entry is also a pre-confluence entry",
+          bool((~(e.to_numpy() & ~old_long)).all()))
+    check("every confluence SHORT entry is also a pre-confluence entry",
+          bool((~(se.to_numpy() & ~old_short)).all()))
+    check("and the confluence takes strictly fewer",
+          n_full <= int(old_long.sum() + old_short.sum()),
+          f"{n_full} vs {int(old_long.sum() + old_short.sum())}")
+
+    # Each condition must actually bind on the entries taken.
+    ent = e.to_numpy() | se.to_numpy()
+    idx = np.flatnonzero(ent)
+    if len(idx):
+        rsi = s["rsi"].to_numpy()
+        vwap = s["vwap"].to_numpy()
+        cl = close.to_numpy()
+        long_i = np.flatnonzero(e.to_numpy())
+        short_i = np.flatnonzero(se.to_numpy())
+        check("every long entry has RSI above 50 and close above VWAP",
+              all(rsi[i] > 50.0 and cl[i] > vwap[i] for i in long_i))
+        check("every short entry has RSI below 50 and close below VWAP",
+              all(rsi[i] < 50.0 and cl[i] < vwap[i] for i in short_i))
+
+
+def test_strategy_declarations() -> None:
+    print("\n23. The module's four declarations, after the refactor")
+    from agents.tier3_workers import load_strategy
+    from backtest.scan import expand_grid
+
+    m = _load_etf()
+    path = REPO / "strategies" / "experimental" / "ema_trend_filter.py"
+    bars = globex_bars(days=40)
+
+    check("DEFAULT_PARAMS matches the specification block",
+          m.DEFAULT_PARAMS == {"fast_period": 9, "slow_period": 21,
+                               "trend_period": 200, "sl_atr_mult": 1.5,
+                               "tp_atr_mult": 2.0, "trailing": False},
+          str(m.DEFAULT_PARAMS))
+    check("PARAM_GRID is the declared 864 cells",
+          len(expand_grid(m.PARAM_GRID)) == 864,
+          str(len(expand_grid(m.PARAM_GRID))))
+    check("the grid's axes are the specified ones",
+          m.PARAM_GRID["trend_period"] == [200, 400, 800]
+          and m.PARAM_GRID["sl_atr_mult"] == [0.8, 1.0, 1.5, 2.0]
+          and m.PARAM_GRID["tp_atr_mult"] == [1.5, 2.0, 3.0, 4.0]
+          and m.PARAM_GRID["trailing"] == [False, True])
+
+    fn, info = load_strategy(path, {})
+    check("load_strategy binds the new defaults",
+          info["bound_params"]["trend_period"] == 200)
+    out = fn(bars)
+    check("signal_fn returns the four-mask form", isinstance(out, tuple)
+          and len(out) == 4)
+    check("every mask is boolean and bars-length",
+          all(len(s_) == len(bars) and s_.dtype == bool for s_ in out))
+
+    ind = m.indicators(bars)
+    check("indicators draws the session VWAP", "Session VWAP" in ind)
+    check("every indicator series is the full length of the frame",
+          all(len(v) == len(bars) for v in ind.values()),
+          str({k: len(v) for k, v in ind.items()}))
+    check("RSI is NOT drawn - it is a 0-100 oscillator on a price axis",
+          not any("RSI" in k for k in ind))
+
+    logic = m.LOGIC
+    check("LOGIC names VWAP and RSI in the entry sentence",
+          "VWAP" in logic["entry"] and "RSI" in logic["entry"])
+    check("LOGIC's slots are all bindable parameters",
+          all(f"{{{k}}}" not in logic["entry"] + logic["exit"]
+              or k in m.DEFAULT_PARAMS
+              for k in ("fast_period", "slow_period", "trend_period",
+                        "sl_atr_mult", "tp_atr_mult", "trailing")))
+    # The card must render with the run's own values substituted in.
+    _fn2, info2 = load_strategy(path, {"trend_period": 400})
+    check("the strategy card states the bound parameters, not the defaults",
+          "400" in info2["logic"]["entry"], info2["logic"]["entry"][:60])
+
+
+def test_multi_timeframe_cli() -> None:
+    print("\n24. Multi-timeframe scanning")
+    from backtest.run import parse_timeframes
+
+    check("a comma-separated list parses in the order given",
+          parse_timeframes("1m,5m,15m,30m", None) == ["1m", "5m", "15m", "30m"])
+    check("one timeframe is still a list, so callers have one code path",
+          parse_timeframes("15m", None) == ["15m"])
+    check("no --tf falls back to the module's declared timeframe",
+          parse_timeframes(None, "15m") == ["15m"])
+    check("duplicates collapse, order preserved",
+          parse_timeframes("30m, 5m ,30m", None) == ["30m", "5m"])
+
+    ok, msg = raises(lambda: parse_timeframes("7m", None), ValueError)
+    check("a timeframe the lake cannot serve is refused up front", ok, msg[:60])
+    check("every derived timeframe the lake declares is accepted",
+          parse_timeframes("1m,5m,15m,30m,1h,2h,4h,1d,1w", None) ==
+          ["1m", "5m", "15m", "30m", "1h", "2h", "4h", "1d", "1w"])
+
+
+def test_multi_timeframe_handoff(tmp: Path) -> None:
+    print("\n25. Multi-timeframe handoff to stage 3")
+    from backtest.audit_gates import discover_symbols, load_params
+    from backtest.scan import write_best_params
+
+    d = tmp / "mtf"
+    d.mkdir(parents=True, exist_ok=True)
+
+    def scan_for(tf, ema):
+        return {"symbol": "NQ", "combinations": 864, "evaluated": 864,
+                "rejected": [], "selection": "GATE 1 PASS",
+                "winner": {"params": {"trend_period": ema},
+                           "metrics": {"sharpe": 1.1},
+                           "gate1": {"status": "PASS"}, "sharpe": 1.1}}
+
+    # A multi-timeframe sweep: per-tf files, and NO unsuffixed file.
+    for tf, ema in (("5m", 400), ("15m", 200)):
+        written = write_best_params(scan_for(tf, ema), "demo", "NQ", tf,
+                                    "2013-01-01", "2022-12-31", {}, d,
+                                    timeframes=["5m", "15m"],
+                                    variants_all_timeframes=1728)
+        check(f"{tf}: one file written, suffixed with the timeframe",
+              len(written) == 1 and written[0].name == "best_params_NQ_5m.json"
+              if tf == "5m" else written[0].name == "best_params_NQ_15m.json",
+              written[0].name)
+
+    check("a multi-timeframe sweep writes NO unsuffixed best_params",
+          not (d / "best_params_NQ.json").exists(),
+          "stage 3 must be told which timeframe it is certifying")
+
+    blob = json.loads((d / "best_params_NQ_15m.json").read_text())
+    check("each file records the full cross-timeframe search size",
+          blob["variants_tested"] == 864
+          and blob["variants_tested_all_timeframes"] == 1728,
+          f"{blob['variants_tested']} / {blob['variants_tested_all_timeframes']}")
+
+    # Stage 3 must pick up the timeframe it is running on, not the other one.
+    p5, prov5 = load_params("demo", "NQ", d, {}, False, tf="5m")
+    p15, _ = load_params("demo", "NQ", d, {}, False, tf="15m")
+    check("stage 3 at 5m reads the 5m winner",
+          p5["trend_period"] == 400, str(p5))
+    check("stage 3 at 15m reads the 15m winner",
+          p15["trend_period"] == 200, str(p15))
+    check("and names the file it used", "NQ_5m" in prov5["params_source"],
+          prov5["params_source"])
+
+    check("symbol discovery strips the timeframe suffix, not just the prefix",
+          discover_symbols(d, "15m") == ["NQ"], str(discover_symbols(d, "15m")))
+    check("...and finds nothing when asked for a timeframe nobody swept",
+          discover_symbols(d, "1h") == [], str(discover_symbols(d, "1h")))
+
+    # A single-timeframe sweep writes both, and the unsuffixed one is the
+    # fallback for the pre-multi-timeframe handoff.
+    solo = tmp / "solo"
+    solo.mkdir(parents=True, exist_ok=True)
+    written = write_best_params(scan_for("15m", 200), "demo", "NQ", "15m",
+                                "2013-01-01", "2022-12-31", {}, solo,
+                                timeframes=["15m"])
+    check("a single-timeframe sweep writes both the suffixed and plain names",
+          len(written) == 2
+          and {w.name for w in written} == {"best_params_NQ_15m.json",
+                                            "best_params_NQ.json"},
+          str([w.name for w in written]))
+
+    # The fallback must not certify one timeframe's winner on another's bars.
+    ok, msg = raises(lambda: load_params("demo", "NQ", solo, {}, False,
+                                         tf="5m"), ValueError)
+    check("certifying 5m bars with a 15m winner is REFUSED", ok, msg[:70])
+
+
 def test_filter_config_kwargs() -> None:
     print("\n19. The CLI flags map onto the config the engine reads")
     import argparse
@@ -927,6 +1218,12 @@ def main() -> int:
         test_cost_drag()
         test_promote_certification(tmp)
         test_filter_config_kwargs()
+        test_session_vwap()
+        test_rsi()
+        test_confluence_is_subtractive()
+        test_strategy_declarations()
+        test_multi_timeframe_cli()
+        test_multi_timeframe_handoff(tmp)
 
     print("\n" + "=" * 60)
     if _failures:

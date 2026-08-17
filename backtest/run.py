@@ -315,6 +315,54 @@ def parse_symbols(text: str | None, module_symbols: list | None) -> list[str]:
     return ordered
 
 
+def parse_timeframes(text: str | None, module_tf: str | None,
+                     fallback: str = "15m") -> list[str]:
+    """
+    `--tf 1m,5m,15m,30m` -> `["1m", "5m", "15m", "30m"]`, validated.
+
+    One timeframe is the normal case and comes back as a one-element list, so
+    every caller loops and there is no second code path for the single-tf run
+    to diverge along.
+
+    Validated against what `mdlib.lake` actually serves, and validated HERE
+    rather than at the first read: an unknown timeframe otherwise surfaces
+    several minutes into a sweep, after the first contract has already been
+    swept at the timeframes that were spelled correctly.
+
+    Nothing is resampled by the caller. `1m` and `1d` are stored natively and
+    `5m/15m/30m/1h/2h/4h` are derived from the 1-minute parquet inside the
+    reader (`mdlib.lake.DERIVED`), so `--tf 1m,5m,15m,30m` reads the same 1m
+    files four times and aggregates each differently. Resampling in a stage
+    instead would be a second implementation of the lake's aggregation, free to
+    disagree with it about bar boundaries and about the Sunday session merge.
+
+    Duplicates are collapsed and the ORDER GIVEN is preserved - a run's log
+    should read in the order the operator asked for, and sorting "1m,5m,30m"
+    into some canonical order makes a long log harder to follow, not easier.
+    """
+    from mdlib.lake import DERIVED, NATIVE_TFS
+
+    raw = (text or "").strip()
+    if not raw:
+        return [module_tf or fallback]
+
+    known = set(NATIVE_TFS) | set(DERIVED)
+    out: list[str] = []
+    for part in raw.split(","):
+        tf = part.strip()
+        if not tf or tf in out:
+            continue
+        if tf not in known:
+            raise ValueError(
+                f"unknown timeframe {tf!r}. The lake serves "
+                f"{', '.join(sorted(known))} — {', '.join(sorted(NATIVE_TFS))} "
+                f"natively and the rest derived from 1m.")
+        out.append(tf)
+    if not out:
+        raise ValueError(f"--tf {text!r} names no timeframe")
+    return out
+
+
 def load_bars(symbol: str, tf: str, start: str | None,
               end: str | None) -> pd.DataFrame:
     """

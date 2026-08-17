@@ -80,7 +80,7 @@ from backtest.report import (day_of_week_breakdown,                # noqa: E402
                              format_day_of_week, losing_weekdays,
                              print_dual_scorecard)
 from backtest.run import (load_bars, parse_param, parse_symbols,    # noqa: E402
-                          resolve_strategy)
+                          parse_timeframes, resolve_strategy)
 
 # The survival bar. 1.00 is break-even after costs, not a comfort margin - the
 # same number Gate 1 binds on, so a contract cannot survive Stage 1 on a profit
@@ -207,7 +207,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--symbols", default=None,
                    help="NQ, a list NQ,ES,CL, or ALL")
     p.add_argument("--tf", "--timeframe", dest="tf", default=None,
-                   help="Timeframe (default: the module's, then 15m)")
+                   help="Timeframe, or a comma-separated list: "
+                        "'--tf 1m,5m,15m,30m' screens each in turn. Derived "
+                        "timeframes are aggregated from the 1m parquet by the "
+                        "lake reader. Default: the module's, then 15m.")
     p.add_argument("--start", default=None, help="In-sample start, YYYY-MM-DD")
     p.add_argument("--end", default=None, help="In-sample end, YYYY-MM-DD")
     p.add_argument("--param", action="append", default=[], metavar="K=V",
@@ -252,11 +255,16 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     symbols = parse_symbols(args.symbols, info.get("symbols"))
-    tf = args.tf or info.get("timeframe") or "15m"
+    try:
+        timeframes = parse_timeframes(args.tf, info.get("timeframe"))
+    except ValueError as e:
+        print(f"ValueError: {e}", file=sys.stderr)
+        return 1
     bound = info.get("bound_params") or {}
 
     print(stage_banner(1, strat_name,
-                       f"{len(symbols)} contract(s) · {tf} · "
+                       f"{len(symbols)} contract(s) × {len(timeframes)} "
+                       f"timeframe(s) · {', '.join(timeframes)} · "
                        f"{args.start or 'lake start'} → {args.end or 'lake end'}"))
     print(f"  parameters : {bound or '(module defaults)'}")
     print(f"  screen     : Version A profit factor >= "
@@ -265,28 +273,69 @@ def main(argv: list[str] | None = None) -> int:
     if cfg_kwargs["news_filter"] or cfg_kwargs["exclude_days"]:
         print(f"  filters    : news={cfg_kwargs['news_filter']} "
               f"exclude_days={cfg_kwargs['exclude_days']}")
+    if len(timeframes) > 1:
+        print(f"  [!] {len(symbols) * len(timeframes)} independent screens. A "
+              f"contract that survives on\n      ONE timeframe survives this "
+              f"stage — which is a weaker statement than\n      surviving on "
+              f"the timeframe you meant, and is why the per-timeframe\n"
+              f"      breakdown below is the part to read.")
 
+    # Timeframe-major: a whole timeframe's screen completes before the next
+    # starts, so a run killed part way leaves complete timeframes rather than
+    # a partial row on each.
     rows, errors = [], []
-    for i, sym in enumerate(symbols, 1):
-        print(f"\n[{i}/{len(symbols)}] {sym}")
-        try:
-            rows.append(run_symbol(sym, path, tf, params, args, cfg_kwargs))
-        except Exception as e:                                    # noqa: BLE001
-            # One bad contract does not end the screen. Recorded as an ERROR
-            # row rather than as a symbol that produced nothing: those read
-            # identically in a survivor list and mean opposite things.
-            errors.append({"symbol": sym, "error": f"{type(e).__name__}: {e}"})
-            print(f"\n[!] {sym}: {type(e).__name__}: {e}", file=sys.stderr)
-            traceback.print_exc(file=sys.stderr)
+    for tf in timeframes:
+        if len(timeframes) > 1:
+            print("\n" + "=" * 78)
+            print(f"TIMEFRAME {tf}")
+            print("=" * 78)
+        for i, sym in enumerate(symbols, 1):
+            print(f"\n[{i}/{len(symbols)}] {sym} · {tf}")
+            try:
+                row = run_symbol(sym, path, tf, params, args, cfg_kwargs)
+                row["timeframe"] = tf
+                rows.append(row)
+            except Exception as e:                                # noqa: BLE001
+                # One bad contract does not end the screen. Recorded as an
+                # ERROR row rather than as a symbol that produced nothing:
+                # those read identically in a survivor list and mean opposite
+                # things.
+                errors.append({"symbol": sym, "timeframe": tf,
+                               "error": f"{type(e).__name__}: {e}"})
+                print(f"\n[!] {sym} {tf}: {type(e).__name__}: {e}",
+                      file=sys.stderr)
+                traceback.print_exc(file=sys.stderr)
 
-    survivors = [r["symbol"] for r in rows if r["survived"]]
-    dropped = [{"symbol": r["symbol"], "reason": r["reason"],
-                "profit_factor": r["profit_factor_a"]}
+    by_tf = {}
+    for tf in timeframes:
+        tf_rows = [r for r in rows if r["timeframe"] == tf]
+        by_tf[tf] = {
+            "surviving": [r["symbol"] for r in tf_rows if r["survived"]],
+            "dropped": [{"symbol": r["symbol"], "reason": r["reason"],
+                         "profit_factor": r["profit_factor_a"]}
+                        for r in tf_rows if not r["survived"]],
+        }
+
+    # The union across timeframes, and it is labelled as one. Stage 2 sweeps
+    # each survivor at every requested timeframe anyway, so a contract that
+    # cleared on one is worth sweeping; what must not happen is the union
+    # being read as "survived at 15m" when it survived at 1m only. `by_timeframe`
+    # is where that question is answered.
+    survivors = sorted({r["symbol"] for r in rows if r["survived"]})
+    dropped = [{"symbol": r["symbol"], "timeframe": r["timeframe"],
+                "reason": r["reason"], "profit_factor": r["profit_factor_a"]}
                for r in rows if not r["survived"]]
 
     out_dir = pipeline_dir(strat_name, args.out_dir, create=True)
     dest = write_stage(out_dir / SURVIVORS_FILE, 1, strat_name, {
-        "timeframe": tf,
+        # Singular when one timeframe was screened, so a downstream reader that
+        # expects the pre-multi-timeframe shape still finds what it looks for;
+        # None when several were, because there is no single answer and a
+        # plausible-looking wrong one is worse than an absent one.
+        "timeframe": timeframes[0] if len(timeframes) == 1 else None,
+        "timeframes": timeframes,
+        "by_timeframe": by_tf,
+        "surviving_is_union_across_timeframes": len(timeframes) > 1,
         "start": args.start,
         "end": args.end,
         "params": bound,
@@ -309,12 +358,23 @@ def main(argv: list[str] | None = None) -> int:
                                          -(r["sharpe_a"] or 0))):
         mark = "keep" if r["survived"] else "drop"
         pf = r["profit_factor_a"]
-        print(f"  {mark:<5}{r['symbol']:<6}"
+        print(f"  {mark:<5}{r['symbol']:<6}{r['timeframe']:<5}"
               f"PF {('%.2f' % pf) if pf is not None and not pd.isna(pf) else '  n/a':>6}"
               f"   Sharpe {(r['sharpe_a'] if r['sharpe_a'] is not None else float('nan')):>6.2f}"
               f"   {int(r['trades_a'] or 0):>7,} trades   {r['reason']}")
     for e in errors:
-        print(f"  ERROR {e['symbol']:<6}{e['error']}")
+        print(f"  ERROR {e['symbol']:<6}{e.get('timeframe', ''):<5}{e['error']}")
+
+    if len(timeframes) > 1:
+        print("\n  by timeframe:")
+        for tf_, block in by_tf.items():
+            kept = block["surviving"]
+            print(f"    {tf_:<5}{len(kept)}/{len(symbols)} survived"
+                  + (f"  ({', '.join(kept)})" if kept else ""))
+        print("\n  The list written to surviving_assets.json is the UNION: a "
+              "contract is in it\n  if it survived on ANY of these timeframes. "
+              "Read by_timeframe before\n  treating that as a result for the "
+              "timeframe you care about.")
     print(f"\n  survivors → {dest}")
 
     if not survivors:
@@ -327,7 +387,8 @@ def main(argv: list[str] | None = None) -> int:
         "",
         f"  python3 backtest/scan.py --strat {args.strat} "
         f"--symbols {','.join(survivors) if survivors else '<none survived>'} \\",
-        f"      --tf {tf} --start {args.start or '2013-01-01'} "
+        f"      --tf {','.join(timeframes)} "
+        f"--start {args.start or '2013-01-01'} "
         f"--end {args.end or '2022-12-31'}",
     ]))
     return 1 if errors else 0

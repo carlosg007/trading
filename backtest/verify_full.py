@@ -79,6 +79,7 @@ from backtest.pipeline import (BEST_PARAMS_FILE, VERIFY_FILE,      # noqa: E402
 from backtest.report import (day_of_week_breakdown,                # noqa: E402
                              format_day_of_week, print_dual_scorecard)
 from backtest.report_html import _cost_split, write_dual_reports   # noqa: E402
+from backtest.audit_gates import discover_symbols                  # noqa: E402
 from backtest.run import (load_bars, parse_param, parse_symbols,    # noqa: E402
                           resolve_strategy)
 from backtest.specs import get_spec                                # noqa: E402
@@ -359,17 +360,26 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{type(e).__name__}: {e}", file=sys.stderr)
         return 1
 
+    # ONE timeframe: a lifecycle run produces one tear sheet per contract, and
+    # a comma-separated list here would overwrite each contract's report with
+    # the next timeframe's under the same filename.
+    tfs = [t.strip() for t in str(args.tf or "").split(",") if t.strip()]
+    if len(tfs) > 1:
+        print(f"--tf takes ONE timeframe here, got {args.tf!r}. Stage 4 writes "
+              f"one tear\nsheet per contract; several timeframes would "
+              f"overwrite each other. Run it\nonce per timeframe.",
+              file=sys.stderr)
+        return 1
+    tf = (tfs[0] if tfs else None) or info.get("timeframe") or "15m"
+
     if args.symbols:
         symbols = parse_symbols(args.symbols, info.get("symbols"))
     else:
-        symbols = sorted(p.stem.replace("best_params_", "")
-                         for p in out_dir.glob("best_params_*.json"))
+        symbols = discover_symbols(out_dir, tf)
         if not symbols:
             print(f"No best_params_*.json in {out_dir} and no --symbols. Run "
                   f"stage 2 first,\nor name the contracts.", file=sys.stderr)
             return 1
-
-    tf = args.tf or info.get("timeframe") or "15m"
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     art_dir = out_dir / f"verify_{stamp}"
 
@@ -387,7 +397,10 @@ def main(argv: list[str] | None = None) -> int:
         try:
             params = dict(overrides)
             variants = args.variants_tested
-            bp = out_dir / BEST_PARAMS_FILE.format(symbol=sym)
+            # The timeframe-specific winner first, as in stage 3.
+            bp = out_dir / BEST_PARAMS_FILE.format(symbol=f"{sym}_{tf}")
+            if not bp.exists():
+                bp = out_dir / BEST_PARAMS_FILE.format(symbol=sym)
             if not args.defaults and bp.exists():
                 blob = read_stage(bp, 2, strat_name)
                 params = {**(blob.get("params") or {}), **overrides}
