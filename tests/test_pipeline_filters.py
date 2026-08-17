@@ -669,6 +669,118 @@ def test_baseline_screen() -> None:
     check("the bar is adjustable per run",
           screen({"ok": True, "trade_count": 200, "profit_factor": 1.10},
                  min_profit_factor=1.25)[0] is False)
+    undef, why = screen({"ok": True, "trade_count": 200})
+    check("an undefined profit factor is dropped as undefined",
+          not undef and "undefined" in why, why)
+    inf, why = screen({"ok": True, "trade_count": 200,
+                       "profit_factor": float("inf")})
+    check("inf - no losing trades - is not a missing value, and survives",
+          inf, why)
+
+    # max(PF_a, PF_b), each version held to the trade floor on its OWN count.
+    a = {"ok": True, "trade_count": 200, "profit_factor": 0.87}
+    b = {"ok": True, "trade_count": 150, "profit_factor": 1.04}
+    keep, why = screen(a, 1.00, b)
+    check("Version B can carry a configuration Version A failed",
+          keep and "Version B" in why, why)
+    check("...and with Version B absent, Version A alone decides",
+          screen(a, 1.00, None)[0] is False)
+
+    thin = {"ok": True, "trade_count": 9, "profit_factor": 2.50}
+    drop, why = screen(a, 1.00, thin)
+    check("a 2.50 PF over 9 trades does NOT rescue the configuration",
+          not drop and "trades < 30" in why, why)
+    check("the floor binds at 29 and clears at 30",
+          screen({"ok": True, "trade_count": 29, "profit_factor": 5.0})[0] is False
+          and screen({"ok": True, "trade_count": 30,
+                      "profit_factor": 1.00})[0] is True)
+
+
+def test_baseline_report(tmp: Path) -> None:
+    print("\n14b. Stage 1's markdown report and its pair handoff")
+    from backtest.baseline import (_evaluated_line, _human_bars, _row,
+                                   build_markdown_report, stage2_command,
+                                   write_markdown_report)
+
+    trades = pd.DataFrame({
+        "entry_time": pd.to_datetime(
+            ["2020-01-06 15:00", "2020-01-07 15:00", "2020-01-08 15:00",
+             "2020-01-10 15:00"], utc=True),
+        "pnl": [120.0, -80.0, 45.0, -200.0]})
+    dow = day_of_week_breakdown(trades)
+    ma = {"ok": True, "trade_count": 4, "profit_factor": 0.59, "sharpe": -0.31,
+          "sortino": -0.40, "calmar": -0.20, "win_rate": 0.5,
+          "max_drawdown_pct": -8.2, "total_return_pct": -0.12,
+          "annualized_return_pct": -0.4, "total_pnl": -115.0,
+          "gross_pnl": 40.0, "total_costs": 155.0, "n_days": 20,
+          "trades": trades,
+          "entry_filters": {"news_filter": True, "news_window_minutes": 30,
+                            "news_kinds": ["NFP"], "news_provenance": RULE,
+                            "news_events_in_span": 214,
+                            "entries_suppressed": 37,
+                            "long_entries_before": 400,
+                            "short_entries_before": 0}}
+    mb = dict(ma, profit_factor=1.31, trade_count=90, sharpe=0.44,
+              total_pnl=900.0)
+
+    dropped = _row("NQ", "1m", ma, None, False, "best profit factor 0.87", dow,
+                   3_200_000, 12.4)
+    kept = _row("NQ", "5m", ma, mb, True, "Version B profit factor 1.31", dow,
+                661_000, 8.1)
+
+    check("bar counts read the way an operator says them",
+          (_human_bars(3_200_000), _human_bars(661_000)) == ("3.2M", "661k"),
+          f"{_human_bars(3_200_000)} / {_human_bars(661_000)}")
+
+    line = _evaluated_line("[1/8]", dropped)
+    check("a skipped Version B reports NOT RUN on the progress line, not 0.00",
+          "NOT RUN" in line and "0.00" not in line and "[DROPPED]" in line,
+          line)
+    line = _evaluated_line("[2/8]", kept)
+    check("both profit factors and the verdict are on one line",
+          "0.59 PF" in line and "1.31 PF" in line and "[SURVIVES]" in line,
+          line)
+
+    md = build_markdown_report(
+        "demo", {"Strategy": "demo"}, [dropped, kept],
+        [{"symbol": "CL", "timeframe": "15m", "error": "ValueError: no bars"}])
+    for want in ("Sharpe", "Sortino", "Profit factor", "Win rate",
+                 "Max drawdown", "Net return", "Trades", "Friction costs",
+                 "SURVIVES", "DROPPED", "NQ · 5m", "NQ · 1m"):
+        check(f"the report carries {want!r}", want in md)
+    check("...the day-of-week attribution", "| Mon |" in md and "| Fri |" in md)
+    check("...the macro filter audit, events scanned and entries cut",
+          "214 events" in md and "entries cut" in md)
+    check("...and the configuration that errored, rather than dropping it",
+          "ValueError: no bars" in md)
+    check("Version B's column says NOT RUN where it did not run - never n/a",
+          "NOT RUN" in md.split("### NQ · 5m")[0])
+    check("a screen that evaluated nothing still renders a report",
+          "Nothing was evaluated"
+          in build_markdown_report("demo", {"Strategy": "demo"}, [], []))
+
+    d = tmp / "stage1_md"
+    p = write_markdown_report(d / "stage1_baseline_report.md", md)
+    check("the report is written atomically, leaving no .tmp behind",
+          p.exists() and not p.with_suffix(".md.tmp").exists())
+
+    # The Stage 2 command targets the surviving PAIRS, not the whole grid.
+    pairs = [{"symbol": "NQ", "tf": "5m"}, {"symbol": "NQ", "tf": "15m"},
+             {"symbol": "GC", "tf": "15m"}]
+    cmd = "\n".join(stage2_command("demo", pairs, "2013-01-01", "2022-12-31"))
+    check("stage 2 is handed only the surviving symbols",
+          "--symbols GC,NQ" in cmd, cmd)
+    check("...only the surviving timeframes, ascending",
+          "--tf 5m,15m" in cmd, cmd)
+    check("...and the timeframes that failed are omitted entirely",
+          "1m," not in cmd and "30m" not in cmd, cmd)
+    check("a ragged survivor set is flagged as a SUPERSET of what survived",
+          "SUPERSET" in cmd)
+    check("a complete grid needs no such warning",
+          "SUPERSET" not in "\n".join(stage2_command(
+              "demo", pairs + [{"symbol": "GC", "tf": "5m"}], None, None)))
+    check("nothing surviving prints no command to run",
+          "scan.py" not in "\n".join(stage2_command("demo", [], None, None)))
 
 
 def test_window_guard() -> None:
@@ -1425,6 +1537,7 @@ def main() -> int:
         test_pipeline_handoff(tmp)
         test_stage_clis()
         test_baseline_screen()
+        test_baseline_report(tmp)
         test_window_guard()
         test_stage2_to_stage3_handoff(tmp)
         test_cost_drag()

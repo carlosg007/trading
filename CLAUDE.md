@@ -767,20 +767,46 @@ unrecorded:
   on different bars raises rather than proceeding.
 
 **`backtest/baseline.py`** — **Stage 1**. Version A (and B with `--ml`) on
-DEFAULT parameters, one simulation per contract, screening on `profit_factor >=
-1.00` and writing the survivors to `surviving_assets.json`.
+DEFAULT parameters, one simulation per **(symbol, timeframe) configuration**,
+screening on profit factor and writing the surviving pairs to
+`surviving_assets.json`.
 
 - Defaults, deliberately unswept: a sweep here would screen on the best of N
   per contract, promoting whichever symbol had the most parameters to hide
   behind. The comparison is meant to be between CONTRACTS.
-- No gate table (`print_dual_scorecard(show_gates=False)`). Nothing at this
-  stage is entitled to a gate verdict, and three lines of NOT EVALUATED under a
-  heading teaches a reader to skip the gate table — the one thing they must not
-  do at Stage 3.
-- Survival is decided on **Version A even when `--ml` is on**. Advancing a
-  contract on B would advance it on the fitted side of a comparison the mandate
-  says is only settled out-of-sample.
-- Prints the day-of-week table per contract and NAMES the losing days as
+- No gate table. Nothing at this stage is entitled to a gate verdict, and three
+  lines of NOT EVALUATED under a heading teaches a reader to skip the gate
+  table — the one thing they must not do at Stage 3.
+- **The console is a progress line per configuration and a table of the
+  winners.** Two lines each — `RUNNING` with the bar count, then `EVALUATED`
+  with both profit factors and the verdict — because 27 contracts × 4
+  timeframes is 108 scorecards, and printed in full the only reliable effect is
+  that nobody reads the last one.
+- **Everything else goes to `stage1_baseline_report.md`** in the pipeline
+  directory: both versions' full metrics (Sharpe, Sortino, PF, win rate, max
+  DD, net return, trades, friction costs), the day-of-week attribution, the
+  entry-filter audit, and the drop reason for every configuration that failed.
+  Written on EVERY run — a screen where nothing survived is the run whose
+  detail matters most — and rewritten from scratch after each configuration, so
+  one killed at 14 of 108 leaves a complete report of 14.
+- **Survival is `max(PF_a, PF_b) >= 1.00` with `>= 30` trades on the version
+  that cleared it**, each version held to the floor on its OWN trade count. The
+  trade floor is far below Gate 1's 100 because this stage decides what is
+  worth sweeping, not what is worth trading; it is not zero because a profit
+  factor over eleven trades clears 1.00 by accident often enough to matter
+  across a 108-cell screen. Admitting Version B is a deliberate loosening of
+  the earlier Version-A-only rule: B's classifier is fitted on these same bars,
+  so a Stage 1 survivor is no longer necessarily a contract with an unfiltered
+  edge. Which version carried it is recorded in the row's `reason` and in the
+  report.
+- **The handoff is exact pairs.** `surviving_pairs` is
+  `[{"symbol": "NQ", "tf": "5m"}, ...]` and the printed Stage 2 command names
+  only those symbols and timeframes. `surviving` is kept beside it as the
+  symbol union, because that is what `scan.py` defaults `--symbols` to.
+  `--symbols`/`--tf` are two axes, so ragged survivors can only be expressed as
+  their cross product — a SUPERSET, and the stage says so rather than quietly
+  handing Stage 2 a contract it just dropped.
+- Writes the day-of-week table per configuration and NAMES the losing days as
   candidates for `--exclude-days`. It never applies them: selecting the days
   that lost in-sample and re-scoring the same bars is circular.
 

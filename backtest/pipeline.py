@@ -49,6 +49,12 @@ STAGE_NAMES = {
 }
 
 SURVIVORS_FILE = "surviving_assets.json"
+# Stage 1's human-readable half. The JSON above is what Stage 2 reads; this is
+# what a person reads, and it is written on EVERY run - including one where
+# nothing survived, which is the run whose detail matters most. Markdown rather
+# than a console dump because the console is now a progress line per
+# configuration: the evidence has to land somewhere, and somewhere is a file.
+BASELINE_REPORT_FILE = "stage1_baseline_report.md"
 BEST_PARAMS_FILE = "best_params_{symbol}.json"
 GATE_AUDIT_FILE = "gate_audit_{symbol}.json"
 VERIFY_FILE = "verify_{symbol}.json"
