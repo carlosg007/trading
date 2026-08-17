@@ -1,7 +1,7 @@
 """
 ema_trend_filter - Version B (ML-filtered), promoted 2026-08-17.
 
-Baseline signals from `baseline.py` (SHA-256 ec5e51ef017912c7a52727cacb9f7b691cdfe84b3d639353f013c9c293663747), with the causal ML
+Baseline signals from `baseline.py` (SHA-256 e178019624e5daa0ec6362a9a9d009e1fef6911f51251a840cfe5ea95260f3ec), with the causal ML
 filter applied on top. This is the pipeline, not a new idea: every entry here
 is an entry Version A also produced, minus the ones the classifier expected to
 lose.
@@ -11,7 +11,7 @@ The filter is an expanding-window walk-forward. For a candidate entry on bar
 decision uses an outcome that did not exist when it was made. Refitting is
 per completed trade, not per bar.
 
-Promoted from: strategies/experimental/ema_trend_filter.py
+Promoted from: /home/cgrullon/src/trading/strategies/experimental/ema_trend_filter.py
 ML threshold : 0.5 - keep the entry when P(win) >= this.
 """
 
@@ -27,7 +27,7 @@ from backtest.engine import BacktestConfig
 
 TIMEFRAME = '15m'
 SYMBOLS = ['NQ', 'ES', 'CL', 'GC']
-DEFAULT_PARAMS = {'fast_period': 13, 'slow_period': 50, 'trend_period': 800, 'sl_atr_mult': 1.5, 'tp_atr_mult': 2.0, 'trailing': False}
+DEFAULT_PARAMS = {'fast_period': 5, 'slow_period': 21, 'trend_period': 200, 'use_trend': True, 'use_vwap': True, 'use_rsi': False, 'use_volatility': False, 'sl_atr_mult': 2.0, 'tp_atr_mult': 1.5, 'trailing': True}
 ML_THRESHOLD = 0.5
 
 _BASELINE_PATH = Path(__file__).with_name("baseline.py")

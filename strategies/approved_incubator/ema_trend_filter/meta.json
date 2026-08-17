@@ -10,50 +10,105 @@
   ],
   "timeframe": "15m",
   "params": {
-    "fast_period": 13,
-    "slow_period": 50,
-    "trend_period": 800,
-    "sl_atr_mult": 1.5,
-    "tp_atr_mult": 2.0,
-    "trailing": false
+    "fast_period": 5,
+    "slow_period": 21,
+    "trend_period": 200,
+    "use_trend": true,
+    "use_vwap": true,
+    "use_rsi": false,
+    "use_volatility": false,
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": 1.5,
+    "trailing": true
   },
-  "params_source": "locked from dual_metrics_GC.json",
+  "params_source": "locked from dual_metrics_NQ.json",
   "risk": {
-    "sl_atr_mult": 1.5,
-    "tp_atr_mult": 2.0,
-    "trailing": false
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": 1.5,
+    "trailing": true
   },
-  "source": "strategies/experimental/ema_trend_filter.py",
-  "source_sha256": "ec5e51ef017912c7a52727cacb9f7b691cdfe84b3d639353f013c9c293663747",
-  "promoted_sha256": "790aba14094debac9760bbc677ff817c6cf525ef59ce3ffd60edce28c224dde3",
-  "promoted_utc": "2026-08-17T00:14:29+00:00",
+  "source": "/home/cgrullon/src/trading/strategies/experimental/ema_trend_filter.py",
+  "source_sha256": "e178019624e5daa0ec6362a9a9d009e1fef6911f51251a840cfe5ea95260f3ec",
+  "promoted_sha256": "e72520ba19a998b6ed3216e09278f635ccaf48d000b98405c90869d33d321c1a",
+  "promoted_utc": "2026-08-17T23:10:21+00:00",
   "costs_included": true,
   "variants_tested": null,
-  "metrics_status": "locked from dual_metrics_GC.json",
+  "metrics_status": "locked from dual_metrics_NQ.json",
   "metrics": {
-    "sharpe": 0.6143968497541917,
-    "sortino": 1.1089136164920579,
-    "calmar": 0.2421996328624371,
-    "profit_factor": 1.410155640367169,
-    "win_rate": 0.5,
-    "max_drawdown_pct": -6.975589890805223,
-    "total_return_pct": 32.37807999999909,
-    "annualized_return_pct": 1.6894853105519525,
-    "trade_count": 424,
-    "total_pnl": 32378.079999999227,
-    "total_costs": 10421.920000000511,
-    "final_equity": 132378.07999999908,
-    "n_days": 4219,
-    "start": "2013-01-01 23:00:00+00:00",
+    "sharpe": 0.5854832414691657,
+    "sortino": 0.8397015577087269,
+    "calmar": 0.22005152769982048,
+    "profit_factor": 1.2067252753990378,
+    "win_rate": 0.5263504611330698,
+    "max_drawdown_pct": -15.33216232948712,
+    "total_return_pct": 93.59755999999895,
+    "annualized_return_pct": 3.373865743545279,
+    "trade_count": 1518,
+    "total_pnl": 93597.56,
+    "total_costs": 22132.440000000017,
+    "final_equity": 193597.55999999895,
+    "n_days": 5017,
+    "start": "2010-06-07 00:00:00+00:00",
     "end": "2026-08-07 00:00:00+00:00",
-    "bars": 317431,
+    "bars": 330112,
     "initial_capital": 100000.0
   },
   "gate_audit_status": "FAIL",
   "gate_audit": {
-    "gate1": "FAIL",
-    "gate2": "NOT EVALUATED",
-    "gate3": "NOT EVALUATED"
+    "gate1": "PASS",
+    "gate2": "FAIL",
+    "gate3": "PASS"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/ema_trend_filter/gate_audit_NQ.json",
+    "audit_sha256": "05623ecb73c08dfdf3d623a0fd1bbe1524a6eeb8ab15712b518d3a42674225fd",
+    "audit_symbol": "NQ",
+    "audit_generated_utc": "2026-08-17T22:45:25+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": "2026-08-07"
+    },
+    "params": {
+      "fast_period": 5,
+      "slow_period": 21,
+      "trend_period": 200,
+      "use_trend": true,
+      "use_vwap": true,
+      "use_rsi": false,
+      "use_volatility": false,
+      "sl_atr_mult": 2.0,
+      "tp_atr_mult": 1.5,
+      "trailing": true
+    },
+    "params_source": "stage 2 winner (best_params_NQ_15m.json)",
+    "variants_tested": 1296,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "FAIL",
+    "snapshot_gate_status": "FAIL",
+    "agrees_with_snapshot": true
   },
   "gates_overridden": true,
   "oos_status": "not_run",
