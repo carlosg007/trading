@@ -402,6 +402,146 @@ def max_consecutive(flags: pd.Series) -> int:
 # --------------------------------------------------------------------------
 # Breakdowns
 # --------------------------------------------------------------------------
+DOW_COLUMNS = ["day", "weekday", "trades", "net_pnl", "gross_win", "gross_loss",
+               "win_rate", "avg_pnl", "profit_factor", "pct_of_trades",
+               "pct_of_net_pnl"]
+
+
+def day_of_week_breakdown(trades: pd.DataFrame) -> pd.DataFrame:
+    """
+    P&L, win rate and trade count per weekday, attributed by ENTRY session.
+
+    Two decisions this makes, both of which change the answer:
+
+    **Attribution is by the ENTRY, not the exit.** A trade is the consequence
+    of the decision to open it, and that decision was made on the entry
+    session. Attributing an overnight position to its exit day would credit
+    Tuesday for a Monday setup, which is precisely backwards for the use this
+    table exists for - `exclude_days` suppresses ENTRIES, so the table has to
+    be keyed on the thing the parameter acts on or pruning the worst row will
+    not remove the trades that made it worst.
+
+    **The day is the CME SESSION date, not the UTC date.** See
+    `backtest.event_calendar.session_date`: the session opens 18:00 ET the previous
+    evening, so on intraday bars a UTC-keyed table splits every Globex evening
+    off onto the wrong weekday.
+
+    Rows are Monday through Sunday, and a weekday with no trades is present
+    with zeros rather than absent. An absent row reads as "no data" when what
+    it means is "this strategy never traded on a Friday", which is a finding.
+    Saturday and Sunday appear only when something actually traded then - on
+    session dates that should be never, and a non-zero row there is a bug
+    worth seeing rather than hiding.
+
+    `win_rate` is a fraction (0.55), matching `summarize_result`, not the
+    percentage `trade_stats` reports. `profit_factor` is NaN, never inf, where
+    a day has no losses - an infinity in a table read by eye is a division by
+    zero wearing a disguise.
+    """
+    from .event_calendar import WEEKDAY_NAMES, session_date
+
+    empty = pd.DataFrame(columns=DOW_COLUMNS)
+    if trades is None or len(trades) == 0:
+        return empty
+    cols = {c.lower(): c for c in trades.columns}
+    pnl_col = next((cols[c] for c in ("pnl", "net_pnl", "profit") if c in cols),
+                   None)
+    entry_col = next((cols[c] for c in ("entry_time", "entry_ts", "entry")
+                      if c in cols), None)
+    if pnl_col is None or entry_col is None:
+        return empty
+
+    df = pd.DataFrame({
+        "pnl": pd.to_numeric(trades[pnl_col], errors="coerce"),
+        "dow": session_date(trades[entry_col]).dayofweek,
+    }).dropna(subset=["pnl"])
+    if df.empty:
+        return empty
+
+    total_trades = len(df)
+    total_pnl = float(df["pnl"].sum())
+
+    present = set(df["dow"].unique())
+    rows = []
+    for d in range(7):
+        if d > 4 and d not in present:
+            continue                       # no weekend row unless it traded
+        g = df[df["dow"] == d]
+        pnl = g["pnl"]
+        wins, losses = pnl[pnl > 0], pnl[pnl < 0]
+        gross_win = float(wins.sum())
+        gross_loss = float(-losses.sum())
+        rows.append({
+            "day": WEEKDAY_NAMES[d],
+            "weekday": d,
+            "trades": int(len(g)),
+            "net_pnl": float(pnl.sum()),
+            "gross_win": gross_win,
+            "gross_loss": gross_loss,
+            "win_rate": float(len(wins) / len(g)) if len(g) else float("nan"),
+            "avg_pnl": float(pnl.mean()) if len(g) else float("nan"),
+            "profit_factor": (gross_win / gross_loss if gross_loss > 0
+                              else float("nan")),
+            "pct_of_trades": (100.0 * len(g) / total_trades
+                              if total_trades else float("nan")),
+            # Share of the run's net P&L, against the ABSOLUTE total so the
+            # sign belongs to the day rather than to the run. Dividing by a
+            # signed total inverts every row of a losing backtest - the worst
+            # day comes out most positive - which is exactly backwards for a
+            # table whose job is to point at the day worth excluding.
+            "pct_of_net_pnl": (100.0 * float(pnl.sum()) / abs(total_pnl)
+                               if total_pnl else float("nan")),
+        })
+    return pd.DataFrame(rows, columns=DOW_COLUMNS)
+
+
+def losing_weekdays(breakdown: pd.DataFrame,
+                    min_trades: int = 20) -> list[int]:
+    """
+    The weekday integers a breakdown says lost money, for `exclude_days`.
+
+    `min_trades` is a floor, not a formality. Over a 5-year daily backtest a
+    weekday holds a fifth of the sample, and pruning a day on eight trades is
+    fitting the calendar to noise - which is the specific way a day-of-week
+    filter manufactures an in-sample Sharpe. Days below the floor are NOT
+    returned however badly they scored, and the caller is told nothing about
+    them here; `format_day_of_week` marks them on the table instead.
+
+    This is a suggestion for a human to act on, never applied automatically.
+    Nothing in the pipeline calls it and then feeds the result back into the
+    same run: selecting the losing days in-sample and re-scoring on the same
+    bars is circular, and the resulting number is not a measurement.
+    """
+    if breakdown is None or breakdown.empty:
+        return []
+    bad = breakdown[(breakdown["net_pnl"] < 0)
+                    & (breakdown["trades"] >= int(min_trades))]
+    return [int(d) for d in bad["weekday"].tolist()]
+
+
+def format_day_of_week(breakdown: pd.DataFrame,
+                       min_trades: int = 20,
+                       indent: str = "  ") -> str:
+    """The breakdown as a console block, thin rows flagged rather than dropped."""
+    if breakdown is None or breakdown.empty:
+        return f"{indent}day of week   : no trades to attribute"
+
+    head = (f"{indent}{'day':<5}{'trades':>8}{'net P&L':>14}{'win rate':>10}"
+            f"{'avg P&L':>12}{'PF':>7}  share of P&L")
+    lines = [head, indent + "-" * (len(head) - len(indent) + 14)]
+    for _, r in breakdown.iterrows():
+        pf = r["profit_factor"]
+        thin = "  (thin sample)" if r["trades"] < min_trades else ""
+        lines.append(
+            f"{indent}{r['day']:<5}{int(r['trades']):>8,}"
+            f"{r['net_pnl']:>14,.0f}"
+            f"{(r['win_rate'] * 100 if pd.notna(r['win_rate']) else float('nan')):>9.1f}%"
+            f"{r['avg_pnl']:>12,.0f}"
+            f"{(f'{pf:.2f}' if pd.notna(pf) else '  n/a'):>7}"
+            f"{r['pct_of_net_pnl']:>13.1f}%{thin}")
+    return "\n".join(lines)
+
+
 def yearly_table(returns: pd.Series) -> pd.DataFrame:
     rows = []
     for year, g in returns.groupby(returns.index.year):
@@ -939,9 +1079,21 @@ def format_dual_scorecard(metrics_a: dict, metrics_b: dict | None,
                           gate_audit_a: dict | None = None,
                           gate_audit_b: dict | None = None,
                           label_a: str = "A · rule-based",
-                          label_b: str = "B · ML-filtered") -> str:
+                          label_b: str = "B · ML-filtered",
+                          show_gates: bool = True) -> str:
     """
     The scorecard as a string, so it can be tested and written to a file.
+
+    `show_gates=False` drops the gate table, the per-criterion detail and the
+    NOT-EVALUATED warning, leaving the metric columns and the verdict. Stage 1
+    of the pipeline (`backtest/baseline.py`) asks for that: it is a survival
+    screen run on default parameters, where every gate would report NOT
+    EVALUATED except a Gate 1 nobody is entitled to read yet - the parameters
+    have not been swept and the holdout has not been touched. Three gates of
+    NOT EVALUATED printed under a heading is clutter that trains a reader to
+    skip the gate table, which is the one thing it must never do at Stage 3.
+    The gates are not being hidden; they are being deferred to the stage that
+    can actually evaluate them.
 
     `metrics_b=None` means Version B was not run (`--ml` off on the batch
     runner). The B and B−A columns are then omitted entirely rather than
@@ -980,49 +1132,50 @@ def format_dual_scorecard(metrics_a: dict, metrics_b: dict | None,
                     f"{_delta_cell(metrics_a, metrics_b, key, fmt, better):>14}")
         add(row)
 
-    add("")
-    add("-" * W)
-    add("ACCEPTANCE GATES")
-    add("-" * W)
-    add(f"  {'Gate':<40}{'A':>18}" + (f"{'B':>18}" if dual else ""))
-    for gk in ("gate1", "gate2", "gate3"):
-        name = GATE_NAMES[gk]
-        add(f"  {name:<40}{_gate_line(gate_audit_a, gk):>18}"
-            + (f"{_gate_line(gate_audit_b, gk):>18}" if dual else ""))
-    add("  " + "-" * (W - 4))
-    add(f"  {'OVERALL':<40}{(gate_audit_a or {}).get('status', NOT_EVALUATED):>18}"
-        + (f"{(gate_audit_b or {}).get('status', NOT_EVALUATED):>18}"
-           if dual else ""))
-
-    # Per-criterion detail, so a FAIL says which number failed and by how much.
-    detail = ((gate_audit_a, label_a), (gate_audit_b, label_b)) if dual \
-        else ((gate_audit_a, label_a),)
-    for audit, label in detail:
-        if not audit:
-            continue
+    if show_gates:
         add("")
-        add(f"  {label}")
+        add("-" * W)
+        add("ACCEPTANCE GATES")
+        add("-" * W)
+        add(f"  {'Gate':<40}{'A':>18}" + (f"{'B':>18}" if dual else ""))
         for gk in ("gate1", "gate2", "gate3"):
-            gate = audit["gates"][gk]
-            add(f"    {gate['name']:<32}{gate['status']}")
-            for c in gate["checks"]:
-                measured, required = criterion_text(c)
-                # 15 wide: 'informational' is 13 characters, and a required
-                # column that runs into the status column reads as one word.
-                add(f"      {c['label']:<28}{measured:>10}  "
-                    f"{required:<15}{c['status']}")
-                if c.get("note"):
-                    add(f"        ! {c['note']}")
+            name = GATE_NAMES[gk]
+            add(f"  {name:<40}{_gate_line(gate_audit_a, gk):>18}"
+                + (f"{_gate_line(gate_audit_b, gk):>18}" if dual else ""))
+        add("  " + "-" * (W - 4))
+        add(f"  {'OVERALL':<40}{(gate_audit_a or {}).get('status', NOT_EVALUATED):>18}"
+            + (f"{(gate_audit_b or {}).get('status', NOT_EVALUATED):>18}"
+               if dual else ""))
 
-    audited = ([(gate_audit_a, "A"), (gate_audit_b, "B")] if dual
-               else [(gate_audit_a, "A")])
-    incomplete = [lbl for audit, lbl in audited
-                  if audit and audit["status"] == NOT_EVALUATED]
-    if incomplete:
-        add("")
-        add(f"  ⚠ Version {', '.join(incomplete)}: at least one gate was NOT")
-        add("    EVALUATED. That is not a pass. Run the walk-forward, the Monte")
-        add("    Carlo bootstrap and the 3-year holdout before promoting.")
+        # Per-criterion detail, so a FAIL says which number failed and by how much.
+        detail = ((gate_audit_a, label_a), (gate_audit_b, label_b)) if dual \
+            else ((gate_audit_a, label_a),)
+        for audit, label in detail:
+            if not audit:
+                continue
+            add("")
+            add(f"  {label}")
+            for gk in ("gate1", "gate2", "gate3"):
+                gate = audit["gates"][gk]
+                add(f"    {gate['name']:<32}{gate['status']}")
+                for c in gate["checks"]:
+                    measured, required = criterion_text(c)
+                    # 15 wide: 'informational' is 13 characters, and a required
+                    # column that runs into the status column reads as one word.
+                    add(f"      {c['label']:<28}{measured:>10}  "
+                        f"{required:<15}{c['status']}")
+                    if c.get("note"):
+                        add(f"        ! {c['note']}")
+
+        audited = ([(gate_audit_a, "A"), (gate_audit_b, "B")] if dual
+                   else [(gate_audit_a, "A")])
+        incomplete = [lbl for audit, lbl in audited
+                      if audit and audit["status"] == NOT_EVALUATED]
+        if incomplete:
+            add("")
+            add(f"  ⚠ Version {', '.join(incomplete)}: at least one gate was NOT")
+            add("    EVALUATED. That is not a pass. Run the walk-forward, the Monte")
+            add("    Carlo bootstrap and the 3-year holdout before promoting.")
 
     add("")
     add("-" * W)
@@ -1056,7 +1209,8 @@ def print_dual_scorecard(metrics_a: dict, metrics_b: dict | None,
                          gate_audit_a: dict | None = None,
                          gate_audit_b: dict | None = None,
                          label_a: str = "A · rule-based",
-                         label_b: str = "B · ML-filtered") -> str:
+                         label_b: str = "B · ML-filtered",
+                         show_gates: bool = True) -> str:
     """
     Render the side-by-side terminal scorecard for both versions.
 
@@ -1064,7 +1218,7 @@ def print_dual_scorecard(metrics_a: dict, metrics_b: dict | None,
     reports without formatting it twice.
     """
     text = format_dual_scorecard(metrics_a, metrics_b, gate_audit_a,
-                                 gate_audit_b, label_a, label_b)
+                                 gate_audit_b, label_a, label_b, show_gates)
     print(text)
     return text
 

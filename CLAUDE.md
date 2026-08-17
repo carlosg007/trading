@@ -219,7 +219,7 @@ bt-status  # = .venv/bin/python3 ~/src/trading/backtest/status.py
 streamlit run dashboard/app.py
 
 # Tests. No pytest config - each is a script that exits non-zero on failure.
-# Thirteen suites. Everything except test_streaming_lake, test_engine_batching
+# Fourteen suites. Everything except test_streaming_lake, test_engine_batching
 # and test_engine_vbt runs without the lake or a network (test_batch_runner's
 # --symbols checks and test_intraday_vol_mr's real-bar section skip, loudly,
 # without it). test_report_gates.py shells out to `node` for the trade
@@ -237,6 +237,7 @@ python tests/test_batch_runner.py       # scan == engine, leaderboard, job track
 python tests/test_intraday_vol_mr.py    # the band-fade walk, against hand answers
 python tests/test_risk_params.py        # TP/SL/trailing walk, grid, leaderboard
 python tests/test_daily_metrics.py      # the daily-close metric frequency contract
+python tests/test_pipeline_filters.py   # entry filters, DOW attribution, the 5 stages
 
 # Dual-version integration on real bars (needs the lake). Pin the thread count:
 # the ML filter refits per completed trade on a few dozen rows, and on a
@@ -270,6 +271,31 @@ python3 backtest/status.py --watch 5    # redraw until the job leaves RUNNING
 python3 backtest/promote.py --strat sma_crossover --version A \
   --source strategies/experimental/sma_crossover.py \
   --metrics /mnt/backtest/artifacts/sma_crossover_<ts>/dual_metrics_NQ.json
+
+# THE FIVE-STAGE PIPELINE. Each stage prints the next stage's command and
+# stops; nothing chains automatically, because the point of the stages is that
+# a human reads the evidence between them. Handoff files live in
+# <BT_ARTIFACTS>/pipeline/<strategy>/ - see backtest/pipeline.py.
+python3 backtest/baseline.py    --strat X --symbols ALL --tf 15m \
+    --start 2013-01-01 --end 2022-12-31       # 1: drop PF<1.0 contracts
+python3 backtest/scan.py        --strat X --tf 15m \
+    --start 2013-01-01 --end 2022-12-31       # 2: sweep the survivors
+python3 backtest/audit_gates.py --strat X --tf 15m \
+    --is-start 2013-01-01 --is-end 2022-12-31 \
+    --holdout-start 2023-01-01 --holdout-end 2026-01-01   # 3: certify
+python3 backtest/verify_full.py --strat X --tf 15m \
+    --start 2010-01-01 --end 2026-01-01       # 4: tear sheets + cost drag
+python3 backtest/promote.py --strat X --version A --source <module.py> \
+    --audit-file /mnt/backtest/artifacts/pipeline/X/gate_audit_NQ.json  # 5
+
+# The entry filters. Available on all five stages AND on bt-run, spelled
+# identically because they come from one add_filter_args().
+bt-run --strat X --symbols NQ --news-filter --news-window 30
+bt-run --strat X --symbols NQ --exclude-days 0,4     # no Mon/Fri ENTRIES
+
+# What macro calendar a news-filtered run would actually use, and whether its
+# dates are published or rule-generated. Reads no bars; costs nothing.
+python3 backtest/event_calendar.py --start 2015-01-01 --end 2026-01-01
 
 # Data manifest: path, size, SHA-256, row count, ts range per file.
 # Answers "have the bytes changed?"; validate_lake.py answers "is it sane?".
@@ -411,6 +437,16 @@ trades, equity, breach, stats)`.
   standard deviation toward a 365-day year while the sqrt(252) stays put. On a
   20-session synthetic run that alone moved Sharpe from -15.08 to -11.26.
 - **Costs are mandatory:** slippage and commissions applied at this layer.
+- **Entry filters, from 2026-08-17.** `BacktestConfig.news_filter`,
+  `.news_window_minutes`, `.news_kinds` and `.exclude_days` are applied in
+  `run_backtest` right after `unpack_signals` — and, separately, in
+  `run_dual_version_backtest`, which drives `_simulate` directly rather than
+  going through `run_backtest`. Wiring only the engine's entry point would
+  leave the flag silently inert for the batch runner and all five pipeline
+  stages, which is every path an operator actually uses. What was removed is
+  recorded in `stats["entry_filters"]` and reaches the metrics dict; a filter
+  that ran and cut nothing reports zero counts, which is a different statement
+  from no filter at all. See `backtest/event_calendar.py`.
 - **Long AND short, from 2026-08-16.** A strategy returns two masks or four;
   `unpack_signals` accepts both and fills the short pair with False for the
   two-mask form. Signals are resolved by ONE three-state machine
@@ -439,7 +475,19 @@ A wrong multiplier silently scales every P&L figure for that symbol and the
 backtest still looks plausible. `verify_specs()` reconciles against Databento's
 `definition` schema.
 
-**`backtest/report.py`** — standalone CLI over saved parquet; joins regime labels
+**`backtest/report.py`** — also holds `day_of_week_breakdown` /
+`losing_weekdays` / `format_day_of_week`: P&L, win rate and trade count per
+weekday, attributed by the **ENTRY** session (not the exit — `exclude_days`
+acts on entries, so a table keyed on exits would point at a day whose pruning
+removes different trades) and on the **session** date (not the UTC date). Every
+weekday Mon–Fri is present even with zero trades, because an absent row reads
+as missing data when it means "this never traded on a Friday". `losing_weekdays`
+enforces a trade floor and is a suggestion for a human, never applied
+automatically — pruning the days that lost in-sample and re-scoring the same
+bars is circular. The records land in `summarize_result` as `dow_breakdown` and
+so reach `dual_metrics.json`.
+
+Standalone CLI over saved parquet; joins regime labels
 and records `--variants-tested` so a Sharpe is never read without knowing how
 many variants it was selected from. Also holds the acceptance gates
 (`GATE_THRESHOLDS`, `audit_acceptance_gates`) and the terminal
@@ -573,7 +621,14 @@ runs.
   Version B that scored nothing, because a comparison that was not made is not
   one the baseline won.
 
-**`backtest/scan.py`** — the vectorbt-native parameter sweep behind `--scan`. A
+**`backtest/scan.py`** — **Stage 2**, and the vectorbt-native sweep behind
+`--scan`. One module, two entry points: `scan_symbol` is the library the batch
+runner calls, and `main()` is the stage that sweeps the in-sample window per
+contract and writes `best_params_<SYMBOL>.json`. The stage adds NOTHING to the
+search — same selection rule, same tie-break — because a second sweep
+implementation in a CLI would be free to disagree with the one `--scan` uses
+and the two would be compared by nobody. With no `--symbols` it sweeps Stage
+1's survivors. A
 strategy declares `PARAM_GRID = {"ema_period": [15, 20, 30], ...}`; every
 combination becomes a COLUMN of a single `vbt.Portfolio.from_signals` call, so a
 27-cell grid costs roughly one backtest rather than 27. The winner is the
@@ -620,6 +675,98 @@ highest Sharpe **among the combinations whose Gate 1 audit is PASS**.
   trade list — and between two identical Sharpes the smaller `abs(max
   drawdown)` wins rather than whichever the grid declared first.
 
+**`backtest/event_calendar.py`** — the two ENTRY filters, and the only place
+either is implemented. Named `event_calendar` rather than `calendar` because
+the latter shadows the stdlib module for any script run out of `backtest/` —
+`_strptime` imports `calendar`, so `bt-run` died on import with the shorter
+name.
+
+- **Entries only, never exits, on both sides.** `apply_entry_filters` is handed
+  the entry masks and nothing else, so a blocked exit — holding a position
+  through the release the filter exists to dodge — is not expressible.
+- **A signal is judged on the bar it FILLS.** The engine fills at the next
+  bar's open, so every mask is widened one bar backwards
+  (`_widen_to_fill_bar`). Without that, exactly one entry per event slips
+  through and fills inside the window: the least visible outcome, and the whole
+  population the filter was added to remove.
+- **Blocking is causal.** US release SCHEDULES are published a year ahead, so
+  blocking the half hour before a print is not lookahead. The OUTCOME is not
+  knowable and nothing here reads one — this module only ever sees timestamps.
+- **Dates carry provenance, and it is not decoration.** `PUBLISHED` comes from
+  an operator-supplied CSV (`$BT_MACRO_CALENDAR`, else
+  `/mnt/backtest/reference/macro/us_macro_events.csv`). `RULE` is generated
+  here. **Only NFP's rule is the real convention** (first Friday, 08:30 ET);
+  CPI, PPI and FOMC anchors land in the right week and often the wrong day,
+  and a 30-minute window on the wrong day blocks a random half hour while
+  leaving the release tradeable. The token is recorded in
+  `stats["entry_filters"]`, printed by `describe_filters`, and carried into
+  every metrics dict — a news-filtered result must never be read as one that
+  dodged the actual prints without checking it.
+- **An empty calendar RAISES.** `is_news_blocked(strict=True)` refuses a span
+  its calendar does not cover, because an all-False mask and a missing
+  calendar are indistinguishable downstream. `strict=False` is the deliberate
+  way to say a period genuinely holds no events.
+- **`exclude_days` is keyed on the CME SESSION date**, not the UTC date
+  (`session_date`: any bar at or after 18:00 ET rolls to the next day). One
+  line, and it has to be right for daily bars as well as intraday ones — a 1d
+  bar stamped at UTC midnight is 19:00 or 20:00 ET the previous evening, so
+  the roll puts it back on its own date in both EST and EDT.
+- O(n log m) via merged intervals and `searchsorted`. The broadcast form on
+  5.6M bars × ~700 events would allocate 4e9 booleans.
+
+**`backtest/pipeline.py`** — not a stage; the contract BETWEEN them. Where each
+stage writes, what the next reads, and the banner that says which stage a log
+came from. `read_stage` refuses a file written by the wrong stage or belonging
+to another strategy — certifying one strategy's gates against another's
+parameters is a mistake nothing downstream could detect. Handoffs are written
+atomically (temp file, `os.replace`) into
+`<BT_ARTIFACTS>/pipeline/<strategy>/`, one directory per strategy rather than
+per run, because the files are a chain and Stage 3 has to find Stage 2's winner
+without being told a timestamp.
+
+**`backtest/baseline.py`** — **Stage 1**. Version A (and B with `--ml`) on
+DEFAULT parameters, one simulation per contract, screening on `profit_factor >=
+1.00` and writing the survivors to `surviving_assets.json`.
+
+- Defaults, deliberately unswept: a sweep here would screen on the best of N
+  per contract, promoting whichever symbol had the most parameters to hide
+  behind. The comparison is meant to be between CONTRACTS.
+- No gate table (`print_dual_scorecard(show_gates=False)`). Nothing at this
+  stage is entitled to a gate verdict, and three lines of NOT EVALUATED under a
+  heading teaches a reader to skip the gate table — the one thing they must not
+  do at Stage 3.
+- Survival is decided on **Version A even when `--ml` is on**. Advancing a
+  contract on B would advance it on the fitted side of a comparison the mandate
+  says is only settled out-of-sample.
+- Prints the day-of-week table per contract and NAMES the losing days as
+  candidates for `--exclude-days`. It never applies them: selecting the days
+  that lost in-sample and re-scoring the same bars is circular.
+
+**`backtest/audit_gates.py`** — **Stage 3**, and the only script that produces a
+gate verdict anybody may act on. Runs the three separate pieces of evidence —
+in-sample metrics, walk-forward + Monte Carlo, and the holdout — and writes
+`gate_audit_<SYMBOL>.json`.
+
+- **`check_windows` refuses an in-sample window that runs into the holdout**,
+  before any bars are read. It also refuses an omitted `--is-end`, which runs
+  to the end of the lake and eats the holdout. This is the one check that can
+  invalidate everything else in the file.
+- Parameters come from Stage 2's `best_params_<SYMBOL>.json`. A missing file is
+  an ERROR, not a silent fall back to the defaults — `--defaults` is how you say
+  you meant it. `variants_tested` travels with them onto the audit.
+- The walk-forward runs with FIXED parameters unless `--wfo-grid` is passed,
+  which is recorded as `wfo_optimized: false`; with nothing selected per fold
+  the ratio compares two time periods rather than fitted-versus-unseen.
+
+**`backtest/verify_full.py`** — **Stage 4**. The whole lifecycle in one run per
+contract: tear sheets, the full trade log as CSV, and the cost drag. **Not a
+certification, and it says so in the JSON** (`is_certification: false`) — this
+window contains the Stage 3 holdout, so its metrics are in-sample by
+construction and no gate table is printed. Cost drag is reported as a total,
+per trade, and as a share of GROSS profit; the third is the one that decides
+whether an edge is real, and it is `None` rather than `0%` when there is no
+gross profit for costs to be a share of.
+
 **`backtest/status.py`** — the job tracker, both halves. `JobTracker` is what
 the runner writes (atomically: temp file, then `os.replace`); `main()` is what
 `bt-status` reads. `active_job.json` is a single well-known path
@@ -631,8 +778,21 @@ a mini-scorecard per completed symbol. It is a progress indicator, not evidence
 PID is gone reads as **STALE**, because a bar frozen at 12/27 looks identical
 whether the run is slow or dead.
 
-**`backtest/promote.py`** — promotes one version into
+**`backtest/promote.py`** — **Stage 5**. Promotes one version into
 `strategies/approved_incubator/<strat>/` and commits it. See the workflow below.
+
+`--audit-file <gate_audit_SYMBOL.json>` is the Stage 3 certification and is the
+**authoritative** gate verdict: the audit inside `dual_metrics.json` comes from
+a single dual-version run, which can only ever evaluate Gate 1 — Gates 2 and 3
+need a walk-forward, a bootstrap and the held-back years, which are separate
+runs. Promotion is refused unless it says PASS (`--force` overrides and records
+it). When both files are supplied the certification wins and any disagreement
+is recorded rather than resolved silently. `meta.json` gains a `certification`
+block — the audit's path, symbol, windows and SHA-256 — or the literal string
+`NOT CERTIFIED`, which is written rather than omitted because an absent key
+reads as a field nobody filled in. Certification is **not** required by
+default, so the older `bt-run` workflow keeps working unchanged;
+`--require-certification` turns its absence into a refusal.
 
 **`data_pull/`** — vendor downloaders. The only layer that touches a vendor API.
 

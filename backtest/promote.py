@@ -291,6 +291,71 @@ def load_metrics(path: Path | None, version: str) -> tuple[dict | None, dict | N
         f"tell which numbers belong to Version {version.upper()}")
 
 
+def load_gate_certification(path: Path | None,
+                            version: str) -> tuple[dict | None, dict]:
+    """
+    Read a Stage 3 `gate_audit_<SYMBOL>.json` and pull out one version's verdict.
+
+    Returns `(gate_audit, provenance)`. The provenance block is what meta.json
+    records: which file, which contract, which windows, and the file's SHA-256,
+    so a promotion can be traced back to the exact certification run rather
+    than to "a gate audit that said PASS at the time".
+
+    This is the AUTHORITATIVE gate audit. The one inside `dual_metrics.json`
+    comes from a single dual-version run, which can only ever evaluate Gate 1 -
+    Gates 2 and 3 need a walk-forward, a bootstrap and the held-back years,
+    which are separate runs. A promotion resting on the dual run's audit is
+    resting on two gates that reported NOT EVALUATED, and NOT EVALUATED is not
+    a pass. When both files are supplied this one wins and the disagreement is
+    recorded rather than resolved silently.
+    """
+    if path is None:
+        return None, {}
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"gate audit not found: {path}")
+
+    blob = json.loads(path.read_text(encoding="utf-8"))
+    stage = blob.get("stage")
+    if stage is not None and int(stage) != 3:
+        raise ValueError(
+            f"{path} was written by stage {stage}, not stage 3. Only the "
+            f"certification stage (backtest/audit_gates.py) produces a gate "
+            f"verdict that may be promoted on.")
+
+    ver = version.upper()
+    versions = blob.get("versions") or {}
+    block = versions.get(ver)
+    if block is None:
+        have = ", ".join(sorted(versions)) or "none"
+        raise ValueError(
+            f"{path} carries no certification for Version {ver} (has: {have}). "
+            f"Re-run stage 3 with --ml to certify Version B.")
+
+    audit = block.get("gate_audit")
+    if not isinstance(audit, dict) or "status" not in audit:
+        raise ValueError(
+            f"{path} Version {ver} carries no gate_audit block. A file that "
+            f"cannot state a verdict is not a certification.")
+
+    prov = {
+        "audit_file": path.as_posix(),
+        "audit_sha256": sha256(path),
+        "audit_symbol": blob.get("symbol"),
+        "audit_generated_utc": blob.get("generated_utc"),
+        "in_sample": blob.get("in_sample"),
+        "holdout": blob.get("holdout"),
+        "params": blob.get("params"),
+        "params_source": blob.get("params_source"),
+        "variants_tested": blob.get("variants_tested"),
+        "wfo": blob.get("wfo"),
+        "monte_carlo": blob.get("monte_carlo"),
+        "entry_filters": blob.get("entry_filters"),
+        "status": audit.get("status"),
+    }
+    return audit, prov
+
+
 def snapshot_params(metrics: dict | None) -> dict:
     """
     The parameters the promoted run ACTUALLY used, out of the metrics snapshot.
@@ -348,6 +413,7 @@ def promote(strat: str,
             version: str,
             source: Path,
             metrics_path: Path | None = None,
+            audit_path: Path | None = None,
             symbol: str | None = None,
             timeframe: str | None = None,
             params: dict | None = None,
@@ -356,6 +422,7 @@ def promote(strat: str,
             variants_tested: int | None = None,
             force: bool = False,
             commit: bool = True,
+            require_certification: bool = False,
             incubator: Path = INCUBATOR) -> dict[str, Any]:
     """Write the promoted strategy directory and return what was written."""
     version = version.upper()
@@ -377,13 +444,39 @@ def promote(strat: str,
 
     metrics, gate_audit, metrics_status = load_metrics(metrics_path, version)
 
+    # Stage 3's certification outranks whatever gate block travelled with the
+    # metrics snapshot. The snapshot's audit comes from one dual-version run,
+    # which cannot evaluate Gates 2 or 3 at all.
+    cert_audit, certification = load_gate_certification(audit_path, version)
+    snapshot_status = (gate_audit or {}).get("status", "NOT EVALUATED")
+    if cert_audit is not None:
+        certification["snapshot_gate_status"] = snapshot_status
+        certification["agrees_with_snapshot"] = (
+            snapshot_status == cert_audit.get("status")
+            if gate_audit else None)
+        gate_audit = cert_audit
     gate_status = (gate_audit or {}).get("status", "NOT EVALUATED")
+
     if gate_audit and gate_status != "PASS" and not force:
+        where = (f" (from {Path(audit_path).name})" if audit_path
+                 else " (from the metrics snapshot)")
         raise SystemExit(
-            f"Version {version} gate audit is {gate_status}, not PASS. "
-            f"Promotion refused.\n"
+            f"Version {version} gate audit is {gate_status}, not PASS"
+            f"{where}. Promotion refused.\n"
             f"  Re-run with --force to promote anyway; the override is "
             f"recorded in meta.json.")
+    # Defaults to False so the documented `bt-run` workflow - promote on a
+    # dual_metrics.json, with meta.json recording NOT RECORDED - keeps working
+    # unchanged. `--require-certification` turns it into a refusal for anyone
+    # running the five-stage pipeline, where an uncertified promotion means a
+    # stage was skipped rather than a snapshot mislaid.
+    if gate_audit is None and require_certification and not force:
+        raise SystemExit(
+            f"No gate certification supplied. Promotion refused.\n"
+            f"  Pass --audit-file <gate_audit_SYMBOL.json> from stage 3 "
+            f"(backtest/audit_gates.py),\n"
+            f"  or --force to promote an uncertified strategy — the override "
+            f"is recorded in meta.json.")
 
     dest = Path(incubator) / strat
     dest.mkdir(parents=True, exist_ok=True)
@@ -468,7 +561,12 @@ def promote(strat: str,
         "metrics": _locked_metrics(metrics),
         "gate_audit_status": gate_status,
         "gate_audit": _gate_summary(gate_audit),
-        "gates_overridden": bool(force and gate_audit and gate_status != "PASS"),
+        # Where the verdict came from. `NOT CERTIFIED` is written rather than
+        # omitted: an absent key reads as a field nobody filled in, and this
+        # one is the difference between a strategy that cleared stage 3 and
+        # one that was promoted past it.
+        "certification": certification or "NOT CERTIFIED",
+        "gates_overridden": bool(force and gate_status != "PASS"),
         "oos_status": "not_run" if gate_status != "PASS" else "passed_gate3",
         "audit_warnings": warnings,
         "notes": notes,
@@ -578,6 +676,16 @@ def main(argv: list[str] | None = None) -> int:
                    help="dual_metrics.json from the run being promoted on. "
                         "Without it meta.json records NOT RECORDED rather than "
                         "a metrics snapshot nobody produced.")
+    p.add_argument("--audit-file", default=None,
+                   help="gate_audit_<SYMBOL>.json from stage 3 "
+                        "(backtest/audit_gates.py). This is the AUTHORITATIVE "
+                        "gate verdict — the audit inside dual_metrics.json "
+                        "comes from a single run, which can only evaluate "
+                        "Gate 1. Promotion is refused unless it says PASS.")
+    p.add_argument("--require-certification", action="store_true",
+                   help="Refuse to promote with no --audit-file at all. The "
+                        "five-stage pipeline should pass this; the older "
+                        "bt-run workflow predates certification and does not.")
     p.add_argument("--symbol", default=None,
                    help="Override the module's SYMBOLS")
     p.add_argument("--timeframe", default=None,
@@ -601,9 +709,11 @@ def main(argv: list[str] | None = None) -> int:
     out = promote(
         strat=args.strat, version=args.version, source=Path(args.source),
         metrics_path=Path(args.metrics) if args.metrics else None,
+        audit_path=Path(args.audit_file) if args.audit_file else None,
         symbol=args.symbol, timeframe=args.timeframe, params=params,
         threshold=args.threshold, notes=args.notes,
         variants_tested=args.variants_tested, force=args.force,
+        require_certification=args.require_certification,
         commit=not args.no_commit)
 
     meta = out["meta"]
@@ -621,6 +731,24 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  metrics        {meta['metrics_status']}")
     print(f"  gate audit     {meta['gate_audit_status']}"
           + ("  (OVERRIDDEN with --force)" if meta["gates_overridden"] else ""))
+    cert = meta["certification"]
+    if isinstance(cert, dict):
+        print(f"  certified by   {Path(cert['audit_file']).name}  "
+              f"({cert.get('audit_symbol') or 'symbol not recorded'})")
+        ho = cert.get("holdout") or {}
+        print(f"                 holdout {ho.get('start', '?')} → "
+              f"{ho.get('end', '?')}, sha {cert['audit_sha256'][:12]}")
+        if cert.get("agrees_with_snapshot") is False:
+            print("\n  ! The stage 3 certification and the metrics snapshot's "
+                  "own gate block\n    disagree. The certification is what was "
+                  "enforced; the snapshot's\n    block can only ever evaluate "
+                  "Gate 1.")
+    else:
+        print("  certified by   NOT CERTIFIED")
+        print("\n  ! No --audit-file was supplied, so no stage 3 gate "
+              "certification is\n    recorded. Gates 2 and 3 cannot be "
+              "evaluated by any single run — a\n    promotion without one "
+              "rests on Gate 1 alone.")
 
     if meta["metrics_status"] == "NOT RECORDED":
         print("\n  ! No metrics snapshot was supplied, so meta.json records "

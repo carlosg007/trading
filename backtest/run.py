@@ -139,6 +139,9 @@ from agents.tier1_master import (_strategy_indicators,            # noqa: E402
                                  run_dual_version_backtest)
 from agents.tier3_workers import load_strategy                    # noqa: E402
 from backtest.engine import BacktestConfig                        # noqa: E402
+from backtest.event_calendar import (add_filter_args,            # noqa: E402
+                                     describe_filters,
+                                     filter_config_kwargs)
 from backtest.report import NOT_EVALUATED, print_dual_scorecard   # noqa: E402
 from backtest.report_html import write_dual_reports               # noqa: E402
 from backtest.specs import SPECS, get_spec                        # noqa: E402
@@ -547,6 +550,10 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--no-reports", action="store_true",
                     help="skip the HTML tear sheets; scorecards and the "
                          "leaderboard are still written")
+    # The news and day-of-week entry filters, defined once in
+    # backtest/event_calendar.py so the batch runner and the five pipeline
+    # stages cannot drift apart on what --exclude-days 0 means.
+    add_filter_args(ap)
     return ap
 
 
@@ -647,7 +654,8 @@ def run_symbol(symbol: str,
         slippage_ticks=args.slippage_ticks,
         flat_by_close=args.flat_by_close,
         variants_tested=args.variants_tested,
-        notes=f"backtest/run.py batch {symbol} {tf}")
+        notes=f"backtest/run.py batch {symbol} {tf}",
+        **filter_config_kwargs(args))
 
     run_params = dict(params)
     scan_selection = None
@@ -706,6 +714,10 @@ def run_symbol(symbol: str,
 
     a = out["version_a"]
     b = out["version_b"]
+
+    filters = a["metrics"].get("entry_filters") or {}
+    if filters:
+        print("\n" + describe_filters(filters))
 
     # Steps 1 and 3. Version A is the left column, because Version B only means
     # anything measured against it.

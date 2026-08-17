@@ -80,6 +80,7 @@ from backtest.report import sortino as report_sortino  # noqa: E402
 from backtest.report import (annualized_return_pct  # noqa: E402
                              as report_annualized_return_pct)
 from backtest.report import calmar as report_calmar  # noqa: E402
+from backtest.report import day_of_week_breakdown  # noqa: E402
 from backtest.report import to_daily_equity as report_to_daily_equity  # noqa: E402
 from backtest.specs import get_spec  # noqa: E402
 
@@ -470,6 +471,18 @@ def summarize_result(result: BacktestResult,
         "short_trades": int(stats.get("n_short", 0)),
         "breach": dict(result.breach or {}),
         "n_days": int(len(result.equity)) if result.equity is not None else 0,
+        # P&L, win rate and trade count by weekday, attributed by entry
+        # session. Records rather than a DataFrame because this dict is
+        # serialized into `dual_metrics.json`, and `_jsonable` DROPS pandas
+        # objects - a breakdown stored as a frame would be present on screen
+        # and silently absent from the snapshot a promotion cites. Seven rows,
+        # so it costs nothing to carry.
+        "dow_breakdown": day_of_week_breakdown(trades).to_dict("records"),
+        # What the entry filters removed before the simulation ran, including
+        # the macro calendar's provenance. Empty when neither filter was
+        # configured; a filter that ran and cut nothing reports itself with
+        # zero counts, which is a different statement.
+        "entry_filters": dict(stats.get("entry_filters", {}) or {}),
     }
     if include_trades:
         out["trades"] = trades

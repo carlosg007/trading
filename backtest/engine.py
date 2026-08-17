@@ -105,6 +105,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from .event_calendar import apply_entry_filters
 from .specs import get_spec
 # The ratio definitions live in backtest.report and are imported rather than
 # reimplemented here. A second local Sharpe would be free to disagree with the
@@ -171,6 +172,24 @@ class BacktestConfig:
     # Data hygiene
     exclude_degraded: bool = True
     exclude_rolls: bool = True
+
+    # Entry filters (backtest/event_calendar.py). Both suppress ENTRIES on both
+    # sides and never touch an exit - blocking an exit would hold a position
+    # through the very event the filter exists to avoid. They live on the
+    # config rather than in the strategies because neither reads a price:
+    # applied here they work for every module in the tree without one of them
+    # being edited, and a sweep over strategy parameters cannot sweep them.
+    #
+    # `news_filter` needs a macro calendar. Absent a published one it falls
+    # back to APPROXIMATE rule-generated dates and says so, in stats and on
+    # every report - see the calendar module's docstring before reading a
+    # news-filtered result as one that dodged the actual releases.
+    news_filter: bool = False
+    news_window_minutes: float = 30.0
+    news_kinds: tuple[str, ...] | None = None      # None = all four
+    # Weekday integers, Monday=0 .. Sunday=6, on the CME SESSION date rather
+    # than the UTC date. (0, 4) suppresses Monday and Friday entries.
+    exclude_days: tuple[int, ...] | None = None
 
     # Execution. Bars are handed to vectorbt this many at a time so a
     # full-lake run does not have to hold the whole simulation in RAM. This is
@@ -988,9 +1007,35 @@ def check_trailing_drawdown(equity: pd.Series, limit_pct: float) -> dict:
     }
 
 
+def _merge_filter_info(parts: list[dict]) -> dict:
+    """
+    Per-symbol entry-filter reports -> one run-level report.
+
+    Counts add up across symbols; the settings do not, so they are taken from
+    the first symbol and the provenance is collapsed to a single token only
+    when every symbol agrees. A run where one symbol's span had published dates
+    and another's fell back to rule-generated ones reports MIXED rather than
+    whichever came last.
+    """
+    if not parts:
+        return {}
+    out = dict(parts[0])
+    counters = [k for k in out
+                if k.endswith(("_blocked", "_before", "_suppressed", "_in_span"))
+                or k == "bars"]
+    for k in counters:
+        out[k] = int(sum(int(p.get(k, 0) or 0) for p in parts))
+    provs = {p.get("news_provenance") for p in parts if p.get("news_provenance")}
+    if provs:
+        out["news_provenance"] = provs.pop() if len(provs) == 1 else "MIXED"
+    out["symbols"] = len(parts)
+    return out
+
+
 def _assemble_result(all_trades: list[pd.DataFrame],
                      days: pd.DatetimeIndex,
-                     cfg: BacktestConfig) -> BacktestResult:
+                     cfg: BacktestConfig,
+                     filter_info: dict | None = None) -> BacktestResult:
     """Pool per-symbol trade lists into the standard result."""
     trades = (pd.concat(all_trades, ignore_index=True)
               if all_trades else
@@ -1050,6 +1095,12 @@ def _assemble_result(all_trades: list[pd.DataFrame],
         "gross_pnl": float(trades["gross_pnl"].sum()) if not trades.empty else 0.0,
         "net_pnl": float(trades["pnl"].sum()) if not trades.empty else 0.0,
     }
+    # What the entry filters removed before the simulation saw the signals.
+    # Recorded whenever either filter was configured - including when it
+    # removed nothing, because "the news filter ran and cut 0 entries" and "no
+    # news filter ran" are different results and the equity curve is identical.
+    if filter_info:
+        stats["entry_filters"] = filter_info
 
     return BacktestResult(returns=returns, trades=trades, equity=equity,
                           config=cfg, breach=breach, stats=stats)
@@ -1183,6 +1234,7 @@ def run_backtest(symbols: str | list[str],
 
     all_trades: list[pd.DataFrame] = []
     day_parts: list[np.ndarray] = []
+    filter_parts: list[dict] = []
     n_symbols = 0
 
     for sym, g in iter_bars(symbols, tf, start, end, **lake_kwargs):
@@ -1191,6 +1243,21 @@ def run_backtest(symbols: str | list[str],
             e, x, se, sx = unpack_signals(signal_fn(g), len(g))
         except ValueError as err:
             raise ValueError(f"{sym}: {err}") from err
+
+        # Entry filters, applied to the strategy's own masks before anything
+        # else touches them. Entries only, both sides, never the exits: a
+        # blocked exit would hold a position through the release rather than
+        # keeping one out of it. Neither filter reads a price, so neither can
+        # add trades or create an edge - see backtest/event_calendar.py.
+        if cfg.news_filter or cfg.exclude_days:
+            e, se, finfo = apply_entry_filters(
+                g["ts"], e, se,
+                news_filter=cfg.news_filter,
+                news_window_minutes=cfg.news_window_minutes,
+                news_kinds=cfg.news_kinds,
+                exclude_days=cfg.exclude_days)
+            finfo["symbol"] = sym
+            filter_parts.append(finfo)
 
         day_parts.append(
             np.unique(pd.DatetimeIndex(g["ts"]).values.astype("datetime64[D]")))
@@ -1216,4 +1283,5 @@ def run_backtest(symbols: str | list[str],
     del day_parts
     gc.collect()
 
-    return _assemble_result(all_trades, days, cfg)
+    return _assemble_result(all_trades, days, cfg,
+                            filter_info=_merge_filter_info(filter_parts))

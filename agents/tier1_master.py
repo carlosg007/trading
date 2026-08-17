@@ -839,6 +839,24 @@ def run_dual_version_backtest(strategy_code: str,
     entries, exits, s_entries, s_exits = unpack_signals(signal_fn(bars),
                                                         len(bars))
 
+    # The news and day-of-week entry filters, applied here for the same reason
+    # and in the same place as in `run_backtest` - this function drives
+    # `_simulate` directly rather than going through it, so a filter wired only
+    # into the engine's entry point would be silently inert for every run the
+    # batch runner and the pipeline stages make. Version B filters these same
+    # cleaned signals, so both versions inherit it and the comparison stays a
+    # comparison of the classifier.
+    filter_info: dict[str, Any] = {}
+    if config.news_filter or config.exclude_days:
+        from backtest.event_calendar import apply_entry_filters
+        entries, s_entries, filter_info = apply_entry_filters(
+            bars["ts"], entries, s_entries,
+            news_filter=config.news_filter,
+            news_window_minutes=config.news_window_minutes,
+            news_kinds=config.news_kinds,
+            exclude_days=config.exclude_days)
+        filter_info["symbol"] = symbol
+
     if config.flat_by_close:
         from backtest.engine import apply_flat_by_close
         entries, exits = apply_flat_by_close(bars, entries, exits,
@@ -856,7 +874,7 @@ def run_dual_version_backtest(strategy_code: str,
     trades_a = _simulate(bars, entries_a, exits_a, symbol, config,
                          s_entries_a, s_exits_a)
     result_a = _assemble_result([trades_a] if not trades_a.empty else [],
-                                days, config)
+                                days, config, filter_info=filter_info)
 
     # -- Version B: the same signals, ML-filtered ---------------------------
     # Filtering the CLEANED signals, not the raw ones, so the trades the
@@ -881,8 +899,11 @@ def run_dual_version_backtest(strategy_code: str,
 
         trades_b = _simulate(bars, entries_b, exits_b, symbol, config,
                              s_entries_b, s_exits_b)
+        # The same filter report as A: Version B filters A's already-filtered
+        # entries, so the news and weekday suppressions are common to both and
+        # only the classifier's cut differs between the two columns.
         result_b = _assemble_result([trades_b] if not trades_b.empty else [],
-                                    days, config)
+                                    days, config, filter_info=filter_info)
         metrics_b = summarize_result(result_b)
 
     metrics_a = summarize_result(result_a)

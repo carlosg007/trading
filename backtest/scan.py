@@ -77,8 +77,10 @@ the held-back final three years - are separate runs that this does not perform.
 
 from __future__ import annotations
 
+import argparse
 import gc
 import itertools
+import math
 import sys
 from pathlib import Path
 from typing import Any, Iterable
@@ -94,6 +96,7 @@ from backtest.engine import (BacktestConfig, TRADE_COLUMNS,   # noqa: E402
                              _assemble_result, _cost_arrays, _shift_to_fill,
                              apply_flat_by_close, clean_signals_ls,
                              unpack_signals)
+from backtest.event_calendar import add_filter_args                  # noqa: E402
 from backtest.report import INFO, PASS, audit_acceptance_gates  # noqa: E402
 from backtest.specs import get_spec                            # noqa: E402
 
@@ -591,3 +594,238 @@ def format_scan_summary(scan: dict, top: int = 5) -> str:
         L.append(f"    … {len(table) - top} more in scan_{scan['symbol']}.csv")
     L.append(f"  selection: {scan['selection']}")
     return "\n".join(L)
+
+
+# --------------------------------------------------------------------------
+# STAGE 2 of 5 - the dedicated sweep CLI
+# --------------------------------------------------------------------------
+# Everything above is the library `backtest/run.py --scan` calls. Everything
+# below turns it into a stage that can be run on its own and hands Stage 3 a
+# file: one `best_params_<SYMBOL>.json` per contract, holding the winning
+# combination and the evidence for how it was chosen.
+#
+# The stage adds nothing to the search itself. Same `scan_symbol`, same Gate-1
+# selection rule, same tie-break on the shallower drawdown - a second sweep
+# implementation living in a CLI would be free to disagree with the one
+# `--scan` uses, and the two would be compared by nobody.
+def write_best_params(scan: dict, strategy: str, symbol: str, tf: str,
+                      start: str | None, end: str | None,
+                      base_params: dict, out_dir: Path) -> Path:
+    """
+    `best_params_<SYMBOL>.json` - the winner, and what it was chosen from.
+
+    `params` is the FULL effective set the winning signals were bound to, not
+    just the swept axes: Stage 3 binds a run from this file, and a file holding
+    only the three parameters that were swept would silently fall back to the
+    module's defaults for everything else. The two runs would differ in a way
+    neither report could show.
+
+    `variants_tested` is written beside it and is not optional. The winning
+    Sharpe is the best of N fits to one sample of bars; Stage 3 carries the
+    number onto its audit, and a certification that cannot say N is not a
+    certification.
+    """
+    from backtest.pipeline import BEST_PARAMS_FILE, write_stage
+
+    winner = scan.get("winner")
+    payload = {
+        "symbol": symbol,
+        "timeframe": tf,
+        "start": start,
+        "end": end,
+        "params": ({**base_params, **winner["params"]} if winner
+                   else dict(base_params)),
+        "swept_params": dict(winner["params"]) if winner else None,
+        "base_params": dict(base_params),
+        "variants_tested": int(scan["evaluated"]),
+        "combinations": int(scan["combinations"]),
+        "rejected": len(scan.get("rejected") or []),
+        "selection": scan["selection"],
+        # The winner's IN-SAMPLE metrics. Recorded so Stage 3 can be compared
+        # against what the sweep believed it had found; they are not evidence
+        # of anything on their own, having been selected on these very bars.
+        "in_sample": _jsonable_metrics(winner["metrics"]) if winner else None,
+        "gate1_in_sample": (winner.get("gate1") or {}).get("status")
+        if winner else None,
+    }
+    if winner is None:
+        payload["warning"] = (
+            "no combination produced a measurable Sharpe; `params` falls back "
+            "to the base parameters and nothing was selected")
+    return write_stage(Path(out_dir) / BEST_PARAMS_FILE.format(symbol=symbol),
+                       2, strategy, payload)
+
+
+def _jsonable_metrics(metrics: dict | None) -> dict | None:
+    """The scalar metrics only - no trade frame, no equity series."""
+    if not metrics:
+        return None
+    keep = ("sharpe", "sortino", "calmar", "profit_factor", "win_rate",
+            "trade_count", "max_drawdown_pct", "total_return_pct",
+            "annualized_return_pct", "total_pnl", "total_costs", "n_days")
+    out = {}
+    for k in keep:
+        v = metrics.get(k)
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            f = float(v)
+            out[k] = None if (math.isnan(f) or math.isinf(f)) else f
+        elif v is not None and not isinstance(v, (pd.DataFrame, pd.Series)):
+            out[k] = v
+    return out
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        description="Stage 2/5 — sweep a strategy's PARAM_GRID over the "
+                    "IN-SAMPLE window, one independent search per contract, "
+                    "and write the winner to best_params_<SYMBOL>.json.")
+    p.add_argument("--strat", required=True, help="Strategy name or path")
+    p.add_argument("--symbols", default=None,
+                   help="NQ, a list NQ,ES,CL, or ALL. Default: the survivors "
+                        "Stage 1 wrote to surviving_assets.json.")
+    p.add_argument("--tf", "--timeframe", dest="tf", default=None)
+    p.add_argument("--start", default="2013-01-01",
+                   help="In-sample start (default 2013-01-01)")
+    p.add_argument("--end", default="2022-12-31",
+                   help="In-sample end (default 2022-12-31). It must NOT run "
+                        "into the Stage 3 holdout — a window that overlaps the "
+                        "holdout has spent it before Gate 3 is evaluated.")
+    p.add_argument("--param", action="append", default=[], metavar="K=V",
+                   help="Fix a parameter OUTSIDE the sweep")
+    p.add_argument("--capital", type=float, default=100_000.0)
+    p.add_argument("--contracts", type=int, default=1)
+    p.add_argument("--slippage-ticks", type=float, default=1.0)
+    p.add_argument("--flat-by-close", action="store_true")
+    p.add_argument("--out-dir", default=None,
+                   help="Override <BT_ARTIFACTS>/pipeline/<strategy>/")
+    add_filter_args(p)
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    import traceback
+
+    from agents.tier3_workers import load_strategy
+    from backtest.event_calendar import filter_config_kwargs
+    from backtest.pipeline import (SURVIVORS_FILE, next_step, pipeline_dir,
+                                   read_stage, stage_banner)
+    from backtest.run import (load_bars, parse_param, parse_symbols,
+                              resolve_strategy)
+
+    args = build_parser().parse_args(argv)
+    path = resolve_strategy(args.strat)
+    strat_name = path.parent.name if path.stem == "strat" else path.stem
+    base_params = dict(parse_param(p) for p in args.param)
+
+    try:
+        _fn, info = load_strategy(path, base_params)
+        cfg_kwargs = filter_config_kwargs(args)
+    except Exception as e:                                        # noqa: BLE001
+        print(f"{type(e).__name__}: {e}", file=sys.stderr)
+        return 1
+
+    out_dir = pipeline_dir(strat_name, args.out_dir, create=True)
+
+    # Symbols default to Stage 1's survivors. Sweeping a contract Stage 1
+    # dropped is not forbidden - an operator naming it explicitly gets it - but
+    # it should not happen by default: the parameters that rescue a contract
+    # with no edge at default settings are the definition of a curve fit.
+    source = "--symbols"
+    if args.symbols:
+        symbols = parse_symbols(args.symbols, info.get("symbols"))
+    else:
+        try:
+            stage1 = read_stage(out_dir / SURVIVORS_FILE, 1, strat_name)
+        except FileNotFoundError as e:
+            print(f"{e}\n\nOr name the contracts explicitly with --symbols.",
+                  file=sys.stderr)
+            return 1
+        symbols = list(stage1.get("surviving") or [])
+        source = f"stage 1 survivors ({SURVIVORS_FILE})"
+        if not symbols:
+            print(f"Stage 1 recorded no surviving contracts in "
+                  f"{out_dir / SURVIVORS_FILE}.\nThere is nothing to sweep. "
+                  f"That is a result about the idea, not a\nreason to sweep "
+                  f"the contracts it already failed on.", file=sys.stderr)
+            return 1
+
+    tf = args.tf or info.get("timeframe") or "15m"
+    grid = info.get("param_grid") or {}
+    if not grid:
+        print(f"{strat_name} declares no PARAM_GRID, so there is nothing to "
+              f"sweep.\nAdd one to the module, or run Stage 3 on the defaults "
+              f"with --param.", file=sys.stderr)
+        return 1
+
+    cells = len(expand_grid(grid))
+    print(stage_banner(2, strat_name,
+                       f"{len(symbols)} contract(s) · {tf} · "
+                       f"{args.start} → {args.end}"))
+    print(f"  symbols    : {', '.join(symbols)}  (from {source})")
+    print(f"  grid       : " + ", ".join(f"{k}={v!r}" for k, v in grid.items()))
+    print(f"  grid size  : {cells:,} combination(s) per contract "
+          f"({cells * len(symbols):,} fits in total)")
+    if cells > SIZE_WARN:
+        print(f"\n  [!] {cells:,} combinations is a large in-sample search. "
+              f"Every winning Sharpe\n      below is the best of {cells:,} "
+              f"fits to one sample of bars, and it has to be\n      read that "
+              f"way. The count travels to Stage 3 as variants_tested.\n",
+              file=sys.stderr, flush=True)
+
+    rows, errors = [], []
+    for i, sym in enumerate(symbols, 1):
+        print(f"\n[{i}/{len(symbols)}] {sym}")
+        print("-" * 78)
+        try:
+            bars = load_bars(sym, tf, args.start, args.end)
+            cfg = BacktestConfig(
+                initial_capital=args.capital, contracts=args.contracts,
+                slippage_ticks=args.slippage_ticks,
+                flat_by_close=args.flat_by_close,
+                notes=f"stage 2 scan {sym} {tf}", **cfg_kwargs)
+            scan = scan_symbol(path, bars, sym, cfg, grid,
+                               base_params=base_params, strat_name=strat_name)
+            print(format_scan_summary(scan))
+            csv = write_scan_table(scan, out_dir)
+            dest = write_best_params(scan, strat_name, sym, tf, args.start,
+                                     args.end, base_params, out_dir)
+            print(f"  table      → {csv}")
+            print(f"  winner     → {dest}")
+            rows.append({"symbol": sym, "selection": scan["selection"],
+                         "winner": (scan["winner"] or {}).get("params"),
+                         "sharpe": (scan["winner"] or {}).get("sharpe"),
+                         "variants_tested": scan["evaluated"]})
+        except Exception as e:                                    # noqa: BLE001
+            errors.append({"symbol": sym, "error": f"{type(e).__name__}: {e}"})
+            print(f"\n[!] {sym}: {type(e).__name__}: {e}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+
+    W = 78
+    print("\n" + "=" * W)
+    print(f"STAGE 2 RESULT · {len(rows)}/{len(symbols)} contract(s) swept")
+    print("=" * W)
+    for r in rows:
+        sharpe = r["sharpe"]
+        print(f"  {r['symbol']:<6}Sharpe "
+              f"{(sharpe if sharpe is not None else float('nan')):>6.2f}"
+              f"  best of {r['variants_tested']:>4,}   {r['winner']}")
+        if r["selection"] != SELECTED_GATE1:
+            print(f"         {r['selection']}")
+    for e in errors:
+        print(f"  ERROR {e['symbol']:<6}{e['error']}")
+
+    print(next_step([
+        "Stage 3 — certify the gates on the winning parameters. The holdout",
+        "window must NOT overlap the in-sample window above:",
+        "",
+        f"  python3 backtest/audit_gates.py --strat {args.strat} \\",
+        f"      --symbols {','.join(r['symbol'] for r in rows) or '<none>'} "
+        f"--tf {tf} \\",
+        f"      --is-start {args.start} --is-end {args.end} \\",
+        "      --holdout-start 2023-01-01 --holdout-end 2026-01-01",
+    ]))
+    return 1 if errors else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
