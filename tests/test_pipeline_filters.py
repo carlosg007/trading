@@ -971,60 +971,240 @@ def test_rsi() -> None:
     check("RSI stays inside [0, 100]", bool((rm >= 0).all() and (rm <= 100).all()))
 
 
-def test_confluence_is_subtractive() -> None:
-    print("\n22. The confluence conditions can only REMOVE trades")
+def _candidate_mask(m, bars: pd.DataFrame, **p) -> np.ndarray:
+    """
+    The raw CANDIDATE triggers for one toggle combination, rebuilt from the
+    module's own series.
+
+    Rebuilt rather than read off `signal_fn`, because `signal_fn` returns the
+    POSITION WALK's entries — one at a time, a trigger arriving while a
+    position is open being ignored — and the subtractive property being checked
+    here is a property of the candidates, not of the walk. See "A filter
+    subtracts candidates, not trades" in the module docstring.
+    """
+    s_ = m._series(bars, p["fast_period"], p["slow_period"], p["trend_period"])
+    ready = s_["fast"].notna() & s_["slow"].notna() & s_["atr"].notna()
+    if p["use_trend"]:
+        ready &= s_["trend"].notna()
+    if p["use_vwap"]:
+        ready &= s_["vwap"].notna()
+    if p["use_rsi"]:
+        ready &= s_["rsi"].notna()
+    if p["use_volatility"]:
+        ready &= s_["atr_ma"].notna()
+
+    above = (s_["fast"] > s_["slow"]) & ready
+    below = (s_["fast"] < s_["slow"]) & ready
+    prev = ready.shift(1, fill_value=False)
+    cross_up = above & ~above.shift(1, fill_value=False) & prev
+    cross_down = below & ~below.shift(1, fill_value=False) & prev
+
+    window, _flat = m._session_masks(bars["ts"])
+    close = bars["close"]
+    yes = pd.Series(True, index=bars.index)
+    long_c = (cross_up
+              & (close > s_["trend"] if p["use_trend"] else yes)
+              & (close > s_["vwap"] if p["use_vwap"] else yes)
+              & (s_["rsi"] > m.RSI_MIDLINE if p["use_rsi"] else yes)
+              & (s_["atr"] > s_["atr_ma"] if p["use_volatility"] else yes)
+              & ready).to_numpy() & window
+    short_c = (cross_down
+               & (close < s_["trend"] if p["use_trend"] else yes)
+               & (close < s_["vwap"] if p["use_vwap"] else yes)
+               & (s_["rsi"] < m.RSI_MIDLINE if p["use_rsi"] else yes)
+               & (s_["atr"] > s_["atr_ma"] if p["use_volatility"] else yes)
+               & ready).to_numpy() & window
+    return long_c | short_c
+
+
+def test_filter_toggles() -> None:
+    print("\n22. Filter toggles: each one subtracts CANDIDATES")
+    import itertools
+
     m = _load_etf()
     bars = globex_bars(days=90, seed=11)
+    TOGGLES = ("use_trend", "use_vwap", "use_rsi", "use_volatility")
+    ALL_OFF = dict.fromkeys(TOGGLES, False)
+    BASE = {"fast_period": 9, "slow_period": 21, "trend_period": 200}
 
-    e, x, se, sx = m.signal_fn(bars)
-    n_full = int(e.sum() + se.sum())
+    def realised(**over):
+        e, x, se, sx = m.signal_fn(bars, **{**BASE, **ALL_OFF, **over})
+        return e.to_numpy() | se.to_numpy()
 
-    # The same module with VWAP and RSI neutralised: every entry the four-way
-    # confluence takes must also be an entry the two-way version would take.
-    # If it were not, one of the new conditions would be ADDING trades, which
-    # a confirmation cannot do.
-    s = m._series(bars, 9, 21, 200)
-    close = bars["close"]
-    ready2 = (s["fast"].notna() & s["slow"].notna() & s["trend"].notna()
-              & s["atr"].notna() & s["atr_ma"].notna())
-    above = (s["fast"] > s["slow"]) & ready2
-    below = (s["fast"] < s["slow"]) & ready2
-    prev_ready = ready2.shift(1, fill_value=False)
-    cross_up = above & ~above.shift(1, fill_value=False) & prev_ready
-    cross_down = below & ~below.shift(1, fill_value=False) & prev_ready
-    window, _flat = m._session_masks(bars["ts"])
-    old_long = ((close > s["trend"]) & cross_up
-                & (s["atr"] > s["atr_ma"]) & ready2).to_numpy() & window
-    old_short = ((close < s["trend"]) & cross_down
-                 & (s["atr"] > s["atr_ma"]) & ready2).to_numpy() & window
+    def candidates(**over):
+        return _candidate_mask(m, bars, **{**BASE, **ALL_OFF, **over})
 
-    check("the confluence build produced trades to compare", n_full > 0,
-          f"{n_full} entries")
-    check("every confluence LONG entry is also a pre-confluence entry",
-          bool((~(e.to_numpy() & ~old_long)).all()))
-    check("every confluence SHORT entry is also a pre-confluence entry",
-          bool((~(se.to_numpy() & ~old_short)).all()))
-    check("and the confluence takes strictly fewer",
-          n_full <= int(old_long.sum() + old_short.sum()),
-          f"{n_full} vs {int(old_long.sum() + old_short.sum())}")
+    bare = candidates()
+    check("with every toggle off the candidates are the bare crossover",
+          bare.sum() > 0, f"{bare.sum()} candidate triggers")
 
-    # Each condition must actually bind on the entries taken.
-    ent = e.to_numpy() | se.to_numpy()
-    idx = np.flatnonzero(ent)
-    if len(idx):
-        rsi = s["rsi"].to_numpy()
-        vwap = s["vwap"].to_numpy()
-        cl = close.to_numpy()
-        long_i = np.flatnonzero(e.to_numpy())
-        short_i = np.flatnonzero(se.to_numpy())
-        check("every long entry has RSI above 50 and close above VWAP",
-              all(rsi[i] > 50.0 and cl[i] > vwap[i] for i in long_i))
-        check("every short entry has RSI below 50 and close below VWAP",
-              all(rsi[i] < 50.0 and cl[i] < vwap[i] for i in short_i))
+    # THE invariant: turning any toggle on can only remove candidates. Checked
+    # for all sixteen combinations against every combination one toggle poorer,
+    # not just against the bare case.
+    holds, broke = True, ""
+    for combo in itertools.product([False, True], repeat=4):
+        on = dict(zip(TOGGLES, combo))
+        c_on = candidates(**on)
+        for j, name in enumerate(TOGGLES):
+            if not combo[j]:
+                continue
+            fewer = dict(on, **{name: False})
+            if (c_on & ~candidates(**fewer)).any():
+                holds, broke = False, f"{on} vs {fewer}"
+    check("adding any filter to any combination only ever removes candidates",
+          holds, broke)
+
+    # How hard each one bites is a property of THIS fixture, not of the
+    # strategy - on a random-walk fixture RSI sits near 50 at most crossings
+    # and removes nothing. What is asserted is only that none of them ADDS a
+    # candidate; the counts are printed because a filter that removes nothing
+    # on real bars is one to drop rather than keep as decoration.
+    for name in TOGGLES:
+        n_on = int(candidates(**{name: True}).sum())
+        check(f"{name} never adds a candidate "
+              f"({n_on} of {int(bare.sum())} survive on this fixture)",
+              n_on <= int(bare.sum()), f"{n_on} vs {int(bare.sum())}")
+
+    # The realised trade list is NOT nested, and that is the documented
+    # behaviour rather than a defect: declining an early trigger leaves the
+    # strategy flat for a later one it would have been holding through. This is
+    # pinned so nobody "fixes" the walk into nesting them, and so the module's
+    # correction note keeps a test behind it.
+    r_vwap, r_bare = realised(use_vwap=True), realised()
+    extra = int((r_vwap & ~r_bare).sum())
+    check("a filtered run can take entries the unfiltered run never did",
+          extra > 0, f"{extra} entries exist only in the filtered run")
+    check("...while its candidates remain a strict subset",
+          not bool((candidates(use_vwap=True) & ~bare).any()))
+    check("so trade COUNT is not the test of whether a filter binds",
+          True, f"realised {int(r_vwap.sum())} vs {int(r_bare.sum())}")
+
+    # Every realised entry must be one of its own configuration's candidates.
+    for combo in itertools.product([False, True], repeat=4):
+        on = dict(zip(TOGGLES, combo))
+        if (realised(**on) & ~candidates(**on)).any():
+            check(f"realised entries are always candidates ({on})", False)
+            break
+    else:
+        check("every realised entry is a candidate of its own configuration",
+              True)
+
+    # Each active filter must actually hold at every entry it allowed.
+    s_ = m._series(bars, 9, 21, 200)
+    e, _x, se, _sx = m.signal_fn(bars, **{**BASE, "use_trend": True,
+                                          "use_vwap": True, "use_rsi": True,
+                                          "use_volatility": True})
+    cl, vw, rsi = (bars["close"].to_numpy(), s_["vwap"].to_numpy(),
+                   s_["rsi"].to_numpy())
+    tr, atr, ama = (s_["trend"].to_numpy(), s_["atr"].to_numpy(),
+                    s_["atr_ma"].to_numpy())
+    longs, shorts = np.flatnonzero(e.to_numpy()), np.flatnonzero(se.to_numpy())
+    check("with all four on, every long entry satisfies all four conditions",
+          all(cl[i] > tr[i] and cl[i] > vw[i] and rsi[i] > 50.0
+              and atr[i] > ama[i] for i in longs), f"{len(longs)} longs")
+    check("and every short entry satisfies their mirrors",
+          all(cl[i] < tr[i] and cl[i] < vw[i] and rsi[i] < 50.0
+              and atr[i] > ama[i] for i in shorts), f"{len(shorts)} shorts")
+
+
+def test_toggle_warmup_and_dead_axis() -> None:
+    print("\n23. A disabled filter costs nothing, including its warm-up")
+    m = _load_etf()
+    bars = globex_bars(days=90, seed=11)
+    BASE = {"fast_period": 9, "slow_period": 21}
+    OFF = dict(use_trend=False, use_vwap=False, use_rsi=False,
+               use_volatility=False)
+
+    def first_entry(**over):
+        e, _x, se, _sx = m.signal_fn(bars, **{**BASE, **OFF, **over})
+        idx = np.flatnonzero(e.to_numpy() | se.to_numpy())
+        return int(idx[0]) if len(idx) else None
+
+    on = first_entry(use_trend=True, trend_period=400)
+    off = first_entry(use_trend=False, trend_period=400)
+    check("the trend filter delays the first entry past its EMA warm-up",
+          on is not None and off is not None and on > off, f"{off} → {on}")
+    check("...and switching it off does NOT inherit that 400-bar wait",
+          off < 400, f"first entry at bar {off}")
+
+    # `trend_period` is a dead axis with the filter off - the grid's declared
+    # cell count exceeds the number of distinct strategies because of it.
+    def sig(**over):
+        e, _x, se, _sx = m.signal_fn(bars, **{**BASE, **OFF, **over})
+        return e.to_numpy() | se.to_numpy()
+
+    check("with use_trend=False, trend_period 200 and 400 are identical",
+          bool((sig(use_trend=False, trend_period=200)
+                == sig(use_trend=False, trend_period=400)).all()))
+    check("with use_trend=True they differ, so the axis is live when used",
+          bool((sig(use_trend=True, trend_period=200)
+                != sig(use_trend=True, trend_period=400)).any()))
+
+    # RSI/volatility warm-ups are shorter than the trend's, so this checks the
+    # per-toggle assembly rather than one blanket condition.
+    check("switching only the volatility filter on delays the start too",
+          first_entry(use_volatility=True) >= off)
+
+
+def test_toggle_causality() -> None:
+    """No toggle combination lets a signal depend on a later bar."""
+    print("\n24. Causality holds for every toggle combination")
+    import itertools
+
+    m = _load_etf()
+    bars = globex_bars(days=60, seed=21)
+    CUT = 4000
+
+    # Deleting every bar after CUT must not change any signal before it. This
+    # catches lookahead the AST validator cannot see - a resample, a centred
+    # window, a groupby-transform over a whole session - because it tests the
+    # property directly rather than the syntax that usually causes it.
+    #
+    # The truncated frame's FINAL bar is excluded, and only that one.
+    # `_session_masks` marks the last bar of a frame as a session-flatten bar
+    # because it has no successor, which is correct - a position is never left
+    # open past the end of the data - and is a fact about the frame boundary
+    # rather than about the signals.
+    bad = []
+    for combo in itertools.product([False, True], repeat=4):
+        kw = dict(zip(("use_trend", "use_vwap", "use_rsi", "use_volatility"),
+                      combo))
+        full = [a.to_numpy()[:CUT - 1] for a in m.signal_fn(bars, **kw)]
+        trunc = [a.to_numpy()[:CUT - 1] for a in
+                 m.signal_fn(bars.iloc[:CUT].reset_index(drop=True), **kw)]
+        if not all(bool((f == t).all()) for f, t in zip(full, trunc)):
+            bad.append(kw)
+    check("all 16 toggle combinations: truncating the future changes no "
+          "earlier signal", not bad, str(bad[:2]))
+
+    # And the same for the indicator series the tear sheet draws, since a
+    # non-causal line under a causal signal is its own kind of wrong.
+    for name in ("fast", "slow", "trend", "vwap", "rsi", "atr", "atr_ma"):
+        a = m._series(bars, 9, 21, 200)[name].to_numpy()[:CUT]
+        b = m._series(bars.iloc[:CUT].reset_index(drop=True), 9, 21,
+                      200)[name].to_numpy()
+        check(f"{name} is unchanged when every later bar is deleted",
+              bool(np.allclose(a, b, equal_nan=True)))
+
+
+def test_toggle_validation() -> None:
+    print("\n25. Toggles are booleans, not truthy values")
+    m = _load_etf()
+    for bad in ("false", "False", 0, 1, 1.0, None, []):
+        ok, _msg = raises(lambda b=bad: m.make_signal_fn(use_trend=b),
+                          ValueError)
+        check(f"use_trend={bad!r} is refused rather than coerced", ok)
+    for name in ("use_vwap", "use_rsi", "use_volatility"):
+        ok, msg = raises(lambda n=name: m.make_signal_fn(**{n: "false"}),
+                         ValueError)
+        check(f"{name} is checked too, and the error names it",
+              ok and name in msg, msg[:60])
+    check("np.bool_ is accepted - the grid round-trips through numpy",
+          m.make_signal_fn(use_trend=np.bool_(True)) is not None)
 
 
 def test_strategy_declarations() -> None:
-    print("\n23. The module's four declarations, after the refactor")
+    print("\n26. The module's four declarations, after the refactor")
     from agents.tier3_workers import load_strategy
     from backtest.scan import expand_grid
 
@@ -1034,17 +1214,34 @@ def test_strategy_declarations() -> None:
 
     check("DEFAULT_PARAMS matches the specification block",
           m.DEFAULT_PARAMS == {"fast_period": 9, "slow_period": 21,
-                               "trend_period": 200, "sl_atr_mult": 1.5,
+                               "trend_period": 200, "use_trend": True,
+                               "use_vwap": True, "use_rsi": False,
+                               "use_volatility": False, "sl_atr_mult": 1.5,
                                "tp_atr_mult": 2.0, "trailing": False},
           str(m.DEFAULT_PARAMS))
-    check("PARAM_GRID is the declared 864 cells",
-          len(expand_grid(m.PARAM_GRID)) == 864,
-          str(len(expand_grid(m.PARAM_GRID))))
+    combos = expand_grid(m.PARAM_GRID)
+    check("PARAM_GRID is the declared 1,296 cells", len(combos) == 1296,
+          str(len(combos)))
     check("the grid's axes are the specified ones",
-          m.PARAM_GRID["trend_period"] == [200, 400, 800]
-          and m.PARAM_GRID["sl_atr_mult"] == [0.8, 1.0, 1.5, 2.0]
-          and m.PARAM_GRID["tp_atr_mult"] == [1.5, 2.0, 3.0, 4.0]
+          m.PARAM_GRID["trend_period"] == [200, 400]
+          and m.PARAM_GRID["use_trend"] == [True, False]
+          and m.PARAM_GRID["use_vwap"] == [True, False]
+          and m.PARAM_GRID["use_rsi"] == [False]
+          and m.PARAM_GRID["use_volatility"] == [False]
+          and m.PARAM_GRID["sl_atr_mult"] == [1.0, 1.5, 2.0]
+          and m.PARAM_GRID["tp_atr_mult"] == [1.5, 2.0, 3.0]
           and m.PARAM_GRID["trailing"] == [False, True])
+    # `trend_period` is dead wherever use_trend is False, so the declared cell
+    # count overstates the number of distinct strategies. Both numbers are
+    # pinned: the docstring quotes them, and a grid edit that changes one
+    # without the other should fail here rather than in a leaderboard.
+    distinct = {tuple(sorted((k, v) for k, v in c.items()
+                             if not (k == "trend_period" and not c["use_trend"])))
+                for c in combos}
+    check("1,296 declared cells are 972 distinct signal configurations",
+          len(distinct) == 972, str(len(distinct)))
+    check("...so variants_tested OVERSTATES the search, the safe direction",
+          len(combos) > len(distinct))
 
     fn, info = load_strategy(path, {})
     check("load_strategy binds the new defaults",
@@ -1056,7 +1253,18 @@ def test_strategy_declarations() -> None:
           all(len(s_) == len(bars) and s_.dtype == bool for s_ in out))
 
     ind = m.indicators(bars)
-    check("indicators draws the session VWAP", "Session VWAP" in ind)
+    check("indicators draws the session VWAP when use_vwap is on",
+          "Session VWAP" in ind)
+    # A line the entries did not respect makes the trades that cross it look
+    # like bugs. Omitted, not greyed out.
+    off = m.indicators(bars, use_trend=False, use_vwap=False)
+    check("no Trend EMA line when use_trend is off",
+          not any("Trend EMA" in k for k in off), str(list(off)))
+    check("no VWAP line when use_vwap is off",
+          "Session VWAP" not in off, str(list(off)))
+    check("the trigger EMAs and the stop are always drawn",
+          any("Fast EMA" in k for k in off) and any("Slow EMA" in k for k in off)
+          and any("Stop" in k for k in off), str(list(off)))
     check("every indicator series is the full length of the frame",
           all(len(v) == len(bars) for v in ind.values()),
           str({k: len(v) for k, v in ind.items()}))
@@ -1066,6 +1274,10 @@ def test_strategy_declarations() -> None:
     logic = m.LOGIC
     check("LOGIC names VWAP and RSI in the entry sentence",
           "VWAP" in logic["entry"] and "RSI" in logic["entry"])
+    check("LOGIC carries a slot for every toggle, so the card states which "
+          "filters ran",
+          all(f"{{{t}}}" in logic["entry"]
+              for t in ("use_trend", "use_vwap", "use_rsi", "use_volatility")))
     check("LOGIC's slots are all bindable parameters",
           all(f"{{{k}}}" not in logic["entry"] + logic["exit"]
               or k in m.DEFAULT_PARAMS
@@ -1078,7 +1290,7 @@ def test_strategy_declarations() -> None:
 
 
 def test_multi_timeframe_cli() -> None:
-    print("\n24. Multi-timeframe scanning")
+    print("\n27. Multi-timeframe scanning")
     from backtest.run import parse_timeframes
 
     check("a comma-separated list parses in the order given",
@@ -1098,7 +1310,7 @@ def test_multi_timeframe_cli() -> None:
 
 
 def test_multi_timeframe_handoff(tmp: Path) -> None:
-    print("\n25. Multi-timeframe handoff to stage 3")
+    print("\n28. Multi-timeframe handoff to stage 3")
     from backtest.audit_gates import discover_symbols, load_params
     from backtest.scan import write_best_params
 
@@ -1220,7 +1432,10 @@ def main() -> int:
         test_filter_config_kwargs()
         test_session_vwap()
         test_rsi()
-        test_confluence_is_subtractive()
+        test_filter_toggles()
+        test_toggle_warmup_and_dead_axis()
+        test_toggle_causality()
+        test_toggle_validation()
         test_strategy_declarations()
         test_multi_timeframe_cli()
         test_multi_timeframe_handoff(tmp)

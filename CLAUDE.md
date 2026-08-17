@@ -743,6 +743,15 @@ unrecorded:
   four trading days on 30m. Sweeping timeframes tests different strategies,
   not one strategy at several resolutions; the claim is the `(tf, params)`
   pair.
+- **A filter subtracts CANDIDATES, not trades.** `ema_trend_filter`'s
+  confluence conditions are boolean toggles, and switching one on can only
+  remove eligible triggers. It cannot only remove TRADES: the walk holds one
+  position at a time and ignores a trigger arriving while one is open, so
+  declining an early trigger leaves the strategy flat for a later one it would
+  have been holding through. Measured on a synthetic fixture, enabling
+  `use_vwap` removed 17 candidates and ADDED 11 realised entries. Never use a
+  trade count to decide whether a filter binds — compare candidates or the
+  trade list.
 - **Stage 1's `surviving` list is a UNION** when several timeframes ran, and
   the file says so (`surviving_is_union_across_timeframes`). `by_timeframe` is
   where "did it survive at 15m" is answered.

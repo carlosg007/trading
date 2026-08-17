@@ -577,17 +577,22 @@ TP_NONE_SEARCHED = {
 # N draws from one sample of bars, and that maximum climbs with N whether or
 # not anything in the market has changed.
 #
-# `ema_trend_filter` was widened to 864 cells on 2026-08-17 when its grid was
-# specified with three trend lengths, four stops, four targets and both
-# trailing settings. That is an EXEMPTION somebody wrote down, not a relaxation
+# `ema_trend_filter` was widened to 864 cells on 2026-08-17, then to 1,296 the
+# same day when its four confluence conditions became toggles and two of them
+# joined the sweep. That is an EXEMPTION somebody wrote down, not a relaxation
 # of the rule: it fails in both directions, so shrinking the grid back without
 # updating this line is also a failure, and every other module still has to
-# clear 200. What makes 864 reportable rather than merely permitted is that
+# clear 200. What makes 1,296 reportable rather than merely permitted is that
 # `variants_tested` travels onto every report, leaderboard row and stage-3
 # audit, and `backtest/scan.py` prints the cell count before it sweeps.
+#
+# Note the declared cells exceed the DISTINCT strategies: `trend_period` is a
+# dead axis wherever `use_trend` is False, so 1,296 cells are 972 distinct
+# signal configurations. `tests/test_pipeline_filters.py` pins both numbers.
+# The cap is on the declared count, which is what the scanner actually fits.
 MAX_GRID_CELLS = {
     "ema_crossover": 200,
-    "ema_trend_filter": 864,
+    "ema_trend_filter": 1296,
 }
 
 
