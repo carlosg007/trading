@@ -884,7 +884,7 @@ Recalibrated 2026-08-16 for single-strategy account governance.
 |---|---|---|
 | **1 · In-Sample** | Sharpe | *informational — not a pass/fail condition* |
 | | Profit factor | >= 1.00 |
-| | Trades | >= 100, scaled to >= 30 per backtest year |
+| | Trades | >= 100, scaled to >= 30 per backtest year, capped at 200 |
 | | Max drawdown | <= 12.0 % |
 | **2 · Robustness** | WFO efficiency | >= 0.50 |
 | | Monte Carlo 95% max DD | <= 18.0 % |
@@ -901,11 +901,16 @@ demoted rather than silently dropped; `_roll_up` skips `INFO` criteria, and
 anything that filters a gate's `checks` on `status != PASS` must skip them too
 (see `scan.py`'s `gate1_shortfalls`).
 
-**The trade count is a floor that scales.** 100 is the minimum for any slice,
-however short — an out-of-sample window with 40 trades cannot separate an edge
-from a run of luck. Past ~3.3 years the per-year rate binds instead: 120
-trades over 16 years is seven a year, and every ratio computed from it is
-noise wearing two decimal places. Years are counted in SESSIONS
+**The trade count is a floor that scales, and a cap that stops it.** 100 is the
+minimum for any slice, however short — an out-of-sample window with 40 trades
+cannot separate an edge from a run of luck. Past ~3.3 years the per-year rate
+binds instead: 120 trades over 16 years is seven a year, and every ratio
+computed from it is noise wearing two decimal places. Past ~6.7 years the
+`max_required_trades` ceiling (200, added 2026-08-17) binds and the requirement
+stops rising: unbounded, the rate demanded 503 trades of a 16.7-year lake run,
+which stops being a significance bar — 200 trades already settles that — and
+becomes a selectivity bar that fails a Version B whose ML filter did its job
+and stood most of the baseline's trades down. Years are counted in SESSIONS
 (`metrics_basis.n_days` / 252, falling back to `n_days`), the same way
 `annualized_return_pct` counts them; a metrics dict carrying no day count is
 held to the bare 100 and the criterion's note says so.

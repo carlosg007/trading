@@ -497,9 +497,11 @@ GATE_THRESHOLDS: dict[str, dict[str, float]] = {
     # research equity curve).
     #
     # `min_trades` is a FLOOR, not the whole criterion - `_required_trades`
-    # scales it by the length of the sample at `min_trades_per_year`.
+    # scales it by the length of the sample at `min_trades_per_year`, and
+    # `max_required_trades` is the CEILING that scaling stops at.
     "gate1": {"min_profit_factor": 1.00, "min_trades": 100,
-              "min_trades_per_year": 30, "max_drawdown_pct": 12.0},
+              "max_required_trades": 200, "min_trades_per_year": 30,
+              "max_drawdown_pct": 12.0},
     "gate2": {"min_wfo_efficiency": 0.50, "max_mc_drawdown_pct": 18.0},
     # Retention = holdout metric / in-sample metric. 0.80 is "no more than 20%
     # degradation", expressed as a ratio because that is what gets computed.
@@ -675,22 +677,36 @@ def _required_trades(metrics: dict, thresholds: dict) -> tuple[float, str | None
     seven trades a year, and every ratio computed from it is noise wearing two
     decimal places.
 
+    `max_required_trades` (200) is a CEILING the scaling stops at, added
+    2026-08-17. Unbounded, the per-year rate demanded 503 trades of a
+    16.7-year lake run, which is not a significance bar - 200 trades already
+    settles whether a sample is large enough to measure - but a selectivity
+    bar, and the thing it rejected hardest was a Version B whose ML filter did
+    its job and stood most of the baseline's trades down. A filter that
+    improves every remaining trade should not fail Gate 1 for taking fewer of
+    them.
+
     Where the sample length is unknown the floor is used alone and the note
     says so, rather than assuming a generous span and quietly lowering the bar.
-    The scaled figure is rounded UP to a whole trade so the number displayed in
+    The scaled figure is rounded to a whole trade so the number displayed in
     the 'required' column is the number actually compared against.
     """
     floor = float(thresholds["min_trades"])
+    ceiling = float(thresholds.get("max_required_trades", math.inf))
     per_year = float(thresholds.get("min_trades_per_year", 0.0))
     years = _sample_years(metrics)
     if math.isnan(years) or per_year <= 0:
         return floor, (f"sample length unknown, so the {floor:,.0f}-trade floor "
                        f"is applied without scaling")
-    scaled = math.ceil(per_year * years)
+    scaled = int(round(per_year * years))
+    required = min(ceiling, max(floor, float(scaled)))
     if scaled <= floor:
-        return floor, (f"{years:.2f} years at {per_year:,.0f} trades/yr is "
-                       f"{scaled:,d}; the {floor:,.0f}-trade floor binds")
-    return float(scaled), (f"{years:.2f} years at {per_year:,.0f} trades/yr")
+        return required, (f"{years:.2f} years at {per_year:,.0f} trades/yr is "
+                          f"{scaled:,d}; the {floor:,.0f}-trade floor binds")
+    if scaled >= ceiling:
+        return required, (f"{years:.2f} years at {per_year:,.0f} trades/yr is "
+                          f"{scaled:,d}; the {ceiling:,.0f}-trade cap binds")
+    return required, (f"{years:.2f} years at {per_year:,.0f} trades/yr")
 
 
 def audit_acceptance_gates(metrics: dict,

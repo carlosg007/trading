@@ -193,6 +193,8 @@ def test_thresholds() -> None:
     check("Gate 1 trade floor >= 100", g1["min_trades"] == 100)
     check("Gate 1 scales at 30 trades per backtest year",
           g1["min_trades_per_year"] == 30)
+    check("Gate 1 caps the scaled requirement at 200 trades",
+          g1["max_required_trades"] == 200)
     check("Gate 1 max drawdown <= 12.0%", g1["max_drawdown_pct"] == 12.0)
     check("Gate 2 WFO efficiency >= 0.50", g2["min_wfo_efficiency"] == 0.50)
     check("Gate 2 MC 95% max DD <= 18.0%", g2["max_mc_drawdown_pct"] == 18.0)
@@ -210,11 +212,11 @@ def test_gate1() -> None:
     check("a clearing run passes all three gates",
           full["status"] == PASS and full["passed"], full["status"])
 
-    # clearing_metrics carries n_days=1500 -> 5.95 years -> ceil(30 * 5.95)
-    # = 179 trades required, which is what the boundary cases below are
-    # written against. Recomputed here rather than hard-coded, so the fixture
-    # and the bar cannot drift apart silently.
-    required = int(math.ceil(30 * 1_500 / 252))
+    # clearing_metrics carries n_days=1500 -> 5.95 years -> round(30 * 5.95)
+    # = 179 trades required (between the 100 floor and the 200 cap), which is
+    # what the boundary cases below are written against. Recomputed here rather
+    # than hard-coded, so the fixture and the bar cannot drift apart silently.
+    required = min(200, max(100, int(round(30 * 1_500 / 252))))
     for label, over in (("profit factor 0.99", {"profit_factor": 0.99}),
                         (f"{required - 1} trades", {"trade_count": required - 1}),
                         ("12.01% drawdown", {"max_drawdown_pct": -12.01})):
@@ -275,8 +277,8 @@ def test_gate1_sharpe_is_informational() -> None:
 
 
 def test_gate1_trade_count_scales() -> None:
-    """The trade bar is a 100 floor that scales at 30 per backtest year."""
-    print("\nGate 1 — the trade count scales with the sample")
+    """A 100 floor, 30 per backtest year in between, and a 200 cap."""
+    print("\nGate 1 — the trade count scales with the sample, and stops")
 
     def bar(**over) -> tuple[float, int]:
         m = clearing_metrics(**over)
@@ -290,15 +292,32 @@ def test_gate1_trade_count_scales() -> None:
     check("a 1-year slice is held to the 100-trade floor, not to 30",
           short == 100, f"{short:g}")
 
-    # A 16-year lake run: 30/yr binds and the floor is nowhere near enough.
-    long_bar, _ = bar(n_days=16 * 252)
-    check("a 16-year run must produce 480 trades, not 100",
-          long_bar == 480, f"{long_bar:g}")
+    # 2 years at 30/yr is 60 - still under the floor, which is the point of
+    # having one.
+    two_yr, _ = bar(n_days=2 * 252)
+    check("a 2-year slice is held to the 100-trade floor, not to 60",
+          two_yr == 100, f"{two_yr:g}")
 
-    # 120 trades over 16 years is seven a year. The old flat floor would have
-    # been the only thing standing between that and a Gate 1 pass.
+    # 5 years is the band where neither end binds and the rate is the bar.
+    five_yr, _ = bar(n_days=5 * 252)
+    check("a 5-year run must produce 150 trades (30/yr, unbounded)",
+          five_yr == 150, f"{five_yr:g}")
+
+    # A 10-year lifecycle: 30/yr wants 300, and the cap stops it at 200.
+    ten_yr, _ = bar(n_days=10 * 252)
+    check("a 10-year run is capped at 200 trades, not 300",
+          ten_yr == 200, f"{ten_yr:g}")
+
+    # The full lake: 16.7 years at 30/yr is 501, which is a selectivity bar
+    # rather than a significance one. 200 is where the cap holds it.
+    full, _ = bar(n_days=int(16.7 * 252))
+    check("a 16.7-year run is capped at 200 trades, not 503",
+          full == 200, f"{full:g}")
+
+    # 120 trades over 16 years is seven a year. The cap does not rescue it -
+    # capping the requirement at 200 is not the same as lowering it to 100.
     thin, status = bar(n_days=16 * 252, trade_count=120)
-    check("120 trades over 16 years fails the scaled bar",
+    check("120 trades over 16 years still fails the capped bar",
           status == FAIL, f"required {thin:g}")
 
     unknown, _ = bar(n_days=0)
@@ -315,12 +334,12 @@ def test_gate1_trade_count_scales() -> None:
     # metrics_basis is what the ratios were sampled on, so it wins over the
     # equity curve's own length when the two disagree.
     basis = clearing_metrics(n_days=252)
-    basis["metrics_basis"] = {"frequency": "daily_close", "n_days": 10 * 252}
+    basis["metrics_basis"] = {"frequency": "daily_close", "n_days": 4 * 252}
     b1 = audit_acceptance_gates(basis, FULL_ROBUSTNESS,
                                 {"sharpe": 1.45})["gates"]["gate1"]
     check("metrics_basis.n_days is preferred over the fallback n_days",
           next(c for c in b1["checks"]
-               if c["label"] == "Trades")["threshold"] == 300)
+               if c["label"] == "Trades")["threshold"] == 120)
 
 
 # --------------------------------------------------------------------------
