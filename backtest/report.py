@@ -477,12 +477,35 @@ def regime_join(yearly: pd.DataFrame,
 # identical numbers - a scorecard where the two columns were scored on
 # different bars is worse than no scorecard.
 GATE_THRESHOLDS: dict[str, dict[str, float]] = {
-    "gate1": {"min_sharpe": 1.20, "min_profit_factor": 1.50,
-              "min_trades": 200, "max_drawdown_pct": 15.0},
+    # Gate 1 recalibrated 2026-08-16 for single-strategy account governance.
+    #
+    # Sharpe is NOT a Gate 1 criterion. It is still computed on daily closes,
+    # still printed on every scorecard and tear sheet, and still the metric
+    # Gate 3 measures retention on - it is simply no longer a pass/fail
+    # condition here. A Sharpe floor rejects a strategy that makes money after
+    # costs and never draws down past 12% for having a lumpy return path,
+    # which is a complaint about the shape of the equity curve rather than
+    # about whether there is an edge. It stays on the Gate 1 table as an
+    # INFORMATIONAL row so a reader who remembers a 1.20 threshold can see it
+    # was demoted rather than silently dropped.
+    #
+    # What is left is the pair that a single account actually lives or dies
+    # on: positive gross expectancy AFTER costs (profit factor >= 1.00, which
+    # is the break-even line, not a comfort margin), and capital preservation
+    # (drawdown <= 12%, tighter than the old 15% because the survivable
+    # drawdown on a governed account is smaller than the survivable one on a
+    # research equity curve).
+    #
+    # `min_trades` is a FLOOR, not the whole criterion - `_required_trades`
+    # scales it by the length of the sample at `min_trades_per_year`.
+    "gate1": {"min_profit_factor": 1.00, "min_trades": 100,
+              "min_trades_per_year": 30, "max_drawdown_pct": 12.0},
     "gate2": {"min_wfo_efficiency": 0.50, "max_mc_drawdown_pct": 18.0},
-    # Retention = holdout Sharpe / in-sample Sharpe. 0.85 is "no more than 15%
+    # Retention = holdout metric / in-sample metric. 0.80 is "no more than 20%
     # degradation", expressed as a ratio because that is what gets computed.
-    "gate3": {"min_sharpe_retention": 0.85},
+    # Measured on Sharpe where the in-sample Sharpe is positive, and on profit
+    # factor where it is not - see `audit_acceptance_gates`.
+    "gate3": {"min_retention": 0.80},
 }
 
 GATE_NAMES = {
@@ -494,6 +517,10 @@ GATE_NAMES = {
 PASS = "PASS"
 FAIL = "FAIL"
 NOT_EVALUATED = "NOT EVALUATED"
+# Reported, never scored. A criterion carrying this status is displayed on the
+# scorecard and the tear sheet and is skipped by `_roll_up` - it can neither
+# pass a gate nor fail one.
+INFO = "INFO"
 
 
 def _numeric(value) -> float:
@@ -524,9 +551,9 @@ def _pick(source, *keys) -> float:
     return float("nan")
 
 
-def _criterion(label: str, value: float, threshold: float, direction: str,
+def _criterion(label: str, value: float, threshold: float | None, direction: str,
                unit: str = "", note: str | None = None,
-               fmt: str = "{:.2f}") -> dict:
+               fmt: str = "{:.2f}", informational: bool = False) -> dict:
     """
     Score one criterion.
 
@@ -536,13 +563,25 @@ def _criterion(label: str, value: float, threshold: float, direction: str,
     them is how an unmeasured gate gets reported as a cleared one. Neither is
     a pass, so the distinction never flatters a result.
 
+    `informational=True` scores INFO and takes no threshold: the number is
+    carried onto the scorecard and the tear sheet and can never pass or fail
+    the gate. It is how Sharpe stays visible on Gate 1 without being a Gate 1
+    condition. Deleting the row instead would leave a reader who remembers a
+    Sharpe threshold unable to tell whether it was demoted or merely not
+    measured this run - which are opposite readings of the same blank space.
+
     Drawdowns are compared on magnitude. The engine reports `max_dd_pct` as a
     negative number and `report.drawdown_stats` agrees, but a caller handing in
     a positive 12.0 means the same drawdown - comparing the raw sign would let
-    a 40% drawdown clear a 15% limit because -40 <= 15.
+    a 40% drawdown clear a 12% limit because -40 <= 12.
     """
     if direction not in ("min", "max"):
         raise ValueError(f"direction must be 'min' or 'max', got {direction!r}")
+
+    if informational:
+        return {"label": label, "value": value, "threshold": None,
+                "direction": direction, "unit": unit, "status": INFO,
+                "note": note, "fmt": fmt}
 
     if math.isnan(value):
         status = NOT_EVALUATED
@@ -558,7 +597,11 @@ def _criterion(label: str, value: float, threshold: float, direction: str,
 
 def criterion_text(check: dict) -> tuple[str, str]:
     """
-    `(measured, required)` as display strings, e.g. ('11.20%', '<= 15%').
+    `(measured, required)` as display strings, e.g. ('11.20%', '<= 12%').
+
+    An informational criterion has no threshold and reports 'informational' in
+    place of one, so no reader can mistake a number that is merely on the
+    table for a bar the run had to clear.
 
     The value goes through `_numeric` rather than being used raw because an
     audit is routinely read back out of JSON, and a NaN written to
@@ -570,17 +613,84 @@ def criterion_text(check: dict) -> tuple[str, str]:
     unit = check.get("unit", "")
     value = _numeric(check.get("value"))
     measured = "n/a" if math.isnan(value) else fmt.format(value) + unit
+    threshold = _numeric(check.get("threshold"))
+    if check.get("status") == INFO or math.isnan(threshold):
+        return measured, "informational"
     op = ">=" if check.get("direction") == "min" else "<="
-    return measured, f"{op} {_numeric(check.get('threshold')):g}{unit}"
+    return measured, f"{op} {threshold:g}{unit}"
 
 
 def _roll_up(checks: list[dict]) -> str:
-    """A gate is only PASS when every one of its criteria passed."""
-    if any(c["status"] == FAIL for c in checks):
+    """
+    A gate is only PASS when every one of its SCORED criteria passed.
+
+    Informational criteria are skipped entirely - they carry no threshold, so
+    there is nothing for them to have passed or failed. A gate made up only of
+    informational rows is NOT EVALUATED, because nothing about it was tested.
+    """
+    scored = [c for c in checks if c["status"] != INFO]
+    if not scored:
+        return NOT_EVALUATED
+    if any(c["status"] == FAIL for c in scored):
         return FAIL
-    if any(c["status"] == NOT_EVALUATED for c in checks):
+    if any(c["status"] == NOT_EVALUATED for c in scored):
         return NOT_EVALUATED
     return PASS
+
+
+def _sample_years(metrics: dict) -> float:
+    """
+    How many years of bars the metrics were measured over. NaN if unknown.
+
+    Counted in SESSIONS (`n_days / TRADING_DAYS`), the same way
+    `annualized_return_pct` counts them, so the trade-count bar and the CAGR
+    beside it are denominated in the same year. A calendar span would make a
+    strategy that only trades one session in five look like it covered more
+    ground than it did.
+
+    `metrics_basis.n_days` is the count the ratios were actually sampled on
+    and is preferred; `n_days` is the equity curve's own length and is the
+    fallback for a metrics dict assembled by hand.
+    """
+    basis = metrics.get("metrics_basis") if isinstance(metrics, dict) else None
+    n_days = _pick(basis, "n_days") if isinstance(basis, dict) else float("nan")
+    if math.isnan(n_days) or n_days <= 0:
+        n_days = _pick(metrics, "n_days")
+    if math.isnan(n_days) or n_days <= 0:
+        return float("nan")
+    return float(n_days) / TRADING_DAYS
+
+
+def _required_trades(metrics: dict, thresholds: dict) -> tuple[float, str | None]:
+    """
+    Gate 1's trade-count bar, scaled to the length of the sample.
+
+    Returns `(required, note)`.
+
+    `min_trades` (100) is a FLOOR that every slice has to clear, however short
+    it is - an out-of-sample window with 40 trades in it cannot separate an
+    edge from a run of luck no matter how few months it covers. Above roughly
+    3.3 years the per-year rate binds instead: a 16-year backtest that
+    produced 120 trades is not comfortably clear of a 100-trade floor, it is
+    seven trades a year, and every ratio computed from it is noise wearing two
+    decimal places.
+
+    Where the sample length is unknown the floor is used alone and the note
+    says so, rather than assuming a generous span and quietly lowering the bar.
+    The scaled figure is rounded UP to a whole trade so the number displayed in
+    the 'required' column is the number actually compared against.
+    """
+    floor = float(thresholds["min_trades"])
+    per_year = float(thresholds.get("min_trades_per_year", 0.0))
+    years = _sample_years(metrics)
+    if math.isnan(years) or per_year <= 0:
+        return floor, (f"sample length unknown, so the {floor:,.0f}-trade floor "
+                       f"is applied without scaling")
+    scaled = math.ceil(per_year * years)
+    if scaled <= floor:
+        return floor, (f"{years:.2f} years at {per_year:,.0f} trades/yr is "
+                       f"{scaled:,d}; the {floor:,.0f}-trade floor binds")
+    return float(scaled), (f"{years:.2f} years at {per_year:,.0f} trades/yr")
 
 
 def audit_acceptance_gates(metrics: dict,
@@ -599,7 +709,10 @@ def audit_acceptance_gates(metrics: dict,
     ----------
     metrics
         The in-sample metrics dict `agents.tier3_workers.summarize_result`
-        returns: `sharpe`, `profit_factor`, `trade_count`, `max_drawdown_pct`.
+        returns: `sharpe`, `profit_factor`, `trade_count`, `max_drawdown_pct`,
+        and `n_days` / `metrics_basis.n_days` - the last of which sets how many
+        trades Gate 1 demands (`_required_trades`). A metrics dict with no day
+        count is scored against the unscaled 100-trade floor.
     robustness
         Optional. `{"wfo": <run_walk_forward_analysis result or ratio>,
         "monte_carlo": <run_monte_carlo_simulation result or drawdown pct>}`.
@@ -608,7 +721,9 @@ def audit_acceptance_gates(metrics: dict,
     holdout
         Optional. The metrics dict from the held-back final 3 years, or
         `{"sharpe": x}`, or a bare Sharpe. Gate 3 compares it against the
-        in-sample Sharpe in `metrics`.
+        in-sample Sharpe in `metrics` - or, where that ratio is undefined,
+        against the in-sample profit factor. Pass the full metrics dict rather
+        than a bare Sharpe when you want that fallback available.
 
     Returns
     -------
@@ -624,12 +739,15 @@ def audit_acceptance_gates(metrics: dict,
                   GATE_THRESHOLDS["gate3"])
 
     is_sharpe = _pick(metrics, "sharpe", "sharpe_ratio")
+    is_pf = _pick(metrics, "profit_factor")
+    min_trades, trades_note = _required_trades(metrics or {}, t1)
     gate1 = [
-        _criterion("Sharpe", is_sharpe, t1["min_sharpe"], "min"),
-        _criterion("Profit factor", _pick(metrics, "profit_factor"),
-                   t1["min_profit_factor"], "min"),
+        # Reported, not gated. See GATE_THRESHOLDS.
+        _criterion("Sharpe (not gated)", is_sharpe, None, "min",
+                   informational=True),
+        _criterion("Profit factor", is_pf, t1["min_profit_factor"], "min"),
         _criterion("Trades", _pick(metrics, "trade_count", "n_trades"),
-                   t1["min_trades"], "min", fmt="{:,.0f}"),
+                   min_trades, "min", fmt="{:,.0f}", note=trades_note),
         _criterion("Max drawdown", abs(_pick(metrics, "max_drawdown_pct", "max_dd_pct")),
                    t1["max_drawdown_pct"], "max", unit="%"),
     ]
@@ -653,21 +771,49 @@ def audit_acceptance_gates(metrics: dict,
                    t2["max_mc_drawdown_pct"], "max", unit="%"),
     ]
 
+    # Gate 3 measures retention on Sharpe where the in-sample Sharpe is
+    # positive, and falls back to profit factor where it is not. The fallback
+    # exists because Sharpe is no longer a Gate 1 condition: a strategy with a
+    # negative in-sample Sharpe can now reach Gate 3, and its retention ratio
+    # is undefined - two negative Sharpes divide to a healthy-looking positive
+    # number. Profit factor is the metric Gate 1 does bind on and it is
+    # strictly positive, so it is the one that still means something there.
+    # The criterion's LABEL names whichever metric was used; the two are never
+    # reported under one heading.
     oos_sharpe = _pick(holdout, "sharpe", "sharpe_ratio", "holdout_sharpe")
-    retention, retention_note = float("nan"), None
-    if not math.isnan(oos_sharpe) and not math.isnan(is_sharpe):
-        if is_sharpe > 0:
-            retention = oos_sharpe / is_sharpe
+    # Only from a mapping. `_pick` reads a bare scalar as the value of
+    # whatever key it was asked for, and the documented bare form of `holdout`
+    # is a SHARPE - taking 1.80 as a profit factor of 1.80 would score Gate 3
+    # on a number the caller never supplied.
+    oos_pf = _pick(holdout, "profit_factor") if isinstance(holdout, dict) \
+        else float("nan")
+    sharpe_retention = float("nan")
+    if not math.isnan(oos_sharpe) and not math.isnan(is_sharpe) and is_sharpe > 0:
+        sharpe_retention = oos_sharpe / is_sharpe
+
+    retention, retention_note = sharpe_retention, None
+    retention_metric = "sharpe" if not math.isnan(sharpe_retention) else None
+    retention_label = "Holdout Sharpe retention"
+    if retention_metric is None:
+        if not math.isnan(is_sharpe) and is_sharpe <= 0:
+            undefined = (f"in-sample Sharpe is {is_sharpe:.2f} (<= 0), so "
+                         f"Sharpe retention is undefined, not passing")
+        elif math.isnan(oos_sharpe) and not math.isnan(is_sharpe):
+            undefined = "no holdout Sharpe supplied, so Sharpe retention is undefined"
+        elif math.isnan(is_sharpe):
+            undefined = "no in-sample Sharpe supplied, so Sharpe retention is undefined"
         else:
-            # Two negative Sharpes divide to a healthy-looking positive ratio.
-            # The ratio is undefined here, and saying so beats reporting 1.4x
-            # retention on a strategy that lost money in both windows.
-            retention_note = (f"in-sample Sharpe is {is_sharpe:.2f} (<= 0), so "
-                              f"retention is undefined, not passing")
+            undefined = None
+        if not math.isnan(oos_pf) and not math.isnan(is_pf) and is_pf > 0:
+            retention, retention_metric = oos_pf / is_pf, "profit_factor"
+            retention_label = "Holdout profit-factor retention"
+            retention_note = (f"{undefined}; measured on profit factor instead"
+                              if undefined else "measured on profit factor")
+        else:
+            retention_note = undefined
     gate3 = [
-        _criterion("Holdout Sharpe retention", retention,
-                   t3["min_sharpe_retention"], "min", unit="x",
-                   note=retention_note),
+        _criterion(retention_label, retention, t3["min_retention"], "min",
+                   unit="x", note=retention_note),
     ]
 
     gates = {
@@ -692,7 +838,13 @@ def audit_acceptance_gates(metrics: dict,
         "thresholds": GATE_THRESHOLDS,
         "holdout_sharpe": oos_sharpe,
         "in_sample_sharpe": is_sharpe,
-        "sharpe_retention": retention,
+        # `sharpe_retention` stays Sharpe-only and is NaN when that ratio is
+        # undefined - a reader asking for the Sharpe retention must never be
+        # handed a profit-factor ratio under that name. `retention` is what
+        # Gate 3 actually scored and `retention_metric` says which it was.
+        "sharpe_retention": sharpe_retention,
+        "retention": retention,
+        "retention_metric": retention_metric,
     }
 
 
@@ -839,8 +991,10 @@ def format_dual_scorecard(metrics_a: dict, metrics_b: dict | None,
             add(f"    {gate['name']:<32}{gate['status']}")
             for c in gate["checks"]:
                 measured, required = criterion_text(c)
+                # 15 wide: 'informational' is 13 characters, and a required
+                # column that runs into the status column reads as one word.
                 add(f"      {c['label']:<28}{measured:>10}  "
-                    f"{required:<12}{c['status']}")
+                    f"{required:<15}{c['status']}")
                 if c.get("note"):
                     add(f"        ! {c['note']}")
 

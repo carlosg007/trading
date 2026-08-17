@@ -83,7 +83,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from backtest.report import (FAIL, NOT_EVALUATED, PASS, criterion_text,
+from backtest.report import (FAIL, INFO, NOT_EVALUATED, PASS, criterion_text,
                              drawdown_series, drawdown_stats, equity_curve,
                              monthly_table, yearly_table)
 
@@ -415,7 +415,10 @@ def build_inspector(bars: pd.DataFrame | None,
 # Sections
 # --------------------------------------------------------------------------
 def _badge(status: str) -> str:
-    cls = {PASS: "pass", FAIL: "fail"}.get(status, "unknown")
+    # INFO gets its own muted badge rather than the amber NOT-EVALUATED one:
+    # a reported-not-gated row is not an outstanding measurement, and colouring
+    # it as one puts a warning next to a number nothing was ever waiting on.
+    cls = {PASS: "pass", FAIL: "fail", INFO: "info"}.get(status, "unknown")
     return f'<span class="badge {cls}">{_esc(status)}</span>'
 
 
@@ -984,6 +987,7 @@ table.grid tr:last-child td { border-bottom:none; }
 .badge.pass { background:rgba(61,220,132,0.16); color:var(--pos); }
 .badge.fail { background:rgba(255,107,107,0.16); color:var(--neg); }
 .badge.unknown { background:rgba(255,180,84,0.16); color:var(--warn); }
+.badge.info { background:rgba(125,135,148,0.16); color:var(--ink-dim); }
 .overall { float:right; text-transform:none; letter-spacing:0; }
 .warn { color:var(--warn); background:rgba(255,180,84,0.08);
   border-left:3px solid var(--warn); padding:10px 12px; border-radius:0 6px 6px 0;

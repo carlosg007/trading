@@ -878,15 +878,47 @@ promoted without them.
 **1. The gates.** `run_dual_version_backtest` calls `audit_acceptance_gates`
 for A and B and attaches the result as `gate_audit` on each version.
 
+Recalibrated 2026-08-16 for single-strategy account governance.
+
 | Gate | Criterion | Threshold |
 |---|---|---|
-| **1 · In-Sample** | Sharpe | >= 1.20 |
-| | Profit factor | >= 1.50 |
-| | Trades | >= 200 |
-| | Max drawdown | <= 15.0 % |
+| **1 · In-Sample** | Sharpe | *informational — not a pass/fail condition* |
+| | Profit factor | >= 1.00 |
+| | Trades | >= 100, scaled to >= 30 per backtest year |
+| | Max drawdown | <= 12.0 % |
 | **2 · Robustness** | WFO efficiency | >= 0.50 |
 | | Monte Carlo 95% max DD | <= 18.0 % |
-| **3 · OOS Holdout** | Holdout Sharpe / IS Sharpe | >= 0.85 (<= 15% degradation) |
+| **3 · OOS Holdout** | Holdout / IS retention | >= 0.80 (<= 20% degradation) |
+
+**Sharpe no longer fails Gate 1.** It is still computed on daily closes, still
+printed on every scorecard and tear sheet, and still the metric Gate 3
+measures retention on — it sits on the Gate 1 table as an `INFO` row with no
+threshold. A Sharpe floor rejects a strategy that makes money after costs and
+never draws past 12% for having a lumpy return path, which is a complaint
+about the shape of an equity curve rather than about whether there is an edge.
+The row stays visible so a reader who remembers the old 1.20 can see it was
+demoted rather than silently dropped; `_roll_up` skips `INFO` criteria, and
+anything that filters a gate's `checks` on `status != PASS` must skip them too
+(see `scan.py`'s `gate1_shortfalls`).
+
+**The trade count is a floor that scales.** 100 is the minimum for any slice,
+however short — an out-of-sample window with 40 trades cannot separate an edge
+from a run of luck. Past ~3.3 years the per-year rate binds instead: 120
+trades over 16 years is seven a year, and every ratio computed from it is
+noise wearing two decimal places. Years are counted in SESSIONS
+(`metrics_basis.n_days` / 252, falling back to `n_days`), the same way
+`annualized_return_pct` counts them; a metrics dict carrying no day count is
+held to the bare 100 and the criterion's note says so.
+
+**Gate 3 measures retention on Sharpe, or on profit factor where that ratio is
+undefined.** Demoting Sharpe from Gate 1 means a strategy with a non-positive
+in-sample Sharpe now reaches Gate 3, where two negative Sharpes divide to a
+healthy-looking positive number. Profit factor is what Gate 1 does bind on and
+it is strictly positive, so it is the fallback. The criterion's LABEL names
+whichever metric was used and `audit["retention_metric"]` records it — the two
+are never reported under one heading. `audit["sharpe_retention"]` stays
+Sharpe-only and NaN when undefined; `audit["retention"]` is what Gate 3
+scored.
 
 Gates 2 and 3 need evidence the dual run does not produce — a walk-forward, a
 bootstrap, and the held-back final 3 years are separate runs. Pass them in via
@@ -895,7 +927,7 @@ bootstrap, and the held-back final 3 years are separate runs. Pass them in via
 `audit["passed"]` is True only when all three gates cleared on real numbers, so
 nothing can be promoted on a gate that was never run. Drawdowns are compared on
 magnitude — the engine signs them negative, and comparing raw would let -40%
-clear a 15% limit.
+clear a 12% limit.
 
 **2. Print the console scorecard, then emit the HTML report — Version A first,
 then Version B.** Take the versions one at a time, in that order: the console

@@ -34,6 +34,7 @@ for _var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
 import ast                                                       # noqa: E402
 import importlib.util                                            # noqa: E402
 import json                                                      # noqa: E402
+import math                                                      # noqa: E402
 import re                                                        # noqa: E402
 import shutil                                                    # noqa: E402
 import subprocess                                                # noqa: E402
@@ -49,8 +50,9 @@ sys.path.insert(0, str(REPO))
 
 from backtest.promote import (VERSION_B_TEMPLATE, inspect_source,   # noqa: E402
                               promote, sha256)
-from backtest.report import (FAIL, GATE_THRESHOLDS, NOT_EVALUATED,  # noqa: E402
-                             PASS, audit_acceptance_gates,
+from backtest.report import (FAIL, GATE_THRESHOLDS, INFO,           # noqa: E402
+                             NOT_EVALUATED, PASS, _roll_up,
+                             audit_acceptance_gates, criterion_text,
                              format_dual_scorecard, print_dual_scorecard)
 from backtest.engine import BacktestConfig                          # noqa: E402
 from backtest.report_html import (build_inspector,                  # noqa: E402
@@ -185,14 +187,17 @@ def test_thresholds() -> None:
     print("\nGate thresholds are the documented ones")
     g1, g2, g3 = (GATE_THRESHOLDS["gate1"], GATE_THRESHOLDS["gate2"],
                   GATE_THRESHOLDS["gate3"])
-    check("Gate 1 Sharpe >= 1.20", g1["min_sharpe"] == 1.20)
-    check("Gate 1 profit factor >= 1.50", g1["min_profit_factor"] == 1.50)
-    check("Gate 1 trades >= 200", g1["min_trades"] == 200)
-    check("Gate 1 max drawdown <= 15.0%", g1["max_drawdown_pct"] == 15.0)
+    check("Gate 1 declares no Sharpe threshold at all",
+          "min_sharpe" not in g1, ", ".join(sorted(g1)))
+    check("Gate 1 profit factor >= 1.00", g1["min_profit_factor"] == 1.00)
+    check("Gate 1 trade floor >= 100", g1["min_trades"] == 100)
+    check("Gate 1 scales at 30 trades per backtest year",
+          g1["min_trades_per_year"] == 30)
+    check("Gate 1 max drawdown <= 12.0%", g1["max_drawdown_pct"] == 12.0)
     check("Gate 2 WFO efficiency >= 0.50", g2["min_wfo_efficiency"] == 0.50)
     check("Gate 2 MC 95% max DD <= 18.0%", g2["max_mc_drawdown_pct"] == 18.0)
-    check("Gate 3 Sharpe retention >= 0.85 (<=15% degradation)",
-          g3["min_sharpe_retention"] == 0.85)
+    check("Gate 3 retention >= 0.80 (<=20% degradation)",
+          g3["min_retention"] == 0.80)
 
 
 # --------------------------------------------------------------------------
@@ -205,41 +210,117 @@ def test_gate1() -> None:
     check("a clearing run passes all three gates",
           full["status"] == PASS and full["passed"], full["status"])
 
-    for label, over in (("Sharpe 1.19", {"sharpe": 1.19}),
-                        ("profit factor 1.49", {"profit_factor": 1.49}),
-                        ("199 trades", {"trade_count": 199}),
-                        ("15.01% drawdown", {"max_drawdown_pct": -15.01})):
+    # clearing_metrics carries n_days=1500 -> 5.95 years -> ceil(30 * 5.95)
+    # = 179 trades required, which is what the boundary cases below are
+    # written against. Recomputed here rather than hard-coded, so the fixture
+    # and the bar cannot drift apart silently.
+    required = int(math.ceil(30 * 1_500 / 252))
+    for label, over in (("profit factor 0.99", {"profit_factor": 0.99}),
+                        (f"{required - 1} trades", {"trade_count": required - 1}),
+                        ("12.01% drawdown", {"max_drawdown_pct": -12.01})):
         a = audit_acceptance_gates(clearing_metrics(**over), FULL_ROBUSTNESS,
                                    {"sharpe": 1.45})
         check(f"{label} fails Gate 1",
               a["gates"]["gate1"]["status"] == FAIL and not a["passed"])
 
-    for label, over in (("Sharpe 1.20", {"sharpe": 1.20}),
-                        ("profit factor 1.50", {"profit_factor": 1.50}),
-                        ("200 trades", {"trade_count": 200}),
-                        ("15.00% drawdown", {"max_drawdown_pct": -15.0})):
+    for label, over in (("profit factor 1.00", {"profit_factor": 1.00}),
+                        (f"{required} trades", {"trade_count": required}),
+                        ("12.00% drawdown", {"max_drawdown_pct": -12.0})):
         a = audit_acceptance_gates(clearing_metrics(**over), FULL_ROBUSTNESS,
                                    {"sharpe": 1.45})
         check(f"{label} is exactly on the boundary and passes",
               a["gates"]["gate1"]["status"] == PASS)
 
     # The engine signs drawdown negative; a caller handing in a positive number
-    # means the same drawdown. Comparing raw would let -40 clear a 15 limit.
+    # means the same drawdown. Comparing raw would let -40 clear a 12 limit.
     neg = audit_acceptance_gates(clearing_metrics(max_drawdown_pct=-40.0))
     pos = audit_acceptance_gates(clearing_metrics(max_drawdown_pct=40.0))
     check("a 40% drawdown fails whichever sign it arrives with",
           neg["gates"]["gate1"]["status"] == FAIL
           and pos["gates"]["gate1"]["status"] == FAIL)
 
-    nan = audit_acceptance_gates(clearing_metrics(sharpe=float("nan")),
-                                 FULL_ROBUSTNESS, {"sharpe": 1.45})
-    check("a NaN Sharpe is NOT EVALUATED, never a pass",
-          nan["gates"]["gate1"]["status"] == NOT_EVALUATED and not nan["passed"])
-
     missing = audit_acceptance_gates({}, FULL_ROBUSTNESS, {"sharpe": 1.4})
     check("an empty metrics dict passes nothing",
           missing["gates"]["gate1"]["status"] == NOT_EVALUATED
           and not missing["passed"])
+
+
+def test_gate1_sharpe_is_informational() -> None:
+    """Sharpe is on the Gate 1 table and can never move its verdict."""
+    print("\nGate 1 — Sharpe is reported, not gated")
+    for label, sharpe in (("0.10", 0.10), ("-2.50", -2.50),
+                          ("NaN", float("nan"))):
+        a = audit_acceptance_gates(clearing_metrics(sharpe=sharpe),
+                                   FULL_ROBUSTNESS, {"sharpe": 1.45,
+                                                     "profit_factor": 1.80})
+        check(f"a Sharpe of {label} does not stop Gate 1 passing",
+              a["gates"]["gate1"]["status"] == PASS,
+              a["gates"]["gate1"]["status"])
+
+    g1 = audit_acceptance_gates(clearing_metrics(), FULL_ROBUSTNESS,
+                                {"sharpe": 1.45})["gates"]["gate1"]
+    sharpe_checks = [c for c in g1["checks"] if "Sharpe" in c["label"]]
+    check("Sharpe is still displayed on the Gate 1 table",
+          len(sharpe_checks) == 1 and sharpe_checks[0]["value"] == 1.60)
+    check("and is marked INFO with no threshold",
+          sharpe_checks[0]["status"] == INFO
+          and sharpe_checks[0]["threshold"] is None)
+    measured, req = criterion_text(sharpe_checks[0])
+    check("its 'required' column reads informational, not a bar it cleared",
+          req == "informational", f"{measured} {req}")
+
+    # A gate made only of informational rows tested nothing, so it cannot pass.
+    check("a wholly informational gate rolls up to NOT EVALUATED",
+          _roll_up([dict(sharpe_checks[0])]) == NOT_EVALUATED)
+
+
+def test_gate1_trade_count_scales() -> None:
+    """The trade bar is a 100 floor that scales at 30 per backtest year."""
+    print("\nGate 1 — the trade count scales with the sample")
+
+    def bar(**over) -> tuple[float, int]:
+        m = clearing_metrics(**over)
+        g1 = audit_acceptance_gates(m, FULL_ROBUSTNESS,
+                                    {"sharpe": 1.45})["gates"]["gate1"]
+        c = next(c for c in g1["checks"] if c["label"] == "Trades")
+        return c["threshold"], c["status"]
+
+    # A short out-of-sample slice: 1 year at 30/yr is 30, and the floor binds.
+    short, _ = bar(n_days=252)
+    check("a 1-year slice is held to the 100-trade floor, not to 30",
+          short == 100, f"{short:g}")
+
+    # A 16-year lake run: 30/yr binds and the floor is nowhere near enough.
+    long_bar, _ = bar(n_days=16 * 252)
+    check("a 16-year run must produce 480 trades, not 100",
+          long_bar == 480, f"{long_bar:g}")
+
+    # 120 trades over 16 years is seven a year. The old flat floor would have
+    # been the only thing standing between that and a Gate 1 pass.
+    thin, status = bar(n_days=16 * 252, trade_count=120)
+    check("120 trades over 16 years fails the scaled bar",
+          status == FAIL, f"required {thin:g}")
+
+    unknown, _ = bar(n_days=0)
+    check("an unknown sample length falls back to the bare floor",
+          unknown == 100, f"{unknown:g}")
+
+    g1 = audit_acceptance_gates(clearing_metrics(n_days=16 * 252),
+                                FULL_ROBUSTNESS,
+                                {"sharpe": 1.45})["gates"]["gate1"]
+    note = next(c for c in g1["checks"] if c["label"] == "Trades")["note"]
+    check("the criterion says why the bar is where it is",
+          bool(note) and "trades/yr" in note, note or "")
+
+    # metrics_basis is what the ratios were sampled on, so it wins over the
+    # equity curve's own length when the two disagree.
+    basis = clearing_metrics(n_days=252)
+    basis["metrics_basis"] = {"frequency": "daily_close", "n_days": 10 * 252}
+    b1 = audit_acceptance_gates(basis, FULL_ROBUSTNESS,
+                                {"sharpe": 1.45})["gates"]["gate1"]
+    check("metrics_basis.n_days is preferred over the fallback n_days",
+          next(c for c in b1["checks"]
+               if c["label"] == "Trades")["threshold"] == 300)
 
 
 # --------------------------------------------------------------------------
@@ -295,24 +376,29 @@ def test_gate3() -> None:
           none["gates"]["gate3"]["status"] == NOT_EVALUATED and not none["passed"])
 
     base = clearing_metrics(sharpe=2.00)
-    on = audit_acceptance_gates(base, FULL_ROBUSTNESS, {"sharpe": 1.70})
-    check("exactly 15% degradation (2.00 -> 1.70) passes",
+    on = audit_acceptance_gates(base, FULL_ROBUSTNESS, {"sharpe": 1.60})
+    check("exactly 20% degradation (2.00 -> 1.60) passes",
           on["gates"]["gate3"]["status"] == PASS,
-          f"retention {on['sharpe_retention']:.3f}")
-    off = audit_acceptance_gates(base, FULL_ROBUSTNESS, {"sharpe": 1.68})
-    check("16% degradation (2.00 -> 1.68) fails",
+          f"retention {on['retention']:.3f}")
+    off = audit_acceptance_gates(base, FULL_ROBUSTNESS, {"sharpe": 1.58})
+    check("21% degradation (2.00 -> 1.58) fails",
           off["gates"]["gate3"]["status"] == FAIL,
-          f"retention {off['sharpe_retention']:.3f}")
+          f"retention {off['retention']:.3f}")
 
     up = audit_acceptance_gates(base, FULL_ROBUSTNESS, {"sharpe": 2.40})
     check("a holdout that improves on in-sample passes",
           up["gates"]["gate3"]["status"] == PASS)
+    check("and the audit names Sharpe as the metric it scored",
+          up["retention_metric"] == "sharpe"
+          and up["gates"]["gate3"]["checks"][0]["label"]
+          == "Holdout Sharpe retention")
 
     bare = audit_acceptance_gates(base, FULL_ROBUSTNESS, 1.80)
     check("a bare holdout Sharpe is accepted",
           bare["gates"]["gate3"]["status"] == PASS)
 
-    # Two negative Sharpes divide to a healthy-looking positive ratio.
+    # Two negative Sharpes divide to a healthy-looking positive ratio. With no
+    # profit factor in the holdout there is nothing to fall back to either.
     neg = audit_acceptance_gates(clearing_metrics(sharpe=-0.40),
                                  FULL_ROBUSTNESS, {"sharpe": -0.36})
     check("a negative in-sample Sharpe does not manufacture 0.90 retention",
@@ -320,6 +406,57 @@ def test_gate3() -> None:
           neg["gates"]["gate3"]["status"])
     check("and the reason is recorded on the criterion",
           "undefined" in (neg["gates"]["gate3"]["checks"][0]["note"] or ""))
+    check("sharpe_retention stays NaN rather than reporting the ratio",
+          math.isnan(neg["sharpe_retention"]))
+
+
+def test_gate3_profit_factor_fallback() -> None:
+    """
+    Where Sharpe retention is undefined, Gate 3 measures profit factor.
+
+    Sharpe is no longer a Gate 1 condition, so a strategy with a non-positive
+    in-sample Sharpe now reaches Gate 3 — where its Sharpe ratio divides to a
+    positive-looking number that means nothing. Profit factor is the metric
+    Gate 1 does bind on and it is strictly positive, so it is what still
+    measures degradation there.
+    """
+    print("\nGate 3 — the profit-factor fallback")
+    m = clearing_metrics(sharpe=-0.40, profit_factor=2.00)
+
+    ok = audit_acceptance_gates(m, FULL_ROBUSTNESS,
+                                {"sharpe": -0.36, "profit_factor": 1.60})
+    g3 = ok["gates"]["gate3"]
+    check("a 2.00 -> 1.60 profit factor is exactly 0.80x and passes",
+          g3["status"] == PASS, f"retention {ok['retention']:.3f}")
+    check("the criterion is LABELLED as the profit-factor one",
+          g3["checks"][0]["label"] == "Holdout profit-factor retention")
+    check("and the audit records which metric it scored",
+          ok["retention_metric"] == "profit_factor")
+    check("the note says why Sharpe was not used",
+          "undefined" in (g3["checks"][0]["note"] or "")
+          and "profit factor" in (g3["checks"][0]["note"] or ""))
+    check("sharpe_retention is NOT overwritten with the PF ratio",
+          math.isnan(ok["sharpe_retention"]))
+
+    bad = audit_acceptance_gates(m, FULL_ROBUSTNESS,
+                                 {"sharpe": -0.36, "profit_factor": 1.58})
+    check("a 2.00 -> 1.58 profit factor is 0.79x and fails",
+          bad["gates"]["gate3"]["status"] == FAIL,
+          f"retention {bad['retention']:.3f}")
+
+    # A holdout with a profit factor but no Sharpe at all is still measurable.
+    no_sharpe = audit_acceptance_gates(clearing_metrics(profit_factor=2.00),
+                                       FULL_ROBUSTNESS, {"profit_factor": 1.90})
+    check("a holdout carrying only a profit factor is scored, not skipped",
+          no_sharpe["gates"]["gate3"]["status"] == PASS
+          and no_sharpe["retention_metric"] == "profit_factor")
+
+    # Neither metric available -> NOT EVALUATED. A missing holdout must never
+    # be scored on the in-sample numbers alone.
+    nothing = audit_acceptance_gates(m, FULL_ROBUSTNESS, {"win_rate": 0.6})
+    check("a holdout with neither metric is NOT EVALUATED",
+          nothing["gates"]["gate3"]["status"] == NOT_EVALUATED
+          and not nothing["passed"])
 
 
 # --------------------------------------------------------------------------
@@ -328,7 +465,11 @@ def test_gate3() -> None:
 def test_scorecard() -> None:
     print("\nDual scorecard")
     a = clearing_metrics()
-    b = clearing_metrics(sharpe=1.10, trade_count=180, profit_factor=2.30,
+    # B fails Gate 1 on the trade count: 120 trades over the fixture's 5.95
+    # years is 20 a year against a bar of 30. Its Sharpe of 1.10 is NOT what
+    # fails it - Sharpe is informational now, and a fixture that leaned on it
+    # would stop testing anything the moment the gate was recalibrated.
+    b = clearing_metrics(sharpe=1.10, trade_count=120, profit_factor=2.30,
                          max_drawdown_pct=-7.10, win_rate=0.61)
     audit_a = audit_acceptance_gates(a, FULL_ROBUSTNESS, {"sharpe": 1.45}, version="A")
     audit_b = audit_acceptance_gates(b, version="B")
@@ -1052,8 +1193,11 @@ def main() -> int:
             (tmp / sub).mkdir(parents=True, exist_ok=True)
         test_thresholds()
         test_gate1()
+        test_gate1_sharpe_is_informational()
+        test_gate1_trade_count_scales()
         test_gate2()
         test_gate3()
+        test_gate3_profit_factor_fallback()
         test_scorecard()
         test_html(tmp / "html")
         test_inspector_payload(tmp / "html")

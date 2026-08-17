@@ -94,7 +94,7 @@ from backtest.engine import (BacktestConfig, TRADE_COLUMNS,   # noqa: E402
                              _assemble_result, _cost_arrays, _shift_to_fill,
                              apply_flat_by_close, clean_signals_ls,
                              unpack_signals)
-from backtest.report import PASS, audit_acceptance_gates       # noqa: E402
+from backtest.report import INFO, PASS, audit_acceptance_gates  # noqa: E402
 from backtest.specs import get_spec                            # noqa: E402
 
 try:
@@ -443,7 +443,11 @@ def scan_symbol(strategy_path: str | Path,
         audit = audit_acceptance_gates(metrics, version="A",
                                        name=strat_name or symbol)
         gate1 = audit["gates"]["gate1"]
-        failed = [c["label"] for c in gate1["checks"] if c["status"] != PASS]
+        # INFO rows carry no threshold, so they cannot be a shortfall. Listing
+        # the informational Sharpe here would put "Sharpe (not gated)" in the
+        # shortfalls column of every row in the sweep, including the winner's.
+        failed = [c["label"] for c in gate1["checks"]
+                  if c["status"] not in (PASS, INFO)]
         rows.append({
             **combo,
             # The whole combination as one unambiguous field, alongside the
