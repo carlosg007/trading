@@ -80,7 +80,8 @@ from backtest.run import (LEADERBOARD_COLUMNS, SEL_A, SEL_A_ONLY, SEL_B,
                           select_version, write_leaderboard)
 from backtest.scan import (SELECTED_GATE1, SELECTED_NO_GATE1, ScanError,
                            _batch_columns, expand_grid, format_scan_summary,
-                           scan_symbol, write_scan_table)
+                           parse_param_dict, scan_from_csv, scan_symbol,
+                           write_best_params, write_scan_table)
 from backtest.status import (DONE, JobTracker, RUNNING, format_elapsed,
                              format_status, pid_alive, progress_bar, read_job)
 
@@ -285,6 +286,147 @@ def test_scan_matches_engine(tmp: Path) -> None:
     summary = format_scan_summary(scan)
     check("the console summary names the selection rule",
           scan["selection"] in summary)
+
+
+def test_parse_param_dict() -> None:
+    print("\na parameter set is read from every shape it is written in")
+
+    want = {"fast_period": 13, "slow_period": 34, "use_trend": False,
+            "sl_atr_mult": 1.5, "tp_atr_mult": None}
+
+    check("a native dict passes through",
+          parse_param_dict(dict(want)) == want)
+    check("the scan CSV's params column - a PYTHON repr - parses",
+          parse_param_dict(str(want)) == want)
+    check("a JSON object parses",
+          parse_param_dict(json.dumps(want)) == want)
+    check("the console's key=value form parses",
+          parse_param_dict("fast_period=13, slow_period=34, use_trend=False, "
+                           "sl_atr_mult=1.5, tp_atr_mult=None") == want)
+
+    # The whole point of the parser. `tp_atr_mult=None` means NO take-profit
+    # was modelled; carried through as the string "None" it binds to the
+    # strategy as a truthy value and nothing raises - the run silently models a
+    # take-profit the winner did not have.
+    for src in ("{'tp_atr_mult': None}", '{"tp_atr_mult": null}',
+                "tp_atr_mult=None"):
+        got = parse_param_dict(src)["tp_atr_mult"]
+        check(f"None stays None, not the string 'None'  ({src})",
+              got is None, repr(got))
+    types = parse_param_dict("a=13, b=1.5, c=True, d=text")
+    check("types are restored, not left as text",
+          types["a"] == 13 and isinstance(types["a"], int)
+          and isinstance(types["b"], float) and types["c"] is True
+          and types["d"] == "text", str(types))
+
+    check("a comma inside brackets does not split the token",
+          parse_param_dict("windows=[5, 10], fast=3")
+          == {"windows": [5, 10], "fast": 3})
+    check("an empty value is an empty dict, not an error",
+          parse_param_dict(None) == {} and parse_param_dict("") == {}
+          and parse_param_dict(float("nan")) == {})
+
+    # A parameter set that cannot be read must not come back as "no
+    # parameters": that binds the module's defaults while the run is reported
+    # under the winner's name.
+    for bad in ("fast_period 13", "[1, 2, 3]", 7.5):
+        try:
+            parse_param_dict(bad)
+            check(f"an unreadable parameter set raises  ({bad!r})", False)
+        except ScanError:
+            check(f"an unreadable parameter set raises  ({bad!r})", True)
+
+
+def test_best_params_export(tmp: Path) -> None:
+    print("\nthe winner is exported, and rebuilt from the table if need be")
+
+    path = write_strategy(tmp)
+    bars = synthetic_bars()
+    scan = scan_symbol(path, bars, "ES", BacktestConfig(),
+                       {"fast": [3, 5, 10], "slow": [10, 20, 40]},
+                       strat_name="scan_probe")
+
+    # The regression. `scan_symbol` stores Gate 1's STATUS STRING on the winner
+    # (the row carries `gate1["status"]`, not the gate dict), and the export
+    # read it as a dict: `AttributeError: 'str' object has no attribute 'get'`,
+    # raised after the entire grid had been swept and the CSV written. Six
+    # completed sweeps were reported as six errors with no best_params to show.
+    check("the winner's gate1 is the status string the table carries",
+          isinstance(scan["winner"]["gate1"], str), repr(scan["winner"]["gate1"]))
+
+    out = tmp / "export"
+    written = write_best_params(scan, "scan_probe", "ES", "15m",
+                                "2013-01-01", "2022-12-31",
+                                {"slow": 40}, out, timeframes=["5m", "15m"])
+    tf_file = out / "best_params_ES_15m.json"
+    check("best_params_<SYMBOL>_<TF>.json is written to the root artifact dir",
+          tf_file.exists() and written[0] == tf_file, str(written))
+    check("a multi-timeframe run writes NO unsuffixed file",
+          not (out / "best_params_ES.json").exists() and len(written) == 1)
+
+    blob = json.loads(tf_file.read_text())
+    check("the exported gate1 status is the string, not a crash",
+          blob["gate1_in_sample"] == scan["winner"]["gate1"],
+          repr(blob["gate1_in_sample"]))
+    check("params is the FULL effective set - base params under the winner's",
+          blob["params"] == {**{"slow": 40}, **scan["winner"]["params"]},
+          str(blob["params"]))
+    check("the search size travels with it",
+          blob["variants_tested"] == scan["evaluated"]
+          and blob["variants_tested_all_timeframes"] == scan["evaluated"])
+
+    # A single-timeframe run DOES write the unsuffixed fallback.
+    one = tmp / "export_one"
+    check("a single-timeframe run writes both names",
+          len(write_best_params(scan, "scan_probe", "ES", "15m", None, None,
+                                {}, one, timeframes=["15m"])) == 2
+          and (one / "best_params_ES.json").exists())
+
+    # --reuse-scan: the grid is the expensive half, the export is the cheap
+    # one, so a crash in the export must not cost the sweep.
+    csv = write_scan_table(scan, tmp / "reuse")
+    rebuilt = scan_from_csv(csv, "ES")
+    check("the rebuilt winner is the row the sweep itself chose",
+          rebuilt["winner"]["params"] == scan["winner"]["params"]
+          and rebuilt["selection"] == scan["selection"],
+          f"{rebuilt['winner']['params']} vs {scan['winner']['params']}")
+    check("the rebuilt Sharpe matches to the last digit",
+          abs(float(rebuilt["winner"]["sharpe"])
+              - float(scan["winner"]["sharpe"])) < 1e-12)
+    check("variants_tested is the row count of the table it was rebuilt from",
+          rebuilt["evaluated"] == len(scan["table"]))
+
+    out2 = tmp / "export_reused"
+    write_best_params(rebuilt, "scan_probe", "ES", "15m", None, None, {}, out2,
+                      timeframes=["5m", "15m"])
+    blob2 = json.loads((out2 / "best_params_ES_15m.json").read_text())
+    check("a rebuilt file says it was rebuilt, and from where",
+          blob2["rebuilt_from"] == str(csv) and "rebuilt_note" in blob2)
+    check("the rebuilt export names the same parameters as the live one",
+          blob2["swept_params"] == blob["swept_params"],
+          f"{blob2['swept_params']} vs {blob['swept_params']}")
+
+    # A table whose own `selected` flag disagrees with the rule is not a
+    # rebuild. Raise rather than write a file naming a different row.
+    bad = pd.read_csv(csv)
+    bad["selected"] = [i == len(bad) - 1 for i in range(len(bad))]
+    if not bool(bad.iloc[-1]["selected"] == bad.iloc[0]["selected"]):
+        bad_path = tmp / "reuse" / "scan_BAD.csv"
+        bad.to_csv(bad_path, index=False)
+        try:
+            scan_from_csv(bad_path, "BAD")
+            check("a table disagreeing with the selection rule raises", False)
+        except ScanError as e:
+            check("a table disagreeing with the selection rule raises",
+                  "disagree" in str(e))
+
+    try:
+        empty = tmp / "reuse" / "scan_EMPTY.csv"
+        empty.write_text("params,sharpe,gate1\n")
+        scan_from_csv(empty, "EMPTY")
+        check("an empty table raises rather than exporting nothing", False)
+    except ScanError:
+        check("an empty table raises rather than exporting nothing", True)
 
 
 def test_scan_selection_respects_gate1(tmp: Path) -> None:
@@ -704,6 +846,8 @@ if __name__ == "__main__":
         test_expand_grid()
         test_scan_matches_engine(tmp)
         test_scan_selection_respects_gate1(tmp)
+        test_parse_param_dict()
+        test_best_params_export(tmp)
         test_ml_off_is_absent_not_zero(tmp)
         test_leaderboard(tmp)
         test_symbol_parsing()

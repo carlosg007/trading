@@ -78,8 +78,10 @@ the held-back final three years - are separate runs that this does not perform.
 from __future__ import annotations
 
 import argparse
+import ast
 import gc
 import itertools
+import json
 import math
 import sys
 from pathlib import Path
@@ -135,6 +137,190 @@ SIZE_WARN = 200
 
 class ScanError(RuntimeError):
     """The grid could not be swept at all."""
+
+
+# Columns of the scan table that are metrics or bookkeeping rather than swept
+# parameters. Named once because two readers need the same answer to "which of
+# these columns is a parameter": `format_scan_summary` when it prints the table,
+# and `scan_from_csv` when it rebuilds a winner out of one.
+_NON_PARAM_COLUMNS = ("params", "sharpe", "sortino", "profit_factor", "trades",
+                      "max_drawdown_pct", "total_return_pct", "total_costs",
+                      "gate1", "gate1_shortfalls", "selected")
+
+
+def _split_top_level(s: str, sep: str = ",") -> list[str]:
+    """
+    Split on `sep`, ignoring separators nested in brackets or quotes.
+
+    `fast_period=13, tp_atr_mult=None` splits on the comma; a hypothetical
+    `windows=[5, 10]` must not. A grid value is almost always a scalar, so the
+    nesting case is rare - which is exactly why a naive `str.split(",")` would
+    survive every test anybody thought to write and then mangle one real grid.
+    """
+    out, buf, depth, quote = [], [], 0, ""
+    for ch in s:
+        if quote:
+            buf.append(ch)
+            if ch == quote:
+                quote = ""
+            continue
+        if ch in "\"'":
+            quote = ch
+        elif ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        elif ch == sep and depth <= 0:
+            out.append("".join(buf))
+            buf = []
+            continue
+        buf.append(ch)
+    out.append("".join(buf))
+    return [t for t in (tok.strip() for tok in out) if t]
+
+
+def _literal(token: str) -> Any:
+    """
+    A grid value as the Python object it denotes, or the bare string.
+
+    `13` is an int, `1.0` a float, `False` a bool and `None` the absence of a
+    take-profit - all four of which arrive here as text and none of which mean
+    what the text means. A token that parses as nothing (`foo`) stays a string
+    rather than raising: a strategy is free to take a string parameter.
+    """
+    try:
+        return ast.literal_eval(token)
+    except (ValueError, SyntaxError):
+        return token
+
+
+def parse_param_dict(params_val: Any) -> dict[str, Any]:
+    """
+    A parameter set as a dict, whatever shape it arrived in.
+
+    The same combination is written three different ways in this pipeline and
+    all three come back through here:
+
+      * a native `dict`, which is what `scan_symbol` holds in memory;
+      * the scan CSV's `params` column, `str(dict(combo))` - a PYTHON repr,
+        with `None` and `True` spelled the Python way and keys in single
+        quotes, so `json.loads` rejects it;
+      * a JSON object, which is what every handoff file under `pipeline/`
+        holds;
+      * and the flat `fast_period=13, slow_period=34` form the console table
+        prints, which is what somebody copying a row out of a log will paste.
+
+    Types are restored, not left as text. `'tp_atr_mult': None` and
+    `tp_atr_mult=None` both come back as `None` rather than the four-character
+    string `"None"`, because `None` is a real point in a risk grid - it means
+    no take-profit was modelled - and a string there would be bound to the
+    strategy as a truthy value. That is the whole failure this function
+    exists to prevent, and nothing downstream would raise on it.
+
+    An empty or missing value is an empty dict. Anything that cannot be read as
+    a mapping raises `ScanError` rather than returning `{}`: a parameter set
+    silently read as "no parameters" binds the module's defaults, and the run
+    would be reported under the winner's name while using none of its values.
+    """
+    if params_val is None:
+        return {}
+    if isinstance(params_val, dict):
+        return {str(k): v for k, v in params_val.items()}
+    if isinstance(params_val, float) and params_val != params_val:  # NaN
+        return {}
+    if not isinstance(params_val, str):
+        raise ScanError(
+            f"cannot read a parameter set from {type(params_val).__name__}: "
+            f"{params_val!r}")
+
+    s = params_val.strip()
+    if not s or s.lower() in ("nan", "none", "{}"):
+        return {}
+
+    if s.startswith("{"):
+        # JSON first - it is the stricter grammar, so anything it accepts is
+        # unambiguous. `literal_eval` then covers the Python repr the CSV
+        # holds, which JSON rejects on the single quotes alone.
+        for loader in (json.loads, ast.literal_eval):
+            try:
+                obj = loader(s)
+            except (ValueError, SyntaxError, TypeError):
+                continue
+            if isinstance(obj, dict):
+                return {str(k): v for k, v in obj.items()}
+        raise ScanError(f"could not parse a parameter dict from {s!r}")
+
+    # `k=v, k=v`. Split on the FIRST `=` per token so a string value containing
+    # one survives.
+    out: dict[str, Any] = {}
+    for token in _split_top_level(s):
+        if "=" not in token:
+            raise ScanError(
+                f"could not parse a parameter dict from {s!r}: the fragment "
+                f"{token!r} is neither `key=value` nor a JSON object.")
+        k, _, v = token.partition("=")
+        out[k.strip()] = _literal(v.strip())
+    if not out:
+        raise ScanError(f"could not parse a parameter dict from {s!r}")
+    return out
+
+
+def _gate1_status(gate1: Any) -> str | None:
+    """
+    Gate 1's status, from either shape it is held in.
+
+    The scan table stores `gate1["status"]` - a bare string. An audit dict from
+    `audit_acceptance_gates` holds the whole gate. Both are read here so that
+    handing this the wrong one is a no-op rather than an `AttributeError` five
+    hundred lines from where the value was set.
+    """
+    if isinstance(gate1, dict):
+        return gate1.get("status")
+    return gate1 if gate1 is None or isinstance(gate1, str) else str(gate1)
+
+
+def _select_best_row(rows: Iterable[dict]) -> tuple[dict | None, str]:
+    """
+    The winning row and the label for HOW it won, from one rule.
+
+    Highest Sharpe among the combinations whose Gate 1 audit is PASS; if none
+    cleared it, the highest Sharpe overall under a `selection` string that says
+    so. This lives in its own function because two callers need the identical
+    answer - `scan_symbol` sweeping the grid, and `scan_from_csv` rebuilding a
+    winner from a table that was written earlier. A second copy of the rule in
+    the rebuild path would be free to disagree with the sweep about which row
+    won, and the two would be compared by nobody.
+
+    Sharpe ranks because it IS the risk-adjusted return, which is what the
+    selection is supposed to maximise; ranking on raw return would pick the
+    parameter set that took the most risk to get there.
+
+    Shallower drawdown breaks ties, and ties are not hypothetical once risk
+    parameters are swept: a take-profit that no bar ever reaches and
+    `tp_atr_mult=None` produce the SAME trade list and therefore the same
+    Sharpe to the last digit. Left to `max` alone the winner would be whichever
+    the grid happened to declare first. Between two identical Sharpes the one
+    that got there through a smaller drawdown is the better risk-adjusted
+    result, and `abs` is required because the engine signs drawdowns negative -
+    comparing raw would prefer the DEEPEST.
+    """
+    rows = list(rows)
+    passing = [r for r in rows
+               if r["gate1"] == PASS and not pd.isna(r["sharpe"])]
+    pool = passing or [r for r in rows if not pd.isna(r["sharpe"])]
+    if passing:
+        selection = SELECTED_GATE1
+    elif pool:
+        selection = SELECTED_NO_GATE1
+    else:
+        return None, SELECTED_NONE
+
+    def _rank(r: dict) -> tuple[float, float]:
+        dd = r.get("max_drawdown_pct")
+        dd = float("inf") if dd is None or pd.isna(dd) else abs(float(dd))
+        return (float(r["sharpe"]), -dd)
+
+    return max(pool, key=_rank), selection
 
 
 def _same_value(a: Any, b: Any) -> bool:
@@ -477,36 +663,10 @@ def scan_symbol(strategy_path: str | Path,
     table = pd.DataFrame([{k: v for k, v in r.items() if k != "_metrics"}
                           for r in rows])
 
-    passing = [r for r in rows
-               if r["gate1"] == PASS and not pd.isna(r["sharpe"])]
-    pool = passing or [r for r in rows if not pd.isna(r["sharpe"])]
-    if passing:
-        selection = SELECTED_GATE1
-    elif pool:
-        selection = SELECTED_NO_GATE1
-    else:
-        selection = SELECTED_NONE
+    best, selection = _select_best_row(rows)
 
     winner = None
-    if pool:
-        # Sharpe first - it IS the risk-adjusted return, which is what the
-        # selection is supposed to maximise, and ranking on raw return would
-        # pick the parameter set that took the most risk to get there.
-        #
-        # Shallower drawdown breaks ties, and ties are not hypothetical once
-        # risk parameters are swept: a take-profit that no bar ever reaches and
-        # `tp_atr_mult=None` produce the SAME trade list and therefore the same
-        # Sharpe to the last digit. Left to `max` alone the winner would be
-        # whichever the grid happened to declare first. Between two identical
-        # Sharpes the one that got there through a smaller drawdown is the
-        # better risk-adjusted result, and `abs` is required because the engine
-        # signs drawdowns negative - comparing raw would prefer the DEEPEST.
-        def _rank(r: dict) -> tuple[float, float]:
-            dd = r.get("max_drawdown_pct")
-            dd = float("inf") if dd is None or pd.isna(dd) else abs(float(dd))
-            return (float(r["sharpe"]), -dd)
-
-        best = max(pool, key=_rank)
+    if best is not None:
         winner = {
             "params": {k: best[k] for k in valid[0]},
             "metrics": best["_metrics"],
@@ -558,6 +718,109 @@ def write_scan_table(scan: dict, out_dir: str | Path) -> Path:
     return path
 
 
+def scan_from_csv(path: str | Path, symbol: str | None = None) -> dict:
+    """
+    Rebuild a scan result from a `scan_<SYMBOL>.csv` the sweep already wrote.
+
+    The grid is the expensive half of Stage 2 and the export is the cheap one,
+    so a crash in the export should not cost the sweep. This reads the table
+    back and re-derives the winner with `_select_best_row` - the SAME rule the
+    live sweep applies, not a copy of it - so a rebuilt `best_params` file
+    names the row the sweep itself would have named.
+
+    What it cannot recover, and does not invent
+    -------------------------------------------
+    The CSV holds one row per EVALUATED combination. Combinations the strategy
+    rejected were never written to it, so `rejected` comes back as 0 and
+    `combinations` equals the row count. `variants_tested` is unaffected - it
+    has always been the number evaluated - but a rebuilt file records where it
+    came from so the two counts are not read as a fresh sweep's.
+
+    The winner's metrics are likewise only the columns the CSV carries. Win
+    rate, Calmar and the day count were never in it; they are OMITTED from
+    `in_sample` rather than defaulted, because a zero win rate beside a
+    profitable profit factor is a number nobody computed.
+    """
+    path = Path(path)
+    table = pd.read_csv(path)
+    if table.empty:
+        raise ScanError(f"{path} holds no rows; there is no winner to rebuild.")
+    for col in ("params", "sharpe", "gate1"):
+        if col not in table.columns:
+            raise ScanError(
+                f"{path} has no {col!r} column, so it is not a scan table "
+                f"written by Stage 2.")
+    if symbol is None:
+        symbol = path.stem[len("scan_"):] if path.stem.startswith("scan_") \
+            else path.stem
+
+    param_cols = [c for c in table.columns if c not in _NON_PARAM_COLUMNS]
+    metric_cols = {"sharpe": "sharpe", "sortino": "sortino",
+                   "profit_factor": "profit_factor", "trades": "trade_count",
+                   "max_drawdown_pct": "max_drawdown_pct",
+                   "total_return_pct": "total_return_pct",
+                   "total_costs": "total_costs"}
+
+    rows = []
+    for i, r in table.iterrows():
+        rec = {c: r[c] for c in param_cols}
+        rec.update({
+            "_index": i,
+            "params": r["params"],
+            "sharpe": r["sharpe"],
+            "gate1": r["gate1"],
+            "max_drawdown_pct": r.get("max_drawdown_pct"),
+            "_metrics": {dst: r[src] for src, dst in metric_cols.items()
+                         if src in table.columns and not pd.isna(r[src])},
+        })
+        rows.append(rec)
+
+    best, selection = _select_best_row(rows)
+
+    winner = None
+    if best is not None:
+        # The `params` STRING, not the per-parameter columns. It is the only
+        # field in the file that survives the round trip intact: pandas reads a
+        # `tp_atr_mult` column of floats-and-None back as float64 with NaN, and
+        # binding NaN to a strategy is not the same run as binding None. The
+        # columns are the fallback for a table written before that column
+        # existed.
+        try:
+            params = parse_param_dict(best["params"])
+        except ScanError:
+            params = {c: (None if pd.isna(best[c]) else best[c])
+                      for c in param_cols}
+        winner = {
+            "params": params,
+            "metrics": best["_metrics"],
+            "gate1": best["gate1"],
+            "sharpe": best["sharpe"],
+        }
+        # The table already records which row the sweep chose. If re-deriving
+        # it lands somewhere else, the rule and the file disagree and the
+        # rebuild is not a rebuild - raise rather than write a best_params
+        # naming one row beside a CSV flagging another.
+        if "selected" in table.columns:
+            flagged = list(table.index[table["selected"].astype(bool)])
+            if flagged and best["_index"] not in flagged:
+                raise ScanError(
+                    f"{path} flags row(s) {flagged} as selected, but the "
+                    f"selection rule picks row {best['_index']}. The CSV and "
+                    f"the rule disagree about which combination won; the "
+                    f"table was not written by this version of the scanner.")
+
+    return {
+        "symbol": symbol,
+        "combinations": len(table),
+        "evaluated": len(table),
+        "rejected": [],
+        "table": table,
+        "winner": winner,
+        "selection": selection,
+        "rebuilt_from": str(path),
+    }
+
+
 def format_scan_summary(scan: dict, top: int = 5) -> str:
     """A few lines for the console: what was searched, what won, and how."""
     L = [f"  grid: {scan['combinations']} combinations, {scan['evaluated']} "
@@ -570,11 +833,7 @@ def format_scan_summary(scan: dict, top: int = 5) -> str:
     # `params` is excluded with the metric columns, not listed with the
     # parameters: it is the whole combination as one string and printing it
     # beside the per-parameter columns would render every row twice.
-    param_cols = [c for c in table.columns
-                  if c not in ("params", "sharpe", "sortino", "profit_factor",
-                               "trades", "max_drawdown_pct",
-                               "total_return_pct", "total_costs", "gate1",
-                               "gate1_shortfalls", "selected")]
+    param_cols = [c for c in table.columns if c not in _NON_PARAM_COLUMNS]
     # Wide enough for five parameters, which is what a grid carrying risk axes
     # alongside indicator ones has. Longer than this is truncated with an
     # ellipsis rather than wrapped - the full set is in `params` in the CSV,
@@ -645,14 +904,18 @@ def write_best_params(scan: dict, strategy: str, symbol: str, tf: str,
     from backtest.pipeline import BEST_PARAMS_FILE, write_stage
 
     winner = scan.get("winner")
+    # `parse_param_dict` rather than `dict(...)`: the winner reaches here as a
+    # native dict from `scan_symbol` and as the CSV's `params` string from
+    # `scan_from_csv`, and `{**base_params, **"fast_period=13, ..."}` raises a
+    # TypeError that names neither the file nor the parameter set.
+    swept = parse_param_dict(winner["params"]) if winner else {}
     payload = {
         "symbol": symbol,
         "timeframe": tf,
         "start": start,
         "end": end,
-        "params": ({**base_params, **winner["params"]} if winner
-                   else dict(base_params)),
-        "swept_params": dict(winner["params"]) if winner else None,
+        "params": ({**base_params, **swept} if winner else dict(base_params)),
+        "swept_params": dict(swept) if winner else None,
         "base_params": dict(base_params),
         "variants_tested": int(scan["evaluated"]),
         "combinations": int(scan["combinations"]),
@@ -662,8 +925,15 @@ def write_best_params(scan: dict, strategy: str, symbol: str, tf: str,
         # against what the sweep believed it had found; they are not evidence
         # of anything on their own, having been selected on these very bars.
         "in_sample": _jsonable_metrics(winner["metrics"]) if winner else None,
-        "gate1_in_sample": (winner.get("gate1") or {}).get("status")
-        if winner else None,
+        # `winner["gate1"]` is the STATUS STRING the scan table carries, not
+        # the gate dict `audit_acceptance_gates` returns - `scan_symbol` stores
+        # `gate1["status"]` on the row and the winner copies the row's value.
+        # Reading it as a dict raised `AttributeError: 'str' object has no
+        # attribute 'get'` here, AFTER the whole grid had been swept and the
+        # CSV written: six completed sweeps reported as six errors with no
+        # best_params file to show for them. The dict form is still accepted so
+        # a caller holding the full gate is not a second crash.
+        "gate1_in_sample": _gate1_status(winner["gate1"]) if winner else None,
         "timeframes_searched": list(timeframes or [tf]),
         # cells x timeframes. The honest N for anything selected by comparing
         # timeframes against each other, which `variants_tested` alone
@@ -676,6 +946,19 @@ def write_best_params(scan: dict, strategy: str, symbol: str, tf: str,
         payload["warning"] = (
             "no combination produced a measurable Sharpe; `params` falls back "
             "to the base parameters and nothing was selected")
+
+    # Provenance, written rather than omitted. A file rebuilt from a CSV counts
+    # only the combinations that CSV holds - anything the strategy rejected was
+    # never written to it - so `combinations` and `rejected` are floors here,
+    # and `in_sample` carries only the columns the table had. Stage 3 is
+    # entitled to know which of those it is reading.
+    if scan.get("rebuilt_from"):
+        payload["rebuilt_from"] = str(scan["rebuilt_from"])
+        payload["rebuilt_note"] = (
+            "regenerated from an existing scan table, not from a fresh sweep. "
+            "`variants_tested` is the row count of that table (combinations "
+            "the strategy rejected were never written to it), and `in_sample` "
+            "holds only the metrics the table carried.")
 
     out_dir = Path(out_dir)
     written = [write_stage(
@@ -734,6 +1017,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--flat-by-close", action="store_true")
     p.add_argument("--out-dir", default=None,
                    help="Override <BT_ARTIFACTS>/pipeline/<strategy>/")
+    p.add_argument("--reuse-scan", action="store_true",
+                   help="Do not sweep. Rebuild best_params_<SYMBOL>_<TF>.json "
+                        "from the scan_<SYMBOL>.csv files already in the "
+                        "artifact directory, re-deriving the winner with the "
+                        "same selection rule the sweep uses. For recovering "
+                        "the export after a completed grid, not for a rerun: "
+                        "it reads no bars, so --start/--end/--param are "
+                        "recorded from the CLI and not verified against the "
+                        "table.")
     add_filter_args(p)
     return p
 
@@ -806,9 +1098,17 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  symbols    : {', '.join(symbols)}  (from {source})")
     print(f"  grid       : " + ", ".join(f"{k}={v!r}" for k, v in grid.items()))
     print(f"  grid size  : {cells:,} combination(s) per contract per timeframe")
-    print(f"  total fits : {total_fits:,} "
-          f"({cells:,} × {len(symbols)} symbol(s) × {len(timeframes)} tf)")
-    if cells > SIZE_WARN:
+    if args.reuse_scan:
+        # No fits are run, so printing a fit count would describe a search this
+        # invocation is not performing. What each file reports as
+        # variants_tested is the row count of the table it was rebuilt from.
+        print(f"  mode       : --reuse-scan · rebuilding the export from the "
+              f"scan tables already in\n               {out_dir}. No bars are "
+              f"read and no combination is re-fitted.")
+    else:
+        print(f"  total fits : {total_fits:,} "
+              f"({cells:,} × {len(symbols)} symbol(s) × {len(timeframes)} tf)")
+    if cells > SIZE_WARN and not args.reuse_scan:
         print(f"\n  [!] {cells:,} combinations is a large in-sample search. "
               f"Every winning Sharpe\n      below is the best of {cells:,} "
               f"fits to one sample of bars, and it has to be\n      read that "
@@ -834,18 +1134,30 @@ def main(argv: list[str] | None = None) -> int:
             print(f"\n[{i}/{len(symbols)}] {sym} · {tf}")
             print("-" * 78)
             try:
-                bars = load_bars(sym, tf, args.start, args.end)
-                cfg = BacktestConfig(
-                    initial_capital=args.capital, contracts=args.contracts,
-                    slippage_ticks=args.slippage_ticks,
-                    flat_by_close=args.flat_by_close,
-                    notes=f"stage 2 scan {sym} {tf}", **cfg_kwargs)
-                scan = scan_symbol(path, bars, sym, cfg, grid,
-                                   base_params=base_params,
-                                   strat_name=strat_name)
-                print(format_scan_summary(scan))
-                csv = write_scan_table(scan, out_dir / tf
-                                       if len(timeframes) > 1 else out_dir)
+                tf_dir = out_dir / tf if len(timeframes) > 1 else out_dir
+                if args.reuse_scan:
+                    csv = tf_dir / f"scan_{sym}.csv"
+                    if not csv.exists():
+                        raise FileNotFoundError(
+                            f"{csv} does not exist. --reuse-scan rebuilds the "
+                            f"export from a sweep that already ran; there is "
+                            f"no table here to rebuild from.")
+                    scan = scan_from_csv(csv, sym)
+                    print(f"  reused: {len(scan['table']):,} evaluated "
+                          f"combination(s) from {csv}")
+                    print(f"  selection: {scan['selection']}")
+                else:
+                    bars = load_bars(sym, tf, args.start, args.end)
+                    cfg = BacktestConfig(
+                        initial_capital=args.capital, contracts=args.contracts,
+                        slippage_ticks=args.slippage_ticks,
+                        flat_by_close=args.flat_by_close,
+                        notes=f"stage 2 scan {sym} {tf}", **cfg_kwargs)
+                    scan = scan_symbol(path, bars, sym, cfg, grid,
+                                       base_params=base_params,
+                                       strat_name=strat_name)
+                    print(format_scan_summary(scan))
+                    csv = write_scan_table(scan, tf_dir)
                 dest = write_best_params(
                     scan, strat_name, sym, tf, args.start, args.end,
                     base_params, out_dir, timeframes=timeframes,
