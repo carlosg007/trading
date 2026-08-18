@@ -108,7 +108,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from agents.tier3_workers import apply_ml_signal_filter
+from agents.tier3_workers import apply_ml_signal_filter, bind_ml_features
 from backtest.engine import BacktestConfig
 
 TIMEFRAME = {timeframe!r}
@@ -154,7 +154,8 @@ def signal_fn(bars: pd.DataFrame, **params):
     merged = dict(DEFAULT_PARAMS)
     merged.update(params)
 
-    out = _baseline().signal_fn(bars, **merged)
+    base = _baseline()
+    out = base.signal_fn(bars, **merged)
     if len(out) == 4:
         entries, exits, s_entries, s_exits = out
     else:
@@ -177,15 +178,25 @@ def signal_fn(bars: pd.DataFrame, **params):
     def _b(s):
         return pd.Series(s).fillna(False).astype(bool)
 
+    # The baseline's own feature matrix when it declares an `ml_features` hook,
+    # None otherwise - and None is what selects the shared `causal_features`,
+    # so a baseline without the hook is filtered by exactly the model it was
+    # backtested under. Omitting this would ship a promoted Version B fitted on
+    # different columns from the Version B whose metrics justified promoting
+    # it, with nothing raising and no field on the page saying so. Resolved
+    # once and handed to both sides, as `run_dual_version_backtest` does.
+    _features_fn = bind_ml_features(base, merged)
+    _features = _features_fn(bars) if _features_fn is not None else None
+
     entries, exits = apply_ml_signal_filter(
         bars, entries, exits, symbol=symbol, cfg=cfg, threshold=threshold,
-        direction="long")
+        direction="long", features=_features)
     if s_entries is None:
         return _b(entries), _b(exits)
 
     s_entries, s_exits = apply_ml_signal_filter(
         bars, _b(s_entries), _b(s_exits), symbol=symbol, cfg=cfg,
-        threshold=threshold, direction="short")
+        threshold=threshold, direction="short", features=_features)
     return _b(entries), _b(exits), _b(s_entries), _b(s_exits)
 
 

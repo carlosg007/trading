@@ -794,7 +794,8 @@ def run_dual_version_backtest(strategy_code: str,
 
     from backtest.engine import (BacktestConfig, _assemble_result, _simulate,
                                  clean_signals_ls, unpack_signals)
-    from agents.tier3_workers import apply_ml_signal_filter, summarize_result
+    from agents.tier3_workers import (ML_FEATURES, apply_ml_signal_filter,
+                                     summarize_result)
 
     config = cfg or BacktestConfig()
 
@@ -882,10 +883,28 @@ def run_dual_version_backtest(strategy_code: str,
     result_b = None
     metrics_b = None
     entries_b = None
+    ml_feature_names = None
     if ml:
+        # The strategy's own feature matrix when it declares an `ml_features`
+        # hook, None otherwise - and None is what makes the shared
+        # `causal_features` the default, so a module without the hook is
+        # filtered by the model it always was. Both sides get the SAME matrix:
+        # the two classifiers differ in what they are trained on (each side's
+        # own completed trades, labelled with that side's P&L sign), not in
+        # what they read, and giving the sides different features would make
+        # the long and short vetoes two unrelated models sharing a name.
+        ml_feature_fn = info.get("ml_feature_fn")
+        # Resolved ONCE, here, rather than by handing the callable to both
+        # calls: the hook would otherwise run twice over the same bars, and a
+        # module whose features happened to depend on anything stateful could
+        # hand the two sides different matrices with nothing raising.
+        ml_features = ml_feature_fn(bars) if ml_feature_fn is not None else None
+        if ml_features is not None:
+            ml_feature_names = [str(c) for c in
+                                getattr(ml_features, "columns", [])]
         filtered, exits_b = apply_ml_signal_filter(
             bars, entries_a, exits_a, symbol=symbol, cfg=config,
-            threshold=threshold, direction="long")
+            threshold=threshold, direction="long", features=ml_features)
         # The short side gets its own classifier, trained on its own completed
         # trades with the short P&L sign. Reusing the long filter here would
         # score every short against a model whose training set is entirely
@@ -893,7 +912,7 @@ def run_dual_version_backtest(strategy_code: str,
         # "ML-filtered" while half its trades never met the classifier.
         s_filtered, s_exits_b = apply_ml_signal_filter(
             bars, s_entries_a, s_exits_a, symbol=symbol, cfg=config,
-            threshold=threshold, direction="short")
+            threshold=threshold, direction="short", features=ml_features)
         entries_b, exits_b, s_entries_b, s_exits_b = clean_signals_ls(
             filtered, exits_b, s_filtered, s_exits_b)
 
@@ -921,6 +940,15 @@ def run_dual_version_backtest(strategy_code: str,
         "initial_capital": config.initial_capital,
         "ml_threshold": threshold if ml else None,
         "ml_evaluated": bool(ml),
+        # WHICH FEATURES VERSION B WAS FITTED ON. The strategy's own column
+        # names when it declares an `ml_features` hook, the shared default's
+        # otherwise, and None when Version B did not run at all - which is a
+        # different statement from "the default was used" and must not collapse
+        # into it. Two strategies filtered on different matrices have Version
+        # Bs that are not comparable, so the answer travels with the metrics
+        # rather than being recoverable only by reading the module.
+        "ml_features": (None if not ml
+                        else ml_feature_names or list(ML_FEATURES)),
         # Plain-English sentences the module declares about itself, with the
         # bound parameters filled in. Presentation only - the tear sheet's
         # strategy card reads these, and nothing else does.

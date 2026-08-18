@@ -169,6 +169,18 @@ def load_strategy(strategy_path: str | Path,
             to come from the module rather than be recomputed downstream where
             they could drift out of step with the signals.
 
+    A third optional declaration is picked up, and this one is NOT cosmetic:
+
+        ml_features(bars, **params) -> DataFrame
+            The feature matrix Version B's classifier is fitted on, returned as
+            `module_info["ml_feature_fn"]` and handed to
+            `apply_ml_signal_filter` in place of the shared `causal_features`.
+            It decides which entries the filter vetoes, so it changes Version
+            B's trades - but it can only ever change VERSION B's. A module that
+            declares none gets None here and the shared default is used, which
+            is why every strategy written before this hook existed keeps the
+            Version B it always had, bit for bit.
+
     Every failure here raises. A worker that returns a null strategy on a bad
     import produces a backtest with no trades, which downstream is
     indistinguishable from a strategy that simply never triggered.
@@ -234,6 +246,10 @@ def load_strategy(strategy_path: str | Path,
 
     info["logic"] = _describe_strategy(module, info["bound_params"])
     info["indicator_fn"] = _bind_indicators(module, info["bound_params"])
+    # The feature matrix Version B is fitted on, when the module declares one.
+    # None for every module that does not, which is what keeps the shared
+    # `causal_features` the default and every existing Version B unchanged.
+    info["ml_feature_fn"] = bind_ml_features(module, info["bound_params"])
     return fn, info
 
 
@@ -261,16 +277,17 @@ def _describe_strategy(module: Any, params: dict) -> dict[str, str]:
     return out
 
 
-def _bind_indicators(module: Any, params: dict) -> Callable | None:
+def _bind_hook(module: Any, name: str, params: dict) -> Callable | None:
     """
-    Bind a module's `indicators(bars, **params)` hook, or None if it has none.
+    Bind a module's optional `<name>(bars, **params)` hook, or None if it has
+    none.
 
     Only the parameters the hook actually accepts are passed. A strategy whose
-    indicators depend on a subset of its parameters is normal, and an unknown
+    hook depends on a subset of its parameters is normal, and an unknown
     keyword here would break a report over a cosmetic function - the strict
     check belongs on the signal path, where a dropped parameter changes trades.
     """
-    fn = getattr(module, "indicators", None)
+    fn = getattr(module, name, None)
     if not callable(fn):
         return None
     try:
@@ -286,6 +303,35 @@ def _bind_indicators(module: Any, params: dict) -> Callable | None:
         return fn(bars, **accepted)
 
     return _bound
+
+
+def _bind_indicators(module: Any, params: dict) -> Callable | None:
+    """The `indicators` hook: the series the tear sheet draws over the candles."""
+    return _bind_hook(module, "indicators", params)
+
+
+def bind_ml_features(module: Any, params: dict) -> Callable | None:
+    """
+    The `ml_features` hook: the feature matrix Version B is fitted on.
+
+    Optional, and a module that declares none gets None here - which
+    `apply_ml_signal_filter` reads as "use the shared `causal_features`", so
+    every strategy written before this hook existed keeps the Version B it
+    always had, bit for bit.
+
+    Unlike `indicators`, this one is NOT cosmetic: it decides which entries the
+    classifier vetoes, so a hook that raises or returns the wrong shape must
+    not be swallowed. The validation lives in `apply_ml_signal_filter`, at the
+    point of use, rather than here - binding a hook is not the moment its
+    output can be checked.
+
+    Public because `backtest/promote.py`'s generated Version B wrapper binds
+    the hook the same way. A promoted Version B fitted on different columns
+    from the Version B whose metrics justified promoting it is the failure this
+    sharing exists to prevent, and two copies of the binding rule could drift
+    into exactly that.
+    """
+    return _bind_hook(module, "ml_features", params)
 
 
 def _reject_unknown_params(factory: Callable, params: dict, name: str) -> None:
@@ -1159,6 +1205,54 @@ def _label_baseline_trades(bars: pd.DataFrame,
             "label": (net > 0).astype(np.int64)}
 
 
+def _feature_matrix(features: Any, bars: pd.DataFrame) -> np.ndarray:
+    """
+    Resolve `apply_ml_signal_filter`'s `features` argument to a float array.
+
+    Accepts None (the shared `causal_features`), a DataFrame, or a callable
+    `f(bars) -> DataFrame`. The result must carry one row per bar, in the
+    frame's own order.
+
+    EVERY FAILURE HERE RAISES, including a hook that raises on its own. The
+    `indicators` hook is wrapped in a try/except upstream because a broken
+    chart annotation must not throw away a completed backtest; this one is the
+    opposite case. Falling back to `causal_features` when a module's hook fails
+    would run Version B on a different model from the one the module declared
+    and report it under the same name, and the only visible symptom would be a
+    slightly different set of trades.
+
+    A row count that disagrees with the bars is refused rather than aligned.
+    The rows are indexed positionally by signal bar - `matrix[signal_idx]` -
+    so a matrix short by one row silently scores every entry against the
+    features of a neighbouring bar.
+    """
+    if features is None:
+        matrix = causal_features(bars)
+    elif callable(features):
+        matrix = features(bars)
+    else:
+        matrix = features
+
+    if not isinstance(matrix, (pd.DataFrame, pd.Series, np.ndarray)):
+        raise TypeError(
+            f"features must resolve to a DataFrame, Series or array; got "
+            f"{type(matrix).__name__}")
+    if isinstance(matrix, pd.Series):
+        matrix = matrix.to_frame()
+
+    arr = np.asarray(matrix, dtype=float)
+    if arr.ndim == 1:
+        arr = arr.reshape(-1, 1)
+    if arr.shape[0] != len(bars):
+        raise ValueError(
+            f"the feature matrix has {arr.shape[0]} rows for {len(bars)} bars. "
+            f"Rows are indexed positionally by signal bar, so a mismatch "
+            f"scores entries against another bar's features.")
+    if arr.shape[1] == 0:
+        raise ValueError("the feature matrix has no columns to fit on")
+    return arr
+
+
 def apply_ml_signal_filter(bars: pd.DataFrame,
                            entries: pd.Series,
                            exits: pd.Series,
@@ -1167,7 +1261,8 @@ def apply_ml_signal_filter(bars: pd.DataFrame,
                            threshold: float = 0.50,
                            min_train_trades: int = MIN_TRAIN_TRADES,
                            random_state: int = 0,
-                           direction: str = "long") -> tuple[pd.Series, pd.Series]:
+                           direction: str = "long",
+                           features: Any = None) -> tuple[pd.Series, pd.Series]:
     """
     Version B of the Dual-Version Mandate: suppress the baseline's entries the
     classifier expects to lose.
@@ -1212,6 +1307,27 @@ def apply_ml_signal_filter(bars: pd.DataFrame,
         that lose money after costs.
     threshold
         Keep the entry when P(win) >= this. 0.50 is "more likely than not".
+    features
+        The matrix to fit on: a DataFrame of one row per bar, a callable
+        `f(bars) -> DataFrame`, or None for the shared `causal_features`.
+
+        None is the default and produces the run this function always produced,
+        bit for bit - a strategy that declares no `ml_features` hook is
+        filtered by exactly the model it was before this parameter existed.
+
+        Supplying one is how a strategy fits its classifier on the state its
+        own hypothesis is about rather than on a general-purpose matrix. It is
+        not free: two strategies filtered on different features have Version
+        Bs that are not comparable to each other, so the columns actually used
+        are recorded on the result by the callers that write metrics.
+
+        THE CAUSALITY REQUIREMENT TRAVELS WITH IT. Everything this function
+        guarantees about training only on closed trades is undone by a feature
+        column that reads the future - a `shift(-1)`, a centred window, or a
+        scaler fitted on the whole frame, which leaks the test period's
+        distribution into the training rows and is invisible to any
+        shift-based audit. The shape is checked here; causality cannot be, and
+        remains the declaring module's responsibility.
 
     Returns (entries, exits), boolean Series on the input index.
 
@@ -1255,8 +1371,8 @@ def apply_ml_signal_filter(bars: pd.DataFrame,
     if trades["signal_idx"].size == 0 or signal_bars.size == 0:
         return entries, exits
 
-    features = causal_features(bars).to_numpy(dtype=float)
-    train_rows = features[trades["signal_idx"]]
+    matrix = _feature_matrix(features, bars)
+    train_rows = matrix[trades["signal_idx"]]
     labels = trades["label"]
     # _pair_trades emits trades in order, so exits are non-decreasing and the
     # count of completed trades before bar s is a searchsorted, not a scan.
@@ -1281,7 +1397,7 @@ def apply_ml_signal_filter(bars: pd.DataFrame,
             model.fit(train_rows[:n_available], y)
             fitted_n = n_available
 
-        p_win = float(model.predict_proba(features[s:s + 1])[0, 1])
+        p_win = float(model.predict_proba(matrix[s:s + 1])[0, 1])
         if p_win < threshold:
             kept[s] = False
 
