@@ -219,7 +219,7 @@ bt-status  # = .venv/bin/python3 ~/src/trading/backtest/status.py
 streamlit run dashboard/app.py
 
 # Tests. No pytest config - each is a script that exits non-zero on failure.
-# Fourteen suites. Everything except test_streaming_lake, test_engine_batching
+# Fifteen suites. Everything except test_streaming_lake, test_engine_batching
 # and test_engine_vbt runs without the lake or a network (test_batch_runner's
 # --symbols checks and test_intraday_vol_mr's real-bar section skip, loudly,
 # without it). test_report_gates.py shells out to `node` for the trade
@@ -238,6 +238,8 @@ python tests/test_intraday_vol_mr.py    # the band-fade walk, against hand answe
 python tests/test_risk_params.py        # TP/SL/trailing walk, grid, leaderboard
 python tests/test_daily_metrics.py      # the daily-close metric frequency contract
 python tests/test_pipeline_filters.py   # entry filters, DOW attribution, the 5 stages
+OMP_NUM_THREADS=1 \
+  python tests/test_sma_momentum_crossover.py   # ADX vs TA-Lib, layers, ml_features
 
 # Dual-version integration on real bars (needs the lake). Pin the thread count:
 # the ML filter refits per completed trade on a few dozen rows, and on a
@@ -1021,6 +1023,39 @@ Write the indicator series the same way the signals are computed, in the same
 module. A second implementation in the report would be free to disagree with
 this one and draw a crossover a bar away from where the trade fired, with
 nothing raising.
+
+A third optional declaration, added 2026-08-18, is **not** cosmetic — it
+changes which entries Version B vetoes:
+
+```python
+def ml_features(bars, **params) -> pd.DataFrame:   # one row per bar, in order
+    ...                                            # the matrix the classifier
+                                                   # is fitted on
+```
+
+`load_strategy` binds it as `module_info["ml_feature_fn"]` and
+`run_dual_version_backtest` hands it to `apply_ml_signal_filter` as `features=`.
+**A module that declares none gets `None`, which selects the shared
+`causal_features`** — so every strategy written before the hook existed keeps
+the Version B it always had, bit for bit. `backtest/promote.py`'s generated
+Version B wrapper binds it through the same `bind_ml_features`, because a
+promoted Version B fitted on different columns from the Version B whose metrics
+justified promoting it is the failure the sharing exists to prevent.
+
+Three things travel with it. **Causality is the module's responsibility** — the
+filter's guarantee that it trains only on trades closed before the candidate is
+undone by a column that reads the future, and a scaler fitted on the whole
+frame leaks the test period's distribution into the training rows without
+tripping any shift-based audit. **Shape is checked and failures raise**: a row
+count that disagrees with the bars, an empty matrix, or a hook that throws is
+refused rather than being aligned or quietly fallen back to the default —
+unlike `indicators`, which is wrapped, because a broken chart annotation must
+not throw away a completed backtest and a silently swapped model must not
+survive one. And **the columns are recorded** on the run as
+`metrics["meta"]["ml_features"]`, `None` when Version B did not run at all:
+two strategies filtered on different matrices have Version Bs that are not
+comparable, and that fact has to travel with the numbers.
+`strategies/experimental/sma_momentum_crossover.py` is the first user.
 
 - **Dual-Version Mandate:** every strategy outputs two versions. **Version A** is
   a pure rule-based baseline (e.g. an SMA crossover); **Version B** adds an ML
