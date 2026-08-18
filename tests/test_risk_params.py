@@ -70,6 +70,8 @@ from agents.tier3_workers import load_strategy                   # noqa: E402
 from backtest.scan import _same_value, expand_grid               # noqa: E402
 from strategies.experimental import ema_crossover as EC          # noqa: E402
 from strategies.experimental import ema_trend_filter as ETF      # noqa: E402
+from strategies.experimental import (sma_momentum_crossover      # noqa: E402
+                                     as SMC)
 
 FAILURES: list[str] = []
 
@@ -518,10 +520,18 @@ def synthetic(n: int = 4000, seed: int = 5, drift: float = 0.02) -> pd.DataFrame
 # parameters reach the simulation — so the shorter anchor buys trades to
 # measure that on. The 800-bar default is exercised where it matters, against
 # real bars, by the runner.
+#
+# `sma_momentum_crossover` is exercised at macro_window=100 for the same
+# reason, and at its own default windows otherwise. Its `adx_threshold` is a
+# non-risk parameter and so belongs in this dict, in the module's positional
+# order — `_signal_arrays` takes it fourth, after the three windows.
 MODULES = (
     ("ema_crossover", EC, {"fast_period": 9, "slow_period": 21}),
     ("ema_trend_filter", ETF, {"fast_period": 9, "slow_period": 21,
                                "trend_period": 100}),
+    ("sma_momentum_crossover", SMC, {"fast_window": 10, "slow_window": 30,
+                                     "macro_window": 100,
+                                     "adx_threshold": 20.0}),
 )
 
 # Which modules trade both ways. `ema_crossover` is long only by its own
@@ -533,6 +543,7 @@ MODULES = (
 BIDIRECTIONAL = {
     "ema_crossover": False,
     "ema_trend_filter": True,
+    "sma_momentum_crossover": True,
 }
 
 # The per-bar drift that gives the short side something to work with. See
@@ -565,9 +576,16 @@ def _masks(mod, bars: pd.DataFrame, **params):
 # — so "is a target better than no target" is close to the central question
 # about it, and its 162-cell grid does not ask. Answering it needs one
 # out-of-band run at the winning cell with tp_atr_mult=None.
+#
+# `sma_momentum_crossover` does NOT, and it is the same gap for the same
+# reason: its grid was specified as [1.5, 2.0, 3.0] in the strategy request,
+# and it has no signal exit and no session flatten either, so the stop and the
+# target are its ENTIRE exit rule. Recorded at its PARAM_GRID with the
+# out-of-band run that answers the question.
 TP_NONE_SEARCHED = {
     "ema_crossover": True,
     "ema_trend_filter": False,
+    "sma_momentum_crossover": False,
 }
 
 # The grid-size bound, per module, declared for the same reason as the table
@@ -593,6 +611,7 @@ TP_NONE_SEARCHED = {
 MAX_GRID_CELLS = {
     "ema_crossover": 200,
     "ema_trend_filter": 1296,
+    "sma_momentum_crossover": 200,
 }
 
 
@@ -805,12 +824,12 @@ def test_the_two_walks_are_the_same_machine() -> None:
         for tp in (np.nan, 3.0):
             for tr in (True, False):
                 a = _run_raw(EC._walk, fx, sl, tp, tr)
-                b = _run_raw(ETF._walk, fx, sl, tp, tr)
-                for x, y in zip(a, b):
-                    if not np.array_equal(x, y, equal_nan=True):
-                        same = False
-    check("ema_crossover._walk == ema_trend_filter._walk on all 8 settings",
-          same)
+                for other in (ETF, SMC):
+                    b = _run_raw(other._walk, fx, sl, tp, tr)
+                    for x, y in zip(a, b):
+                        if not np.array_equal(x, y, equal_nan=True):
+                            same = False
+    check("all three modules' _walk agree on all 8 settings", same)
 
     # And the interpreted fallback must agree with the compiled build, or a
     # box without numba silently takes different trades.
@@ -827,8 +846,13 @@ def test_the_two_walks_are_the_same_machine() -> None:
     # fixture. Behavioural equality over 400 random bars is strong evidence and
     # not a proof - a branch neither side's fixture reaches would pass it.
     import inspect
-    check("the two walk copies are character-for-character the same source",
-          inspect.getsource(EC._walk_loop) == inspect.getsource(ETF._walk_loop))
+    sources = {name: inspect.getsource(mod._walk_loop)
+               for name, mod in (("ema_crossover", EC),
+                                 ("ema_trend_filter", ETF),
+                                 ("sma_momentum_crossover", SMC))}
+    check("the three walk copies are character-for-character the same source",
+          len(set(sources.values())) == 1,
+          " / ".join(f"{k}:{len(v)}" for k, v in sources.items()))
 
 
 # --------------------------------------------------------------------------
