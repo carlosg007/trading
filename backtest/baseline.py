@@ -1157,7 +1157,8 @@ def main(argv: list[str] | None = None) -> int:
         for label in ("a", "b"):
             prof = r.get(f"regime_profile_{label}")
             if prof:
-                regime_sources[f"{r['symbol']}_{r['tf']}_version_{label}"] = (
+                regime_sources[
+                    f"{r['symbol']}_{r['timeframe']}_version_{label}"] = (
                     prof.get("regime_source", "unrecorded"))
 
     # `kill_switch_regimes` is DERIVED from `optimal_regime` rather than
