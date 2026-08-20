@@ -67,6 +67,8 @@ from pathlib import Path
 import pandas as pd
 import pyarrow.dataset as ds
 
+from mdlib import regimes as _regimes
+
 # --------------------------------------------------------------------------
 LAKE = Path("/mnt/backtest/lake/futures/bars")
 REF = Path("/mnt/backtest/reference/futures")
@@ -290,7 +292,8 @@ def iter_bars(symbols: str | list[str],
               session_merge: bool = True,
               exclude_degraded: bool = False,
               exclude_rolls: bool = False,
-              respect_coverage: bool = False) -> Iterator[tuple[str, pd.DataFrame]]:
+              respect_coverage: bool = False,
+              regimes: bool = True) -> Iterator[tuple[str, pd.DataFrame]]:
     """
     Yield `(symbol, bars)` one symbol at a time, in the order requested.
 
@@ -316,6 +319,9 @@ def iter_bars(symbols: str | list[str],
     genuinely needed - correlation work, `wide()`, anything cross-sectional
     that compares symbols at the same timestamp. Use this when the work is
     per-symbol, which a backtest's is.
+
+    `regimes` behaves exactly as it does on `get_bars`, and is applied here so
+    both functions return the same columns - see that docstring.
 
     Note each yielded frame covers ONE symbol, so rolling windows computed on
     it cannot bleed across symbol boundaries. On the concatenated frame from
@@ -373,7 +379,27 @@ def iter_bars(symbols: str | list[str],
         if df.empty:
             continue
 
-        yield sym, df[LONG_COLUMNS].reset_index(drop=True)
+        out = df[LONG_COLUMNS].reset_index(drop=True)
+
+        # The pre-computed regime cache, left-joined on ts. Attached HERE
+        # rather than in `get_bars` so the two functions keep returning the
+        # same frame - `tests/test_streaming_lake.py` pins that equality, and
+        # a regime column present on one path and absent on the other would
+        # break it for a reason that has nothing to do with the bars.
+        #
+        # Joined per symbol, inside the loop, because the regime file is keyed
+        # by timestamp alone. On the concatenated frame `get_bars` builds, one
+        # timestamp carries a row per contract, and a join there would give
+        # every symbol NQ's ADX.
+        if regimes:
+            out = _regimes.attach(out, sym, tf, bar_flags={
+                "session_merge": bool(session_merge),
+                "exclude_degraded": bool(exclude_degraded),
+                "exclude_rolls": bool(exclude_rolls),
+                "respect_coverage": bool(respect_coverage),
+            })
+
+        yield sym, out
 
 
 def get_bars(symbols: str | list[str],
@@ -383,7 +409,8 @@ def get_bars(symbols: str | list[str],
              session_merge: bool = True,
              exclude_degraded: bool = False,
              exclude_rolls: bool = False,
-             respect_coverage: bool = False) -> pd.DataFrame:
+             respect_coverage: bool = False,
+             regimes: bool = True) -> pd.DataFrame:
     """
     Return bars in long format: ts, symbol, open, high, low, close, volume.
 
@@ -408,6 +435,23 @@ def get_bars(symbols: str | list[str],
     respect_coverage
         Clamp the start date to each symbol's intraday_start_year. Only
         meaningful for intraday timeframes.
+    regimes
+        Left-join the pre-computed regime cache (`adx_14`, `atr_14`,
+        `is_trending`, `is_high_vol`, `regime_quadrant`) when one exists for
+        that `(symbol, tf)`. Default True.
+
+        A MISS is not an error and is not filled in: the frame comes back with
+        no regime columns and one line on the console naming the file it
+        looked for. Nothing is computed on the fly, because the quadrant
+        boundary is a median over the in-sample window and taking it over
+        whatever window the caller asked for would make a bar's regime depend
+        on the date range it was read under. See `mdlib.regimes`.
+
+        `regime_quadrant` is `uint8`: 1 High-Vol/Trending, 2 High-Vol/Ranging,
+        3 Low-Vol/Trending, 4 Low-Vol/Ranging, and **0 = undefined** for the
+        ADX/ATR warm-up bars and for any bar outside the cache's span. 0 is
+        not a quadrant; a consumer that treats it as one is filing warm-up
+        bars under low volatility.
 
     Memory
     ------
@@ -422,6 +466,7 @@ def get_bars(symbols: str | list[str],
         exclude_degraded=exclude_degraded,
         exclude_rolls=exclude_rolls,
         respect_coverage=respect_coverage,
+        regimes=regimes,
     )]
 
     if not frames:
@@ -429,6 +474,29 @@ def get_bars(symbols: str | list[str],
 
     out = pd.concat(frames, ignore_index=True)
     del frames
+
+    # Concat UNIONS columns. When some requested symbols have a regime cache
+    # and others do not, the ones that do contribute the five regime columns
+    # and every row from an uncached symbol is filled with NaN - which turns
+    # `regime_quadrant` from uint8 into float64 and the two booleans into
+    # object. Nothing raises, and a consumer comparing `regime_quadrant == 1`
+    # still works, so the degraded dtype survives all the way into whatever
+    # reads it next.
+    #
+    # The declared dtypes are restored and the uncached rows are stamped
+    # UNDEFINED, which is what 0 already means everywhere else - a bar whose
+    # regime is not available. `_regimes.attach` has already named the missing
+    # file on the console once per symbol, so the gap is announced rather than
+    # papered over.
+    if "regime_quadrant" in out.columns:
+        out["regime_quadrant"] = (out["regime_quadrant"]
+                                  .fillna(_regimes.QUADRANT_UNDEFINED)
+                                  .astype("uint8"))
+        for col in ("is_trending", "is_high_vol"):
+            out[col] = out[col].fillna(False).astype(bool)
+        for col in ("adx_14", "atr_14"):
+            out[col] = out[col].astype("float32")
+
     return out.sort_values(["ts", "symbol"]).reset_index(drop=True)
 
 

@@ -219,7 +219,7 @@ bt-status  # = .venv/bin/python3 ~/src/trading/backtest/status.py
 streamlit run dashboard/app.py
 
 # Tests. No pytest config - each is a script that exits non-zero on failure.
-# Fifteen suites. Everything except test_streaming_lake, test_engine_batching
+# Sixteen suites. Everything except test_streaming_lake, test_engine_batching
 # and test_engine_vbt runs without the lake or a network (test_batch_runner's
 # --symbols checks and test_intraday_vol_mr's real-bar section skip, loudly,
 # without it). test_report_gates.py shells out to `node` for the trade
@@ -238,6 +238,7 @@ python tests/test_intraday_vol_mr.py    # the band-fade walk, against hand answe
 python tests/test_risk_params.py        # TP/SL/trailing walk, grid, leaderboard
 python tests/test_daily_metrics.py      # the daily-close metric frequency contract
 python tests/test_pipeline_filters.py   # entry filters, DOW attribution, the 5 stages
+python tests/test_regime_cache.py      # regime quadrants, theta_vol, the lake join
 OMP_NUM_THREADS=1 \
   python tests/test_sma_momentum_crossover.py   # ADX vs TA-Lib, layers, ml_features
 
@@ -330,6 +331,12 @@ python scripts/validate_lake.py                     # all symbols
 python scripts/validate_lake.py --symbols ES NQ --tf 1d
 python scripts/validate_lake.py --quick             # skip price checks
 
+# Build the pre-computed regime cache (ADX14/ATR14/quadrant per symbol+tf).
+# Writes /mnt/backtest/lake/regimes/{SYMBOL}_{TF}_regime.parquet ($BT_REGIME_CACHE
+# overrides). mdlib.lake picks these up automatically; re-run after a data pull.
+python scripts/precompute_regimes.py --symbols NQ,GC --tf 15m,30m
+python scripts/precompute_regimes.py --symbols ALL --tf 15m --force
+
 # Rebuild the per-symbol coverage reference (writes reference/futures/coverage*.csv)
 python scripts/coverage_summary.py
 
@@ -403,10 +410,57 @@ UTC). `wide(df, field)` pivots when a column per symbol is needed.
   stub "days" a year that silently corrupt every lookback window. The merge
   lives in the reader, not the lake — one function to change if it is wrong.
 - Hygiene flags: `exclude_degraded`, `exclude_rolls`, `respect_coverage`.
+- **`regimes=True` (default) left-joins the pre-computed regime cache** onto
+  each symbol's frame. Applied inside `iter_bars`, so `get_bars` inherits it
+  and the two keep returning the same columns —
+  `tests/test_streaming_lake.py` pins that equality. Joined PER SYMBOL, inside
+  the loop, because the regime file is keyed by timestamp alone and a join on
+  the concatenated frame would hand every contract NQ's ADX with the column
+  still fully populated. A cache MISS is not an error: the frame comes back
+  with no regime columns at all, rather than a column of zeros that would read
+  as a regime that was computed and found absent. Nothing is computed on the
+  fly — see `mdlib/regimes.py` for why an improvised threshold is worse than
+  no threshold.
 - Reference lookups (`coverage()`, `degraded_days()`, `roll_dates()`) read from
   `/mnt/backtest/reference/futures/` and are `lru_cache`d.
 - **Dual-dataset routing is not implemented** — `get_bars` has no `source`
   parameter, so the NT8 tree is unreachable through the reader. See Open Tasks.
+
+**`mdlib/regimes.py`** — the pre-computed regime feature cache, and the only
+place the quadrant encoding is written down. Wilder's ADX(14) and ATR(14) are a
+pure function of the bars, and every stage that profiles a result was
+recomputing them over the same series.
+
+- **`regime_quadrant` is `uint8`: 1 High-Vol/Trending, 2 High-Vol/Ranging,
+  3 Low-Vol/Trending, 4 Low-Vol/Ranging, and 0 = UNDEFINED.** The order matches
+  `backtest.profiler.REGIMES`, so a quadrant integer and a profiler label are
+  the same statement about the same bar. **0 is not a quadrant.** ADX and ATR
+  are undefined during their 14-bar warm-up, and `NaN > 25.0` is False — the
+  naive encoding files every warm-up bar under Low-Vol/Ranging, a populated
+  column of a regime nobody measured. Bars outside the cache's span get 0 for
+  the same reason. Anything reading the column must treat 0 as "no regime".
+- **The volatility boundary is pinned to the IN-SAMPLE window**, default
+  2013-01-01..2022-12-31, and then applied to the whole series including the
+  holdout years — which are therefore labelled by a boundary that never saw
+  them. A median taken over whatever window the caller asked for is a property
+  of the REQUEST, not of the contract: the same bar would be labelled one way
+  by an in-sample run and another by a holdout run, and Gate 3 would measure
+  retention between two strategies whose regime definitions disagree. `theta_vol`
+  is stored in the file, because a quadrant read without knowing which window
+  drew its boundary is not a measurement.
+- **This differs from `backtest.profiler.RegimeProfiler`, which takes the
+  median of whatever frame it was handed.** Nothing here changes that class and
+  Stage 1's screening numbers are untouched. Reconciling the two — pointing the
+  profiler at the cache — is its own scoped change, and it WILL move every
+  Stage 1 verdict, so it is not something to fold into an unrelated task.
+- **Provenance lives inside the parquet**, as schema metadata, not in a sidecar
+  that can be separated from what it describes: `theta_vol`, the in-sample
+  window, the indicator lengths, and the lake hygiene flags the bars were read
+  under. A cache built on bars that included roll days holds an ATR shaped by
+  those gaps; joined onto a run that excluded them every timestamp still
+  matches, so `attach` compares the flags and says so.
+- **Warnings go to stderr, once per (symbol, tf).** `mdlib.lake` is a library
+  and several callers parse a child process's stdout as data.
 
 **`backtest/engine.py`** — Runs the simulations.
 `run_backtest(symbols, tf, signal_fn, start, end, cfg)` → `BacktestResult(returns,
