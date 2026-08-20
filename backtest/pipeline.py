@@ -23,6 +23,14 @@ overwrites - deliberately, and only for the small JSON handoffs. Stage 4's tear
 sheets keep the repo's usual timestamped-directory rule, since those are the
 evidence a promotion cites and evidence is never overwritten.
 
+Stage 1 also hands Stage 2 a DECISION, not only a list: the Drop Unprofitable
+Days contract. Each surviving pair carries its own `dropped_days` and
+`exclude_days` - every weekday whose profit factor was below 1.00 - and
+`stage1_exclude_days` below is the one place that mapping is read. Keyed per
+`(symbol, timeframe)` rather than globally, because which weekdays lose is a
+fact about a contract at a timeframe and a single list applied to every survivor
+would prune a session that is profitable on one of them.
+
 Every handoff file records the stage that wrote it, the strategy, the date
 window and a UTC timestamp. `read_stage` checks the strategy name matches what
 the reader expects and raises when it does not: two strategies' pipelines run
@@ -142,6 +150,81 @@ def read_stage(path: Path, expect_stage: int | None = None,
             f"another's parameters is a mistake nothing downstream could "
             f"detect.")
     return blob
+
+
+def stage1_exclude_days(blob: dict[str, Any] | None
+                        ) -> dict[tuple[str, str], tuple[int, ...]]:
+    """
+    Stage 1's Drop Unprofitable Days decision, keyed by `(symbol, timeframe)`.
+
+    The handoff carries one `exclude_days` list PER SURVIVING PAIR - zero, one
+    or five days - because which weekdays lose is a fact about a contract at a
+    timeframe. Flattening them into one list and applying it everywhere would
+    prune a session that is profitable on NQ in order to fix one that is not on
+    GC, and nothing downstream could tell that had happened.
+
+    Pairs with an empty list are omitted from the mapping rather than mapped to
+    `()`. `()` and "no entry" mean the same thing to every caller here, and the
+    absent key keeps `if key in mapping` an honest test of "did Stage 1 exclude
+    anything for this pair".
+
+    A blob written before the contract existed - or by a run with
+    `--no-drop-losing-days` - simply yields an empty mapping. That is the correct
+    reading: no exclusion was decided, so Stage 2 sweeps the whole week.
+    """
+    out: dict[tuple[str, str], tuple[int, ...]] = {}
+    for pair in (blob or {}).get("surviving_pairs") or []:
+        if not isinstance(pair, dict):
+            continue
+        sym, tf = pair.get("symbol"), pair.get("tf")
+        days = tuple(sorted({int(d) for d in (pair.get("exclude_days") or [])}))
+        if sym and tf and days:
+            out[(str(sym), str(tf))] = days
+    return out
+
+
+def leaderboard(title: str, header: list[str], rows: list[list[str]],
+                align: list[str] | None = None,
+                empty: str = "nothing to report") -> str:
+    """
+    The end-of-stage table, rendered the same way by every stage.
+
+    One implementation rather than three, because the point of printing a
+    leaderboard at each stage is that an operator reads them as a sequence: a
+    Symbol column that is left-aligned in Stage 1 and right-aligned in Stage 2
+    makes two tables of the same contracts look like tables of different things.
+
+    Columns are sized to their widest CELL, not to a fixed width, so a long
+    parameter set widens its own column instead of being silently clipped -
+    a truncated winning parameter set reads as a complete one, and the whole
+    value of the row is that it names the parameters exactly.
+
+    `align` is one of `"<"` or `">"` per column, defaulting to left for the
+    first and right for the rest, which is the shape every one of these tables
+    has: identifiers on the left, numbers on the right. A stage that ends with
+    no rows still prints the heading and says so - an absent table reads as a
+    stage that did not finish.
+    """
+    align = align or (["<"] + [">"] * (len(header) - 1))
+    cells = [[str(c) for c in r] for r in rows]
+    widths = [max(len(header[i]), *(len(r[i]) for r in cells)) if cells
+              else len(header[i]) for i in range(len(header))]
+
+    def _line(vals: list[str]) -> str:
+        # Right-stripped: a padded final column leaves trailing spaces on every
+        # row, which survive into a log file and show up as a diff against the
+        # same table pasted anywhere else.
+        return ("  " + "  ".join(f"{v:{align[i]}{widths[i]}}"
+                                 for i, v in enumerate(vals))).rstrip()
+
+    rule = "  " + "  ".join("-" * w for w in widths)
+    total = max(len(rule), len(title) + 2)
+    out = ["", "=" * total, f"  {title}", "=" * total, _line(header), rule]
+    out.extend(_line(r) for r in cells)
+    if not cells:
+        out.append(f"  ({empty})")
+    out.append("=" * total)
+    return "\n".join(out)
 
 
 def next_step(lines: list[str]) -> str:

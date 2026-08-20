@@ -43,40 +43,71 @@ heading is clutter that teaches a reader to skip the gate table, which is the
 one thing they must not do when Stage 3 prints a real one. The gates are
 deferred, not hidden.
 
-**Profit factor is the screen, not Sharpe.** PF < 1.00 means the strategy took
-in less than it gave back after costs, on this contract. That is a fact about
-the symbol. A Sharpe screen at this stage would drop a contract for a lumpy
-equity path, which is the complaint Gate 1 stopped making when its Sharpe
-threshold was demoted to informational.
+**The screen is a REGIME, not a blended average.** Every configuration is
+profiled into four quadrants by `backtest.profiler.RegimeProfiler` — ADX(14)
+above 25 is Trending, ATR(14) above the contract's own median is High
+Volatility — and it survives when ONE quadrant carries a profit factor of 1.15
+or better over at least 30 trades in that quadrant, on either version.
 
-**The screen also carries a trade floor.** A profit factor over eleven trades
-is not a measurement, and 1.00 is a bar it clears by accident often enough to
-matter across a 108-cell screen. `MIN_TRADES` (30) is deliberately far below
-Gate 1's 100 - Stage 1 is asking whether an idea is worth sweeping, not
-certifying it - but it is not zero.
+That is a different question from the one this stage used to ask. A blended
+profit factor over the whole window asks whether a strategy makes money on
+every bar; a quadrant asks whether there is an environment in which it does.
+The second is the honest question for a strategy that will be governed by a
+live supervisor able to stand it down — and it is a LOOSER screen, which is why
+the bar sits at 1.15 rather than at the 1.00 break-even. The quadrant is picked
+as the best of four, so a bar it clears by a hair is a bar it clears by
+selection.
 
-**A configuration survives on EITHER version** (`max(PF_a, PF_b)`), each held
-to the trade floor on its own trade count. This is a change from the earlier
-rule, which decided survival on Version A alone even when `--ml` was on, and it
-is a real loosening: Version B's classifier is fitted on these same bars, so
-advancing a configuration on B advances it on the fitted side of a comparison
-the Dual-Version Mandate says is only settled out-of-sample. What that buys is
-that a filter which rescues a marginal contract gets its parameters swept in
-Stage 2 rather than being dropped here. What it costs is that a Stage 1
-survivor is no longer necessarily a contract with an unfiltered edge. Which
-version carried a configuration is recorded in its `reason` and in the report,
-so the distinction survives into Stage 2 rather than being averaged away.
+**Both bars bind on the SAME quadrant.** A 1.80 profit factor over eleven
+trades in one quadrant and a 0.90 over four hundred in another describe a
+strategy with no environment; pairing the best factor with the largest count
+would advance exactly that.
 
-The day-of-week table
----------------------
-Every configuration gets P&L, win rate and trade count by weekday in the
-markdown report, attributed by ENTRY session (see
-`backtest.report.day_of_week_breakdown`). It is DESCRIPTIVE. A losing weekday
-is a candidate for `--exclude-days` in a later run, not a parameter this script
-applies: excluding the days that lost money in-sample and re-scoring on those
-same bars is circular, and the Sharpe it produces is not a measurement. The
-suggestion is written with the trade count beside it so a reader can see
-whether the row is an edge or eleven trades.
+**A survivor is scoped, and the scope travels with it.** Each surviving pair
+carries `optimal_regime`, `regime_pf` and `kill_switch_regimes` — the three
+quadrants the contract must NOT trade in. The kill switch is DERIVED from the
+optimal regime rather than measured: a quadrant that failed the bar and a
+quadrant the strategy never traded in are the same instruction to a supervisor,
+and reading "no evidence" as "permitted" is what puts a contract into the one
+environment nobody sampled.
+
+**This is an in-sample selection layer, and the handoff says so.** The quadrant
+is chosen on the same bars Stage 2 sweeps and Stage 3 certifies, so a winning
+Sharpe is the best of (parameter combinations × this best-of-four pick).
+`regime_screen.selected_in_sample` records it, and Gate 3's holdout retention
+is the only evidence it generalised. Stage 2 deliberately sweeps the WHOLE
+window rather than masking to the winning quadrant — fitting parameters to a
+subset that was itself chosen as the best of four on these same bars would
+stack a second selection layer under the first.
+
+Calendar-day pruning is gone
+----------------------------
+**The Drop Unprofitable Days contract has been REMOVED from this stage.** No
+weekday is blacklisted, `surviving_assets.json` carries no `exclude_days`, and
+`pipeline.stage1_exclude_days` therefore yields an empty mapping — which that
+function already documents as the correct reading of a handoff with nothing
+excluded, so Stage 2 sweeps the whole week unless an explicit `--exclude-days`
+is passed to it directly.
+
+The day-of-week table is still written to the markdown report and is now purely
+DESCRIPTIVE — nothing downstream reads it. Which weekday loses is largely a
+restatement of which regime that weekday tends to fall in, and pruning the
+calendar masked the environment instead of naming it. Naming it is what the
+quadrant does.
+
+`--exclude-days` and `--news-filter` remain on the CLI. They come from the
+shared `add_filter_args` and are spelled identically on all five stages and on
+`bt-run`; they are explicit operator instructions applied by the engine, not a
+pruning decision this stage makes.
+
+Artifacts
+---------
+Besides `surviving_assets.json` and `stage1_baseline_report.md`, every
+configuration writes one regime profile per version —
+`regime_profile_<SYMBOL>_<TF>_version_<a|b>.json` — into the same pipeline
+directory. The report carries the four-quadrant matrix for every asset
+EVALUATED, survivors and drops alike: the matrix of a configuration that failed
+is how an operator sees whether it failed on its edge or on its sample size.
 """
 
 from __future__ import annotations
@@ -106,25 +137,25 @@ from backtest.event_calendar import (add_filter_args, describe_filters,   # noqa
                                filter_config_kwargs)
 from backtest.engine import BacktestConfig                         # noqa: E402
 from backtest.pipeline import (BASELINE_REPORT_FILE, SURVIVORS_FILE,  # noqa: E402
-                               next_step, pipeline_dir, stage_banner,
-                               write_stage)
-from backtest.report import (day_of_week_breakdown,                # noqa: E402
-                             losing_weekdays)
+                               leaderboard, next_step, pipeline_dir,
+                               stage_banner, write_stage)
+from backtest.profiler import REGIMES, RegimeProfiler               # noqa: E402
+from backtest.report import day_of_week_breakdown                   # noqa: E402
 from backtest.run import (load_bars, parse_param, parse_symbols,    # noqa: E402
                           parse_timeframes, resolve_strategy)
 
-# The survival bar. 1.00 is break-even after costs, not a comfort margin - the
-# same number Gate 1 binds on, so a configuration cannot survive Stage 1 on a
-# profit factor Gate 1 would later reject.
-MIN_PROFIT_FACTOR = 1.00
+# The survival bar, applied to ONE regime quadrant rather than to the whole
+# sample. 1.15 is deliberately above the 1.00 break-even the blended screen
+# used: a quadrant is a SUBSET chosen after the fact as the best of four, so a
+# bar it clears by a hair is a bar it clears by selection. 1.00 on a
+# best-of-four pick would advance a contract with no edge anywhere.
+MIN_REGIME_PROFIT_FACTOR = 1.15
 
-# The trade floor the surviving version must clear on its OWN trade count.
-# Below Gate 1's 100 on purpose: this stage decides what is worth sweeping, not
-# what is worth trading.
-MIN_TRADES = 30
-
-# Below this, the day-of-week row is reported but never suggested for exclusion.
-DOW_MIN_TRADES = 20
+# The trade floor the winning QUADRANT must clear on its own trade count - not
+# the configuration's total. A 1.60 profit factor over nine trades in one
+# quadrant is not an environment, and the whole point of screening per quadrant
+# is that the counts get smaller.
+MIN_REGIME_TRADES = 30
 
 # Ascending bar length, so the Stage 2 command lists timeframes the way an
 # operator reads them (1m, 5m, 15m, 30m) rather than the way `sorted` does
@@ -173,66 +204,152 @@ def _pair_label(symbol: str, tf: str) -> str:
 
 
 # --------------------------------------------------------------------------
-# The screen
+# The regime screen
 # --------------------------------------------------------------------------
-def screen(metrics: dict | None,
-           min_profit_factor: float = MIN_PROFIT_FACTOR,
-           metrics_b: dict | None = None,
-           min_trades: int = MIN_TRADES) -> tuple[bool, str]:
+def best_quadrant(profile: dict | None,
+                  min_profit_factor: float = MIN_REGIME_PROFIT_FACTOR,
+                  min_trades: int = MIN_REGIME_TRADES) -> dict | None:
     """
-    Did this configuration carry the edge? Returns `(survived, reason)`.
+    The best quadrant of one version's profile that CLEARS BOTH bars, or None.
 
-    A configuration survives when EITHER version's profit factor is at or above
-    `min_profit_factor` AND that same version produced at least `min_trades`
-    trades. The two bars are applied to one version at a time on purpose: a
-    Version B profit factor of 1.4 over nine surviving trades is not rescued by
-    Version A's four hundred, and pairing the best PF with the largest trade
-    count would let exactly that through.
+    Both bars are applied to the same quadrant, which is the whole point: a
+    1.80 profit factor in a quadrant with eleven trades and a 0.90 in one with
+    four hundred describe a strategy with no environment, and pairing the best
+    factor with the largest count would let exactly that through.
 
-    A run that produced no trades is dropped with its own reason rather than
-    being folded into "profit factor too low". No trades is a fact about the
-    strategy on this contract - the signals never fired - and a reader chasing
-    a 0.00 profit factor would go looking for losses that do not exist.
+    Ranked on profit factor, ties broken on the LARGER trade count. Ties are
+    real - a quadrant no bar reaches and one the strategy never traded in both
+    round to the same number - and between two equal factors the one measured
+    over more trades is the better-evidenced claim, not the one the quadrant
+    order happened to put first.
 
-    `metrics_b=None` means Version B did not run, and only Version A is
+    A profit factor of `inf` (the quadrant never lost) is a result and clears;
+    the profiler's 999 sentinel for the same case is left as it is rather than
+    normalised here, because rewriting another module's sentinel in a screen is
+    how two modules come to disagree about what 999 meant.
+    """
+    if not profile:
+        return None
+    best = None
+    for regime in REGIMES:
+        stats = (profile.get("regime_breakdown") or {}).get(regime)
+        if not stats:
+            continue
+        pf = _num(stats.get("profit_factor"))
+        n = int(stats.get("trade_count", 0) or 0)
+        if pf is None or pf < float(min_profit_factor) or n < int(min_trades):
+            continue
+        cand = {"regime": regime, "profit_factor": pf, "trade_count": n,
+                "win_rate": _num(stats.get("win_rate")),
+                "net_pnl": _num(stats.get("net_pnl"))}
+        if best is None or (pf, n) > (best["profit_factor"],
+                                      best["trade_count"]):
+            best = cand
+    return best
+
+
+def _top_quadrant(profile: dict | None) -> dict | None:
+    """
+    The highest-profit-factor quadrant IGNORING both bars — for the drop
+    reason only, never for survival.
+
+    "best profit factor 1.04 in High Volatility / Trending, below 1.15" tells
+    an operator what to change. A bare "no quadrant cleared the bar" sends them
+    to re-run the stage to find out how close it was.
+    """
+    rows = [(_num(v.get("profit_factor")), int(v.get("trade_count", 0) or 0), k)
+            for k, v in ((profile or {}).get("regime_breakdown") or {}).items()
+            if _num(v.get("profit_factor")) is not None]
+    if not rows:
+        return None
+    pf, n, regime = max(rows)
+    return {"regime": regime, "profit_factor": pf, "trade_count": n}
+
+
+def kill_switch_regimes(optimal_regime: str | None) -> list[str]:
+    """
+    The three quadrants a survivor must NOT trade in, derived from the one it
+    must.
+
+    Derived rather than measured on purpose. A quadrant that failed the bar and
+    a quadrant the strategy never traded in are the same instruction to a live
+    supervisor — stand down — and treating "no evidence" as "permitted" is the
+    reading that puts a strategy into the one environment nobody sampled.
+
+    An unknown or absent optimal regime yields an EMPTY list, never all four.
+    "Trade nowhere" is a live-trading instruction, and it must come from a
+    decision rather than from a missing value.
+    """
+    if not optimal_regime or optimal_regime not in REGIMES:
+        return []
+    return [r for r in REGIMES if r != optimal_regime]
+
+
+def screen(profiles: dict | None,
+           min_profit_factor: float = MIN_REGIME_PROFIT_FACTOR,
+           min_trades: int = MIN_REGIME_TRADES) -> tuple[bool, str, dict | None]:
+    """
+    Did this configuration carry an edge in ANY ONE regime? Returns
+    `(survived, reason, best)`.
+
+    `profiles` is `{"A": profile_or_None, "B": profile_or_None}` as
+    `RegimeProfiler.generate_profile` returns them. A configuration survives
+    when EITHER version has a quadrant at or above `min_profit_factor` over at
+    least `min_trades` trades IN THAT QUADRANT, and `best` carries the winning
+    quadrant with the version that produced it.
+
+    This replaces the blended profit-factor screen, and it is a different
+    question. The old one asked whether the strategy made money across every
+    bar of the window; this asks whether there is an environment in which it
+    does, and it will advance a contract whose blended factor is below 1.00 on
+    the strength of one quadrant — which is the intended loosening, and the
+    reason the quadrant bar sits at 1.15 rather than 1.00.
+
+    **The quadrant is chosen in-sample, on the same bars Stage 2 sweeps and
+    Stage 3 certifies.** Best-of-four is a selection layer stacked on the
+    parameter search, exactly as the weekday pruning it replaces was. The
+    handoff records it; Gate 3's holdout retention is the only evidence it
+    generalised.
+
+    `profiles["B"] = None` means Version B did not run, and only Version A is
     considered. A skipped comparison is not one the baseline won.
     """
-    if not metrics or not metrics.get("ok", True):
-        return False, f"run failed: {(metrics or {}).get('error', 'unknown')}"
+    views = [(k, v) for k, v in (("A", (profiles or {}).get("A")),
+                                 ("B", (profiles or {}).get("B"))) if v]
+    if not views:
+        return False, "no regime profile — the run produced nothing to profile", None
 
-    views = [("A", metrics)]
-    if metrics_b is not None and metrics_b.get("ok", True):
-        views.append(("B", metrics_b))
+    if not any(int(v.get("trades_profiled", 0) or 0) for _, v in views):
+        return False, ("no trades landed in any regime — the signals never "
+                       "fired, or every entry sat inside the indicator "
+                       "warm-up"), None
 
-    scored = []                       # (pf, label, n) for a defined PF
-    counts = []                       # n per version, defined or not
-    for label, m in views:
-        n = int(m.get("trade_count", 0) or 0)
-        counts.append(n)
-        pf = m.get("profit_factor")
-        # `_profit_factor` returns inf for a run with no losing trades. That is
-        # not a missing value, and it survives.
-        if pf is not None and not pd.isna(pf):
-            scored.append((float(pf), label, n))
-
-    if not any(counts):
-        return False, "no trades - the signals never fired on this contract"
-
-    clearing = [s for s in scored
-                if s[0] >= min_profit_factor and s[2] >= int(min_trades)]
+    clearing = []
+    for label, prof in views:
+        q = best_quadrant(prof, min_profit_factor, min_trades)
+        if q:
+            clearing.append({**q, "version": label})
     if clearing:
-        pf, label, n = max(clearing)
-        return True, f"Version {label} profit factor {pf:.2f} over {n:,} trades"
+        best = max(clearing, key=lambda q: (q["profit_factor"],
+                                            q["trade_count"]))
+        return True, (f"Version {best['version']} profit factor "
+                      f"{best['profit_factor']:.2f} over "
+                      f"{best['trade_count']:,} trades in "
+                      f"{best['regime']}"), best
 
-    if not scored:
-        return False, f"profit factor undefined over {max(counts):,} trades"
-
-    pf, label, n = max(scored)
-    if pf < min_profit_factor:
-        return False, (f"best profit factor {pf:.2f} (Version {label}) < "
-                       f"{min_profit_factor:.2f} over {n:,} trades")
-    return False, (f"Version {label} profit factor {pf:.2f} but only {n:,} "
-                   f"trades < {int(min_trades)}")
+    near = [(t, label) for label, prof in views
+            if (t := _top_quadrant(prof)) is not None]
+    if not near:
+        return False, ("no quadrant has a defined profit factor over any "
+                       "trades"), None
+    top, label = max(near, key=lambda x: x[0]["profit_factor"])
+    if top["profit_factor"] < float(min_profit_factor):
+        return False, (f"best quadrant {top['profit_factor']:.2f} (Version "
+                       f"{label}, {top['regime']}) < "
+                       f"{float(min_profit_factor):.2f}"), None
+    return False, (f"Version {label} clears {float(min_profit_factor):.2f} in "
+                   f"{top['regime']} but on only {top['trade_count']:,} "
+                   f"trades < {int(min_trades)}"), None
 
 
 # --------------------------------------------------------------------------
@@ -291,8 +408,23 @@ def _scalars(m: dict | None) -> dict | None:
 
 def _row(symbol: str, tf: str, metrics_a: dict, metrics_b: dict | None,
          survived: bool, reason: str, dow: pd.DataFrame,
-         bars: int, elapsed: float) -> dict:
+         bars: int, elapsed: float,
+         profiles: dict | None = None,
+         best: dict | None = None) -> dict:
+    """
+    One configuration's complete record — both versions' metrics, both
+    versions' four-quadrant regime breakdowns, and the screen's verdict.
+
+    `best` is the winning quadrant `screen` returned, or None when nothing
+    cleared. The three regime fields are written from it and are the ones the
+    handoff carries: `optimal_regime`, `regime_pf`, `kill_switch_regimes`.
+    A dropped configuration gets `None` and `[]` rather than a plausible
+    second-best — a kill switch derived from a quadrant that failed the bar is
+    a live-trading instruction nothing certified.
+    """
     a, b = _scalars(metrics_a), _scalars(metrics_b)
+    profiles = profiles or {}
+    optimal = (best or {}).get("regime")
 
     return {
         "symbol": symbol,
@@ -316,8 +448,22 @@ def _row(symbol: str, tf: str, metrics_a: dict, metrics_b: dict | None,
         "metrics_a": a,
         "metrics_b": b,
         "entry_filters": dict(metrics_a.get("entry_filters") or {}),
+        # Descriptive only, and it no longer decides anything. The weekday
+        # table is kept because the attribution is worth reading; the pruning
+        # that used to be derived from it is gone, and the regime breakdown
+        # below is what the screen acts on.
         "dow_breakdown": dow.to_dict("records"),
-        "losing_weekdays": losing_weekdays(dow, DOW_MIN_TRADES),
+        # The full four-quadrant matrix per version, so the report can print
+        # what the screen saw rather than a summary of it.
+        "regime_profile_a": profiles.get("A"),
+        "regime_profile_b": profiles.get("B"),
+        "regime_version": (best or {}).get("version"),
+        # The three fields the handoff carries, in the schema the live
+        # supervisor reads.
+        "optimal_regime": optimal,
+        "regime_pf": (best or {}).get("profit_factor"),
+        "regime_trade_count": (best or {}).get("trade_count"),
+        "kill_switch_regimes": kill_switch_regimes(optimal),
     }
 
 
@@ -360,13 +506,129 @@ def _md_scorecard(row: dict) -> list[str]:
     return _md_table(header, body, ["---", "---:", "---:", "---:"])
 
 
+def _regime_cell(row: dict) -> str:
+    """
+    The optimal-regime column, in the two states it has.
+
+    `High Volatility / Trending (1.28)` — a quadrant cleared both bars.
+    `none`                             — nothing did, so nothing is promoted
+                                          and no kill switch is derived.
+
+    A dropped configuration never prints a regime name. Naming its best
+    quadrant here would read as an environment the strategy was cleared to
+    trade in, which is the one thing the screen just decided against.
+    """
+    regime = row.get("optimal_regime")
+    if not regime:
+        return "none"
+    return f"{regime} ({_fmt(row.get('regime_pf'))})"
+
+
+def _md_regime_matrix(profile: dict | None, label: str,
+                      min_pf: float = MIN_REGIME_PROFIT_FACTOR,
+                      min_trades: int = MIN_REGIME_TRADES) -> list[str]:
+    """
+    The four-quadrant breakdown matrix for ONE version.
+
+    Every one of the four regimes is a row, including those the strategy never
+    traded in. An absent row reads as missing data when it means "this
+    strategy never took a trade in a low-volatility range", which is a finding
+    about the strategy rather than a gap in the table — the same rule the
+    day-of-week breakdown follows for a weekday with no trades.
+
+    The VERDICT column states which bar a quadrant missed, so a reader can see
+    whether a regime failed on its edge or on its sample size. Those are fixed
+    by different work.
+    """
+    if profile is None:
+        return [f"_Version {label} was NOT RUN, so it has no regime profile._"]
+    breakdown = profile.get("regime_breakdown") or {}
+    if not breakdown:
+        return [f"_Version {label} placed no trades in any regime "
+                f"({int(profile.get('trades_unplaced', 0) or 0):,} outside "
+                f"every quadrant)._"]
+
+    body = []
+    for regime in REGIMES:
+        stats = breakdown.get(regime)
+        if not stats:
+            body.append([regime, "0", "—", "—", "—", "no trades in this regime"])
+            continue
+        pf = _num(stats.get("profit_factor"))
+        n = int(stats.get("trade_count", 0) or 0)
+        if pf is not None and pf >= min_pf and n >= min_trades:
+            verdict = "**CLEARS**"
+        elif pf is not None and pf < min_pf:
+            verdict = f"PF < {min_pf:.2f}"
+        elif n < min_trades:
+            verdict = f"{n} trades < {min_trades}"
+        else:
+            verdict = "profit factor undefined"
+        body.append([
+            regime, f"{n:,}",
+            _fmt(stats.get("win_rate"), ".1f", suffix="%"),
+            _fmt(pf),
+            _fmt(stats.get("net_pnl"), ",.0f"),
+            verdict,
+        ])
+    lines = _md_table(
+        ["Regime", "Trades", "Win rate", "PF", "Net P&L", "Verdict"], body,
+        ["---", "---:", "---:", "---:", "---:", "---"])
+
+    unplaced = int(profile.get("trades_unplaced", 0) or 0)
+    if unplaced:
+        lines += ["",
+                  f"_{unplaced:,} trade(s) are in NO quadrant — the entry is "
+                  f"outside this frame, or inside the 14-bar ADX/ATR warm-up "
+                  f"where the regime is undefined — and are excluded from "
+                  f"every row above._"]
+    return lines
+
+
+def _md_regimes(row: dict) -> list[str]:
+    """Both versions' matrices, and what the screen concluded from them."""
+    lines = ["**Version A · rules**", ""]
+    lines += _md_regime_matrix(row.get("regime_profile_a"), "A")
+    lines += ["", "**Version B · ML-filtered**", ""]
+    lines += _md_regime_matrix(row.get("regime_profile_b"), "B")
+    lines.append("")
+    if row.get("optimal_regime"):
+        lines += [
+            f"**Optimal regime: {row['optimal_regime']}** "
+            f"(Version {row.get('regime_version')}, PF "
+            f"{_fmt(row.get('regime_pf'))} over "
+            f"{int(row.get('regime_trade_count') or 0):,} trades)  ",
+            f"**Kill switch — do NOT trade in:** "
+            f"{', '.join(row.get('kill_switch_regimes') or []) or '(none)'}",
+            "",
+            "_The quadrant is the best of four, chosen IN-SAMPLE on THESE "
+            "bars — the same bars Stage 2 then sweeps and Stage 3 certifies. "
+            "It is a selection layer stacked on the parameter search, not a "
+            "free improvement, and Gate 3's holdout retention is the only "
+            "evidence that it generalised._",
+        ]
+    else:
+        lines.append("_No quadrant cleared both bars, so no optimal regime "
+                     "and no kill switch are derived._")
+    return lines
+
+
 def _md_dow(row: dict) -> list[str]:
+    """
+    The weekday attribution, DESCRIPTIVE ONLY since the regime firewall
+    replaced the Drop Unprofitable Days contract.
+
+    It reports all five weekdays whether they made money or lost it, and
+    nothing downstream reads it. A losing weekday is no longer a session this
+    stage prunes: which weekday loses is largely a restatement of which regime
+    that weekday tends to fall in, and pruning the calendar masked the
+    environment instead of naming it.
+    """
     recs = row.get("dow_breakdown") or []
     if not recs:
         return ["_No trades to attribute._"]
     body = []
     for r in recs:
-        thin = " ⚠ thin" if int(r.get("trades", 0) or 0) < DOW_MIN_TRADES else ""
         wr = _num(r.get("win_rate"))
         body.append([
             str(r.get("day", "?")),
@@ -375,23 +637,12 @@ def _md_dow(row: dict) -> list[str]:
             _fmt(None if wr is None else wr * 100.0, ".1f", suffix="%"),
             _fmt(r.get("avg_pnl"), ",.0f"),
             _fmt(r.get("profit_factor"), ".2f"),
-            _fmt(r.get("pct_of_net_pnl"), ".1f", suffix="%") + thin,
+            _fmt(r.get("pct_of_net_pnl"), ".1f", suffix="%"),
         ])
-    lines = _md_table(
+    return _md_table(
         ["Day", "Trades", "Net P&L", "Win rate", "Avg P&L", "PF",
          "Share of net P&L"], body,
         ["---", "---:", "---:", "---:", "---:", "---:", "---:"])
-    losers = row.get("losing_weekdays") or []
-    if losers:
-        names = ", ".join(str(r.get("day")) for r in recs
-                          if int(r.get("weekday", -1)) in losers)
-        lines += ["",
-                  f"_{names} lost money on this configuration. That is a "
-                  f"CANDIDATE for `--exclude-days "
-                  f"{','.join(str(d) for d in losers)}`, not a result: "
-                  f"excluding the days that lost in-sample and re-scoring the "
-                  f"same bars proves nothing._"]
-    return lines
 
 
 def build_markdown_report(strat_name: str, header: dict,
@@ -432,12 +683,14 @@ def build_markdown_report(strat_name: str, header: dict,
                 _fmt(r["sharpe_a"]),
                 _fmt(r["max_drawdown_pct_a"], ".2f", suffix="%"),
                 f"{int(r['trades_a'] or 0):,}",
+                _regime_cell(r),
                 r["reason"],
             ])
         W.extend(_md_table(
             ["Status", "Symbol", "TF", "PF (A)", "PF (B)", "Sharpe (A)",
-             "Max DD (A)", "Trades (A)", "Reason"], body,
-            ["---", "---", "---", "---:", "---:", "---:", "---:", "---:", "---"]))
+             "Max DD (A)", "Trades (A)", "Optimal regime", "Reason"], body,
+            ["---", "---", "---", "---:", "---:", "---:", "---:", "---:",
+             "---", "---"]))
         W.append("")
 
     if errors:
@@ -465,7 +718,12 @@ def build_markdown_report(strat_name: str, header: dict,
         W.append("")
         W.extend(_md_scorecard(r))
         W.append("")
-        W.append("#### Day of week · Version A, attributed by entry session")
+        W.append("#### Regime breakdown · the four-quadrant screening matrix")
+        W.append("")
+        W.extend(_md_regimes(r))
+        W.append("")
+        W.append("#### Day of week · Version A, attributed by entry session "
+                 "(descriptive — nothing is pruned from it)")
         W.append("")
         W.extend(_md_dow(r))
         W.append("")
@@ -497,9 +755,43 @@ def write_markdown_report(path: Path, text: str) -> Path:
 # --------------------------------------------------------------------------
 # One configuration
 # --------------------------------------------------------------------------
+def profile_versions(bars: pd.DataFrame, out: dict, symbol: str, tf: str,
+                     strat_name: str, out_dir: Path | str | None = None,
+                     quiet: bool = True) -> dict[str, dict | None]:
+    """
+    The four-quadrant regime profile of BOTH versions of one configuration.
+
+    Each version is profiled from its own `BacktestResult` against the SAME
+    bar frame, so the ADX/ATR classification of every bar is identical and the
+    two breakdowns are comparable. Profiling Version B against a frame rebuilt
+    for it would let the quadrant boundaries move between the two columns of
+    the same table, and nothing would raise.
+
+    Returns `{"A": profile, "B": profile_or_None}`. `B` is None when `--ml` was
+    off — a version that never ran has no regime profile, which is a different
+    statement from one that has an empty breakdown.
+
+    `quiet` by default: this stage's console is one progress line per
+    configuration, and 108 configurations x 2 versions is 216 ten-line tables.
+    The matrices go into `stage1_baseline_report.md`, and each version's own
+    `regime_profile_<SYMBOL>_<TF>_version_<v>.json` artifact is written
+    regardless.
+    """
+    profiles: dict[str, dict | None] = {"A": None, "B": None}
+    for label, key in (("A", "version_a"), ("B", "version_b")):
+        version = out.get(key)
+        if not version or version.get("result") is None:
+            continue
+        profiles[label] = RegimeProfiler(
+            bars, version["result"], strat_name, symbol, tf,
+            out_dir=out_dir, version=label.lower(), quiet=quiet
+        ).generate_profile()
+    return profiles
+
+
 def run_symbol(symbol: str, path: Path, tf: str, params: dict,
                args: argparse.Namespace, cfg_kwargs: dict,
-               tag: str = "") -> dict:
+               tag: str = "", out_dir: Path | None = None) -> dict:
     """
     One (symbol, timeframe) configuration, defaults only, no sweep.
 
@@ -532,11 +824,63 @@ def run_symbol(symbol: str, path: Path, tf: str, params: dict,
     metrics_a = a["metrics"]
     metrics_b = b["metrics"] if b else None
 
+    strat_name = path.parent.name if path.stem == "strat" else path.stem
+    profiles = profile_versions(bars, out, symbol, tf, strat_name, out_dir)
+    survived, reason, best = screen(profiles, args.min_profit_factor,
+                                    args.min_trades)
+
+    # Version A's trades, deliberately, even when --ml ran: the weekday table
+    # describes what the RULES did, and attributing it on Version B's surviving
+    # trades would describe what a classifier left behind. Descriptive only -
+    # nothing downstream reads it since the regime firewall replaced the
+    # Drop Unprofitable Days contract.
     dow = day_of_week_breakdown(metrics_a.get("trades"))
-    survived, reason = screen(metrics_a, args.min_profit_factor, metrics_b,
-                              args.min_trades)
     return _row(symbol, tf, metrics_a, metrics_b, survived, reason, dow,
-                len(bars), time.time() - t0)
+                len(bars), time.time() - t0, profiles=profiles, best=best)
+
+
+def survivors_leaderboard(rows: list[dict]) -> str:
+    """
+    STAGE 1 SURVIVORS LEADERBOARD - the table the stage ends on.
+
+    Survivors only, sorted by the REGIME profit factor the screen decided on,
+    descending — not by either version's blended factor. The blended number is
+    not what advanced the configuration and ranking on it would put a contract
+    with a broad mediocre edge above one with a sharp edge in a single
+    environment, which inverts the question this stage now asks.
+
+    `OPTIMAL REGIME` and `REGIME PF` are the two fields the live supervisor
+    reads. The kill switch is NOT a column here: it is always the other three
+    quadrants, so spelling it out would repeat the optimal regime three times
+    per row and push the table past 170 characters — where a terminal wraps it
+    and the alignment that makes a leaderboard readable is gone. It is printed
+    in full, per survivor, in the REGIME FIREWALL block below the table, and
+    carried in full on every handoff row.
+
+    A Version B that never ran prints NOT RUN, never a dash and never 0.00: a
+    comparison that was not made is not one the baseline won.
+    """
+    survivors = [r for r in rows if r["survived"]]
+
+    body = []
+    for r in sorted(survivors, key=lambda r: _num(r.get("regime_pf")) or 0.0,
+                    reverse=True):
+        body.append([
+            r["symbol"], r["timeframe"],
+            _fmt(r["profit_factor_a"]),
+            _fmt(r["profit_factor_b"], na="NOT RUN")
+            if r["ml_evaluated"] else "NOT RUN",
+            r.get("optimal_regime") or "none",
+            _fmt(r.get("regime_pf")),
+            f"{int(r.get('regime_trade_count') or 0):,}",
+            f"V{r.get('regime_version') or '?'}",
+        ])
+    return leaderboard(
+        "STAGE 1 SURVIVORS LEADERBOARD",
+        ["SYMBOL", "TF", "PF (A)", "PF (B)", "OPTIMAL REGIME", "REGIME PF",
+         "REGIME TRADES", "VER"],
+        body, align=["<", "<", ">", ">", "<", ">", ">", "<"],
+        empty="no configuration cleared the regime firewall")
 
 
 def _evaluated_line(tag: str, row: dict) -> str:
@@ -554,11 +898,16 @@ def _evaluated_line(tag: str, row: dict) -> str:
 # --------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Stage 1/5 — baseline survival screen on default "
-                    "parameters. Drops (symbol, timeframe) configurations "
-                    "whose best profit factor is below 1.00, writes the "
-                    "surviving pairs for Stage 2, and writes the full detail "
-                    "to stage1_baseline_report.md.")
+        description="Stage 1/5 — the REGIME-AWARE SCREENING FIREWALL. Runs "
+                    "each (symbol, timeframe) configuration on default "
+                    "parameters, profiles both versions into the four "
+                    "volatility/trend quadrants, and keeps only the "
+                    "configurations with a quadrant at profit factor "
+                    f"{MIN_REGIME_PROFIT_FACTOR:.2f} or better over "
+                    f"{MIN_REGIME_TRADES}+ trades. Writes each survivor's "
+                    "optimal_regime, regime_pf and kill_switch_regimes for "
+                    "Stage 2, and the full four-quadrant matrix per asset to "
+                    "stage1_baseline_report.md.")
     p.add_argument("--strat", required=True, help="Strategy name or path")
     p.add_argument("--symbols", default=None,
                    help="NQ, a list NQ,ES,CL, or ALL")
@@ -583,12 +932,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--contracts", type=int, default=1)
     p.add_argument("--slippage-ticks", type=float, default=1.0)
     p.add_argument("--flat-by-close", action="store_true")
-    p.add_argument("--min-profit-factor", type=float, default=MIN_PROFIT_FACTOR,
-                   help=f"Survival bar on max(PF A, PF B) "
-                        f"(default {MIN_PROFIT_FACTOR:.2f})")
-    p.add_argument("--min-trades", type=int, default=MIN_TRADES,
-                   help=f"Trade floor the surviving version must clear on its "
-                        f"own trade count (default {MIN_TRADES})")
+    p.add_argument("--min-profit-factor", type=float,
+                   default=MIN_REGIME_PROFIT_FACTOR,
+                   help=f"Profit-factor bar ONE regime quadrant must clear "
+                        f"(default {MIN_REGIME_PROFIT_FACTOR:.2f}). Above the "
+                        f"1.00 break-even a blended screen would use, because "
+                        f"the quadrant is the best of four and a bar cleared "
+                        f"by a hair is a bar cleared by selection.")
+    p.add_argument("--min-trades", type=int, default=MIN_REGIME_TRADES,
+                   help=f"Trade floor the winning QUADRANT must clear on its "
+                        f"own trade count, not the configuration's total "
+                        f"(default {MIN_REGIME_TRADES})")
     p.add_argument("--out-dir", default=None,
                    help="Override <BT_ARTIFACTS>/pipeline/<strategy>/")
     add_filter_args(p)
@@ -621,6 +975,20 @@ def stage2_command(strat: str, pairs: list[dict], start: str | None,
         f"--start {start or '2013-01-01'} "
         f"--end {end or '2022-12-31'}",
     ]
+    profiled = [p for p in pairs if p.get("optimal_regime")]
+    if profiled:
+        lines += [
+            "",
+            f"  {SURVIVORS_FILE} carries each pair's optimal_regime, "
+            f"regime_pf and",
+            f"  kill_switch_regimes — {len(profiled)} of {len(pairs)} "
+            f"pair(s). Stage 2 sweeps the WHOLE",
+            "  window; the regime is a live-execution instruction, not a mask "
+            "on the sweep.",
+            "  Masking the sweep to the winning quadrant would fit parameters "
+            "to a subset",
+            "  that was itself chosen as the best of four on these same bars.",
+        ]
     if len(pairs) < len(symbols) * len(tfs):
         kept = ", ".join(f"{p['symbol']}·{p['tf']}" for p in pairs)
         lines += [
@@ -663,9 +1031,9 @@ def main(argv: list[str] | None = None) -> int:
 
     out_dir = pipeline_dir(strat_name, args.out_dir, create=True)
     report_path = out_dir / BASELINE_REPORT_FILE
-    criterion = (f"max(profit_factor_a, profit_factor_b) >= "
-                 f"{args.min_profit_factor:.2f} with >= {args.min_trades} "
-                 f"trades on the version that cleared it")
+    criterion = (f"optimal_regime_PF >= {args.min_profit_factor:.2f} AND "
+                 f"optimal_regime_trade_count >= {args.min_trades} in ANY of "
+                 f"the 4 regime quadrants, on either version")
 
     # Symbol-major, so the progress counter reads the way an operator watches
     # it: one contract taken through every timeframe before the next starts.
@@ -682,12 +1050,23 @@ def main(argv: list[str] | None = None) -> int:
         "Parameter source": "module DEFAULT_PARAMS with --param over them "
                             "(NOT swept — that is Stage 2)",
         "Screen": criterion,
+        "Regimes": " · ".join(REGIMES),
+        "Regime classification": "ADX(14) > 25 is Trending; ATR(14) above the "
+                                 "contract's own median ATR is High "
+                                 "Volatility. Both thresholds are per "
+                                 "(symbol, timeframe) — the ATR median is "
+                                 "computed on THESE bars.",
         "Version B": "evaluated" if args.ml else "NOT RUN (--ml is off)",
         "Costs": f"{args.slippage_ticks:g} tick slippage each way, "
                  f"{args.contracts} contract(s), "
                  f"${args.capital:,.0f} capital",
         "Entry filters": (f"news={cfg_kwargs['news_filter']} "
-                          f"exclude_days={cfg_kwargs['exclude_days']}"),
+                          f"exclude_days={cfg_kwargs['exclude_days']} "
+                          f"(explicit CLI filters only — this stage decides "
+                          f"no calendar pruning of its own)"),
+        "Day-of-week pruning": "REMOVED. The weekday table is descriptive and "
+                               "nothing downstream reads it; the regime "
+                               "quadrant replaced it as the screen.",
     }
 
     print(stage_banner(1, strat_name,
@@ -697,6 +1076,8 @@ def main(argv: list[str] | None = None) -> int:
                        f"{args.end or 'lake end'}"))
     print(f"  parameters : {bound or '(module defaults)'}")
     print(f"  screen     : {criterion}")
+    print(f"  regimes    : ADX(14)>25 = Trending · ATR(14) > per-contract "
+          f"median = High Volatility")
     print(f"  Version B  : {'evaluated' if args.ml else 'NOT RUN (--ml is off)'}")
     print(f"  report     : {report_path}")
     print()
@@ -706,7 +1087,8 @@ def main(argv: list[str] | None = None) -> int:
     for i, (sym, tf) in enumerate(pairs, 1):
         tag = f"[{i}/{total}]"
         try:
-            row = run_symbol(sym, path, tf, params, args, cfg_kwargs, tag)
+            row = run_symbol(sym, path, tf, params, args, cfg_kwargs, tag,
+                             out_dir=out_dir)
             rows.append(row)
             print(_evaluated_line(tag, row), flush=True)
         except Exception as e:                                # noqa: BLE001
@@ -738,9 +1120,23 @@ def main(argv: list[str] | None = None) -> int:
                         for r in tf_rows if not r["survived"]],
         }
 
-    # The exact configurations that survived, as (symbol, tf) pairs. This is
-    # the handoff Stage 2 should sweep.
-    surviving_pairs = [{"symbol": r["symbol"], "tf": r["timeframe"]}
+    # The exact configurations that survived, in the schema the live
+    # supervisor and Stage 2 read. Five fields and no more: the pair, the one
+    # environment it is cleared to trade in, the profit factor that cleared it,
+    # and the three quadrants it must stand down in.
+    #
+    # `kill_switch_regimes` is DERIVED from `optimal_regime` rather than
+    # measured, and that is deliberate. A quadrant that failed the profit-factor
+    # bar and a quadrant the strategy never traded in are the same instruction
+    # to a supervisor - stand down - and treating "no evidence" as "permitted"
+    # is the reading that puts a contract into the one environment nobody
+    # sampled.
+    surviving_pairs = [{"symbol": r["symbol"],
+                        "tf": r["timeframe"],
+                        "optimal_regime": r["optimal_regime"],
+                        "regime_pf": r["regime_pf"],
+                        "kill_switch_regimes": list(
+                            r.get("kill_switch_regimes") or [])}
                        for r in rows if r["survived"]]
     # And the symbol union, kept because `scan.py` defaults `--symbols` to it.
     # It is labelled as a union so it is never read as "survived at 15m" when
@@ -771,6 +1167,45 @@ def main(argv: list[str] | None = None) -> int:
         "entry_filters": cfg_kwargs,
         "surviving_pairs": surviving_pairs,
         "surviving": survivors,
+        "regime_screen": {
+            "regimes": list(REGIMES),
+            "min_profit_factor": float(args.min_profit_factor),
+            "min_trades": int(args.min_trades),
+            "rule": criterion,
+            "classification": ("ADX(14) > 25 is Trending; ATR(14) above the "
+                               "contract's own median ATR over this window is "
+                               "High Volatility. Both thresholds are per "
+                               "(symbol, timeframe)."),
+            # Written as a field rather than left to a reader to infer. The
+            # quadrant is the best of four picked on the bars Stage 2 then
+            # optimises over and Stage 3 certifies, exactly as the weekday
+            # pruning it replaced was, and a gate verdict on a strategy scoped
+            # to one regime has to carry the fact that the regime was chosen on
+            # the bars being certified.
+            "selected_in_sample": True,
+            "note": ("The optimal regime is the best of four quadrants, "
+                     "selected on THIS in-sample window, which Stage 2 then "
+                     "optimises over and Stage 3 certifies. It is a layer of "
+                     "in-sample selection on top of the parameter sweep, not "
+                     "a free improvement, and the retention Gate 3 measures "
+                     "is the only evidence that it generalised."),
+            "applied_to_stage2": False,
+            "applied_to_stage2_note": (
+                "Stage 2 sweeps the WHOLE in-sample window, not the winning "
+                "quadrant. Masking the sweep to a subset that was itself "
+                "chosen as the best of four on these same bars would stack a "
+                "second selection layer under the first. The regime is a "
+                "live-execution instruction for the supervisor."),
+        },
+        "day_of_week_pruning": {
+            "enabled": False,
+            "note": ("REMOVED. Stage 1 no longer blacklists weekdays. The "
+                     "day-of-week table in the report is descriptive and "
+                     "nothing downstream reads it; `stage1_exclude_days` "
+                     "therefore yields an empty mapping and Stage 2 sweeps "
+                     "the whole week unless an explicit --exclude-days is "
+                     "passed to it."),
+        },
         "dropped": dropped,
         "errors": errors,
         "report": str(report_path),
@@ -782,26 +1217,37 @@ def main(argv: list[str] | None = None) -> int:
     print(f"STAGE 1 RESULT · {len(surviving_pairs)}/{total} configuration(s) "
           f"survived")
     print("=" * W)
-    if surviving_pairs:
-        print(f"  {'SYMBOL':<8}{'TF':<6}{'PF (A)':>8}{'PF (B)':>9}"
-              f"{'SHARPE':>9}{'MAX DD':>9}{'TRADES':>9}")
-        for r in sorted((r for r in rows if r["survived"]),
-                        key=lambda r: -(_num(r["sharpe_a"]) or 0)):
-            print(f"  {r['symbol']:<8}{r['timeframe']:<6}"
-                  f"{_fmt(r['profit_factor_a']):>8}"
-                  f"{_fmt(r['profit_factor_b'], na='—'):>9}"
-                  f"{_fmt(r['sharpe_a']):>9}"
-                  f"{_fmt(r['max_drawdown_pct_a'], '.1f', suffix='%'):>9}"
-                  f"{int(r['trades_a'] or 0):>9,}")
+    print(survivors_leaderboard(rows))
+    if not surviving_pairs:
+        print("\n  Nothing cleared the regime firewall. That is a result about")
+        print("  the idea on these contracts — there is no environment in")
+        print("  which it works — not a run to repeat with different")
+        print("  parameters until something does.")
     else:
-        print("  Nothing survived. That is a result about the idea on these")
-        print("  contracts, not a run to repeat with different parameters")
-        print("  until something does.")
+        print(f"\n  REGIME FIREWALL · {len(surviving_pairs)} surviving "
+              f"pair(s), each scoped to ONE environment:")
+        for pair in surviving_pairs:
+            print(f"    {pair['symbol']:<6}{pair['tf']:<5}TRADE ONLY IN  "
+                  f"{pair['optimal_regime']}  (PF {_fmt(pair['regime_pf'])})")
+            # In full, never as a count. "3 regimes" beside a symbol is not an
+            # instruction a supervisor can act on.
+            for killed in pair["kill_switch_regimes"]:
+                print(f"    {'':<11}KILL SWITCH    {killed}")
+        print("    [!] The quadrant is the BEST OF FOUR, chosen on THESE "
+              "bars, which Stage 2 then\n"
+              "        sweeps and Stage 3 certifies. It is an in-sample "
+              "selection layer stacked on\n"
+              "        the parameter search, recorded as such in the handoff. "
+              "Gate 3's holdout\n"
+              "        retention is the only evidence that it generalised.")
+
     dropped_n = len(rows) - len(surviving_pairs)
     print(f"\n  {dropped_n} dropped, {len(errors)} errored — every one with "
-          f"its reason in the report.")
+          f"its reason and its full four-quadrant matrix in the report.")
     print(f"  report    → {report_path}")
     print(f"  survivors → {dest}")
+    print(f"  profiles  → {out_dir}/regime_profile_<SYMBOL>_<TF>_version_"
+          f"<a|b>.json")
 
     print(next_step(stage2_command(args.strat, surviving_pairs,
                                    args.start, args.end)))

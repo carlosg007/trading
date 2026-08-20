@@ -6,6 +6,19 @@ import os
 
 from backtest.pipeline import pipeline_dir
 
+# The four quadrants, in the order every table prints them. A module constant
+# rather than a list built inside `generate_profile`, because Stage 1 screens
+# on these names and derives each survivor's kill-switch set as "the other
+# three". Two spellings of the same quadrant - one here and one in the caller -
+# would make a kill switch name a regime that never appears in a breakdown, and
+# nothing would raise.
+REGIMES = (
+    "High Volatility / Trending",
+    "High Volatility / Ranging",
+    "Low Volatility / Trending",
+    "Low Volatility / Ranging",
+)
+
 
 def _resolve_out_dir(out_dir, strat_name: str) -> str:
     """
@@ -91,18 +104,59 @@ def _closed_trades(portfolio) -> pd.DataFrame:
 
 
 class RegimeProfiler:
-    def __init__(self, df, portfolio, strat_name, symbol, tf, out_dir=None):
+    def __init__(self, df, portfolio, strat_name, symbol, tf, out_dir=None,
+                 version: str = "", quiet: bool = False):
+        """
+        `version` suffixes the artifact filename ("a" ->
+        `regime_profile_NQ_15m_version_a.json`) and is empty by default, so a
+        caller profiling one result per configuration keeps the original path.
+        Stage 1 profiles BOTH versions of the same configuration, and without
+        the suffix Version B's profile would overwrite Version A's at a path
+        named only for the contract - a file whose name says NQ 15m holding the
+        other version's regime breakdown, with nothing raising.
+
+        `quiet` suppresses the console breakdown and nothing else - the same
+        dict is returned and the same artifact written. Stage 1 screens 27
+        contracts x 4 timeframes x 2 versions, and 216 ten-line tables on a
+        console whose stated job is one progress line per configuration is how
+        the last one goes unread.
+        """
         self.df = df.copy()
         self.df.index = _entry_timestamps(self.df)
         self.portfolio = portfolio
         self.strat_name = strat_name
         self.symbol = symbol
         self.tf = tf
+        self.version = str(version or "")
+        self.quiet = bool(quiet)
         self.out_dir = _resolve_out_dir(out_dir, strat_name)
         os.makedirs(self.out_dir, exist_ok=True)
 
+    def _say(self, *a, **kw):
+        if not self.quiet:
+            print(*a, **kw)
+
+    @property
+    def artifact_path(self) -> str:
+        """Where `generate_profile` writes, version suffix included."""
+        suffix = f"_version_{self.version.lower()}" if self.version else ""
+        return (f"{self.out_dir}/regime_profile_"
+                f"{self.symbol}_{self.tf}{suffix}.json")
+
     def generate_profile(self):
-        print(f"\n[PROFILER] Analyzing {self.symbol} on {self.tf} for {self.strat_name}...")
+        """
+        The four-quadrant breakdown, RETURNED as well as printed and written.
+
+        The return value is the same dict the artifact holds, so a caller that
+        screens on the profile reads the numbers it wrote rather than parsing
+        the JSON back off an NFS mount. A run with NO trades still returns a
+        dict - `optimal_regime` "None", an empty breakdown, an EMPTY kill
+        switch - and writes NO artifact. An empty kill switch rather than all
+        four regimes is the point: "trade nowhere" is a live-trading
+        instruction, and deriving one from a strategy that never traded is the
+        failure `_closed_trades` refuses to make quietly.
+        """
+        self._say(f"\n[PROFILER] Analyzing {self.symbol} on {self.tf} for {self.strat_name}...")
         
         # 1. Calculate ADX (Trend) and ATR (Volatility)
         self.df.ta.adx(length=14, append=True)
@@ -122,19 +176,27 @@ class RegimeProfiler:
             (self.df[atr_col] <= atr_median) & (self.df[adx_col] > 25), # Low Vol, Trending
             (self.df[atr_col] <= atr_median) & (self.df[adx_col] <= 25) # Low Vol, Ranging
         ]
-        choices = [
-            "High Volatility / Trending",
-            "High Volatility / Ranging",
-            "Low Volatility / Trending",
-            "Low Volatility / Ranging"
-        ]
+        choices = list(REGIMES)
         self.df['Regime'] = np.select(conditions, choices, default="UNKNOWN")
         
         # 4. Extract the closed trades and tag them
         trades = _closed_trades(self.portfolio)
         if len(trades) == 0:
-            print("No trades found to profile.")
-            return
+            self._say("No trades found to profile.")
+            return {
+                "strategy": self.strat_name,
+                "symbol": self.symbol,
+                "timeframe": self.tf,
+                "version": self.version,
+                "optimal_regime": "None",
+                "optimal_profit_factor": None,
+                "optimal_trade_count": 0,
+                "kill_switch_conditions": [],
+                "regime_breakdown": {},
+                "trades_profiled": 0,
+                "trades_unplaced": 0,
+                "artifact": None,
+            }
             
         # Map the entry timestamp to the DataFrame index to get the regime at entry
         regime_map = self.df['Regime'].to_dict()
@@ -149,7 +211,7 @@ class RegimeProfiler:
         # so on the same screen.
         unplaced = int((~trades['Entry_Regime'].isin(choices)).sum())
         if unplaced:
-            print(f"[PROFILER] {unplaced} of {len(trades)} trades are in no "
+            self._say(f"[PROFILER] {unplaced} of {len(trades)} trades are in no "
                   f"regime (entry outside this frame, or inside the 14-bar "
                   f"indicator warm-up) and are excluded from every row below.")
         
@@ -158,11 +220,11 @@ class RegimeProfiler:
         best_regime = "None"
         best_pf = 0
         
-        print("\n" + "="*80)
-        print(f" REGIME PROFILE: {self.symbol} {self.tf} | {self.strat_name}")
-        print("="*80)
-        print(f" {'REGIME':<30} | {'TRADES':<8} | {'WIN %':<8} | {'PROFIT FACTOR':<14} | {'NET PNL'}")
-        print("-" * 80)
+        self._say("\n" + "="*80)
+        self._say(f" REGIME PROFILE: {self.symbol} {self.tf} | {self.strat_name}")
+        self._say("="*80)
+        self._say(f" {'REGIME':<30} | {'TRADES':<8} | {'WIN %':<8} | {'PROFIT FACTOR':<14} | {'NET PNL'}")
+        self._say("-" * 80)
         
         for regime in choices:
             regime_trades = trades[trades['Entry_Regime'] == regime]
@@ -186,26 +248,41 @@ class RegimeProfiler:
                 "net_pnl": round(net_pnl, 2)
             }
             
-            print(f" {regime:<30} | {count:<8} | {win_rate:>5.1f}%  | {pf:>13.2f} | ${net_pnl:,.2f}")
+            self._say(f" {regime:<30} | {count:<8} | {win_rate:>5.1f}%  | {pf:>13.2f} | ${net_pnl:,.2f}")
             
             # Select Optimal Regime (Must have > 30 trades and highest PF)
             if pf > best_pf and count >= 30:
                 best_pf = pf
                 best_regime = regime
                 
-        print("="*80)
-        print(f"✅ OPTIMAL ENVIRONMENT: {best_regime} (PF: {best_pf:.2f})\n")
+        self._say("="*80)
+        self._say(f"✅ OPTIMAL ENVIRONMENT: {best_regime} (PF: {best_pf:.2f})\n")
 
         # 6. Save Artifact for the Live Supervisor
+        file_path = self.artifact_path
         out_data = {
             "strategy": self.strat_name,
             "symbol": self.symbol,
             "timeframe": self.tf,
+            "version": self.version,
             "optimal_regime": best_regime,
-            "kill_switch_conditions": [r for r in choices if r != best_regime],
-            "regime_breakdown": profile
+            # The optimal quadrant's own numbers, beside its name. Stage 1
+            # screens on the PAIR (profit factor at a trade count), and a name
+            # with no numbers under it forces every reader to re-derive them
+            # from the breakdown - where a reader is free to apply a different
+            # trade floor than the one that chose the name.
+            "optimal_profit_factor": (profile.get(best_regime) or {}
+                                      ).get("profit_factor"),
+            "optimal_trade_count": (profile.get(best_regime) or {}
+                                    ).get("trade_count", 0),
+            "kill_switch_conditions": ([r for r in choices if r != best_regime]
+                                       if best_regime in profile else []),
+            "regime_breakdown": profile,
+            "trades_profiled": int(len(trades) - unplaced),
+            "trades_unplaced": int(unplaced),
+            "artifact": file_path,
         }
-        
-        file_path = f"{self.out_dir}/regime_profile_{self.symbol}_{self.tf}.json"
+
         with open(file_path, "w") as f:
             json.dump(out_data, f, indent=4)
+        return out_data
