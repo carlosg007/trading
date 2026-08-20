@@ -651,49 +651,95 @@ def test_stage_clis() -> None:
               "--news-filter" in r.stdout and "--exclude-days" in r.stdout)
 
 
+def _profile(**quadrants) -> dict:
+    """A RegimeProfiler-shaped profile from `regime="pf,trades"` pairs."""
+    from backtest.profiler import REGIMES
+    breakdown, total = {}, 0
+    for key, (pf, n) in quadrants.items():
+        regime = {"hvt": REGIMES[0], "hvr": REGIMES[1],
+                  "lvt": REGIMES[2], "lvr": REGIMES[3]}[key]
+        breakdown[regime] = {"trade_count": n, "profit_factor": pf,
+                             "win_rate": 55.0, "net_pnl": 100.0 * n}
+        total += n
+    return {"regime_breakdown": breakdown, "trades_profiled": total,
+            "trades_unplaced": 0}
+
+
 def test_baseline_screen() -> None:
-    print("\n14. Stage 1's survival screen")
-    from backtest.baseline import screen
+    print("\n14. Stage 1's REGIME firewall")
+    from backtest.baseline import (best_quadrant, kill_switch_regimes, screen)
+    from backtest.profiler import REGIMES
 
-    keep, why = screen({"ok": True, "trade_count": 200, "profit_factor": 1.05})
-    check("profit factor 1.05 survives", keep, why)
-    drop, why = screen({"ok": True, "trade_count": 200, "profit_factor": 0.99})
-    check("profit factor 0.99 is dropped", not drop, why)
-    edge, why = screen({"ok": True, "trade_count": 200, "profit_factor": 1.00})
-    check("exactly 1.00 is on the boundary and survives", edge, why)
-    none, why = screen({"ok": True, "trade_count": 0})
-    check("no trades is dropped with its OWN reason, not as a 0.00 PF",
+    keep, why, best = screen({"A": _profile(hvt=(1.28, 80)), "B": None})
+    check("a quadrant at 1.28 over 80 trades survives", keep, why)
+    check("...and the winning quadrant is named, with its own numbers",
+          best["regime"] == REGIMES[0] and best["profit_factor"] == 1.28
+          and best["trade_count"] == 80 and best["version"] == "A", str(best))
+
+    drop, why, best = screen({"A": _profile(hvt=(1.14, 400)), "B": None})
+    check("1.14 is below the 1.15 bar and is dropped", not drop and best is None,
+          why)
+    check("...and the reason names the best quadrant and how far short it fell",
+          "1.14" in why and REGIMES[0] in why, why)
+    edge, why, _ = screen({"A": _profile(hvt=(1.15, 30)), "B": None})
+    check("exactly 1.15 over exactly 30 trades is on the boundary and survives",
+          edge, why)
+
+    thin, why, _ = screen({"A": _profile(hvt=(2.40, 29)), "B": None})
+    check("a 2.40 PF over 29 trades in that quadrant is NOT an environment",
+          not thin and "29" in why and "< 30" in why, why)
+
+    # Both bars bind on the SAME quadrant - the whole point of the screen.
+    split, why, _ = screen({"A": _profile(hvt=(1.90, 11), lvr=(0.90, 400)),
+                            "B": None})
+    check("the best PF and the largest trade count in DIFFERENT quadrants "
+          "do not combine to a pass", not split, why)
+
+    # Blended profit factor is irrelevant now: this configuration loses money
+    # overall and still survives on one environment. That is the intended
+    # loosening, and the reason the bar is 1.15 rather than 1.00.
+    mixed, why, best = screen({"A": _profile(hvt=(1.60, 90), hvr=(0.55, 300),
+                                             lvr=(0.70, 250)), "B": None})
+    check("a configuration that loses overall survives on ONE good quadrant",
+          mixed and best["regime"] == REGIMES[0], why)
+
+    none, why, _ = screen({"A": _profile(), "B": None})
+    check("no trades in any regime is dropped with its OWN reason",
           not none and "never fired" in why, why)
-    fail, why = screen({"ok": False, "error": "boom"})
-    check("a failed run is dropped and says so", not fail and "boom" in why, why)
-    check("the bar is adjustable per run",
-          screen({"ok": True, "trade_count": 200, "profit_factor": 1.10},
-                 min_profit_factor=1.25)[0] is False)
-    undef, why = screen({"ok": True, "trade_count": 200})
-    check("an undefined profit factor is dropped as undefined",
-          not undef and "undefined" in why, why)
-    inf, why = screen({"ok": True, "trade_count": 200,
-                       "profit_factor": float("inf")})
-    check("inf - no losing trades - is not a missing value, and survives",
-          inf, why)
+    absent, why, _ = screen({"A": None, "B": None})
+    check("no profile at all is dropped and says so",
+          not absent and "no regime profile" in why, why)
 
-    # max(PF_a, PF_b), each version held to the trade floor on its OWN count.
-    a = {"ok": True, "trade_count": 200, "profit_factor": 0.87}
-    b = {"ok": True, "trade_count": 150, "profit_factor": 1.04}
-    keep, why = screen(a, 1.00, b)
+    # Version B can carry a configuration Version A failed.
+    keep, why, best = screen({"A": _profile(hvt=(0.87, 400)),
+                              "B": _profile(lvt=(1.31, 60))})
     check("Version B can carry a configuration Version A failed",
-          keep and "Version B" in why, why)
+          keep and best["version"] == "B" and best["regime"] == REGIMES[2], why)
     check("...and with Version B absent, Version A alone decides",
-          screen(a, 1.00, None)[0] is False)
+          screen({"A": _profile(hvt=(0.87, 400)), "B": None})[0] is False)
 
-    thin = {"ok": True, "trade_count": 9, "profit_factor": 2.50}
-    drop, why = screen(a, 1.00, thin)
-    check("a 2.50 PF over 9 trades does NOT rescue the configuration",
-          not drop and "trades < 30" in why, why)
-    check("the floor binds at 29 and clears at 30",
-          screen({"ok": True, "trade_count": 29, "profit_factor": 5.0})[0] is False
-          and screen({"ok": True, "trade_count": 30,
-                      "profit_factor": 1.00})[0] is True)
+    check("the bars are adjustable per run",
+          screen({"A": _profile(hvt=(1.20, 80)), "B": None},
+                 min_profit_factor=1.50)[0] is False
+          and screen({"A": _profile(hvt=(1.20, 80)), "B": None},
+                     min_trades=200)[0] is False)
+
+    # best_quadrant's tie-break: equal factors, the better-evidenced one wins.
+    tied = best_quadrant(_profile(hvt=(1.40, 40), lvr=(1.40, 900)))
+    check("a tie on profit factor breaks on the LARGER trade count",
+          tied["regime"] == REGIMES[3] and tied["trade_count"] == 900,
+          str(tied))
+    check("a profile with nothing clearing returns None, not a best-effort pick",
+          best_quadrant(_profile(hvt=(1.10, 900))) is None)
+
+    # The kill switch is derived, and never invented.
+    ks = kill_switch_regimes(REGIMES[0])
+    check("the kill switch is the other THREE quadrants, in regime order",
+          ks == list(REGIMES[1:]), str(ks))
+    check("no optimal regime yields an EMPTY kill switch, never all four - "
+          "'trade nowhere' has to come from a decision",
+          kill_switch_regimes(None) == []
+          and kill_switch_regimes("Some Other Regime") == [])
 
 
 def test_baseline_report(tmp: Path) -> None:
@@ -1520,6 +1566,427 @@ def test_filter_config_kwargs() -> None:
 
 
 # --------------------------------------------------------------------------
+# 29. The Drop Unprofitable Days contract - stage 1 decides, 2 and 3 inherit
+# --------------------------------------------------------------------------
+def dow_trades(per_day: dict[int, float], n_weeks: int = 12,
+               start: str = "2020-01-06") -> pd.DataFrame:
+    """
+    A trade log with a KNOWN P&L per weekday. `per_day` maps Mon=0..Fri=4.
+
+    Two trades a day, split around the target, so gross win and gross loss are
+    both non-zero and the profit factor is a real number rather than NaN. Entry
+    stamps are 15:00 UTC - 10:00 ET, inside the session whose date is the
+    calendar date - so the session-date roll is not what this fixture tests;
+    `test_session_dates` covers the roll itself.
+    """
+    rows = []
+    for w in range(n_weeks):
+        monday = pd.Timestamp(start, tz="UTC") + pd.Timedelta(weeks=w)
+        for d, pnl in per_day.items():
+            ts = monday + pd.Timedelta(days=d, hours=15)
+            rows += [(ts, pnl + 10.0), (ts + pd.Timedelta(minutes=5), -10.0)]
+    return pd.DataFrame(rows, columns=["entry_time", "pnl"])
+
+
+def test_unprofitable_weekdays() -> None:
+    print("\n29. unprofitable_weekdays - every session below PF 1.00")
+    from backtest.report import exclude_days_basis, unprofitable_weekdays
+
+    # Mon and Tue below 1.00, Wed/Thu/Fri above it.
+    dow = day_of_week_breakdown(dow_trades({0: -100.0, 1: -20.0, 2: 40.0,
+                                            3: 40.0, 4: 40.0}))
+    bad = unprofitable_weekdays(dow, min_trades=10)
+    check("EVERY weekday under the bar is returned, not just the worst",
+          [d["weekday"] for d in bad] == [0, 1],
+          str([(d["day_name"], d["profit_factor"]) for d in bad]))
+    check("...in weekday order, with the long name for the artifact",
+          [d["day_name"] for d in bad] == ["Monday", "Tuesday"])
+    check("...and the metrics that condemned each one",
+          all({"trades", "net_pnl", "profit_factor"} <= set(d) for d in bad))
+    check("the rule is stated in words for the record",
+          "profit factor < 1.00" in exclude_days_basis(20)
+          and "ENTRY session" in exclude_days_basis(20), exclude_days_basis(20))
+
+    # 0, 1 and 5 days are the same code path and the same shape.
+    check("ZERO days below the bar is an empty list, never None",
+          unprofitable_weekdays(
+              day_of_week_breakdown(dow_trades({0: 40.0, 1: 40.0, 2: 40.0,
+                                                3: 40.0, 4: 40.0})),
+              min_trades=10) == [])
+    one = unprofitable_weekdays(
+        day_of_week_breakdown(dow_trades({0: -100.0, 1: 40.0, 2: 40.0,
+                                          3: 40.0, 4: 40.0})), min_trades=10)
+    check("ONE day below the bar is a one-element list",
+          [d["weekday"] for d in one] == [0])
+    allbad = unprofitable_weekdays(
+        day_of_week_breakdown(dow_trades({0: -50.0, 1: -50.0, 2: -50.0,
+                                          3: -50.0, 4: -50.0})), min_trades=10)
+    check("ALL FIVE below the bar excludes all five - no cap, no index error",
+          [d["weekday"] for d in allbad] == [0, 1, 2, 3, 4])
+
+    check("the trade floor is a floor, not a formality",
+          unprofitable_weekdays(dow, min_trades=1000) == [])
+    check("an empty breakdown is [], not a crash",
+          unprofitable_weekdays(day_of_week_breakdown(None)) == []
+          and unprofitable_weekdays(pd.DataFrame()) == [])
+
+    # A day with no losing trades has an UNDEFINED profit factor. It is the
+    # opposite of a day to exclude, and `NaN < 1.00` being False must not be
+    # the only thing standing between it and the blacklist.
+    clean = day_of_week_breakdown(pd.DataFrame({
+        "entry_time": pd.date_range("2020-01-06 15:00", periods=40, freq="7D",
+                                    tz="UTC"),
+        "pnl": [25.0] * 40}))
+    check("a weekday that never lost has an undefined PF and is NEVER dropped",
+          pd.isna(clean.loc[clean["weekday"] == 0, "profit_factor"].iloc[0])
+          and unprofitable_weekdays(clean, min_trades=10) == [])
+
+    # A weekend row only exists when something traded then, and it is a bug
+    # worth seeing rather than a session to prune.
+    sat = pd.concat([dow_trades({0: 40.0, 1: 40.0, 2: 40.0, 3: 40.0, 4: 40.0}),
+                     pd.DataFrame({
+                         "entry_time": pd.date_range("2020-01-11 15:00",
+                                                     periods=40, freq="7D",
+                                                     tz="UTC"),
+                         "pnl": [-500.0] * 40})], ignore_index=True)
+    b = day_of_week_breakdown(sat)
+    check("a losing SATURDAY is present in the table but never blacklisted",
+          5 in set(b["weekday"]) and unprofitable_weekdays(b, 10) == [],
+          str(sorted(set(b["weekday"]))))
+
+    # Determinism: the same breakdown must give the same answer every time.
+    picks = {tuple(d["weekday"] for d in unprofitable_weekdays(dow, 10))
+             for _ in range(5)}
+    check("the answer is deterministic", picks == {(0, 1)}, str(picks))
+
+
+def test_stage1_regime_row() -> None:
+    print("\n29b. Stage 1 writes optimal_regime, regime_pf and the kill switch")
+    from backtest.baseline import (_regime_cell, _row, build_markdown_report,
+                                   screen)
+    from backtest.profiler import REGIMES
+
+    dow = day_of_week_breakdown(dow_trades({0: -100.0, 1: -20.0, 2: 40.0,
+                                            3: 40.0, 4: 40.0}))
+    m = {"ok": True, "trade_count": 420, "profit_factor": 0.96, "sharpe": 0.1,
+         "win_rate": 0.52, "max_drawdown_pct": -9.0, "total_pnl": -200.0,
+         "gross_pnl": 5000.0, "total_costs": 900.0, "n_days": 300}
+
+    profiles = {"A": _profile(hvt=(1.28, 120), hvr=(0.80, 150),
+                              lvt=(1.05, 90), lvr=(0.62, 60)), "B": None}
+    ok, why, best = screen(profiles)
+    kept = _row("NQ", "15m", m, None, ok, why, dow, 1000, 1.0,
+                profiles=profiles, best=best)
+
+    check("the optimal regime is captured by name",
+          kept["optimal_regime"] == REGIMES[0], str(kept["optimal_regime"]))
+    check("...with the profit factor that cleared the bar",
+          kept["regime_pf"] == 1.28 and kept["regime_trade_count"] == 120)
+    check("...and the kill switch is the other three quadrants",
+          kept["kill_switch_regimes"] == list(REGIMES[1:]),
+          str(kept["kill_switch_regimes"]))
+    check("the blended profit factor is BELOW 1.00 and the pair still "
+          "survives - the screen is now the quadrant, not the average",
+          kept["survived"] and kept["profit_factor_a"] == 0.96)
+
+    thin = {"A": _profile(hvt=(1.90, 12)), "B": None}
+    ok2, why2, best2 = screen(thin)
+    dropped = _row("CL", "15m", m, None, ok2, why2, dow, 1000, 1.0,
+                   profiles=thin, best=best2)
+    check("a DROPPED configuration names no optimal regime",
+          not dropped["survived"] and dropped["optimal_regime"] is None
+          and dropped["regime_pf"] is None)
+    check("...and derives NO kill switch - a stand-down list from a quadrant "
+          "that failed the bar is an instruction nothing certified",
+          dropped["kill_switch_regimes"] == [])
+    check("the two states stay distinguishable in the summary column",
+          (_regime_cell(kept), _regime_cell(dropped))
+          == (f"{REGIMES[0]} (1.28)", "none"),
+          f"{_regime_cell(kept)} / {_regime_cell(dropped)}")
+
+    md = build_markdown_report("demo", {"Strategy": "demo"},
+                               [kept, dropped], [])
+    check("the report prints the FOUR-QUADRANT matrix per asset",
+          all(r in md for r in REGIMES))
+    check("...for every asset EVALUATED, drops included - the matrix of a "
+          "failure is how you see whether it failed on edge or on sample size",
+          "12 trades < 30" in md, md[md.index("### CL"):][:1500])
+    check("...marking the quadrant that cleared both bars",
+          "**CLEARS**" in md)
+    check("...a quadrant the strategy never traded in is a ROW, not an "
+          "omission", "no trades in this regime" in md)
+    check("...the optimal regime and the kill switch, spelled out",
+          "Optimal regime" in md and "Kill switch" in md
+          and "do NOT trade in" in md)
+    check("...and the circularity, in the same block",
+          "IN-SAMPLE" in md and "Stage 3" in md and "best of four" in md)
+    check("the summary table carries an Optimal regime column",
+          "Optimal regime" in md and f"| {REGIMES[0]} (1.28) |" in md)
+
+    check("the day-of-week table survives as DESCRIPTIVE only",
+          "| Mon |" in md and "descriptive" in md)
+    for gone in ("Dropped days", "exclude_days=[", "EXCLUDED",
+                 "--no-drop-losing-days"):
+        check(f"...and the calendar pruning is gone: no {gone!r}",
+              gone not in md)
+
+
+def test_stage1_survivors_leaderboard() -> None:
+    print("\n29c. STAGE 1 SURVIVORS LEADERBOARD")
+    from backtest.baseline import _row, screen, survivors_leaderboard
+    from backtest.profiler import REGIMES
+
+    dow = day_of_week_breakdown(dow_trades({0: -100.0, 1: 40.0, 2: 40.0,
+                                            3: 40.0, 4: 40.0}))
+    base = {"ok": True, "trade_count": 120, "win_rate": 0.55,
+            "max_drawdown_pct": -6.0, "total_pnl": 900.0, "gross_pnl": 2000.0,
+            "total_costs": 300.0, "n_days": 300, "sharpe": 0.8}
+
+    def row(sym, tf, pf_a, profiles):
+        ok, why, best = screen(profiles)
+        return _row(sym, tf, {**base, "profit_factor": pf_a},
+                    ({**base, "profit_factor": 1.51} if profiles["B"] else None),
+                    ok, why, dow, 1, 1.0, profiles=profiles, best=best)
+
+    # NQ survives on B's quadrant (1.72); ES on A's (1.20); CL clears nothing.
+    nq = row("NQ", "15m", 1.10, {"A": _profile(hvt=(1.02, 200)),
+                                 "B": _profile(lvt=(1.72, 65))})
+    es = row("ES", "5m", 1.08, {"A": _profile(hvr=(1.20, 310)), "B": None})
+    cl = row("CL", "5m", 0.70, {"A": _profile(lvr=(0.70, 400)), "B": None})
+
+    out = survivors_leaderboard([es, cl, nq])
+    check("the leaderboard is titled as specified",
+          "STAGE 1 SURVIVORS LEADERBOARD" in out)
+    for col in ("SYMBOL", "TF", "PF (A)", "PF (B)", "OPTIMAL REGIME",
+                "REGIME PF", "REGIME TRADES", "VER"):
+        check(f"...and carries the {col!r} column", col in out)
+    body = [ln for ln in out.splitlines()
+            if ln.strip().startswith(("NQ", "ES", "CL"))]
+    check("only SURVIVORS are listed - a dropped contract is not a survivor",
+          len(body) == 2 and not any(ln.strip().startswith("CL")
+                                     for ln in body), str(body))
+    check("sorted by the REGIME profit factor the screen decided on, "
+          "descending - NOT by either version's blended factor",
+          body[0].strip().startswith("NQ"), str(body))
+    check("the winning quadrant is named on the row", REGIMES[2] in body[0])
+    check("...with the version that produced it, so a quadrant carried by a "
+          "classifier is not read as one the rules found",
+          "VB" in body[0] and "VA" in body[1], str(body))
+    check("a Version B that never ran reads NOT RUN, never 0.00 or a dash",
+          "NOT RUN" in body[1] and "0.00" not in body[1], body[1])
+    check("the kill switch is NOT a column - it is always the other three, "
+          "and spelling it out wraps the table",
+          "KILL SWITCH" not in out)
+    check("a stage where nothing cleared the firewall still prints the table "
+          "and says so",
+          "STAGE 1 SURVIVORS LEADERBOARD" in survivors_leaderboard([cl])
+          and "no configuration cleared the regime firewall"
+          in survivors_leaderboard([cl]))
+
+
+def test_stage2_winners_leaderboard() -> None:
+    print("\n29d. STAGE 2 OPTIMIZED WINNERS LEADERBOARD")
+    from backtest.scan import winners_leaderboard
+
+    rows = [
+        {"symbol": "ES", "timeframe": "5m", "sharpe": 0.71,
+         "profit_factor": 1.12, "max_drawdown_pct": -9.4,
+         "winner": {"fast": 5, "slow": 20}, "exclude_days": [],
+         "exclude_days_named": [], "selection": "x"},
+        {"symbol": "NQ", "timeframe": "15m", "sharpe": 1.84,
+         "profit_factor": 1.55, "max_drawdown_pct": -6.1,
+         "winner": {"fast": 4, "slow": 30}, "exclude_days": [0, 4],
+         "exclude_days_named": ["Mon", "Fri"], "selection": "x"},
+        {"symbol": "GC", "timeframe": "15m", "sharpe": float("nan"),
+         "profit_factor": None, "max_drawdown_pct": None, "winner": None,
+         "exclude_days": [], "exclude_days_named": [], "selection": "x"},
+    ]
+    out = winners_leaderboard(rows)
+    check("the leaderboard is titled as specified",
+          "STAGE 2 OPTIMIZED WINNERS LEADERBOARD" in out)
+    for col in ("SYMBOL", "TF", "IS PF", "IS SHARPE", "MAX DD",
+                "WINNING PARAMS", "EXCLUDED DAYS"):
+        check(f"...and carries the {col!r} column", col in out)
+    body = [ln for ln in out.splitlines()
+            if ln.strip().startswith(("NQ", "ES", "GC"))]
+    check("sorted by in-sample Sharpe descending - the metric it selected on",
+          body[0].strip().startswith("NQ") and body[1].strip().startswith("ES"),
+          str(body))
+    check("a contract with no measurable Sharpe sorts LAST, never disappears",
+          body[-1].strip().startswith("GC") and "n/a" in body[-1], body[-1])
+    check("the winning parameters are named in full, not summarised",
+          "fast=4, slow=30" in body[0], body[0])
+    check("the excluded days are on the row, so two rows fitted to different "
+          "weeks are not read as comparable",
+          "Mon, Fri" in body[0] and "none" in body[1], str(body[:2]))
+    check("no sweep completed still prints the table",
+          "no sweep completed" in winners_leaderboard([]))
+
+
+def test_stage3_certification_leaderboard() -> None:
+    print("\n29e. STAGE 3 GATE CERTIFICATION LEADERBOARD")
+    from backtest.audit_gates import certification_leaderboard
+    from backtest.report import FAIL, NOT_EVALUATED, PASS
+
+    results = [
+        {"symbol": "ES", "timeframe": "15m", "path": Path("gate_audit_ES.json"),
+         "status": {"A": FAIL}, "passed": {"A": False},
+         "gates": {"A": {"gate1": FAIL, "gate2": NOT_EVALUATED,
+                         "gate3": NOT_EVALUATED}},
+         "exclude_days": []},
+        {"symbol": "NQ", "timeframe": "15m", "path": Path("gate_audit_NQ.json"),
+         "status": {"A": PASS, "B": FAIL}, "passed": {"A": True, "B": False},
+         "gates": {"A": {"gate1": PASS, "gate2": PASS, "gate3": PASS},
+                   "B": {"gate1": PASS, "gate2": FAIL,
+                         "gate3": NOT_EVALUATED}},
+         "exclude_days": [0, 4]},
+    ]
+    out = certification_leaderboard(results)
+    check("the leaderboard is titled as specified",
+          "STAGE 3 GATE CERTIFICATION LEADERBOARD" in out)
+    for col in ("SYMBOL", "TF", "GATE 1 (IS)", "GATE 2 (WFO/MC)",
+                "GATE 3 (OOS)", "FINAL STATUS"):
+        check(f"...and carries the {col!r} column", col in out)
+    body = [ln for ln in out.splitlines()
+            if ln.strip().startswith(("NQ", "ES"))]
+    check("one row per (contract, VERSION) - A and B are certified separately",
+          len(body) == 3, str(body))
+    check("what passed sorts first", "CERTIFIED" in body[0]
+          and "NOT CERTIFIED" not in body[0], body[0])
+    check("a gate that was never run reads NOT EVAL, never PASS and never FAIL",
+          "NOT EVAL" in out and sum("NOT EVAL" in ln for ln in body) == 2,
+          str(body))
+    check("...and a version with one NOT EVAL is NOT CERTIFIED",
+          all("NOT CERTIFIED" in ln for ln in body if "NOT EVAL" in ln),
+          str(body))
+    check("the certified week is on the row - the gates were run on it",
+          "Mon, Fri" in body[0], body[0])
+    check("no completed audit still prints the table",
+          "nothing was certified" in certification_leaderboard([]))
+
+
+def test_stage1_to_stage2_exclude_days(tmp: Path) -> None:
+    print("\n29f. The handoff: per-pair exclusions, and who overrides whom")
+    from backtest.pipeline import SURVIVORS_FILE, stage1_exclude_days
+    from backtest.scan import resolve_exclude_days
+
+    blob = {
+        "surviving_pairs": [
+            {"symbol": "NQ", "tf": "5m", "dropped_days": ["Monday", "Friday"],
+             "exclude_days": [0, 4]},
+            {"symbol": "NQ", "tf": "15m", "dropped_days": ["Friday"],
+             "exclude_days": [4]},
+            {"symbol": "GC", "tf": "15m", "dropped_days": [],
+             "exclude_days": []},
+        ]}
+    m = stage1_exclude_days(blob)
+    check("the exclusion is keyed per (symbol, timeframe), not globally",
+          m == {("NQ", "5m"): (0, 4), ("NQ", "15m"): (4,)}, str(m))
+    check("MULTIPLE days survive the handoff as a list, not collapsed to one",
+          m[("NQ", "5m")] == (0, 4))
+    check("a pair with nothing to exclude is ABSENT, not mapped to ()",
+          ("GC", "15m") not in m)
+    check("a handoff written before the contract existed yields no exclusions",
+          stage1_exclude_days({"surviving_pairs": [{"symbol": "NQ",
+                                                    "tf": "5m"}]}) == {}
+          and stage1_exclude_days(None) == {} and stage1_exclude_days({}) == {})
+
+    # Precedence, the part an operator has to be able to predict.
+    check("with no CLI flag, Stage 1's decision applies automatically",
+          resolve_exclude_days("NQ", "5m", None, m)[0] == (0, 4))
+    check("...per pair, so NQ·15m gets Friday alone",
+          resolve_exclude_days("NQ", "15m", None, m)[0] == (4,))
+    days, why = resolve_exclude_days("NQ", "5m", (2, 3), m)
+    check("an explicit --exclude-days OVERRIDES the artifact outright",
+          days == (2, 3) and "CLI" in why, f"{days} · {why}")
+    check("--ignore-stage1-exclude-days sweeps the whole week",
+          resolve_exclude_days("NQ", "5m", None, m,
+                               ignore_stage1=True)[0] is None)
+    check("...but never disables an explicit --exclude-days",
+          resolve_exclude_days("NQ", "5m", (1,), m,
+                               ignore_stage1=True)[0] == (1,))
+    check("a pair Stage 1 excluded nothing for sweeps unfiltered",
+          resolve_exclude_days("GC", "15m", None, m) == (None, "none"))
+    check("every answer carries its provenance, never a bare list",
+          all(isinstance(resolve_exclude_days(*a)[1], str) and
+              resolve_exclude_days(*a)[1]
+              for a in (("NQ", "5m", None, m), ("GC", "15m", None, m),
+                        ("NQ", "5m", (1,), m))))
+
+    d = tmp / "dwd"
+    write_stage(d / SURVIVORS_FILE, 1, "demo", blob)
+    back = read_stage(d / SURVIVORS_FILE, 1, "demo")
+    check("the mapping survives the JSON round trip",
+          stage1_exclude_days(back) == m, str(stage1_exclude_days(back)))
+
+
+def test_stage2_to_stage3_filter_inheritance(tmp: Path) -> None:
+    print("\n29g. Stage 3 certifies the week Stage 2 optimised on")
+    from backtest.audit_gates import _resolve_filters, load_params
+
+    d = tmp / "dwd3"
+    payload = {
+        "symbol": "NQ", "timeframe": "15m", "params": {"trend_period": 200},
+        "variants_tested": 12, "selection": "x",
+        "entry_filters": {"exclude_days": [0, 4],
+                          "exclude_days_named": ["Mon", "Fri"],
+                          "exclude_days_source": "stage 1 Drop Losing Days"},
+    }
+    write_stage(d / BEST_PARAMS_FILE.format(symbol="NQ_15m"), 2, "demo",
+                payload)
+    _params, prov = load_params("demo", "NQ", d, {}, False, tf="15m")
+    check("Stage 2's exclusion reaches Stage 3 on the winner",
+          (prov.get("entry_filters") or {}).get("exclude_days") == [0, 4],
+          str(prov.get("entry_filters")))
+
+    base = {"news_filter": False, "news_window_minutes": 30.0,
+            "news_kinds": None, "exclude_days": None}
+    kw, why = _resolve_filters(dict(base), prov)
+    check("...and is APPLIED, so the certification is not of a different "
+          "strategy", kw["exclude_days"] == (0, 4) and "inherited" in why, why)
+    kw, why = _resolve_filters({**base, "exclude_days": (3,)}, prov)
+    check("an explicit --exclude-days on Stage 3 still wins",
+          kw["exclude_days"] == (3,) and "CLI" in why, why)
+    check("the news filter is NOT inherited - a rule-generated calendar must "
+          "not creep into a gate verdict",
+          _resolve_filters(dict(base), {"entry_filters": {
+              "exclude_days": [], "news_filter": True}})[0]["news_filter"]
+          is False)
+    kw, why = _resolve_filters(dict(base), {"entry_filters": None})
+    check("a best_params written before the contract inherits nothing",
+          kw["exclude_days"] is None and why == "none", why)
+
+
+def test_drop_losing_days_clis() -> None:
+    print("\n29h. Stage 1's calendar flags are gone; the filters remain")
+    out = {}
+    for rel in ("backtest/baseline.py", "backtest/scan.py",
+                "backtest/audit_gates.py"):
+        r = subprocess.run([sys.executable, str(REPO / rel), "--help"],
+                           capture_output=True, text=True, cwd=REPO, timeout=180)
+        out[rel] = r.stdout if r.returncode == 0 else ""
+        check(f"{rel} --help still exits 0", r.returncode == 0,
+              (r.stderr or "")[-160:])
+    # Stage 1's calendar pruning is GONE - the regime quadrant replaced it.
+    # Its flags must be gone with it: a --no-drop-losing-days that parses and
+    # changes nothing is worse than one that errors.
+    for flag in ("--no-drop-losing-days", "--dow-min-pf", "--dow-min-trades"):
+        check(f"Stage 1 no longer offers {flag}",
+              flag not in out["backtest/baseline.py"])
+    check("Stage 1 documents the REGIME bars in its place",
+          "--min-profit-factor" in out["backtest/baseline.py"]
+          and "--min-trades" in out["backtest/baseline.py"]
+          and "quadrant" in out["backtest/baseline.py"].lower())
+    check("Stage 2 still accepts a handoff that carries exclude_days - the "
+          "inheritance path is unchanged, Stage 1 simply writes none",
+          "--ignore-stage1-exclude-days" in out["backtest/scan.py"])
+    check("Stage 2 documents --ignore-stage1-exclude-days",
+          "--ignore-stage1-exclude-days" in out["backtest/scan.py"])
+    check("all three still expose the manual --exclude-days that overrides it",
+          all("--exclude-days" in v for v in out.values()))
+
+
+# --------------------------------------------------------------------------
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="pipefilt_") as td:
         tmp = Path(td)
@@ -1552,6 +2019,14 @@ def main() -> int:
         test_strategy_declarations()
         test_multi_timeframe_cli()
         test_multi_timeframe_handoff(tmp)
+        test_unprofitable_weekdays()
+        test_stage1_regime_row()
+        test_stage1_survivors_leaderboard()
+        test_stage2_winners_leaderboard()
+        test_stage3_certification_leaderboard()
+        test_stage1_to_stage2_exclude_days(tmp)
+        test_stage2_to_stage3_filter_inheritance(tmp)
+        test_drop_losing_days_clis()
 
     print("\n" + "=" * 60)
     if _failures:

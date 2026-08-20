@@ -301,6 +301,19 @@ python3 backtest/promote.py --strat X --version A --source <module.py> \
 bt-run --strat X --symbols NQ --news-filter --news-window 30
 bt-run --strat X --symbols NQ --exclude-days 0,4     # no Mon/Fri ENTRIES
 
+# The Regime-Aware Screening Firewall (replaced the Drop Unprofitable Days
+# contract, 2026-08-20). Stage 1 profiles every configuration into four
+# volatility/trend quadrants and keeps only those with a quadrant at PF >= 1.15
+# over >= 30 trades; each survivor carries optimal_regime, regime_pf and
+# kill_switch_regimes into surviving_assets.json. NO weekday is blacklisted
+# any more, so Stage 1 writes no exclude_days and Stage 2 inherits none.
+# Every stage ends by printing its own leaderboard.
+python3 backtest/baseline.py --strat X --symbols ALL --tf 15m \
+    --min-profit-factor 1.25 --min-trades 50    # tighten the quadrant bars
+# Stage 2 still HONOURS an exclude_days a handoff carries; nothing writes one.
+python3 backtest/scan.py --strat X --tf 15m --ignore-stage1-exclude-days
+python3 backtest/scan.py --strat X --tf 15m --exclude-days 3,4   # CLI wins
+
 # What macro calendar a news-filtered run would actually use, and whether its
 # dates are published or rule-generated. Reads no bars; costs nothing.
 python3 backtest/event_calendar.py --start 2015-01-01 --end 2026-01-01
@@ -490,10 +503,23 @@ acts on entries, so a table keyed on exits would point at a day whose pruning
 removes different trades) and on the **session** date (not the UTC date). Every
 weekday Mon–Fri is present even with zero trades, because an absent row reads
 as missing data when it means "this never traded on a Friday". `losing_weekdays`
-enforces a trade floor and is a suggestion for a human, never applied
-automatically — pruning the days that lost in-sample and re-scoring the same
-bars is circular. The records land in `summarize_result` as `dow_breakdown` and
-so reach `dual_metrics.json`.
+enforces a trade floor and remains a suggestion for a human. The records land in
+`summarize_result` as `dow_breakdown` and so reach `dual_metrics.json`.
+
+`unprofitable_weekdays` (added 2026-08-19) is the automated half. **Stage 1
+stopped calling it on 2026-08-20**, when the regime firewall replaced the Drop
+Unprofitable Days contract; it is retained as a library function and has no
+caller in the pipeline. It returns EVERY Mon–Fri
+weekday whose profit factor is below 1.00 — `DOW_MIN_PROFIT_FACTOR`, the same
+bar the contract screen and Gate 1 use — over at least `min_trades` trades, in
+weekday order. Zero, one and five days are one code path and one shape; an empty
+list means the whole week cleared the bar, which is a result rather than a
+missing value. Three rules that are the point of the function: a weekend row is
+never returned, since a Saturday row is a bug worth seeing rather than a session
+to prune; a weekday whose profit factor is UNDEFINED (it never lost) is never
+dropped, checked explicitly rather than left to `NaN < 1.00` being False by
+accident; and `exclude_days_basis` states the rule in words so no artifact
+records which days were dropped without recording why.
 
 Standalone CLI over saved parquet; joins regime labels
 and records `--variants-tested` so a Sharpe is never read without knowing how
@@ -642,6 +668,44 @@ combination becomes a COLUMN of a single `vbt.Portfolio.from_signals` call, so a
 27-cell grid costs roughly one backtest rather than 27. The winner is the
 highest Sharpe **among the combinations whose Gate 1 audit is PASS**.
 
+- **The sweep runs the ENTRY filters, from 2026-08-19, and inherits Stage 1's
+  losing days automatically.** `_combo_signals` applies the block mask
+  immediately after `unpack_signals` and before `apply_flat_by_close` — exactly
+  where `run_backtest` applies it, and before `clean_signals_ls`, because
+  suppressing an entry after the three-state machine has run would leave the
+  other side's signal resolved against a trade that no longer exists. The mask
+  is built ONCE per contract by `_entry_block_mask` (it reads timestamps and
+  nothing else), not once per grid cell.
+  **Before this the sweep ignored `cfg.news_filter` and `cfg.exclude_days`
+  entirely**: the flags parsed, reached the config, printed on the console and
+  changed no signal, so every parameter set was selected on the unfiltered week
+  and then re-run filtered. `tests/test_batch_runner.py` now pins the filtered
+  sweep against an `apply_entry_filters` + `_simulate` oracle trade for trade,
+  and separately against the unfiltered sweep — parity alone would be passed by
+  a no-op mask.
+- **Precedence lives in one function, `resolve_exclude_days`.** An explicit
+  `--exclude-days` wins outright and applies to every contract; otherwise Stage
+  1's per-pair `exclude_days` applies with no flag;
+  `--ignore-stage1-exclude-days` removes that middle step only and never
+  disables an explicit `--exclude-days`. Whichever way it resolves, the answer
+  and its PROVENANCE are printed and written onto
+  `best_params_<SYMBOL>_<TF>.json` — "Monday was excluded" is never recorded
+  without who decided it.
+- **`scan["entry_filters"]` is `None` when neither filter was configured**, and
+  a dict recording what was blocked when one was. A filter that ran and cut
+  nothing is a different result from no filter, and the two tables are otherwise
+  indistinguishable. A `--reuse-scan` rebuild reports `None` — "not recorded" —
+  because the CSV holds metrics, not the mask that produced them.
+- **`winners_leaderboard` is the table the stage ends on** — Symbol, Timeframe,
+  in-sample PF, in-sample Sharpe, max drawdown, the winning parameters in full,
+  and the excluded days, sorted by Sharpe descending because that is the metric
+  the sweep selected on. A contract with no measurable Sharpe sorts LAST rather
+  than being dropped: "this grid produced no trades" is a finding about the
+  space, and an absent row reads as a sweep that never ran. The excluded-days
+  column is not decoration — two rows with the same parameters and different
+  exclusions were fitted to different weeks, and without it the table presents
+  them as comparable.
+
 - **The scanner's numbers are the engine's numbers.** Per-column trade lists are
   built from the engine's own `_cost_arrays` and `_assemble_result`, with the
   same one-bar signal shift and next-bar-open fill, so a column's metrics are
@@ -764,7 +828,19 @@ parameters is a mistake nothing downstream could detect. Handoffs are written
 atomically (temp file, `os.replace`) into
 `<BT_ARTIFACTS>/pipeline/<strategy>/`, one directory per strategy rather than
 per run, because the files are a chain and Stage 3 has to find Stage 2's winner
-without being told a timestamp.
+without being told a timestamp. `stage1_exclude_days` is the one place a per-pair
+weekday exclusion is read back out, keyed per `(symbol, timeframe)`; a pair with
+nothing to exclude is ABSENT from the mapping rather than mapped to an empty
+tuple, and a handoff written before the contract existed simply yields `{}`.
+**Since the regime firewall replaced Stage 1's Drop Unprofitable Days contract
+(2026-08-20) that is what it always returns from a fresh Stage 1 run** — the
+inheritance path in Stage 2 and Stage 3 is unchanged and still honours a handoff
+that carries days, but nothing in the pipeline writes one any more. `leaderboard(title, header, rows)` renders the end-of-stage table for all
+three stages — one implementation, because these are read as a sequence and a
+Symbol column aligned one way in Stage 1 and another in Stage 2 makes two tables
+of the same contracts look like tables of different things. Columns size to
+their widest CELL, so a long parameter set widens its own column rather than
+being silently clipped.
 
 **Multi-timeframe scanning.** Stages 1 and 2 accept `--tf 1m,5m,15m,30m` and
 run each timeframe independently; `run.parse_timeframes` validates against
@@ -802,10 +878,12 @@ unrecorded:
   tear sheet per contract. Certifying at a timeframe whose winner was selected
   on different bars raises rather than proceeding.
 
-**`backtest/baseline.py`** — **Stage 1**. Version A (and B with `--ml`) on
-DEFAULT parameters, one simulation per **(symbol, timeframe) configuration**,
-screening on profit factor and writing the surviving pairs to
-`surviving_assets.json`.
+**`backtest/baseline.py`** — **Stage 1**, the **Regime-Aware Screening
+Firewall**. Version A (and B with `--ml`) on DEFAULT parameters, one simulation
+per **(symbol, timeframe) configuration**, each profiled into four
+volatility/trend quadrants and screened on the best quadrant rather than on the
+blended sample. Survivors are written to `surviving_assets.json` scoped to the
+one environment they cleared.
 
 - Defaults, deliberately unswept: a sweep here would screen on the best of N
   per contract, promoting whichever symbol had the most parameters to hide
@@ -820,31 +898,97 @@ screening on profit factor and writing the surviving pairs to
   that nobody reads the last one.
 - **Everything else goes to `stage1_baseline_report.md`** in the pipeline
   directory: both versions' full metrics (Sharpe, Sortino, PF, win rate, max
-  DD, net return, trades, friction costs), the day-of-week attribution, the
+  DD, net return, trades, friction costs), the four-quadrant regime matrix per
+  version, the (now purely descriptive) day-of-week attribution, the
   entry-filter audit, and the drop reason for every configuration that failed.
   Written on EVERY run — a screen where nothing survived is the run whose
   detail matters most — and rewritten from scratch after each configuration, so
   one killed at 14 of 108 leaves a complete report of 14.
-- **Survival is `max(PF_a, PF_b) >= 1.00` with `>= 30` trades on the version
-  that cleared it**, each version held to the floor on its OWN trade count. The
-  trade floor is far below Gate 1's 100 because this stage decides what is
-  worth sweeping, not what is worth trading; it is not zero because a profit
-  factor over eleven trades clears 1.00 by accident often enough to matter
-  across a 108-cell screen. Admitting Version B is a deliberate loosening of
-  the earlier Version-A-only rule: B's classifier is fitted on these same bars,
-  so a Stage 1 survivor is no longer necessarily a contract with an unfiltered
-  edge. Which version carried it is recorded in the row's `reason` and in the
-  report.
+- **Survival is one QUADRANT, on either version** — `optimal_regime_PF >= 1.15`
+  over `>= 30` trades in that same quadrant. Full detail in the firewall bullet
+  below. The trade floor is far below Gate 1's 100 because this stage decides
+  what is worth sweeping, not what is worth trading; it is not zero because a
+  profit factor over eleven trades clears any bar by accident often enough to
+  matter across a 108-cell screen. Admitting Version B is a deliberate loosening
+  of the earlier Version-A-only rule: B's classifier is fitted on these same
+  bars, so a Stage 1 survivor is no longer necessarily a contract with an
+  unfiltered edge. Which version carried it is recorded in the row's `reason`,
+  on the leaderboard, and in the report.
 - **The handoff is exact pairs.** `surviving_pairs` is
-  `[{"symbol": "NQ", "tf": "5m"}, ...]` and the printed Stage 2 command names
+  `[{"symbol": "NQ", "tf": "5m", "optimal_regime": ..., "regime_pf": ...,
+  "kill_switch_regimes": [...]}, ...]` and the printed Stage 2 command names
   only those symbols and timeframes. `surviving` is kept beside it as the
   symbol union, because that is what `scan.py` defaults `--symbols` to.
   `--symbols`/`--tf` are two axes, so ragged survivors can only be expressed as
   their cross product — a SUPERSET, and the stage says so rather than quietly
   handing Stage 2 a contract it just dropped.
-- Writes the day-of-week table per configuration and NAMES the losing days as
-  candidates for `--exclude-days`. It never applies them: selecting the days
-  that lost in-sample and re-scoring the same bars is circular.
+- **The Regime-Aware Screening Firewall, from 2026-08-20.** This REPLACED the
+  Drop Unprofitable Days contract, which is gone from this stage along with its
+  `--no-drop-losing-days`, `--dow-min-pf` and `--dow-min-trades` flags. Both
+  versions of every configuration are profiled by
+  `backtest.profiler.RegimeProfiler` into four quadrants — ADX(14) > 25 is
+  Trending, ATR(14) above the contract's OWN median is High Volatility — and
+  each version's breakdown is written as
+  `regime_profile_<SYMBOL>_<TF>_version_<a|b>.json` beside the handoff.
+  - **Survival is one quadrant, not the blend.** `optimal_regime_PF >= 1.15`
+    AND `optimal_regime_trade_count >= 30` **in the same quadrant**, on either
+    version. The bar is 1.15 rather than the 1.00 the blended screen used
+    because the quadrant is the best of four: a bar cleared by a hair is a bar
+    cleared by selection. Both bars bind on ONE quadrant — a 1.90 over eleven
+    trades beside a 0.90 over four hundred is a strategy with no environment,
+    and pairing the best factor with the largest count would advance exactly
+    that.
+  - **This is a LOOSER screen than the one it replaced, deliberately.** A
+    configuration whose blended profit factor is below 1.00 now survives on the
+    strength of a single quadrant. The question changed: not "does this make
+    money on every bar" but "is there an environment in which it does" — which
+    is the honest question for a strategy governed by a live supervisor able to
+    stand it down.
+  - **The handoff is scoped, and the scope travels.** Each entry of
+    `surviving_pairs` is exactly `{"symbol", "tf", "optimal_regime",
+    "regime_pf", "kill_switch_regimes"}`. The kill switch is DERIVED as the
+    other three quadrants rather than measured: a quadrant that failed the bar
+    and a quadrant the strategy never traded in are the same instruction to a
+    supervisor, and reading "no evidence" as "permitted" is what puts a contract
+    into the one environment nobody sampled. A configuration that cleared
+    nothing gets `None` and `[]` — never a best-effort second place, because a
+    stand-down list derived from a quadrant that failed is a live-trading
+    instruction nothing certified.
+  - **It is an in-sample selection layer, and the handoff says so.** The
+    quadrant is picked on the same bars Stage 2 sweeps and Stage 3 certifies, so
+    a winning Sharpe is the best of (combinations × this best-of-four pick).
+    `regime_screen.selected_in_sample` records it; Gate 3's holdout retention is
+    the only evidence it generalised.
+  - **Stage 2 sweeps the WHOLE window, not the winning quadrant**
+    (`regime_screen.applied_to_stage2: false`). Masking the sweep to a subset
+    that was itself chosen as the best of four on those same bars would stack a
+    second selection layer under the first. The regime is an instruction for the
+    live supervisor, not a mask on the search.
+  - **The day-of-week table survives as DESCRIPTIVE only.** It is still written
+    per configuration and nothing downstream reads it. Which weekday loses is
+    largely a restatement of which regime that weekday falls in, and pruning the
+    calendar masked the environment instead of naming it.
+  - **`--exclude-days` and `--news-filter` remain**, from the shared
+    `add_filter_args`, spelled identically on all five stages and on `bt-run`.
+    They are explicit operator instructions applied by the engine, not a pruning
+    decision this stage makes.
+  - **The report carries the four-quadrant matrix for every asset EVALUATED**,
+    drops included, with all four regimes as rows — a quadrant with no trades is
+    a row saying so, because an absent row reads as missing data when it means
+    "this strategy never traded a low-volatility range". The VERDICT column
+    names which bar a quadrant missed, since failing on edge and failing on
+    sample size are fixed by different work.
+- **`survivors_leaderboard` is the table the stage ends on** — Symbol,
+  Timeframe, PF (A), PF (B), the optimal regime, its profit factor, its trade
+  count and the version that produced it; survivors only, sorted by the REGIME
+  profit factor descending. Sorted on the regime rather than on either blended
+  factor because that is what the screen decided on: ranking on the blend would
+  put a contract with a broad mediocre edge above one with a sharp edge in a
+  single environment, which inverts the question the stage now asks. The kill
+  switch is NOT a column — it is always the other three quadrants, and spelling
+  it out per row pushes the table past 170 characters into a terminal wrap; it
+  is printed in full per survivor in the REGIME FIREWALL block beneath the
+  table, and carried in full on every handoff row.
 
 **`backtest/audit_gates.py`** — **Stage 3**, and the only script that produces a
 gate verdict anybody may act on. Runs the three separate pieces of evidence —
@@ -858,6 +1002,24 @@ in-sample metrics, walk-forward + Monte Carlo, and the holdout — and writes
 - Parameters come from Stage 2's `best_params_<SYMBOL>.json`. A missing file is
   an ERROR, not a silent fall back to the defaults — `--defaults` is how you say
   you meant it. `variants_tested` travels with them onto the audit.
+- **`_resolve_filters` inherits Stage 2's `exclude_days`** so the certification
+  is of the week the parameters were actually selected on. Certifying the whole
+  week when the winner was chosen with Monday masked out scores a strategy
+  nobody optimised: Gate 1 disagrees with the sweep's own in-sample metrics, and
+  Gate 3 measures retention between two different strategies. An explicit
+  `--exclude-days` here still wins, and the source is recorded as
+  `entry_filters_source`. **The news filter is deliberately NOT inherited** —
+  its dates can be rule-generated and approximate, and an approximate blocking
+  window must not creep into a gate verdict unasked.
+- **`certification_leaderboard` is the table the stage ends on** — one row per
+  (contract, VERSION), with Gate 1, Gate 2 and Gate 3 shown SEPARATELY, then the
+  rolled-up `CERTIFIED` / `NOT CERTIFIED`, then the excluded days the gates were
+  run on. The three gates are separate columns because they fail for different
+  reasons and are fixed by different work, and because a `NOT EVAL` is a run
+  that has not been done rather than a statement about the strategy — one
+  PASS/FAIL column makes those indistinguishable. `FINAL STATUS` is
+  `audit["passed"]`, so a NOT EVALUATED reads as NOT CERTIFIED, which is what
+  Stage 5 enforces.
 - The walk-forward runs with FIXED parameters unless `--wfo-grid` is passed,
   which is recorded as `wfo_optimized: false`; with nothing selected per fold
   the ratio compares two time periods rather than fitted-versus-unseen.
