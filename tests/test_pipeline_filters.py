@@ -676,14 +676,19 @@ def test_baseline_screen() -> None:
           best["regime"] == REGIMES[0] and best["profit_factor"] == 1.28
           and best["trade_count"] == 80 and best["version"] == "A", str(best))
 
-    drop, why, best = screen({"A": _profile(hvt=(1.14, 400)), "B": None})
-    check("1.14 is below the 1.15 bar and is dropped", not drop and best is None,
+    # The bar was lowered 1.15 -> 1.00 on 2026-08-20 by operator instruction.
+    # 1.14 now SURVIVES; what must still be dropped is a quadrant that did not
+    # break even.
+    drop, why, best = screen({"A": _profile(hvt=(0.94, 400)), "B": None})
+    check("0.94 is below the 1.00 bar and is dropped", not drop and best is None,
           why)
     check("...and the reason names the best quadrant and how far short it fell",
-          "1.14" in why and REGIMES[0] in why, why)
-    edge, why, _ = screen({"A": _profile(hvt=(1.15, 30)), "B": None})
-    check("exactly 1.15 over exactly 30 trades is on the boundary and survives",
+          "0.94" in why and REGIMES[0] in why, why)
+    edge, why, _ = screen({"A": _profile(hvt=(1.00, 30)), "B": None})
+    check("exactly 1.00 over exactly 30 trades is on the boundary and survives",
           edge, why)
+    loosened, why, _ = screen({"A": _profile(hvt=(1.14, 400)), "B": None})
+    check("1.14 now survives, where the 1.15 bar dropped it", loosened, why)
 
     thin, why, _ = screen({"A": _profile(hvt=(2.40, 29)), "B": None})
     check("a 2.40 PF over 29 trades in that quadrant is NOT an environment",
@@ -697,7 +702,7 @@ def test_baseline_screen() -> None:
 
     # Blended profit factor is irrelevant now: this configuration loses money
     # overall and still survives on one environment. That is the intended
-    # loosening, and the reason the bar is 1.15 rather than 1.00.
+    # loosening. The bar sat at 1.15 for that reason until 2026-08-20.
     mixed, why, best = screen({"A": _profile(hvt=(1.60, 90), hvr=(0.55, 300),
                                              lvr=(0.70, 250)), "B": None})
     check("a configuration that loses overall survives on ONE good quadrant",
@@ -730,7 +735,7 @@ def test_baseline_screen() -> None:
           tied["regime"] == REGIMES[3] and tied["trade_count"] == 900,
           str(tied))
     check("a profile with nothing clearing returns None, not a best-effort pick",
-          best_quadrant(_profile(hvt=(1.10, 900))) is None)
+          best_quadrant(_profile(hvt=(0.90, 900))) is None)
 
     # The kill switch is derived, and never invented.
     ks = kill_switch_regimes(REGIMES[0])

@@ -45,18 +45,29 @@ deferred, not hidden.
 
 **The screen is a REGIME, not a blended average.** Every configuration is
 profiled into four quadrants by `backtest.profiler.RegimeProfiler` — ADX(14)
-above 25 is Trending, ATR(14) above the contract's own median is High
-Volatility — and it survives when ONE quadrant carries a profit factor of 1.15
-or better over at least 30 trades in that quadrant, on either version.
+above 25 is Trending, ATR(14) above the contract's own in-sample median is
+High Volatility — and it survives when ONE quadrant carries a profit factor of
+1.00 or better over at least 30 trades in that quadrant, on either version.
+
+Since 2026-08-20 the quadrant labels are READ from the pre-computed regime
+cache (`mdlib/regimes.py`, joined onto every frame by `mdlib.lake`) rather than
+recomputed per stage and per version. The threshold that separates high from
+low volatility is therefore the same number in every stage, pinned to the
+in-sample window, instead of a median of whatever date range each caller
+happened to request.
 
 That is a different question from the one this stage used to ask. A blended
 profit factor over the whole window asks whether a strategy makes money on
 every bar; a quadrant asks whether there is an environment in which it does.
 The second is the honest question for a strategy that will be governed by a
-live supervisor able to stand it down — and it is a LOOSER screen, which is why
-the bar sits at 1.15 rather than at the 1.00 break-even. The quadrant is picked
-as the best of four, so a bar it clears by a hair is a bar it clears by
-selection.
+live supervisor able to stand it down — and it is a LOOSER screen.
+
+The bar sat at 1.15 for that reason: the quadrant is picked as the best of
+four, so a bar it clears by a hair is a bar it clears by selection rather than
+by edge. **It was lowered to 1.00 on 2026-08-20 by operator instruction**, and
+that objection is not answered by the change — it is accepted. Stage 1 is now
+a wide net feeding the Stage 2 sweep, not a verdict about an edge. See
+MIN_REGIME_PROFIT_FACTOR.
 
 **Both bars bind on the SAME quadrant.** A 1.80 profit factor over eleven
 trades in one quadrant and a 0.90 over four hundred in another describe a
@@ -145,11 +156,23 @@ from backtest.run import (load_bars, parse_param, parse_symbols,    # noqa: E402
                           parse_timeframes, resolve_strategy)
 
 # The survival bar, applied to ONE regime quadrant rather than to the whole
-# sample. 1.15 is deliberately above the 1.00 break-even the blended screen
-# used: a quadrant is a SUBSET chosen after the fact as the best of four, so a
-# bar it clears by a hair is a bar it clears by selection. 1.00 on a
-# best-of-four pick would advance a contract with no edge anywhere.
-MIN_REGIME_PROFIT_FACTOR = 1.15
+# sample.
+#
+# **Lowered from 1.15 to 1.00 on 2026-08-20 by operator instruction.** The
+# reason 1.15 was chosen still stands and is not answered by the change: a
+# quadrant is a SUBSET chosen after the fact as the best of four, so a bar it
+# clears by a hair is a bar it clears by SELECTION rather than by edge. At
+# 1.00 a configuration advances on a quadrant that merely broke even, and
+# break-even on the best of four looks the same as no edge anywhere.
+#
+# What this makes Stage 1: a wider net feeding a sweep, not a verdict. Nothing
+# downstream loosens - Gate 1 still binds profit factor at 1.00 on the BLENDED
+# sample over >= 100 trades, and Gate 3 still has to see the retention hold
+# out of sample. Raise it back with --min-profit-factor at any time; the value
+# actually used is printed in the stage banner and written onto
+# surviving_assets.json, so no handoff records a survivor without recording
+# the bar it cleared.
+MIN_REGIME_PROFIT_FACTOR = 1.00
 
 # The trade floor the winning QUADRANT must clear on its own trade count - not
 # the configuration's total. A 1.60 profit factor over nine trades in one
@@ -253,7 +276,7 @@ def _top_quadrant(profile: dict | None) -> dict | None:
     The highest-profit-factor quadrant IGNORING both bars — for the drop
     reason only, never for survival.
 
-    "best profit factor 1.04 in High Volatility / Trending, below 1.15" tells
+    "best profit factor 0.94 in High Volatility / Trending, below 1.00" tells
     an operator what to change. A bare "no quadrant cleared the bar" sends them
     to re-run the stage to find out how close it was.
     """
@@ -302,8 +325,9 @@ def screen(profiles: dict | None,
     question. The old one asked whether the strategy made money across every
     bar of the window; this asks whether there is an environment in which it
     does, and it will advance a contract whose blended factor is below 1.00 on
-    the strength of one quadrant — which is the intended loosening, and the
-    reason the quadrant bar sits at 1.15 rather than 1.00.
+    the strength of one quadrant — which is the intended loosening. The bar
+    sits at 1.00 since 2026-08-20; it sat at 1.15 before, because a quadrant
+    cleared by a hair on a best-of-four pick is cleared by selection.
 
     **The quadrant is chosen in-sample, on the same bars Stage 2 sweeps and
     Stage 3 certifies.** Best-of-four is a selection layer stacked on the
@@ -1125,6 +1149,17 @@ def main(argv: list[str] | None = None) -> int:
     # environment it is cleared to trade in, the profit factor that cleared it,
     # and the three quadrants it must stand down in.
     #
+    # One entry per configuration that produced a profile, so a mixed run -
+    # some pairs cached, some not - says so per pair rather than under a single
+    # banner that would be true of only half of it.
+    regime_sources: dict[str, str] = {}
+    for r in rows:
+        for label in ("a", "b"):
+            prof = r.get(f"regime_profile_{label}")
+            if prof:
+                regime_sources[f"{r['symbol']}_{r['tf']}_version_{label}"] = (
+                    prof.get("regime_source", "unrecorded"))
+
     # `kill_switch_regimes` is DERIVED from `optimal_regime` rather than
     # measured, and that is deliberate. A quadrant that failed the profit-factor
     # bar and a quadrant the strategy never traded in are the same instruction
@@ -1173,9 +1208,24 @@ def main(argv: list[str] | None = None) -> int:
             "min_trades": int(args.min_trades),
             "rule": criterion,
             "classification": ("ADX(14) > 25 is Trending; ATR(14) above the "
-                               "contract's own median ATR over this window is "
-                               "High Volatility. Both thresholds are per "
-                               "(symbol, timeframe)."),
+                               "contract's own median ATR is High Volatility. "
+                               "Both thresholds are per (symbol, timeframe)."),
+            # WHERE the quadrant labels came from, per configuration, and it is
+            # not decoration. A cached label is drawn against a threshold
+            # pinned to the in-sample window; a recomputed one is drawn against
+            # the median of whatever window the caller asked for. The two put
+            # the same bar in different quadrants, so a handoff that records a
+            # survivor's optimal_regime without recording which threshold drew
+            # it is not reproducible.
+            "regime_source": regime_sources,
+            "regime_source_note": (
+                "precomputed_cache = read from "
+                "<lake>/regimes/{SYMBOL}_{TF}_regime.parquet, whose volatility "
+                "threshold is the median ATR(14) over the cache's own "
+                "in-sample window and does NOT move with this run's --start / "
+                "--end. recomputed_live = no cached quadrant on the bars, so "
+                "the profiler took the median ATR of this window instead. "
+                "Build the cache with scripts/precompute_regimes.py."),
             # Written as a field rather than left to a reader to infer. The
             # quadrant is the best of four picked on the bars Stage 2 then
             # optimises over and Stage 3 certifies, exactly as the weekday

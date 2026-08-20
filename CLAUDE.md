@@ -219,7 +219,7 @@ bt-status  # = .venv/bin/python3 ~/src/trading/backtest/status.py
 streamlit run dashboard/app.py
 
 # Tests. No pytest config - each is a script that exits non-zero on failure.
-# Sixteen suites. Everything except test_streaming_lake, test_engine_batching
+# Seventeen suites. Everything except test_streaming_lake, test_engine_batching
 # and test_engine_vbt runs without the lake or a network (test_batch_runner's
 # --symbols checks and test_intraday_vol_mr's real-bar section skip, loudly,
 # without it). test_report_gates.py shells out to `node` for the trade
@@ -239,6 +239,7 @@ python tests/test_risk_params.py        # TP/SL/trailing walk, grid, leaderboard
 python tests/test_daily_metrics.py      # the daily-close metric frequency contract
 python tests/test_pipeline_filters.py   # entry filters, DOW attribution, the 5 stages
 python tests/test_regime_cache.py      # regime quadrants, theta_vol, the lake join
+python tests/test_profiler_precomputed.py  # the profiler reads the cache, not its own pass
 OMP_NUM_THREADS=1 \
   python tests/test_sma_momentum_crossover.py   # ADX vs TA-Lib, layers, ml_features
 
@@ -304,7 +305,7 @@ bt-run --strat X --symbols NQ --exclude-days 0,4     # no Mon/Fri ENTRIES
 
 # The Regime-Aware Screening Firewall (replaced the Drop Unprofitable Days
 # contract, 2026-08-20). Stage 1 profiles every configuration into four
-# volatility/trend quadrants and keeps only those with a quadrant at PF >= 1.15
+# volatility/trend quadrants and keeps only those with a quadrant at PF >= 1.00
 # over >= 30 trades; each survivor carries optimal_regime, regime_pf and
 # kill_switch_regimes into surviving_assets.json. NO weekday is blacklisted
 # any more, so Stage 1 writes no exclude_days and Stage 2 inherits none.
@@ -448,11 +449,24 @@ recomputing them over the same series.
   retention between two strategies whose regime definitions disagree. `theta_vol`
   is stored in the file, because a quadrant read without knowing which window
   drew its boundary is not a measurement.
-- **This differs from `backtest.profiler.RegimeProfiler`, which takes the
-  median of whatever frame it was handed.** Nothing here changes that class and
-  Stage 1's screening numbers are untouched. Reconciling the two — pointing the
-  profiler at the cache — is its own scoped change, and it WILL move every
-  Stage 1 verdict, so it is not something to fold into an unrelated task.
+- **`backtest.profiler.RegimeProfiler` consumes this cache from 2026-08-20.**
+  When the bars carry `regime_quadrant` — which they do whenever they came
+  through `mdlib.lake` — the profiler labels every bar from the cached column
+  and runs no indicator pass of its own. It falls back to the original live
+  ADX/ATR pass otherwise, and the two are NOT equivalent: the fallback takes
+  the median ATR of whatever frame it was handed, so its boundary moves with
+  the requested date range while the cache's does not. Which one ran is
+  recorded on every profile artifact as `regime_source`
+  (`precomputed_cache` / `recomputed_live`) alongside the threshold that drew
+  the quadrants, and Stage 1 collects them per configuration into
+  `regime_screen.regime_source`. **Switching a (symbol, tf) from recomputed to
+  cached MOVES its quadrant boundary and therefore its Stage 1 verdict** — that
+  is the intended effect, not drift, but a before/after is not comparable
+  across the change.
+- The integer→label map lives in `backtest/profiler.py` as
+  `QUADRANT_TO_REGIME`, built FROM `QUADRANT_LABELS` here and **checked against
+  `REGIMES` at import**, which raises on disagreement. A transposed map would
+  move every trade between quadrants with every total still adding up.
 - **Provenance lives inside the parquet**, as schema metadata, not in a sidecar
   that can be separated from what it describes: `theta_vol`, the in-sample
   window, the indicator lengths, and the lake hygiene flags the bars were read
@@ -958,7 +972,7 @@ one environment they cleared.
   Written on EVERY run — a screen where nothing survived is the run whose
   detail matters most — and rewritten from scratch after each configuration, so
   one killed at 14 of 108 leaves a complete report of 14.
-- **Survival is one QUADRANT, on either version** — `optimal_regime_PF >= 1.15`
+- **Survival is one QUADRANT, on either version** — `optimal_regime_PF >= 1.00`
   over `>= 30` trades in that same quadrant. Full detail in the firewall bullet
   below. The trade floor is far below Gate 1's 100 because this stage decides
   what is worth sweeping, not what is worth trading; it is not zero because a
@@ -984,11 +998,17 @@ one environment they cleared.
   Trending, ATR(14) above the contract's OWN median is High Volatility — and
   each version's breakdown is written as
   `regime_profile_<SYMBOL>_<TF>_version_<a|b>.json` beside the handoff.
-  - **Survival is one quadrant, not the blend.** `optimal_regime_PF >= 1.15`
+  - **Survival is one quadrant, not the blend.** `optimal_regime_PF >= 1.00`
     AND `optimal_regime_trade_count >= 30` **in the same quadrant**, on either
-    version. The bar is 1.15 rather than the 1.00 the blended screen used
-    because the quadrant is the best of four: a bar cleared by a hair is a bar
-    cleared by selection. Both bars bind on ONE quadrant — a 1.90 over eleven
+    version. **The bar was 1.15 until 2026-08-20, when it was lowered to 1.00
+    by operator instruction.** The reason for 1.15 is not answered by that
+    change, it is accepted: the quadrant is the best of four, so a bar cleared
+    by a hair is a bar cleared by selection rather than by edge. At 1.00 a
+    configuration advances on a quadrant that merely broke even. Stage 1 is
+    therefore a wide net feeding the Stage 2 sweep, not a verdict about an
+    edge — nothing downstream loosened, Gate 1 still binds PF at 1.00 on the
+    BLENDED sample over >= 100 trades. `--min-profit-factor` raises it back,
+    and the value used is printed in the banner and written onto the handoff. Both bars bind on ONE quadrant — a 1.90 over eleven
     trades beside a 0.90 over four hundred is a strategy with no environment,
     and pairing the best factor with the largest count would advance exactly
     that.

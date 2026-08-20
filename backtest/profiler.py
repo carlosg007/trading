@@ -5,6 +5,7 @@ import json
 import os
 
 from backtest.pipeline import pipeline_dir
+from mdlib import regimes as _regime_cache
 
 # The four quadrants, in the order every table prints them. A module constant
 # rather than a list built inside `generate_profile`, because Stage 1 screens
@@ -18,6 +19,23 @@ REGIMES = (
     "Low Volatility / Trending",
     "Low Volatility / Ranging",
 )
+
+# The bar column `mdlib.lake` joins on from the pre-computed regime cache, and
+# the integer -> label map. Built FROM `mdlib.regimes` rather than spelled out
+# again here, and checked against REGIMES at import: two orderings of the same
+# four quadrants would put a trade in "High Volatility / Trending" when the
+# cache said "Low Volatility / Ranging", and every number downstream would
+# still add up.
+PRECOMPUTED_COLUMN = "regime_quadrant"
+UNKNOWN_REGIME = "UNKNOWN"
+
+QUADRANT_TO_REGIME = {q: _regime_cache.QUADRANT_LABELS[q] for q in (1, 2, 3, 4)}
+if tuple(QUADRANT_TO_REGIME[q] for q in (1, 2, 3, 4)) != REGIMES:
+    raise ImportError(
+        f"quadrant encoding disagreement: mdlib.regimes numbers the quadrants "
+        f"{[QUADRANT_TO_REGIME[q] for q in (1, 2, 3, 4)]} but "
+        f"backtest.profiler.REGIMES orders them {list(REGIMES)}. A cached "
+        f"quadrant and a profiled label would name different environments.")
 
 
 def _resolve_out_dir(out_dir, strat_name: str) -> str:
@@ -143,6 +161,87 @@ class RegimeProfiler:
         return (f"{self.out_dir}/regime_profile_"
                 f"{self.symbol}_{self.tf}{suffix}.json")
 
+    def _classify_bars(self) -> dict:
+        """
+        Write `self.df['Regime']`, and return how it was decided.
+
+        **The pre-computed cache wins when the bars carry it.** `mdlib.lake`
+        left-joins `regime_quadrant` onto every frame it returns, so a bar that
+        arrived through the reader already has a quadrant computed once, from
+        Wilder's ADX(14)/ATR(14), against a volatility threshold pinned to the
+        in-sample window. Recomputing here would be the same indicator pass
+        repeated per stage AND per version, against a DIFFERENT threshold - see
+        below - so the two would disagree about which environment a trade was
+        in, and both would look right.
+
+        Quadrant 0 is the indicator warm-up (and any bar outside the cache's
+        span). It maps to UNKNOWN, exactly where the live pass falls through to
+        UNKNOWN for a NaN indicator, so those trades are counted as unplaced
+        rather than filed under a regime nobody measured.
+
+        The fallback is the original live pass, unchanged, and it is NOT
+        equivalent: it takes the median ATR of whatever frame it was handed, so
+        its threshold moves with the requested date range. It stays because a
+        caller holding a hand-built frame - a test, a notebook, a strategy the
+        cache has not been built for - must still get a profile rather than an
+        exception. Which one ran is recorded on the artifact; a quadrant read
+        without knowing which threshold drew it is not a measurement.
+        """
+        if PRECOMPUTED_COLUMN in self.df.columns:
+            quad = self.df[PRECOMPUTED_COLUMN]
+            self.df["Regime"] = (quad.map(QUADRANT_TO_REGIME)
+                                     .fillna(UNKNOWN_REGIME)
+                                     .astype(object))
+            prov = _regime_cache.provenance(self.symbol, self.tf) or {}
+            n_undefined = int((quad == _regime_cache.QUADRANT_UNDEFINED).sum())
+            return {
+                "regime_source": "precomputed_cache",
+                "volatility_threshold": prov.get("theta_vol"),
+                "volatility_threshold_basis": (
+                    f"median ATR({prov.get('atr_length', 14)}) over the "
+                    f"in-sample window {prov.get('is_start')} .. "
+                    f"{prov.get('is_end')}"
+                    if prov.get("theta_vol") is not None else
+                    "not recorded - the bars carried a quadrant column but no "
+                    "cache file was found for this (symbol, timeframe)"),
+                "adx_trend_threshold": prov.get(
+                    "adx_trend_threshold", _regime_cache.ADX_TREND_THRESHOLD),
+                "cache_file": str(
+                    _regime_cache.cache_path(self.symbol, self.tf)),
+                "bars_without_regime": n_undefined,
+            }
+
+        # Fallback: the original live pass.
+        self.df.ta.adx(length=14, append=True)
+        self.df.ta.atr(length=14, append=True)
+
+        adx_col = [c for c in self.df.columns if c.startswith('ADX')][0]
+        atr_col = [c for c in self.df.columns
+                   if c.startswith('ATRe') or c.startswith('ATR')][0]
+
+        atr_median = self.df[atr_col].median()
+
+        conditions = [
+            (self.df[atr_col] > atr_median) & (self.df[adx_col] > 25),
+            (self.df[atr_col] > atr_median) & (self.df[adx_col] <= 25),
+            (self.df[atr_col] <= atr_median) & (self.df[adx_col] > 25),
+            (self.df[atr_col] <= atr_median) & (self.df[adx_col] <= 25),
+        ]
+        self.df['Regime'] = np.select(conditions, list(REGIMES),
+                                      default=UNKNOWN_REGIME)
+        return {
+            "regime_source": "recomputed_live",
+            "volatility_threshold": (None if pd.isna(atr_median)
+                                     else float(atr_median)),
+            "volatility_threshold_basis": (
+                "median ATR(14) over the frame handed to the profiler - moves "
+                "with the requested date range"),
+            "adx_trend_threshold": 25.0,
+            "cache_file": None,
+            "bars_without_regime": int(
+                (self.df['Regime'] == UNKNOWN_REGIME).sum()),
+        }
+
     def generate_profile(self):
         """
         The four-quadrant breakdown, RETURNED as well as printed and written.
@@ -157,27 +256,15 @@ class RegimeProfiler:
         failure `_closed_trades` refuses to make quietly.
         """
         self._say(f"\n[PROFILER] Analyzing {self.symbol} on {self.tf} for {self.strat_name}...")
-        
-        # 1. Calculate ADX (Trend) and ATR (Volatility)
-        self.df.ta.adx(length=14, append=True)
-        self.df.ta.atr(length=14, append=True)
-        
-        # Find exact column names generated by pandas-ta
-        adx_col = [c for c in self.df.columns if c.startswith('ADX')][0]
-        atr_col = [c for c in self.df.columns if c.startswith('ATRe') or c.startswith('ATR')][0]
-        
-        # 2. Define the Volatility Median for this specific asset
-        atr_median = self.df[atr_col].median()
-        
-        # 3. Classify Every Bar into a Quadrant
-        conditions = [
-            (self.df[atr_col] > atr_median) & (self.df[adx_col] > 25),  # High Vol, Trending
-            (self.df[atr_col] > atr_median) & (self.df[adx_col] <= 25), # High Vol, Ranging
-            (self.df[atr_col] <= atr_median) & (self.df[adx_col] > 25), # Low Vol, Trending
-            (self.df[atr_col] <= atr_median) & (self.df[adx_col] <= 25) # Low Vol, Ranging
-        ]
+
+        # 1-3. Label every bar with its quadrant, from the pre-computed cache
+        # when the bars carry one and from a live ADX/ATR pass when they do not.
         choices = list(REGIMES)
-        self.df['Regime'] = np.select(conditions, choices, default="UNKNOWN")
+        provenance = self._classify_bars()
+        self._say(f"[PROFILER] regime source: {provenance['regime_source']}"
+                  + (f" (theta_vol={provenance['volatility_threshold']:.6f})"
+                     if provenance.get("volatility_threshold") is not None
+                     else ""))
         
         # 4. Extract the closed trades and tag them
         trades = _closed_trades(self.portfolio)
@@ -196,6 +283,7 @@ class RegimeProfiler:
                 "trades_profiled": 0,
                 "trades_unplaced": 0,
                 "artifact": None,
+                **provenance,
             }
             
         # Map the entry timestamp to the DataFrame index to get the regime at entry
@@ -281,6 +369,8 @@ class RegimeProfiler:
             "trades_profiled": int(len(trades) - unplaced),
             "trades_unplaced": int(unplaced),
             "artifact": file_path,
+            # How the quadrants were drawn, beside the numbers they produced.
+            **provenance,
         }
 
         with open(file_path, "w") as f:
