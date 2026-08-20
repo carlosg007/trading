@@ -76,6 +76,7 @@ from backtest.event_calendar import (add_filter_args,              # noqa: E402
 from backtest.pipeline import (BEST_PARAMS_FILE, VERIFY_FILE,      # noqa: E402
                                next_step, pipeline_dir, read_stage,
                                stage_banner, write_stage)
+from backtest.profiler import RegimeProfiler                       # noqa: E402
 from backtest.report import (day_of_week_breakdown,                # noqa: E402
                              format_day_of_week, print_dual_scorecard)
 from backtest.report_html import _cost_split, write_dual_reports   # noqa: E402
@@ -236,6 +237,28 @@ def verify_symbol(symbol: str, path: Path, tf: str, params: dict,
     if filters:
         print()
         print(describe_filters(filters))
+
+    # Run Dynamic Regime Profiler. Version A's result, matching the cost drag
+    # and the day-of-week table below it: the profile describes the rule-based
+    # baseline, not whatever an ML filter left of it.
+    #
+    # `a["result"]` is a BacktestResult, NOT a vbt.Portfolio - the engine
+    # builds one portfolio per chunk inside `_simulate` and deletes it, so no
+    # portfolio object survives the run. RegimeProfiler reads the trade list
+    # off either shape.
+    #
+    # `art_dir.parent` is the stage's own out directory - `pipeline_dir` with
+    # `--out-dir` already applied - so the profile lands beside the handoffs
+    # rather than under a hardcoded root, and at a STABLE path: the live
+    # supervisor reads the latest profile, and burying it in this run's
+    # timestamped directory would make it unfindable without one.
+    try:
+        profiler = RegimeProfiler(bars, a.get("result"), strat_name, symbol, tf,
+                                  out_dir=art_dir.parent)
+        profiler.generate_profile()
+    except Exception as e:                                        # noqa: BLE001
+        print(f"[!] Regime Profiler failed for {symbol}: "
+              f"{type(e).__name__}: {e}", file=sys.stderr)
 
     drag = cost_drag(metrics_a.get("trades"), a.get("result"), symbol, cfg)
     print("\n  COST DRAG · Version A")
