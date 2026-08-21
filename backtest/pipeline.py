@@ -88,6 +88,16 @@ BEST_PARAMS_FILE = "best_params_{symbol}.json"
 STAGE2_SUMMARY_FILE = "stage2_summary.json"
 STAGE2_MATRIX_FILE = "stage2_summary_matrix.csv"
 GATE_AUDIT_FILE = "gate_audit_{symbol}.json"
+
+# Stage 3's own handoff, beside the per-contract gate audits. One file for the
+# whole certification run, written through `write_stage` for the same reason
+# Stage 2's summary is: `discord_reporter.py --stage 3` reads it, and a
+# certification card posted off another strategy's audit is exactly the
+# artifact nobody cross-checks. The per-contract `gate_audit_<SYMBOL>.json`
+# stays the AUTHORITATIVE verdict a promotion rests on - this is the index
+# over them, not a replacement for one.
+STAGE3_SUMMARY_FILE = "stage3_audit_summary.json"
+
 VERIFY_FILE = "verify_{symbol}.json"
 
 
