@@ -3,7 +3,7 @@
   "version": "A",
   "description": "Promoted Version A (rule-based baseline).",
   "symbols": [
-    "HO"
+    "PL"
   ],
   "timeframe": "30m",
   "params": {
@@ -27,23 +27,23 @@
   "source": "/home/cgrullon/src/trading/strategies/experimental/sma_momentum_crossover_20260818.py",
   "source_sha256": "884807fcc056c83f65606fff6fb7cb80f2f4dcef89983f5479115178a44059ff",
   "promoted_sha256": "884807fcc056c83f65606fff6fb7cb80f2f4dcef89983f5479115178a44059ff",
-  "promoted_utc": "2026-08-21T21:53:36+00:00",
+  "promoted_utc": "2026-08-21T21:53:39+00:00",
   "costs_included": false,
   "variants_tested": null,
   "metrics_status": "NOT RECORDED",
   "metrics": null,
   "gate_audit_status": "PASS",
   "gate_audit": {
-    "gate1": "PASS",
+    "gate1": "FAIL",
     "gate2": "FAIL",
     "gate3": "PASS",
     "gate_regime": "PASS"
   },
   "certification": {
-    "audit_file": "/mnt/backtest/artifacts/pipeline/sma_momentum_crossover_20260818/gate_audit_HO_30m.json",
-    "audit_sha256": "ef4a13e081f40a7ed25e3a4f07d28dd834f0d42aed17dca1238fa873f539ea69",
-    "audit_symbol": "HO",
-    "audit_generated_utc": "2026-08-21T21:41:23+00:00",
+    "audit_file": "/mnt/backtest/artifacts/pipeline/sma_momentum_crossover_20260818/gate_audit_PL_30m.json",
+    "audit_sha256": "0bb8e1e682fd2fd86974fdac1f3af00cae51d099a474f387daf7de0d67a059ac",
+    "audit_symbol": "PL",
+    "audit_generated_utc": "2026-08-21T21:42:25+00:00",
     "in_sample": {
       "start": "2013-01-01",
       "end": "2022-12-31"
@@ -54,13 +54,13 @@
       "end_basis": "the present - every bar the lake holds"
     },
     "params": {
-      "fast_window": 10,
+      "fast_window": 15,
       "slow_window": 50,
-      "tp_atr_mult": 2.0,
-      "sl_atr_mult": 1.5,
+      "tp_atr_mult": 3.0,
+      "sl_atr_mult": 1.0,
       "trailing": false
     },
-    "params_source": "stage 2 winner (best_params_HO_30m.json)",
+    "params_source": "stage 2 winner (best_params_PL_30m.json)",
     "variants_tested": 54,
     "wfo": {
       "train_years": 2,
