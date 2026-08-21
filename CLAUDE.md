@@ -593,6 +593,67 @@ trades, equity, breach, stats)`.
   two-state oracle (`_clean_signals_loop`, kept for exactly that), which also
   pins the long-only reduction exhaustively at every length up to 10.
 
+**`backtest/profiler.py`** — the four-quadrant breakdown, and **TRUE HOME
+REGIME DISCOVERY** (2026-08-21): the one place a strategy's home quadrant is
+chosen. `designate(breakdown, total_profiled)` is shared by the profiler,
+Stage 1's screen (`baseline.best_quadrant`) and, through the handoff, by Gate
+R — before this each ranked on profit factor with its own trade floor and its
+own tie-break, so a `regime_profile_*.json` and the `surviving_assets.json`
+written beside it could name DIFFERENT home quadrants for the same run with
+nothing raising.
+
+- **The score is ALPHA CONTRIBUTION, `net P&L × profit factor`**, not the
+  per-trade edge. A 1.55 factor over 45 trades and a 1.28 over 4,000 are both
+  real and the second is the engine; ranking on the factor scoped survivors to
+  the first and sent Gate R to certify a corner of the window. `SCORE_PF_CEILING`
+  (10.0) caps the factor **for scoring only** — the profiler's 999 sentinel
+  means "gross loss was zero", not a measured factor, and `net × 999` ranks an
+  unbeaten 51-trade quadrant two orders of magnitude above a 4,000-trade book.
+  A capped row says so (`pf_capped`); the reported `profit_factor` is left as
+  measured.
+- **Three bars, all on the SAME quadrant**: profit factor >=
+  `DESIGNATION_MIN_PROFIT_FACTOR` (1.00), **positive net P&L**, and at least
+  `designation_floor(total) = max(DESIGNATION_MIN_TRADES, DESIGNATION_MIN_TRADE_FRACTION × placed)`
+  = `max(50, 10%)`. Positive net P&L is not decoration: `net × PF` is monotone
+  only above zero, and at a factor of 0.00 — a quadrant with no winning trade —
+  the product is exactly 0.0 and would outrank a quadrant that lost $5,000 at
+  0.50. Requiring it removes the inversion from the selection path rather than
+  patching the formula, and every quadrant is still scored and reported.
+- **The floor scales.** 50 is meaningless once a run places 5,000 trades — a
+  quadrant holding 1% of the sample is a corner of the window, not an
+  environment. `total_profiled` is the trades PLACED in a quadrant, never the
+  trade list: an unplaced trade (outside the frame, or inside the 14-bar
+  warm-up) belongs to no quadrant, so counting it raises every quadrant's bar
+  on trades no quadrant could claim.
+- **This is NOT Gate R's floor.** `baseline.MIN_REGIME_TRADES` stays 30 and is
+  still what `audit_gates` imports. They answer different questions — is there
+  enough in-sample evidence to NAME a home regime, versus did the named one
+  still trade out of sample — and a holdout is shorter than the window that
+  chose the quadrant, so holding it to the designation floor would fail
+  configurations for the length of the holdout.
+- **`primary` is None when nothing clears**, which is a finding rather than a
+  missing value. There is deliberately no fall back to the best of a bad set:
+  the quadrant becomes Gate R's certification target and a live supervisor's
+  permission to trade, and neither may be derived from a quadrant that lost
+  money or was measured over twenty trades.
+- **`secondary_regimes` are the other POSITIVE-expectancy quadrants**, each
+  carrying why it was not designated — eligible-but-outscored, and profitable
+  but below the sample floor, kept distinct because they are fixed by
+  different work. They are metadata for the live supervisor and **never a
+  second certification target**: two permitted quadrants give Gate R two
+  chances at a 1.00 holdout profit factor, which is the best-of-N selection
+  the single-quadrant rule exists to prevent.
+- **`regime_scores` is the whole scored table**, all four quadrants including
+  the losing ones, with `eligible` and a `reason` on each. A ranking that
+  dropped them would make "disqualified on sample size" and "never traded" the
+  same absent row. It travels onto `surviving_assets.json`, onto
+  `best_params_<SYMBOL>_<TF>.json` (top level AND nested under
+  `stage1_regime`), and is what Stage 3's REGIME STARVATION diagnostic reads.
+- Ties break on the larger trade count, then on the declared regime order —
+  the better-evidenced claim rather than whichever the quadrant order put
+  first. `--min-trades` and `--min-trade-fraction` on Stage 1 move both bars,
+  and the values used are printed in the banner and written onto the handoff.
+
 **`backtest/specs.py`** — contract multiplier, tick size, commission per symbol.
 A wrong multiplier silently scales every P&L figure for that symbol and the
 backtest still looks plausible. `verify_specs()` reconciles against Databento's
@@ -1098,7 +1159,11 @@ one environment they cleared.
   detail matters most — and rewritten from scratch after each configuration, so
   one killed at 14 of 108 leaves a complete report of 14.
 - **Survival is one QUADRANT, on either version** — `optimal_regime_PF >= 1.00`
-  over `>= 30` trades in that same quadrant. Full detail in the firewall bullet
+  over `>= max(50, 10% of placed trades)` trades in that same quadrant, with
+  **positive net P&L** there, and among the quadrants that clear, the one
+  DESIGNATED is the one with the highest **alpha score** (`net P&L × profit
+  factor`). See the True Home Regime Discovery bullet below; the rule lives in
+  `backtest/profiler.py::designate` and Stage 1 adds none of its own. Full detail in the firewall bullet
   below. The trade floor is far below Gate 1's 100 because this stage decides
   what is worth sweeping, not what is worth trading; it is not zero because a
   profit factor over eleven trades clears any bar by accident often enough to
@@ -1235,6 +1300,30 @@ module rather than left to how the command was typed:
   CERTIFIED with a failing Gate 1. That is the intended effect.** The audit's
   shape is unchanged, so `promote.load_gate_certification` and Stage 5 need no
   change — what moved is what `status` means.
+- **`[REGIME STARVATION]`, from 2026-08-21.** When Gate R fails on the TRADE
+  COUNT, `regime_starvation` prints and records
+  `[REGIME STARVATION] Quadrant {Qn} ({regime}) had only {n} holdout trades.
+  Candidate was dominant in {Qn} ({regime}) in sample.` "Gate R FAIL" reads
+  identically whether the edge died or the strategy simply never entered its
+  own environment again, and those are fixed by completely different work —
+  the second is the common failure of a best-of-four in-sample pick and is
+  invisible on the gate table, because a quadrant with one holdout trade
+  prints a profit factor of 999 and a PASS on the factor row. It is keyed on
+  the COUNT check rather than the overall status for that reason. The dominant
+  quadrant is read from the Stage 2 handoff's `regime_scores`, **never
+  re-derived from the holdout** — naming a new quadrant off the holdout is
+  exactly the best-of-four selection Gate R exists to avoid, and the
+  diagnostic must not smuggle one in through a print statement. With no scored
+  table on the handoff it says the dominance cannot be stated rather than
+  guessing.
+- **The target is parsed dynamically.** `target_regime` reads Stage 2's
+  top-level `optimal_regime` / `target_quadrant` first, falls back to the
+  nested `stage1_regime`, then to the Stage 2 summary row — so a handoff
+  written before the designation was lifted to the top level still certifies,
+  and one carrying only a `Q1`..`Q4` code resolves through
+  `regime_for_quadrant`. When the top-level and nested copies DISAGREE the top
+  level wins and the disagreement is recorded in `target_regime_source` rather
+  than resolved silently. A name outside `REGIMES` still RAISES.
 - **The parameters are LOCKED.** Targets come from `stage2_summary.json` as
   exact `(symbol, timeframe)` pairs via `stage2_targets`, not from a glob of
   `best_params_*.json` — a superseded sweep's winner sits in that directory
@@ -1276,13 +1365,39 @@ module rather than left to how the command was typed:
   `--no-promote` declines the staging, and a refusal is RETURNED as an error row
   rather than raised, so a completed certification is not thrown away because
   staging hit a read-only checkout.
-- **`stage3_audit_summary.json`** is the run's handoff, written through
+- **`stage3_audit_summary.json`** is the CAMPAIGN's handoff, written through
   `pipeline.write_stage` and read by `discord_reporter.py --stage 3`. It
   computes NOTHING — every value is transcribed from an audit this run already
   wrote, so the index can never disagree with the verdicts it indexes. Errors
   and skips are rows with `status: "NOT AUDITED"`, which is deliberately not
   `FAIL`: "the run broke" and "the edge did not generalise" must not share a
   token.
+- **It MERGES across timeframes rather than overwriting (2026-08-21).** This
+  stage certifies ONE timeframe per invocation, so a campaign at 5m, 15m and
+  30m runs it three times into that one file; as a plain overwrite it kept only
+  the last, and the Discord card — which reads the summary and not the
+  directory — announced one timeframe while the other certifications sat on
+  disk as `gate_audit_<SYMBOL>_<TF>.json` and reached nobody. `merge_stage3_rows`
+  carries every OTHER timeframe's rows forward verbatim and lets this run
+  replace its own, so a re-certification that no longer covers a contract
+  cannot leave the earlier verdict standing beside the new ones. `runs` records
+  what each invocation covered and `coverage` is summed over them; `timeframes`
+  is the campaign and `timeframe` is still the last run, as two separate fields
+  rather than one that changes meaning. `audits` is the consolidated index over
+  the per-pair files — path, SHA-256 and the verdict inside each — which remain
+  AUTHORITATIVE; the list says where they are so nothing has to glob a
+  directory where a superseded sweep's audit is indistinguishable from a
+  current one. Each row also carries `regime_starvation`, the message or
+  `None`, because a Gate R FAIL on the trade count and one on the factor are
+  fixed by completely different work.
+- **`--rebuild-summary` reconstructs that index from the audits on disk.**
+  Stage 2's `--reuse-scan` for Stage 3, and for the same reason: the expensive
+  half of the stage is already written and the index is the cheap half. It
+  reads NO bars, re-scores NO gate, and takes each timeframe's windows from the
+  audits themselves rather than from whatever flags were typed while rebuilding.
+  Only the SUFFIXED files are read — the unsuffixed `gate_audit_<SYMBOL>.json`
+  duplicates whichever timeframe ran last. It exists to recover the campaigns
+  the old overwrite already flattened.
 - Audits are written per PAIR (`gate_audit_<SYMBOL>_<TF>.json`) as well as to
   the unsuffixed name Stage 5's documented command uses. Certifying NQ at 30m
   after certifying it at 15m would otherwise replace the 15m verdict with no
@@ -1354,26 +1469,85 @@ optimization summary, read straight out of `stage2_summary.json`; `--stage 3` /
 - **The Stage 3 card carries the whole claim per configuration**: the strategy,
   BOTH windows (in-sample, so a reader knows what the parameters were fitted
   to, and the holdout, which is the verdict — an open end prints as `present`),
-  the symbol, timeframe, target regime quadrant, Gate R's status, the quadrant
-  profit factor and trade count Gate R was measured on, the IS and OOS blended
-  profit factors side by side, and the SHA-256 seal. **Three profit factors per
-  row, each labelled**, because only one of them decided anything: `REG PF` is
-  what Gate R scored, and `IS PF`/`OOS PF` are the blended pair that says
-  whether the edge collapsed. Printing the holdout factor alone would let a
-  1.10 that fell from 2.40 read as a healthy one. The `Verdict` line states in
-  words that Gates 1–3 are advisory, because a `CERTIFIED` beside a failing
-  Gate 1 otherwise reads as a bug in the roll-up.
-- **Seals are printed twice**, for the same reason Stage 2's parameter sets
-  are: a 12-character prefix in the table so the fixed-width columns stay
-  aligned, and all three hashes in full below it, which is the copy a reader
-  checks against a promoted `meta.json`. A truncated hash presented as the hash
-  is a checksum nobody can verify. Only configurations that were actually
-  STAGED get a seal block — a checksum of a file the reader cannot find is
-  worse than none.
+  the symbol, timeframe, target regime quadrant, Gate R's status, and the
+  quadrant profit factor and trade count Gate R was measured on.
+- **The table is built to a WIDTH, not to a column list** (45 characters,
+  `STAGE3_TABLE_WIDTH`). Discord wraps a code block that overruns the viewport,
+  and a wrapped fixed-width table is worse than none: every row becomes two,
+  the second one unlabelled, and the columns a reader is comparing stop lining
+  up under each other. The ten-column row this replaced ran to 68 characters
+  and wrapped on every phone. The row is now
+  `SYM · TF · QD · GATE R · PF · N · STATUS`, and the columns still size to
+  their widest CELL — the width is held by keeping the tokens short, never by
+  clipping a symbol or a verdict, because a clipped table lies.
+- **`PF` and `N` are Gate R's OWN quadrant numbers**, on the holdout, and the
+  description says so under the table. An unlabelled profit factor under a
+  regime-gated verdict is the one value on this card a reader must not have to
+  guess at. **The blended IS/OOS pair moved to the promotion bullets**, where
+  the collapse it exposes (`1.10`, down from `2.40`) changes a decision
+  somebody is about to make; on the rows nobody is promoting they were two more
+  numbers that decided nothing.
+- **A `FAIL` says which bar it missed** — `FAIL·N` for a quadrant that starved,
+  `FAIL·PF` for an edge that died, and `STARVED` / `REJECTED` in the STATUS
+  column beside it. Both read identically as `FAIL` and are fixed by completely
+  different work. **The PASS/FAIL token is still transcribed**; only the reason
+  is derived, and only from the thresholds the handoff itself recorded in
+  `certification_rule` (`gate_r_reason` prefers Stage 3's own
+  `regime_starvation` record, and leaves the reason OFF rather than guessing
+  when either number is missing).
+- **The 999 profit-factor sentinel renders as `--`.** The profiler writes it
+  when a quadrant never had a losing trade, so a starved quadrant with one
+  winning holdout trade printed `999.00` beside a Gate R FAIL — the strongest
+  number on the card, attached to the weakest row.
+- **Seals are a 12-character prefix on the promotion bullets**, beside the
+  parameters they seal, and the code hash and the parameter hash are both
+  there: the same module under a different winning cell is a different strategy
+  with the same code checksum. The 30-line dump of full 64-character digests
+  that used to close this card is GONE — it was unreadable on a phone and
+  verified by nobody from one, and a reader checking a seal has the promoted
+  `meta.json` open. Only configurations that were actually STAGED carry one.
 - **It re-scores nothing.** The card prints the `gate_regime` status and the
   `certified` flag Stage 3 recorded, so it can never announce a certification
   the audit refused. A configuration Stage 3 could not audit is a row reading
   NOT AUDITED, never a shorter table.
+- **The table spans every timeframe the summary indexes**, now that Stage 3
+  merges its per-timeframe invocations into one file. A card headed `15m` above
+  a table carrying 5m rows described neither.
+- **The promotion section is the one part of this card somebody ACTS on**, and
+  it is budgeted ahead of everything optional for that reason. One bullet per
+  certified configuration — target quadrant, the factor Gate R scored and the
+  sample it scored on, the winning parameter plateau (abbreviated through the
+  module's own collision-safe shortener), the blended IS→OOS pair behind it,
+  and its two seal prefixes — and then **ONE command, in a field of its own**,
+  that promotes all of them:
+  `python3 backtest/run_pipeline.py --strat <STRAT> --promote-only`.
+- **`--promote-only`, never `--auto-promote`.** The second re-runs Stages 1–4
+  first, which OVERWRITES the handoff the card was built from: the winners it
+  then promotes are a fresh sweep's, not the ones the reader is looking at, and
+  nothing downstream could detect the substitution. `--promote-only` skips the
+  four stages and runs Stage 5 alone over the certifications already on the
+  handoff, iterating every certified row against that row's OWN
+  `gate_audit_<SYMBOL>_<TF>.json` — which is exactly what the three-line
+  per-pair `promote.py` blocks used to spell out by hand. Three certified
+  configurations meant three of those blocks carrying four absolute filesystem
+  paths each, which is what made this section unreadable on a phone.
+- **The per-pair `promote.py` command survives for the one case that needs
+  it**: a promotion that FAILED, where an operator is finishing a single pair
+  and must cite that pair's own audit rather than the unsuffixed file, which
+  holds whichever timeframe ran last. The unified command is its own field
+  rather than the tail of the bullet block, because the field chunker splits a
+  long block on a blank line and half a command is a command that runs and does
+  something else; a field is never split.
+- Headed `🏆 READY FOR PROMOTION / STAGED` until a promotion has happened and
+  `🚀 AUTOMATICALLY PROMOTED TO INCUBATOR (Commit <hash>)` once
+  `run_pipeline.py --auto-promote` (or `--promote-only`) has written its
+  outcome back onto the handoff as `auto_promotion`. **The heading is that
+  record's and is never inferred from a seal** — a sealed configuration was
+  staged by Stage 3 and committed by nobody, and announcing it as promoted is
+  how a strategy nobody promoted comes to be believed to be in the incubator.
+  The bullets say `staged`, `promoted <commit>` or `NOT PROMOTED` per row, and
+  the one-command footer counts only what is still OUTSTANDING, so it never
+  tells a reader to re-run a promotion that already committed.
 
 - **The Stage 2 card carries what the charter asks for and nothing derived**:
   the strategy, the in-sample window (with the holdout date it did not touch),

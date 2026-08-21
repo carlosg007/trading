@@ -75,7 +75,9 @@ from backtest.audit_gates import (GATE_R, PROP_FIRM_FIELDS,       # noqa: E402
                                   load_stage2_summary, regime_gate,
                                   retention_scores, seal_and_promote,
                                   resolve_targets, stage2_targets,
-                                  target_regime, write_stage3_summary)
+                                  target_regime, write_stage3_summary,
+                                  audit_to_result, consolidated_audits,
+                                  merge_stage3_rows)
 from backtest.baseline import (MIN_REGIME_PROFIT_FACTOR,          # noqa: E402
                                MIN_REGIME_TRADES)
 from backtest.engine import BacktestConfig                        # noqa: E402
@@ -118,6 +120,15 @@ def _profile(**by_regime) -> dict:
 def _q(pf, n, win_rate=50.0, net=1000.0) -> dict:
     return {"profit_factor": pf, "trade_count": n, "win_rate": win_rate,
             "net_pnl": net}
+
+
+def _raises(fn) -> bool:
+    """Did it raise? A broken handoff has to stop the run, not be measured."""
+    try:
+        fn()
+    except Exception:                                          # noqa: BLE001
+        return True
+    return False
 
 
 # --------------------------------------------------------------------------
@@ -370,6 +381,93 @@ def test_gate_r() -> None:
     check("the JSON token 'None' is not a regime - the summary is the "
           "fallback", reg == LV_RANGING and STAGE2_SUMMARY_FILE in src,
           f"{reg} / {src}")
+
+
+def test_regime_starvation() -> None:
+    print("\n3b. REGIME STARVATION — a Gate R that failed on sample, not edge")
+    from backtest.audit_gates import (regime_for_quadrant, regime_starvation,
+                                      target_regime)
+
+    scores = {TRENDING: {"regime": TRENDING, "quadrant": "Q1",
+                         "score": 150_132.0, "trade_count": 436},
+              LV_RANGING: {"regime": LV_RANGING, "quadrant": "Q4",
+                           "score": 1_335.0, "trade_count": 167}}
+
+    # One holdout trade in the designated quadrant. The FACTOR row passes -
+    # the profiler's 999 sentinel clears 1.00 - so a reader looking only at
+    # the factor sees a healthy number under a FAIL, which is exactly the
+    # case the diagnostic exists for.
+    starved = _profile(**{LV_RANGING: _q(999, 1, win_rate=100.0, net=450.42)})
+    g = regime_gate(starved, LV_RANGING, regime_scores=scores)
+    check("a designated quadrant with 1 holdout trade FAILS", g["status"] == FAIL)
+    diag = g.get("regime_starvation")
+    check("...and carries a starvation diagnostic", bool(diag), str(diag))
+    check("...naming the target quadrant, its holdout count, and where the "
+          "candidate was actually dominant IN SAMPLE",
+          diag["message"] == ("[REGIME STARVATION] Quadrant Q4 "
+                              "(Low Volatility / Ranging) had only 1 holdout "
+                              "trades. Candidate was dominant in Q1 "
+                              "(High Volatility / Trending) in sample."),
+          diag["message"])
+    check("...and the dominance is read from the STAGE 2 handoff, never "
+          "re-derived from the holdout — naming a new quadrant off the "
+          "holdout is the best-of-four pick Gate R exists to avoid",
+          diag["dominant_basis"].startswith("in-sample")
+          and diag["dominant_quadrant"] == "Q1")
+
+    # A quadrant that traded enough and lost is NOT starvation. Attaching the
+    # diagnostic there would send the operator to re-designate a quadrant
+    # whose problem is that the edge is dead.
+    fed = _profile(**{TRENDING: _q(0.61, 400, win_rate=39.0, net=-5000.0)})
+    g2 = regime_gate(fed, TRENDING, regime_scores=scores)
+    check("a quadrant that traded 400 times and lost is a dead edge, not "
+          "starvation — no diagnostic",
+          g2["status"] == FAIL and g2.get("regime_starvation") is None)
+
+    # A PASS never carries one either.
+    g3 = regime_gate(_profile(**{TRENDING: _q(1.42, 88)}), TRENDING,
+                     regime_scores=scores)
+    check("a PASS carries no starvation diagnostic",
+          g3["status"] == PASS and g3.get("regime_starvation") is None)
+
+    # No scored table on the handoff: say so rather than guessing.
+    bare = regime_gate(starved, LV_RANGING, regime_scores=None)
+    check("with no scored table on the handoff the diagnostic still prints "
+          "the starvation and declines to name a dominant quadrant",
+          "REGIME STARVATION" in bare["regime_starvation"]["message"]
+          and bare["regime_starvation"]["dominant_quadrant"] is None
+          and "cannot be stated" in bare["regime_starvation"]["message"],
+          bare["regime_starvation"]["message"])
+
+    print("\n3c. Gate R's target is parsed DYNAMICALLY from best_params")
+    check("Q1..Q4 codes resolve to their regime names",
+          regime_for_quadrant("Q1") == TRENDING
+          and regime_for_quadrant("q4") == LV_RANGING
+          and regime_for_quadrant("Q9") is None)
+
+    file_prov = {"best_params_file": "/x/best_params_NQ_30m.json"}
+    check("the TOP-LEVEL optimal_regime stage 2 now writes is read first",
+          target_regime({**file_prov, "best_params_regime": TRENDING},
+                        None)[0] == TRENDING)
+    check("...a handoff carrying only the QUADRANT CODE still resolves",
+          target_regime({**file_prov, "best_params_quadrant": "Q1"},
+                        None)[0] == TRENDING)
+    check("...and a file written before the lift falls back to the nested "
+          "stage1_regime, so an old handoff still certifies",
+          target_regime({**file_prov,
+                         "stage1_regime": {"optimal_regime": LV_RANGING}},
+                        None)[0] == LV_RANGING)
+    regime, source = target_regime(
+        {**file_prov, "best_params_regime": TRENDING,
+         "stage1_regime": {"optimal_regime": LV_RANGING}}, None)
+    check("when the two DISAGREE the top level wins and the disagreement is "
+          "RECORDED in the source, not resolved silently",
+          regime == TRENDING and "disagrees" in source and LV_RANGING in source,
+          source)
+    check("a quadrant name no profiler produces still RAISES rather than "
+          "being measured as zero trades",
+          _raises(lambda: target_regime(
+              {**file_prov, "best_params_regime": "Sideways Chop"}, None)))
 
 
 def test_no_aggregate_pruning() -> None:
@@ -699,19 +797,63 @@ def test_stage3_card(blob: dict) -> None:
     check("the OUT-OF-SAMPLE window is on the card, and an open end reads as "
           "'present' rather than as a blank",
           HOLDOUT_START in desc and "present" in desc)
-    for col in ("SYMBOL", "TF", "VER", "QUAD", "GATE R", "REG PF", "REG N",
-                "IS PF", "OOS PF", "SEAL"):
+    for col in ("SYM", "TF", "QD", "GATE R", "PF", "N", "STATUS"):
         check(f"the table carries the {col!r} column", col in desc)
+    for gone in ("SYMBOL", "REG PF", "IS PF", "OOS PF", "SEAL"):
+        check(f"...and NOT the wide {gone!r} column: a fixed-width table that "
+              f"overruns a phone viewport wraps, and a wrapped row is two "
+              f"rows with the second one unlabelled", gone not in desc)
+    table = desc.split("```text\n")[1].split("\n```")[0]
+    widest = max(len(line) for line in table.splitlines())
+    check(f"every row fits {dr.STAGE3_TABLE_WIDTH} characters, which is what "
+          f"keeps it from wrapping", widest <= dr.STAGE3_TABLE_WIDTH,
+          f"{widest} chars")
     check("the target quadrant legend is built FROM the rows, so no second "
           "spelling of a regime name lives in the reporter",
           f"`Q1` {TRENDING}" in desc, desc[-500:])
-    check("IS PF and OOS PF are BOTH on the row - a holdout factor alone "
-          "lets a collapsing edge read as a healthy one",
-          "1.90" in desc and "1.05" in desc)
-    check("Gate R's own quadrant profit factor and trade count are there too",
-          "1.42" in desc and "88" in desc)
+    check("Gate R's own quadrant profit factor and trade count are on the "
+          "row - they are what the verdict was measured on",
+          "1.42" in table and "88" in table)
+    check("...and the description says which factor that is, so a lone "
+          "number under a regime-gated verdict is never guessed at",
+          "INSIDE the target quadrant" in desc)
     check("the card says in words that Gates 1-3 cannot fail a certification",
           "cannot fail a certification" in desc)
+    # Why a Gate R failed, on the row. The PASS/FAIL token is transcribed;
+    # only the reason is worked out, and only from the thresholds the handoff
+    # itself recorded.
+    rule = {"min_profit_factor": 1.00, "min_trades": 30}
+    starved = {"symbol": "NQ", "timeframe": "15m", "quadrant": "Q3",
+               "target_regime": TRENDING, "gate_regime": FAIL,
+               "certified": False, "status": FAIL,
+               "oos_profit_factor": 999.0, "oos_trade_count": 1}
+    dead = dict(starved, symbol="CL", oos_profit_factor=0.98,
+                oos_trade_count=36)
+    broke = {"symbol": "GC", "timeframe": "15m", "status": "NOT AUDITED",
+             "certified": False, "gate_regime": "NOT AUDITED"}
+    small, _h, _l = dr.format_stage3_table([starved, dead, broke], 10, rule)
+    check("a Gate R that failed on the SAMPLE reads FAIL·N and STARVED - 'it "
+          "never traded there again' and 'the edge died' are fixed by "
+          "different work and must not share a token",
+          "FAIL·N" in small and "STARVED" in small, small)
+    check("...and one that failed on the FACTOR reads FAIL·PF and REJECTED",
+          "FAIL·PF" in small and "REJECTED" in small, small)
+    check("the 999 sentinel renders as `--`: a quadrant with one winning "
+          "holdout trade has no measured profit factor, and 999.00 beside a "
+          "FAIL reads as the strongest row on the card",
+          "999" not in small, small)
+    check("a run that broke is NO AUDIT in both columns, never a FAIL - the "
+          "run failing and the edge failing are different findings",
+          small.count("NO AUDIT") == 2 and "GC" in small, small)
+    check("with no threshold on the handoff the reason is left off rather "
+          "than guessed, and the cell stays a bare FAIL",
+          dr.gate_r_reason(dict(dead, regime_starvation=None), {}) == "",
+          dr.gate_r_reason(dict(dead, regime_starvation=None), {}))
+    check("...but Stage 3's own starvation record outranks the arithmetic",
+          dr.gate_r_reason(dict(dead, regime_starvation="[REGIME STARVATION] "
+                                "Quadrant Q3 had only 36 holdout trades."),
+                           rule) == "N")
+
     check("Certified counts Gate R's passes",
           fields.get("Certified → Incubator") == "1")
     check("a NOT AUDITED configuration is still a row - the card is never "
@@ -719,17 +861,14 @@ def test_stage3_card(blob: dict) -> None:
 
     digest = ((blob["results"][0].get("seal") or {})
               .get("strategy_code", {}).get("sha256", ""))
-    check("the table shows a hash PREFIX, not the full digest",
-          digest[:dr.SEAL_PREFIX_CHARS] in desc and digest not in desc)
-    seals = "\n".join(f["value"] for f in embed["fields"]
-                      if f["name"].startswith("Seals"))
-    check("...and the full seals are their own field, labelled by what each "
-          "one covers",
-          digest in seals and "code" in seals and "params" in seals
-          and "audit" in seals, seals[:120])
-    check("only STAGED configurations get a seal block - a checksum of a "
-          "file the reader cannot find is worse than none",
-          "ES " not in seals and "GC " not in seals, seals)
+    promo = "\n".join(f["value"] for f in embed["fields"]
+                      if f["name"].startswith(dr.PROMO_READY_TITLE))
+    check("the seals are a PREFIX beside the parameters they seal, never the "
+          "30-line dump of full digests that nobody verified from a phone",
+          digest[:dr.SEAL_PREFIX_CHARS] in promo and digest not in promo)
+    check("only STAGED configurations carry a seal - a checksum of a file "
+          "the reader cannot find is worse than none",
+          "ES " not in promo and "GC " not in promo, promo)
 
     size = dr._embed_size(embed)
     check(f"the embed fits Discord's {dr.MAX_EMBED_TOTAL}-character limit",
@@ -830,12 +969,221 @@ def test_cli(tmp: Path, blob: dict) -> None:
           "cannot fail a certification" in text)
 
 
+# --------------------------------------------------------------------------
+# 12. The summary spans every timeframe the campaign certified
+# --------------------------------------------------------------------------
+def _result_at(d: Path, symbol: str, tf: str, passed: bool) -> dict:
+    audit = _audit_for(d, PASS if passed else FAIL, f"{symbol}_{tf}")
+    return {
+        "symbol": symbol, "timeframe": tf, "path": audit,
+        "status": {"A": PASS if passed else FAIL}, "passed": {"A": passed},
+        "target_regime": TRENDING, "target_quadrant": "Q1",
+        "params": {"fast": 5, "slow": 50}, "params_locked": True,
+        "in_stage1": True,
+        "gates": {"A": {"gate1": PASS, "gate2": PASS, "gate3": PASS,
+                        GATE_R: PASS if passed else FAIL}},
+        "regime_measured": {"A": {"profit_factor": 1.07 if passed else 0.98,
+                                  "trade_count": 348 if passed else 12}},
+        "regime_starvation": {"A": None if passed else
+                              "[REGIME STARVATION] Quadrant Q1 (High "
+                              "Volatility / Trending) had only 12 holdout "
+                              "trades."},
+        "retention": {"A": {}},
+        "incubator": {"A": {"promoted": passed,
+                            "dir": d / "inc" / "demo" if passed else None,
+                            "seal": _seal_hashes(audit, None, audit, None)
+                            if passed else None, "error": ""}},
+        "exclude_days": [],
+    }
+
+
+def test_multi_timeframe_summary(tmp: Path) -> dict:
+    print("\n12. stage3_audit_summary.json MERGES across timeframes")
+
+    check("the merge keeps other timeframes and lets this run replace its own",
+          merge_stage3_rows(
+              [{"symbol": "CL", "timeframe": "5m", "version": "A"},
+               {"symbol": "CL", "timeframe": "15m", "version": "A",
+                "stale": True}],
+              [{"symbol": "CL", "timeframe": "15m", "version": "A"}],
+              {"15m"})[0]
+          == [{"symbol": "CL", "timeframe": "15m", "version": "A"},
+              {"symbol": "CL", "timeframe": "5m", "version": "A"}])
+    check("...so a re-certification cannot leave a superseded verdict for the "
+          "same pair standing beside the new one",
+          all(not r.get("stale") for r in merge_stage3_rows(
+              [{"symbol": "CL", "timeframe": "15m", "version": "A",
+                "stale": True}],
+              [{"symbol": "CL", "timeframe": "15m", "version": "A"}],
+              {"15m"})[0]))
+
+    d = tmp / "multitf"
+    d.mkdir(parents=True, exist_ok=True)
+
+    class _A5(_Args):
+        tf = "5m"
+
+    # Two Stage 3 runs, exactly as the pipeline drives them: one per timeframe.
+    write_stage3_summary("demo", d, [_result_at(d, "CL", "15m", True)], [], [],
+                         _Args(), [{"symbol": "CL", "timeframe": "15m"}],
+                         "stage2 (exact pairs)")
+    path = write_stage3_summary(
+        "demo", d, [_result_at(d, "CL", "5m", True),
+                    _result_at(d, "NQ", "5m", False)], [], [],
+        _A5(), [{"symbol": s, "timeframe": "5m"} for s in ("CL", "NQ")],
+        "stage2 (exact pairs)")
+    blob = json.loads(path.read_text())
+    rows = blob["results"]
+
+    check("the second run did not overwrite the first - a card reading this "
+          "file would otherwise announce one timeframe and silently drop the "
+          "certifications from the others",
+          {(r["symbol"], r["timeframe"]) for r in rows}
+          == {("CL", "15m"), ("CL", "5m"), ("NQ", "5m")},
+          str(sorted((r["symbol"], r["timeframe"]) for r in rows)))
+    check("every timeframe the file indexes is named on it",
+          blob["timeframes"] == ["15m", "5m"], str(blob.get("timeframes")))
+    check("...and `timeframe` still records the run that wrote it, as a "
+          "SEPARATE field rather than one that changes meaning",
+          blob["timeframe"] == "5m")
+    check("coverage is summed over every invocation, not the last one",
+          blob["coverage"]["targets"] == 3
+          and blob["coverage"]["certified"] == 2, str(blob["coverage"]))
+    check("...and each invocation is on the record under its own timeframe",
+          set(blob["runs"]) == {"15m", "5m"}
+          and blob["runs"]["15m"]["certified"] == 1, str(list(blob["runs"])))
+
+    audits = blob["audits"]
+    check("the per-pair audits are indexed, one entry each",
+          len(audits) == 3 and all(a["path"] for a in audits), str(len(audits)))
+    check("...naming the file, its hash and the verdict inside it, so nothing "
+          "has to glob a directory holding one audit per timeframe",
+          all(a["exists"] and len(a["sha256"]) == 64 for a in audits))
+    check("...and the audits stay AUTHORITATIVE - the index transcribes their "
+          "verdict rather than restating one",
+          {(a["symbol"], a["timeframe"], a["certified"]) for a in audits}
+          == {("CL", "15m", True), ("CL", "5m", True), ("NQ", "5m", False)})
+    check("a row with no audit file is kept in results and left out of the "
+          "index - an entry pointing at nothing is worse than none",
+          consolidated_audits([{"symbol": "X", "audit_file": None}]) == [])
+
+    starved = [r for r in rows if r["symbol"] == "NQ"][0]
+    check("a Gate R failure records WHETHER the quadrant starved, because "
+          "'the edge died' and 'it never traded there again' are fixed by "
+          "different work", "STARVATION" in (starved["regime_starvation"] or ""),
+          str(starved["regime_starvation"]))
+
+    # An audit read back off disk reproduces the row it was written from.
+    replayed = audit_to_result(json.loads(Path(audits[0]["path"]).read_text()),
+                               Path(audits[0]["path"]))
+    check("a per-pair audit replays into the shape the summary indexes, so a "
+          "rebuild re-scores nothing - the verdict is transcribed out of the "
+          "file, including from the nested block when the top-level copy was "
+          "never written",
+          replayed["passed"] == {"A": True}
+          and replayed["status"] == {"A": PASS}
+          and replayed["gates"]["A"][GATE_R] == PASS, str(replayed["status"]))
+    return blob
+
+
+# --------------------------------------------------------------------------
+# 13. The promotion section of the card
+# --------------------------------------------------------------------------
+def test_promotion_section(blob: dict) -> None:
+    print("\n13. The card's promotion section")
+
+    title, lines, pairs, hidden = dr.format_stage3_promotions("demo", blob)
+    text = "\n".join(lines)
+    check("headed READY FOR PROMOTION until something actually promoted",
+          title == dr.PROMO_READY_TITLE, title)
+    check("only CERTIFIED configurations are listed", len(pairs) == 2
+          and all("NQ" not in p for p in pairs), str(pairs))
+    check("the pairs are the compact answer to 'did anything certify' - the "
+          "detail is in the block below them",
+          all(p.startswith("`CL ") for p in pairs), str(pairs))
+    check("each bullet carries its quadrant and the factor Gate R scored",
+          text.count("`Q1`") == 2 and text.count("PF **1.07**") == 2,
+          text[:200])
+    check("the winning parameter plateau is on the bullet, abbreviated "
+          "through the module's own collision-safe shortener",
+          text.count("`f=5 s=50`") == 2, text[:200])
+    check("...and the blended pair behind it, so an edge that collapsed from "
+          "2.40 to 1.10 cannot read as a healthy 1.10",
+          text.count("blended IS ") == 2, text[:400])
+    check("ONE command promotes the certified set, and it is --promote-only: "
+          "--auto-promote re-runs Stages 1-4 first and overwrites the very "
+          "handoff this card was built from",
+          "--promote-only" in dr.promotion_footer("demo", blob)
+          and "--auto-promote" not in dr.promotion_footer("demo", blob),
+          dr.promotion_footer("demo", blob))
+    check("...and it is not one three-line bash block per pair any more",
+          "backtest/promote.py" not in text, text[:200])
+    check("a staged configuration says it is staged and NOT committed",
+          "STAGED by Stage 3" in text and "nothing is committed" in text)
+
+    promoted = dict(blob)
+    promoted["auto_promotion"] = {
+        "ran": True, "commit": "deadbee",
+        "promotions": [{"symbol": "CL", "timeframe": "15m", "version": "A",
+                        "promoted": True, "commit": "deadbee",
+                        "incubator_dir": "/x/inc/demo", "error": ""},
+                       {"symbol": "CL", "timeframe": "5m", "version": "A",
+                        "promoted": False, "commit": None,
+                        "error": "promote.py exited 1"}]}
+    title2, lines2, _pairs2, _h = dr.format_stage3_promotions("demo", promoted)
+    text2 = "\n".join(lines2)
+    check("once auto-promotion ran the heading says so, with the commit",
+          title2.startswith(dr.PROMO_DONE_TITLE) and "deadbee" in title2,
+          title2)
+    check("...and the heading is the RECORD's, never inferred from a seal - a "
+          "sealed configuration was staged by Stage 3 and committed by nobody",
+          dr.format_stage3_promotions("demo", blob)[0] == dr.PROMO_READY_TITLE)
+    check("a promoted row names the commit it landed under",
+          "promoted `deadbee`" in text2, text2[:200])
+    check("a FAILED promotion says so and keeps its OWN per-pair command - "
+          "the recovery path is one pair, not the set, and it cites that "
+          "pair's own audit rather than the unsuffixed file, which holds "
+          "whichever timeframe ran last",
+          "NOT PROMOTED" in text2 and "promote.py exited 1" in text2
+          and "gate_audit_CL_5m.json" in text2
+          and "backtest/promote.py --strat demo --version A" in text2)
+    check("the one-command footer counts only what is still outstanding, so "
+          "it never tells a reader to re-run a promotion that committed",
+          "1 configuration(s)" in dr.promotion_footer("demo", promoted),
+          dr.promotion_footer("demo", promoted))
+
+    embed = dr.build_stage3_embed("demo", promoted, source="/x/summary.json")
+    names = [f["name"] for f in embed["fields"]]
+    check("the section is its own field on the embed, and the command is a "
+          "field of its own - the chunker splits a block on a blank line, and "
+          "half a command is a command that runs and does something else",
+          any(n.startswith(dr.PROMO_DONE_TITLE) for n in names)
+          and dr.PROMO_COMMAND_FIELD in names, str(names))
+    check("...and the embed still fits Discord's limit",
+          dr._embed_size(embed) <= dr.MAX_EMBED_TOTAL,
+          str(dr._embed_size(embed)))
+    check("the timeframe field carries EVERY timeframe the summary indexes, "
+          "not the last run's",
+          all(t in [f for f in embed["fields"]
+                    if f["name"] == "Timeframe"][0]["value"]
+              for t in ("15m", "5m")))
+
+    none_certified = dict(blob)
+    none_certified["results"] = [dict(r, certified=False)
+                                 for r in blob["results"]]
+    _t, l3, p3, _ = dr.format_stage3_promotions("demo", none_certified)
+    check("nothing certified means no section at all, rather than an empty "
+          "heading that reads as a promotion nobody can find",
+          not l3 and not p3)
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="stage3charter_") as td:
         tmp = Path(td)
         test_ingestion(tmp)
         test_holdout_isolation()
         test_gate_r()
+        test_regime_starvation()
         test_no_aggregate_pruning()
         test_no_prop_firm_rules()
         test_retention()
@@ -844,6 +1192,8 @@ def main() -> int:
         test_stage3_card(blob)
         test_mode_resolution()
         test_cli(tmp, blob)
+        multi = test_multi_timeframe_summary(tmp)
+        test_promotion_section(multi)
 
     print("\n" + "=" * 60)
     if _failures:

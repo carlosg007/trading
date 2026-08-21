@@ -27,15 +27,55 @@ Four cards, one transport
 - **`--mode audit`** (equivalently `--stage 3`): Stage 3's GATE AUDIT AND
   CERTIFICATION, read straight out of `stage3_audit_summary.json` - both
   windows, and per configuration the symbol, timeframe, target regime
-  quadrant, Gate R's verdict, the quadrant profit factor and trade count it
-  was measured on, the in-sample and out-of-sample blended profit factors side
-  by side, and the SHA-256 seal. Three profit factors per row, each labelled,
-  because only ONE of them decided anything: Gate R scores the quadrant, and
-  the other two are the blended-sample pair that says whether the edge
-  collapsed. The seals are printed twice for the same reason the Stage 2
-  parameter sets are - a 12-character prefix in the table to keep the columns
-  aligned, and all three hashes in full below it, which is the copy a reader
-  checks against a promoted `meta.json`.
+  quadrant, Gate R's verdict, and the quadrant profit factor and trade count
+  it was measured on. **The table is built to a WIDTH** (45 characters,
+  `STAGE3_TABLE_WIDTH`): Discord wraps a code block that overruns the
+  viewport, and a wrapped fixed-width table is worse than none - every row
+  becomes two, the second one unlabelled, and the columns a reader is
+  comparing stop lining up under each other. The ten-column row this replaced
+  ran to 68 characters and wrapped on every phone.
+
+  So `PF` and `N` on the row are Gate R's OWN quadrant numbers and nothing
+  else, and the description says which they are, because an unlabelled profit
+  factor under a regime-gated verdict is the one value here a reader must not
+  have to guess at. The blended IS/OOS pair moved to the certified rows in the
+  promotion block, where the collapse it exposes ("1.10, down from 2.40")
+  changes a decision somebody is about to make; on the other rows they were
+  two more numbers that decided nothing. A `FAIL` carries WHY - `FAIL·N` for a
+  quadrant that starved, `FAIL·PF` for an edge that died - because those read
+  identically as `FAIL` and are fixed by completely different work. The
+  PASS/FAIL token itself is still transcribed; only the reason is derived, and
+  only from the thresholds the handoff recorded (see `gate_r_reason`). The 999
+  profit-factor sentinel renders as `--`: a quadrant with one winning holdout
+  trade has no measured factor, and 999.00 beside a FAIL reads as the
+  strongest configuration on the card.
+
+  Its table spans EVERY timeframe the summary indexes, because Stage 3 now
+  merges its per-timeframe invocations into one file; a card headed `15m`
+  above a table carrying 5m rows described neither. Below the table it carries
+  the one section on this card somebody ACTS on: a bullet per certified
+  configuration - target quadrant, the factor Gate R scored, the winning
+  parameter plateau, the blended pair behind it, and 12-character prefixes of
+  its code and parameter seals - and then ONE command, in a field of its own,
+  that promotes all of them. `run_pipeline.py --promote-only`, never
+  `--auto-promote`: the second re-runs Stages 1-4 first and OVERWRITES the
+  handoff this card was built from, so the winners it then promotes are a
+  fresh sweep's rather than the ones the reader is looking at. The per-pair
+  `promote.py` command survives for the one case that needs it - a promotion
+  that FAILED, where an operator finishes a single pair and must cite that
+  pair's own `gate_audit_<SYMBOL>_<TF>.json` rather than the unsuffixed file,
+  which holds whichever timeframe ran last. The full 64-character seals are
+  not on the card: the 30-line dump they used to close it was unreadable on a
+  phone and verified by nobody from one, and a reader checking a seal has the
+  promoted `meta.json` open.
+
+  Headed READY FOR PROMOTION / STAGED until a promotion has actually happened,
+  and AUTOMATICALLY PROMOTED TO INCUBATOR with the commit once
+  `run_pipeline.py --auto-promote` has written its outcome back onto the
+  handoff. The heading is that RECORD's and is never inferred from a seal: a
+  sealed configuration was staged by Stage 3 and committed by nobody, and
+  announcing it as promoted is how a strategy nobody promoted comes to be
+  believed to be in the incubator.
 
 Four cards now, and the reason the count keeps growing is that each one
 announces a DIFFERENT decision. A Stage 2 card is not a promotion and not a
@@ -211,21 +251,63 @@ ERRORED = "ERROR"
 # them at a glance in a scrollback.
 TEAL = 0x1ABC9C
 
-# A Stage 3 row carries a quadrant, two profit factors, two trade counts and a
-# hash prefix, so it is wider than a Stage 1 row and narrower than a Stage 2
-# one. Whatever does not fit is COUNTED on the card, as everywhere else here.
+# A Stage 3 row carries a quadrant, Gate R's verdict and the factor and sample
+# it was measured on. Whatever does not fit is COUNTED on the card, as
+# everywhere else here.
 STAGE3_MAX_ROWS = 24
+
+# The width the Stage 3 table is built to. Discord wraps a code block that
+# overruns the viewport, and a wrapped fixed-width table is worse than no
+# table: every row becomes two, the second one unlabelled, and the columns a
+# reader is comparing stop lining up. 45 characters clears the narrowest phone
+# viewport this card is read on. It is a design TARGET rather than a hard cut -
+# the columns still size to their widest cell, because clipping a symbol or a
+# verdict to hit a number is how a table starts lying - so the way to keep it
+# is to keep the tokens in it short.
+STAGE3_TABLE_WIDTH = 45
+
+# The profiler writes 999 as a profit factor when a quadrant never had a losing
+# trade (backtest/profiler.py). It is a SENTINEL, not a measured factor, and it
+# is exactly the number a STARVED quadrant prints: one winning holdout trade
+# shows 999.00 next to a Gate R that failed on the sample count, which reads as
+# the strongest configuration on the card. It renders as `--`.
+REGIME_PF_SENTINEL = 999.0
+
+# The long verdict tokens, shortened for the table and nowhere else. Both keep
+# their NOT: a gate that was not evaluated and a run that was not audited are
+# statements about what has not happened yet, and "EVAL"/"AUDIT" alone would
+# read as the opposite.
+GATE_R_TOKENS = {"NOT EVALUATED": "NO EVAL", "NOT AUDITED": "NO AUDIT"}
 
 # How much of each SHA-256 goes on the card. Twelve hex characters is 48 bits -
 # enough to tell two builds of the same strategy apart at a glance, which is
-# what a reader uses it for. The full 64 are in the seal, and the card says so:
-# a truncated hash presented as the hash is a checksum nobody can verify.
+# what a reader uses it for. The full 64 live in the promoted `meta.json` and
+# on the handoff, and the card says so: a truncated hash presented as THE hash
+# is a checksum nobody can verify. The 30-line dump of full digests that used
+# to close this card was unreadable on a phone and verified by nobody from
+# one - a reader checking a seal has the file open.
 SEAL_PREFIX_CHARS = 12
 
-# The seal block below the Stage 3 table: at most this many fields, each inside
-# Discord's 1024-character cap. The embed already carries six other fields and
-# Discord caps an embed at 25 fields and 6000 characters.
-STAGE3_SEAL_MAX_FIELDS = 6
+# The promotion block. It is the one part of this card somebody ACTS on, so it
+# is budgeted BEFORE the seals: a reader who cannot find the promote command
+# goes looking through the handoff, while a reader missing a seal has lost a
+# checksum they were not going to verify from a chat client anyway.
+STAGE3_PROMO_MAX_ROWS = 10
+STAGE3_PROMO_MAX_FIELDS = 4
+
+# The two headings the section takes, and they are not interchangeable. The
+# first says a human still has to run something; the second says a commit
+# already happened. Labelling a staged-but-uncommitted configuration as
+# promoted is how a strategy nobody promoted ends up believed to be in the
+# incubator.
+PROMO_READY_TITLE = "\U0001F3C6 READY FOR PROMOTION / STAGED"
+PROMO_DONE_TITLE = "\U0001F680 AUTOMATICALLY PROMOTED TO INCUBATOR"
+
+# The one command that promotes the certified set, in its own field. Its own
+# field and not the tail of the promotion block, because the chunker splits a
+# long block across fields and half a command is a command that runs and does
+# something else. A field is never split.
+PROMO_COMMAND_FIELD = "\u25B6 Promote all certified · one command"
 
 # The tokens Stage 3 records per configuration.
 CERTIFIED = "PASS"
@@ -1077,20 +1159,104 @@ def stage3_rows(blob: dict[str, Any]) -> list[dict[str, Any]]:
     return list(blob.get("results") or [])
 
 
-def _seal_prefix(row: dict[str, Any]) -> str:
+def _seal_prefix(row: dict[str, Any], key: str = "strategy_code") -> str:
     """
-    The strategy-code hash, shortened for the table.
+    One of a configuration's seals, shortened.
 
-    The CODE hash rather than the audit hash, because it is what a reader
-    compares against a promoted `meta.json`. `--` when nothing was staged: an
-    uncertified configuration has no seal, and a blank cell in a hash column
-    reads as a hash of nothing.
+    `--` when nothing was staged: an uncertified configuration has no seal,
+    and a blank cell in a hash column reads as a hash of nothing. The CODE
+    hash and the WINNING PARAMETERS hash are both used - the same module under
+    a different grid cell is a different strategy with the same code checksum,
+    so a code prefix alone identifies a build only if the parameters travelled
+    with it.
     """
     seal = row.get("seal") or {}
-    digest = ((seal.get("strategy_code") or {}).get("sha256") or "")
+    digest = ((seal.get(key) or {}).get("sha256") or "")
     if not digest or digest == "NOT AVAILABLE":
         return "--"
     return digest[:SEAL_PREFIX_CHARS]
+
+
+def _regime_pf_cell(row: dict[str, Any]) -> str:
+    """
+    Gate R's quadrant profit factor as a table cell, with the sentinel
+    rendered as `--`.
+
+    `999.00` is what the profiler writes when a quadrant never had a losing
+    trade. It is not a measured factor, and it is exactly the number a starved
+    quadrant prints: one winning holdout trade shows 999.00 beside a Gate R
+    that failed on the sample count, which reads as the strongest row on the
+    card. `--` is what every other column here uses for "nothing was
+    measured", and that is the true statement about a factor with no losing
+    trade under it.
+    """
+    pf = _fmt_float(row.get("oos_profit_factor"))
+    if pf is None or pf >= REGIME_PF_SENTINEL:
+        return "--"
+    return f"{pf:.2f}"
+
+
+def gate_r_reason(row: dict[str, Any], rule: dict[str, Any] | None) -> str:
+    """
+    WHY a Gate R failed: `N` (too few trades in the quadrant), `PF` (the
+    factor missed), or `""` when it did not fail or cannot be told.
+
+    A FAIL on the count and a FAIL on the factor read identically as `FAIL`
+    and are fixed by completely different work - a quadrant the strategy never
+    entered again is a designation problem, a factor below 1.00 is a dead
+    edge. Stage 3 records the first as `regime_starvation` and that record is
+    preferred whenever it is there.
+
+    **The PASS/FAIL token itself is never re-derived** - it is transcribed
+    from `gate_regime`, as everything else on this card is. Only the
+    parenthetical reason is worked out here, and only from the thresholds the
+    handoff itself recorded in `certification_rule`, so the card cannot hold a
+    configuration to a bar the audit did not use. With either number missing
+    it returns `""` and the cell stays a bare `FAIL`, which is the honest
+    answer when the reason is not on the file.
+    """
+    if str(row.get("gate_regime") or "").upper() != "FAIL":
+        return ""
+    if row.get("regime_starvation"):
+        return "N"
+    rule = rule or {}
+    n, floor = _fmt_float(row.get("oos_trade_count")), \
+        _fmt_float(rule.get("min_trades"))
+    if n is not None and floor is not None and n < floor:
+        return "N"
+    pf, bar = _fmt_float(row.get("oos_profit_factor")), \
+        _fmt_float(rule.get("min_profit_factor"))
+    if pf is not None and bar is not None and pf < bar:
+        return "PF"
+    return ""
+
+
+def _gate_r_cell(row: dict[str, Any], rule: dict[str, Any] | None) -> str:
+    """`PASS`, `FAIL`, `FAIL·N`, `FAIL·PF`, `NO EVAL` or `NO AUDIT`."""
+    status = str(row.get("gate_regime") or NOT_AUDITED).upper()
+    cell = GATE_R_TOKENS.get(status, status)
+    reason = gate_r_reason(row, rule)
+    return f"{cell}·{reason}" if reason else cell
+
+
+def _status_cell(row: dict[str, Any], rule: dict[str, Any] | None) -> str:
+    """
+    The outcome column: `CERTIFIED`, `STARVED`, `REJECTED`, `NOT CERT` or
+    `NO AUDIT`.
+
+    `CERTIFIED` is the handoff's own `certified` flag and never a re-reading
+    of the numbers beside it. The other four are what that flag being false
+    MEANS, which is not one thing: a run that broke, a quadrant nobody
+    designated, a quadrant that starved and an edge that died are four
+    findings fixed by four different pieces of work, and one `NOT CERTIFIED`
+    token hides all of them.
+    """
+    if row.get("certified"):
+        return "CERTIFIED"
+    if str(row.get("status") or "").upper() == NOT_AUDITED:
+        return "NO AUDIT"
+    return {"N": "STARVED", "PF": "REJECTED"}.get(gate_r_reason(row, rule),
+                                                  "NOT CERT")
 
 
 def _stage3_sort_key(row: dict[str, Any]) -> tuple:
@@ -1120,7 +1286,8 @@ def _fmt_float(value: Any) -> float | None:
 
 
 def format_stage3_table(rows: list[dict[str, Any]],
-                        max_rows: int = STAGE3_MAX_ROWS
+                        max_rows: int = STAGE3_MAX_ROWS,
+                        rule: dict[str, Any] | None = None
                         ) -> tuple[str, int, dict[str, str]]:
     """
     The certification table as one fixed-width block, plus the quadrant legend.
@@ -1128,20 +1295,35 @@ def format_stage3_table(rows: list[dict[str, Any]],
     Returns `(text, hidden, legend)`. `hidden` is counted on the card by the
     caller.
 
-    **IS PF and OOS PF sit next to each other on purpose.** "the holdout profit
-    factor is 1.10" and "1.10, down from 2.40" are different findings, and a
-    card printing only the second number would let a collapsing edge look like
-    a healthy one. `REG PF` beside them is the quadrant factor Gate R actually
-    scored - three profit factors on one row, each labelled, because two of
-    them are blended-sample numbers that decided nothing.
+    **It is built to a WIDTH, not to a column list** (`STAGE3_TABLE_WIDTH`,
+    45 characters). Discord wraps a code block that overruns the viewport, and
+    a wrapped fixed-width table is worse than no table: every row becomes two,
+    the second one unlabelled, and the columns a reader is comparing no longer
+    line up under each other. The old ten-column row ran to 68 characters and
+    wrapped on every phone. So the row carries the six things a certification
+    IS - which contract, at which timeframe, in which quadrant, what Gate R
+    said, and the factor and sample it said it on - and nothing else.
+
+    What was dropped, and where it went. `VER` is on the promotion bullets,
+    which is the only place a reader acts on it. The blended IS and OOS
+    factors are on the promotion bullets too, for the certified rows: the
+    collapse they exist to expose ("1.10, down from 2.40") only changes a
+    decision for a configuration somebody is about to promote, and for the
+    rest they are two more numbers that decided nothing. The `SEAL` prefix is
+    likewise on the bullets, beside the parameters it seals.
+
+    `PF` and `N` are Gate R's OWN quadrant numbers - the factor and the trade
+    count inside the designated quadrant, on the holdout - never the blended
+    sample. The header is short and the description says which they are,
+    because an unlabelled profit factor under a regime-gated verdict is the
+    one number on this card that must not be guessed at.
 
     The QUAD column carries the `Q1`..`Q4` id the handoff recorded, with the
     legend built FROM the rows. No short spelling of a regime name lives in
     this module, for the same reason it does not on the Stage 1 card: a second
     one would be free to disagree with `mdlib.regimes`.
     """
-    header = ["SYMBOL", "TF", "VER", "QUAD", "GATE R", "REG PF", "REG N",
-              "IS PF", "OOS PF", "SEAL"]
+    header = ["SYM", "TF", "QD", "GATE R", "PF", "N", "STATUS"]
     body: list[list[str]] = []
     legend: dict[str, str] = {}
 
@@ -1155,23 +1337,21 @@ def format_stage3_table(rows: list[dict[str, Any]],
         body.append([
             str(row.get("symbol") or "?"),
             str(row.get("timeframe") or "?"),
-            f"V{row['version']}" if row.get("version") else "--",
             str(quad) if quad else "--",
             # The GATE R status verbatim from the handoff. Never re-derived
             # from the numbers beside it: this module computes nothing, and a
             # card that recomputed a verdict would be free to disagree with the
-            # audit it is announcing.
-            str(row.get("gate_regime") or NOT_AUDITED).upper(),
-            _fmt_metric(row.get("oos_profit_factor")),
+            # audit it is announcing. Only the ·N / ·PF suffix is worked out
+            # here - see gate_r_reason.
+            _gate_r_cell(row, rule),
+            _regime_pf_cell(row),
             _fmt_count(row.get("oos_trade_count")),
-            _fmt_metric(row.get("is_profit_factor")),
-            _fmt_metric(row.get("holdout_profit_factor")),
-            _seal_prefix(row),
+            _status_cell(row, rule),
         ])
 
     widths = [max(len(header[i]), *(len(r[i]) for r in body)) if body
               else len(header[i]) for i in range(len(header))]
-    align = ["<", "<", "<", "<", "<", ">", ">", ">", ">", "<"]
+    align = ["<", ">", "<", "<", ">", ">", "<"]
 
     def line(cells: list[str]) -> str:
         return "  ".join(format(c, f"{align[i]}{widths[i]}")
@@ -1182,32 +1362,240 @@ def format_stage3_table(rows: list[dict[str, Any]],
     return "\n".join(out), len(ordered) - len(shown), legend
 
 
-def format_stage3_seals(rows: list[dict[str, Any]],
-                        max_rows: int = STAGE3_MAX_ROWS) -> list[str]:
+def stage3_timeframes(blob: dict[str, Any]) -> list[str]:
     """
-    The full 64-character seals, one block per staged configuration.
+    Every timeframe this summary indexes, in order.
 
-    The table carries a 12-character prefix, which is enough to tell two builds
-    apart and not enough to verify one. This is the copy a reader checks
-    against a promoted `meta.json`, so all three hashes are here in full and
-    labelled by what they cover - the code, the winning parameter file, and the
-    gate audit. Only configurations that were actually STAGED appear: a seal
-    for something nobody promoted is a checksum of a file the reader cannot
-    find.
+    Read off the handoff's own `timeframes` when it has one and off the rows
+    otherwise, so a summary written before Stage 3 merged across timeframes
+    still names what it holds. The single `timeframe` field is the LAST run's
+    and is deliberately not used here: a card headed `15m` above a table
+    carrying 5m rows describes neither.
     """
+    declared = [str(t) for t in (blob.get("timeframes") or []) if t]
+    if declared:
+        return declared
+    seen: list[str] = []
+    for row in stage3_rows(blob):
+        tf = row.get("timeframe")
+        if tf and str(tf) not in seen:
+            seen.append(str(tf))
+    return seen
+
+
+def stage3_param_text(value: Any) -> str:
+    """
+    A winning parameter set as `k=v, k=v`, from a dict or from a string.
+
+    Stage 3 records `params` as a DICT (Stage 2 records a string), and both
+    shapes reach this module. Values are stringified and never reformatted -
+    `None` stays `None`, which for `tp_atr_mult` means no take-profit was
+    modelled at all, and a reporter that turned it into a number would print a
+    target that never existed.
+    """
+    if isinstance(value, dict):
+        if not value:
+            return "not recorded"
+        return ", ".join(f"{k}={value[k]}" for k in value)
+    text = str(value or "").strip()
+    return text or "not recorded"
+
+
+def stage3_auto_promotion(blob: dict[str, Any]) -> dict[str, Any]:
+    """
+    The auto-promotion record `run_pipeline.py --auto-promote` writes back onto
+    Stage 3's summary, or `{}` when nothing promoted.
+
+    Written by the orchestrator rather than by Stage 3, because Stage 3 stages
+    into the incubator and never commits - the commit is Stage 5's, and the
+    hash only exists once it has run. The card reads it and changes its
+    HEADING; it never infers a promotion from a seal, because a sealed
+    configuration is one Stage 3 staged and nobody committed.
+    """
+    blk = blob.get("auto_promotion")
+    return blk if isinstance(blk, dict) else {}
+
+
+def promotion_command(strat: str, row: dict[str, Any],
+                      source: str | None) -> str:
+    """
+    The exact Stage 5 command for ONE configuration, on one line.
+
+    This is the RECOVERY path and not the card's normal instruction: it is
+    printed only for a configuration whose automatic promotion failed, where
+    an operator needs the one pair rather than the whole certified set. It is
+    spelled out in full - strategy, version, source module and that pair's own
+    `gate_audit_<SYMBOL>_<TF>.json` - because the alternative is reconstructing
+    it against a directory holding one audit per timeframe, and picking the
+    wrong file promotes a verdict about different bars. `--source` comes from
+    the handoff; when Stage 3 did not record one the placeholder is left
+    visible rather than the flag dropped, so the command fails loudly instead
+    of promoting the module's defaults.
+    """
+    version = str(row.get("version") or "A")
+    audit = str(row.get("audit_file") or "NOT RECORDED")
+    src = str(source or "<path to the strategy module>")
+    return (f"python3 backtest/promote.py --strat {strat} "
+            f"--version {version} --source {src} --audit-file {audit}")
+
+
+def unified_promote_command(strat: str) -> list[str]:
+    """
+    The one command that promotes everything Stage 3 certified, as the two
+    lines it is printed on.
+
+    `--promote-only`, never `--auto-promote`: the second re-runs Stages 1-4
+    first and OVERWRITES the handoff this card was built from, so the winners
+    it then promotes are a fresh sweep's and not the ones the reader is
+    looking at. One flag is the difference between promoting what was
+    certified and silently re-certifying from scratch.
+
+    Split on a backslash continuation rather than run out to 90 characters:
+    a code block that overruns the viewport wraps, and a wrapped command is
+    one a reader copies half of.
+    """
+    return ["python3 backtest/run_pipeline.py \\",
+            f"    --strat {strat} --promote-only"]
+
+
+def format_stage3_promotions(strat: str, blob: dict[str, Any],
+                             max_rows: int = STAGE3_PROMO_MAX_ROWS
+                             ) -> tuple[str, list[str], list[str], int]:
+    """
+    The promotion block: `(title, lines, pairs, hidden)`.
+
+    `pairs` is the one-line answer the description carries (`` `CL 15m` ``);
+    `lines` are MARKDOWN, not a code fence - a bullet per certified
+    configuration with its quadrant, the factor Gate R scored, the winning
+    parameter plateau, the blended pair behind it and its seals, and ONE
+    command underneath that promotes all of them.
+
+    **One command, not one per pair.** Three certified configurations used to
+    print three three-line bash blocks carrying four absolute filesystem
+    paths each, which is 12 lines of wrapped path on a phone and the reason
+    this section was unreadable. `run_pipeline.py --promote-only` iterates
+    every certified row against that row's OWN
+    `gate_audit_<SYMBOL>_<TF>.json`, which is exactly what the per-pair
+    commands spelled out by hand. The per-pair command survives for the one
+    case that needs it: a promotion that FAILED, where an operator is
+    finishing a single pair rather than running the set.
+
+    Only rows Stage 3 recorded as `certified` appear. Never a row whose
+    numbers look like a pass: this module transcribes, and a section headed
+    READY FOR PROMOTION is exactly where a re-derived verdict would do the
+    most damage.
+
+    The heading is the auto-promotion record's, not a guess. A configuration
+    Stage 3 SEALED has been staged into the incubator and not committed, and
+    presenting that as promoted is the failure this whole card is written to
+    avoid.
+    """
+    rows = [r for r in stage3_rows(blob) if r.get("certified")]
+    rows.sort(key=_stage3_sort_key)
+    shown = rows[: max(0, int(max_rows))]
+
+    auto = stage3_auto_promotion(blob)
+    ran = bool(auto.get("ran"))
+    commit = str(auto.get("commit") or "").strip()
+    title = (f"{PROMO_DONE_TITLE} (Commit {commit})" if ran and commit
+             else PROMO_DONE_TITLE if ran else PROMO_READY_TITLE)
+    # Keyed by the same (symbol, timeframe, version) the orchestrator promoted
+    # under, so a partially-failed auto-promotion labels each row by what
+    # actually happened to it rather than by what happened to the run.
+    done = {(str(d.get("symbol")), str(d.get("timeframe")),
+             str(d.get("version") or "A")): d
+            for d in (auto.get("promotions") or [])
+            if isinstance(d, dict)}
+    source = blob.get("strategy_source")
+
+    pairs: list[str] = []
     lines: list[str] = []
-    for row in sorted(rows, key=_stage3_sort_key)[: max(0, int(max_rows))]:
-        seal = row.get("seal") or {}
-        if not seal:
-            continue
-        head = (f"{row.get('symbol') or '?'} {row.get('timeframe') or '?'} "
-                f"V{row.get('version') or '?'}")
-        for key, label in (("strategy_code", "code"),
-                           ("winning_parameters", "params"),
-                           ("gate_audit", "audit")):
-            digest = ((seal.get(key) or {}).get("sha256") or "NOT AVAILABLE")
-            lines.append(f"{head} {label:<7}{digest}")
-    return lines
+    if any(not (done.get((str(r.get("symbol")), str(r.get("timeframe")),
+                          str(r.get("version") or "A"))) or {}).get("promoted")
+           for r in shown):
+        # Said ONCE, above the rows, rather than on every line: staged and
+        # promoted are different states and the difference is the whole point
+        # of this section - a configuration Stage 3 sealed is in the incubator
+        # directory and in nobody's git history.
+        lines.append("_Sealed and STAGED by Stage 3 — nothing is committed "
+                     "until the command below runs._")
+        lines.append("")
+    for row in shown:
+        sym = str(row.get("symbol") or "?")
+        tf = str(row.get("timeframe") or "?")
+        ver = str(row.get("version") or "A")
+        quad = str(row.get("quadrant") or row.get("target_regime")
+                   or "quadrant not recorded")
+        pairs.append(f"`{sym} {tf}`")
+        record = done.get((sym, tf, ver))
+        if record and record.get("promoted"):
+            sha = str(record.get("commit") or commit or "").strip()
+            state = f"promoted `{sha}`" if sha else "promoted"
+        elif record:
+            state = "**NOT PROMOTED**"
+        else:
+            state = "staged" if row.get("incubator_dir") else "not staged"
+        lines.append(f"• **{sym} {tf}** V{ver} `{quad}` · PF "
+                     f"**{_regime_pf_cell(row)}** (n="
+                     f"{_fmt_count(row.get('oos_trade_count'))}) · {state}")
+        lines.append(f"  params `{compact_params(stage3_param_text(row.get('params')))}`")
+        # The blended pair, for the rows somebody is about to act on. A
+        # holdout factor read alone lets an edge that collapsed from 2.40 to
+        # 1.10 look like a healthy 1.10, and this is the section where that
+        # reading costs something.
+        lines.append(f"  blended IS {_fmt_metric(row.get('is_profit_factor'))}"
+                     f" → OOS {_fmt_metric(row.get('holdout_profit_factor'))}")
+        code, params = _seal_prefix(row), _seal_prefix(row,
+                                                       "winning_parameters")
+        if code != "--" or params != "--":
+            lines.append(f"  seals code `{code}` · params `{params}`")
+        if record and not record.get("promoted"):
+            lines.append(f"  ⚠ {record.get('error') or 'promote.py failed'}")
+            lines.append(f"  `{promotion_command(strat, row, source)}`")
+        lines.append("")
+    while lines and not lines[-1]:
+        lines.pop()
+    return title, lines, pairs, len(rows) - len(shown)
+
+
+def outstanding_promotions(blob: dict[str, Any]) -> list[dict[str, Any]]:
+    """
+    The certified configurations that have NOT been committed yet.
+
+    A configuration Stage 3 sealed is STAGED and not promoted, and one whose
+    automatic promotion failed is neither - both still need the command. One
+    the orchestrator committed does not, and telling a reader to run a command
+    that has already run is how the same strategy gets promoted twice under
+    two commits.
+    """
+    done = {(str(d.get("symbol")), str(d.get("timeframe")),
+             str(d.get("version") or "A"))
+            for d in (stage3_auto_promotion(blob).get("promotions") or [])
+            if isinstance(d, dict) and d.get("promoted")}
+    return [r for r in stage3_rows(blob) if r.get("certified")
+            and (str(r.get("symbol")), str(r.get("timeframe")),
+                 str(r.get("version") or "A")) not in done]
+
+
+def promotion_footer(strat: str, blob: dict[str, Any]) -> str:
+    """
+    The single promotion command, as one field value, or `""` when there is
+    nothing left to run.
+
+    Its own field rather than the last lines of the bullet block, because the
+    field chunker splits a long block across fields on a blank line and half a
+    command is a command that runs and does something else. A field cannot be
+    split.
+    """
+    pending = outstanding_promotions(blob)
+    if not pending:
+        return ("_Every certified configuration is promoted and committed; "
+                "nothing is left to run._" if stage3_rows(blob)
+                and any(r.get("certified") for r in stage3_rows(blob)) else "")
+    return (f"Promotes the {len(pending)} configuration(s) above and nothing "
+            f"else — it reads this handoff and promotes only what Gate R "
+            f"certified.\n" + FENCE_OPEN
+            + "\n".join(unified_promote_command(strat)) + FENCE_CLOSE)
 
 
 def build_stage3_embed(strat: str, blob: dict[str, Any],
@@ -1228,13 +1616,17 @@ def build_stage3_embed(strat: str, blob: dict[str, Any],
     certified = [r for r in rows if r.get("certified")]
     audited = [r for r in rows
                if str(r.get("status") or "").upper() != NOT_AUDITED]
-    table, hidden, legend = format_stage3_table(rows, max_rows)
-
     is_window = blob.get("in_sample") or {}
     ho_window = blob.get("holdout") or {}
     rule = blob.get("certification_rule") or {}
+    table, hidden, legend = format_stage3_table(rows, max_rows, rule)
     coverage = blob.get("coverage") or {}
-    tf = blob.get("timeframe")
+    # Every timeframe the summary indexes, not only the one the last Stage 3
+    # invocation certified. A card headed `15m` above a table carrying 5m rows
+    # describes neither, and that is exactly what a multi-timeframe campaign
+    # produced before the summary merged.
+    tfs = stage3_timeframes(blob)
+    tf = " · ".join(f"`{t}`" for t in tfs) if tfs else None
 
     description = [
         f"**In-sample** `{is_window.get('start') or 'not recorded'} → "
@@ -1250,7 +1642,23 @@ def build_stage3_embed(strat: str, blob: dict[str, Any],
         "```text",
         table if table.strip() else "no configuration was audited",
         "```",
+        # What the two number columns ARE. They are Gate R's own quadrant
+        # numbers and not the blended sample, and an unlabelled profit factor
+        # under a regime-gated verdict is the one value on this card a reader
+        # must not have to guess at.
+        "`PF` `N` — Gate R's factor and trades INSIDE the target quadrant, "
+        "on the holdout. `FAIL·N` starved there · `FAIL·PF` factor missed. "
+        "Blended IS/OOS: on the certified rows below.",
     ]
+    promo_title, promo_lines, promo_pairs, promo_hidden = \
+        format_stage3_promotions(strat, blob)
+    if promo_pairs:
+        # The passing pairs in one line, above the fold. The block below
+        # carries the parameters and the command; this is the answer to "did
+        # anything certify", which is the question the card is opened with.
+        description.append(f"**{promo_title}** " + " · ".join(promo_pairs)
+                           + (f" _(+{promo_hidden} more)_" if promo_hidden
+                              else ""))
     if legend:
         description.append("**Target regimes** " + " · ".join(
             f"`{q}` {legend[q]}" for q in sorted(legend)))
@@ -1258,9 +1666,6 @@ def build_stage3_embed(strat: str, blob: dict[str, Any],
         description.append(
             f"_{hidden} further configuration(s) are not shown — the full "
             f"summary is in the handoff._")
-    description.append(
-        f"_`SEAL` is the first {SEAL_PREFIX_CHARS} characters of the strategy "
-        f"code's SHA-256; the full seals are below._")
 
     text = "\n".join(description)
     if len(text) > MAX_EMBED_DESCRIPTION:
@@ -1271,7 +1676,10 @@ def build_stage3_embed(strat: str, blob: dict[str, Any],
 
     fields = [
         {"name": "Strategy", "value": f"`{strat}`", "inline": True},
-        {"name": "Timeframe", "value": f"`{tf}`" if tf else "not recorded",
+        # Named in the singular because a single-timeframe campaign is still
+        # the common case and the value reads as one; it carries every
+        # timeframe the summary indexes, separated.
+        {"name": "Timeframe", "value": tf or "not recorded",
          "inline": True},
         {"name": "Configurations", "value": str(len(rows)), "inline": True},
         # "Certified" is Gate R and nothing else. Counted from the handoff's
@@ -1303,66 +1711,100 @@ def build_stage3_embed(strat: str, blob: dict[str, Any],
                            "recomputed"},
     }
 
-    # The full seals go in LAST, on whatever the rest of the card left of
-    # Discord's 6000 characters - sized against the FINISHED embed rather than
-    # a constant, exactly as the Stage 2 parameter block is, because the
+    # The promotion block goes in LAST, on whatever the rest of the card left
+    # of Discord's 6000 characters - sized against the FINISHED embed rather
+    # than a constant, exactly as the Stage 2 parameter block is, because the
     # description holding the table is most of the budget.
     handoff = {"name": "Handoff", "value": _fmt_report(str(source or "")),
                "inline": False}
+    footer = promotion_footer(strat, blob)
     budget = (MAX_EMBED_TOTAL - _embed_size(embed)
-              - len(handoff["name"]) - len(handoff["value"]))
-    seal_fields, dropped = _seal_fields(
-        format_stage3_seals(rows, max_rows), budget)
-    if not seal_fields:
-        # The block did not fit. The note pointing at it must go with it: a
-        # line saying the full seals are below, with nothing below, is worse
-        # than the prefix it was added to explain.
-        embed["description"] = embed["description"].replace(
-            f"the full seals are below._",
-            f"the full seals are in the handoff._")
-    elif dropped:
-        seal_fields[-1]["value"] = seal_fields[-1]["value"].rstrip("`\n") + (
-            f"\n… {dropped} further seal line(s) — see the handoff." + FENCE_CLOSE)
-    embed["fields"] = fields + seal_fields + [handoff]
+              - len(handoff["name"]) - len(handoff["value"])
+              - (len(PROMO_COMMAND_FIELD) + len(footer) if footer else 0))
+    # It is the one part of this card somebody ACTS on, which is why it is
+    # budgeted ahead of everything optional and why the command that promotes
+    # the set is reserved out of the budget before the bullets are chunked: a
+    # card that listed three certified configurations and dropped the command
+    # sends a reader into the handoff to reconstruct one against a directory
+    # holding an audit per timeframe, and picking the wrong file promotes a
+    # verdict about different bars.
+    promo_fields, promo_dropped = _fenced_fields(
+        promo_lines, budget, promo_title, f"{promo_title} (cont.)",
+        STAGE3_PROMO_MAX_FIELDS, fence=False)
+    if promo_fields and promo_dropped:
+        promo_fields[-1]["value"] += (
+            f"\n… {promo_dropped} further line(s) — see the handoff.")
+    if footer:
+        promo_fields.append({"name": PROMO_COMMAND_FIELD, "value": footer,
+                             "inline": False})
+    embed["fields"] = fields + promo_fields + [handoff]
     return embed
 
 
-def _seal_fields(lines: list[str], budget: int) -> tuple[list[dict], int]:
+def _fenced_fields(lines: list[str], budget: int, name: str, cont: str,
+                   max_fields: int, fence: bool = True
+                   ) -> tuple[list[dict], int]:
     """
-    The seal block as Discord fields, and how many lines did not fit.
+    A block of lines as Discord fields, and how many did not fit.
 
-    One field per chunk under `MAX_FIELD_VALUE`, at most `STAGE3_SEAL_MAX_FIELDS` of
-    them, and never past `budget`. A hash line is 80-odd characters and does
-    not wrap usefully, so a line that does not fit is COUNTED rather than
-    truncated: half a SHA-256 is not a shorter checksum, it is a different
-    string that looks like one.
+    One field per chunk under `MAX_FIELD_VALUE`, at most `max_fields` of them,
+    and never past `budget`. A line that does not fit is COUNTED rather than
+    truncated - half a SHA-256 is not a shorter checksum but a different string
+    that looks like one, and half a promote command is a command that runs and
+    does something else.
+
+    `fence=False` renders the lines as MARKDOWN instead of wrapping them in a
+    code fence. Stage 3's promotion block needs it: bold, backticks and
+    bullets render in a field value and do not inside a fence, and the block is
+    a list of configurations rather than a fixed-width table. The chunking is
+    otherwise identical, including the preference for cutting on a blank line.
     """
-    if not lines or budget <= len(FENCE_OPEN) + len(FENCE_CLOSE) + NOTE_RESERVE:
+    wrap = (len(FENCE_OPEN) + len(FENCE_CLOSE)) if fence else 0
+    if not lines or budget <= wrap + NOTE_RESERVE:
         return [], len(lines)
 
     fields: list[dict] = []
     spent = 0
     i = 0
-    while i < len(lines) and len(fields) < STAGE3_SEAL_MAX_FIELDS:
+    while i < len(lines) and len(fields) < max_fields:
         chunk: list[str] = []
-        size = len(FENCE_OPEN) + len(FENCE_CLOSE)
+        size = wrap
         while i < len(lines):
             need = len(lines[i]) + (1 if chunk else 0)
             if size + need > MAX_FIELD_VALUE:
                 break
-            name = "Seals (SHA-256)" if not fields else "Seals (cont.)"
-            if spent + size + need + len(name) + NOTE_RESERVE > budget:
+            label = name if not fields else cont
+            if spent + size + need + len(label) + NOTE_RESERVE > budget:
                 break
             chunk.append(lines[i])
             size += need
             i += 1
         if not chunk:
             break
-        name = "Seals (SHA-256)" if not fields else "Seals (cont.)"
-        fields.append({"name": name,
-                       "value": FENCE_OPEN + "\n".join(chunk) + FENCE_CLOSE,
+        # Prefer to end a field on a BLANK line when there is more to come.
+        # The promotion block is a stack of records separated by blank lines,
+        # and a field boundary through the middle of one splits a promote
+        # command across two Discord fields - where the half a reader copies
+        # is a command that runs and does something else. A block with no
+        # blank line in it (a fixed-width table) is chunked straight through.
+        if i < len(lines) and "" in chunk[:-1]:
+            cut = len(chunk) - 1 - chunk[::-1].index("")
+            if cut > 0:
+                i -= len(chunk) - cut
+                chunk = chunk[:cut]
+        label = name if not fields else cont
+        # The blank line a chunk was cut on belongs to the break, not to the
+        # next field: rendered, it is an empty first row above the record.
+        while chunk and not chunk[0]:
+            chunk.pop(0)
+        if not chunk:
+            continue
+        body = "\n".join(chunk)
+        fields.append({"name": label,
+                       "value": (FENCE_OPEN + body + FENCE_CLOSE) if fence
+                       else body,
                        "inline": False})
-        spent += size + len(name)
+        spent += size + len(label)
     return fields, len(lines) - i
 
 

@@ -44,7 +44,8 @@ if str(REPO) not in sys.path:
 
 from backtest.pipeline import (CHARTER_IS_END, CHARTER_IS_START,    # noqa: E402
                                HOLDOUT_START, STAGE2_SUMMARY_FILE,
-                               STAGE3_SUMMARY_FILE, pipeline_dir, write_stage)
+                               STAGE3_SUMMARY_FILE, pipeline_dir,
+                               read_stage, write_stage)
 import backtest.run_pipeline as rp                                  # noqa: E402
 
 _failures: list[str] = []
@@ -127,9 +128,11 @@ def s2row(symbol="NQ", tf="15m", status="OPTIMIZED") -> dict:
 
 
 def s3row(symbol="NQ", tf="15m", certified=True, version="A",
-          status="PASS") -> dict:
+          status="PASS", starved=None, pf=1.07, quadrant="Q1") -> dict:
     return {"symbol": symbol, "timeframe": tf, "version": version,
             "status": status, "certified": certified, "gate_regime": status,
+            "quadrant": quadrant, "oos_profit_factor": pf,
+            "oos_trade_count": 348, "regime_starvation": starved,
             "audit_file": f"/tmp/gate_audit_{symbol}_{tf}.json"}
 
 
@@ -467,6 +470,179 @@ def test_auto_promote(tmp: Path) -> None:
           str(runner.scripts()))
 
 
+def test_promote_only(tmp: Path) -> None:
+    print("\n14c. --promote-only runs Stage 5 alone, against what is already "
+          "certified")
+    write_stage2(tmp, [s2row("NQ", "15m")])
+    write_stage3(tmp, [s3row("NQ", "15m", certified=True),
+                       s3row("ES", "15m", certified=False, status="FAIL")])
+
+    runner = FakeRunner()
+    rc = _main_with(runner, ["--strat", STRAT, "--symbols", "NQ,ES",
+                             "--tf", "15m", "--promote-only",
+                             "--out-dir", str(tmp)])
+    scripts = runner.scripts()
+    check("exits 0", rc == 0, f"rc={rc}")
+    check("Stages 1-4 do NOT run - this is the command the Stage 3 card "
+          "prints, and re-running the sweep would overwrite the handoff the "
+          "card was built from and promote a DIFFERENT set of winners",
+          not {"baseline.py", "scan.py", "audit_gates.py", "verify_full.py"}
+          & set(scripts), str(scripts))
+    promos = runner.for_script("promote.py")
+    check("exactly ONE promotion, for the certified row", len(promos) == 1,
+          f"{len(promos)} promotion(s)")
+    if promos:
+        check("it names the certified symbol",
+              flag_value(promos[0], "--symbol") == "NQ")
+        check("...and cites that row's own audit file",
+              flag_value(promos[0], "--audit-file")
+              .endswith("gate_audit_NQ_15m.json"))
+        check("...through --require-certification, never --force",
+              "--require-certification" in promos[0]
+              and "--force" not in promos[0])
+    check("--symbols narrows nothing here: auto_promote promotes every "
+          "certified row and always has, and a symbol list that silently "
+          "scoped nothing would read as one that did",
+          all(flag_value(c, "--symbol") != "ES" for c in promos))
+
+    # The Discord card, and only after the promotions: the outcome is on the
+    # handoff by then, so the section reads PROMOTED with a commit instead of
+    # printing a command that has already run.
+    runner = FakeRunner()
+    _main_with(runner, ["--strat", STRAT, "--promote-only", "--report-discord",
+                        "--out-dir", str(tmp)])
+    scripts = runner.scripts()
+    check("--report-discord posts the Stage 3 card AFTER the promotion",
+          "discord_reporter.py" in scripts
+          and scripts.index("discord_reporter.py") > scripts.index("promote.py"),
+          str(scripts))
+
+    # A webhook outage must not fail a promotion that already happened.
+    runner = FakeRunner(fail_on={"discord_reporter.py": 1})
+    rc = _main_with(runner, ["--strat", STRAT, "--promote-only",
+                             "--report-discord", "--out-dir", str(tmp)])
+    check("...and a card that failed to post does not fail the run", rc == 0,
+          f"rc={rc}")
+
+    # Nothing certified is a verdict, not a breakage.
+    write_stage3(tmp, [s3row("NQ", "15m", certified=False, status="FAIL")])
+    runner = FakeRunner()
+    rc = _main_with(runner, ["--strat", STRAT, "--promote-only",
+                             "--out-dir", str(tmp)])
+    check("nothing certified promotes nothing, and exits 0",
+          rc == 0 and runner.for_script("promote.py") == [], f"rc={rc}")
+
+
+def test_auto_promote_every_timeframe(tmp: Path) -> None:
+    print("\n14b. --auto-promote iterates EVERY certified timeframe")
+
+    write_stage2(tmp, [s2row("CL", "5m"), s2row("CL", "15m")])
+    write_stage3(tmp, [
+        s3row("CL", "5m", certified=True),
+        s3row("CL", "15m", certified=True),
+        s3row("NQ", "15m", certified=False, status="FAIL", pf=0.91),
+        s3row("NQ", "5m", certified=False, status="FAIL", pf=None,
+              starved="[REGIME STARVATION] Quadrant Q1 had only 3 holdout "
+                      "trades."),
+    ])
+
+    runner = FakeRunner()
+    rc = _main_with(runner, ["--strat", STRAT, "--tf", "5m,15m",
+                             "--auto-promote", "--out-dir", str(tmp)])
+    promos = runner.for_script("promote.py")
+    check("exits 0", rc == 0, f"rc={rc}")
+    check("BOTH certified timeframes are promoted - Stage 3 merges its runs "
+          "into one summary, so a loop that stopped at the first timeframe "
+          "would silently drop the rest", len(promos) == 2,
+          f"{len(promos)} promotion(s)")
+    audits = sorted(flag_value(c, "--audit-file") or "" for c in promos)
+    check("...and each cites its OWN per-pair audit, never the unsuffixed "
+          "file, which holds whichever timeframe ran last",
+          audits == ["/tmp/gate_audit_CL_15m.json", "/tmp/gate_audit_CL_5m.json"],
+          str(audits))
+    check("...and each names its own timeframe",
+          sorted(flag_value(c, "--timeframe") or "" for c in promos)
+          == ["15m", "5m"])
+
+    blob = read_stage(pipeline_dir(STRAT, str(tmp)) / STAGE3_SUMMARY_FILE,
+                      expect_stage=3, expect_strategy=STRAT)
+    auto = blob.get("auto_promotion") or {}
+    check("the promotion outcome is written BACK onto Stage 3's summary, "
+          "which is how the Discord card knows to say PROMOTED rather than "
+          "telling a reader to run a command that already ran",
+          auto.get("ran") is True and len(auto.get("promotions") or []) == 2,
+          str(list(auto)))
+    check("...per configuration, so a partly-failed batch labels each row by "
+          "what happened to IT",
+          {(d["symbol"], d["timeframe"], d["promoted"])
+           for d in auto["promotions"]}
+          == {("CL", "5m", True), ("CL", "15m", True)})
+    check("...and the verdicts themselves are rewritten untouched - "
+          "annotating an index must not restate one",
+          len(blob["results"]) == 4)
+
+
+def test_failure_reasons_are_distinguished() -> None:
+    print("\n14c. A configuration that was not promoted says WHY")
+
+    starved = rp.failure_reason(s3row(
+        "NQ", "5m", certified=False, status="FAIL", pf=999.0,
+        starved="[REGIME STARVATION] Quadrant Q1 had only 3 holdout trades."))
+    check("starvation is named as starvation - a quadrant with three holdout "
+          "trades prints a 999 profit factor and a PASS on the factor row, so "
+          "'Gate R FAIL' alone points at the wrong work",
+          starved.startswith("REGIME STARVATION"), starved)
+    lost = rp.failure_reason(s3row("NQ", "15m", certified=False,
+                                   status="FAIL", pf=0.91))
+    check("an edge that was re-tested and lost reports the factor it lost at",
+          "0.91" in lost and "STARVATION" not in lost, lost)
+    none_eval = rp.failure_reason(s3row("GC", "15m", certified=False,
+                                        status="NOT EVALUATED",
+                                        pf=None))
+    check("NOT EVALUATED says no quadrant was designated, which is neither a "
+          "pass nor a failure of the edge",
+          "no home quadrant" in none_eval, none_eval)
+    broke = rp.failure_reason({"symbol": "ES", "timeframe": "15m",
+                               "status": "NOT AUDITED",
+                               "error": "ValueError: no bars"})
+    check("a run that broke is NOT AUDITED, never a verdict about the "
+          "strategy", broke.startswith("NOT AUDITED") and "no bars" in broke,
+          broke)
+
+
+def test_summary_table(tmp: Path) -> None:
+    print("\n14d. The pipeline ends on one table of every configuration")
+
+    rows = [s3row("CL", "15m", certified=True),
+            s3row("CL", "5m", certified=True),
+            s3row("NQ", "15m", certified=False, status="FAIL", pf=0.91)]
+    table = rp.promotion_summary_table(rows, [
+        {"symbol": "CL", "timeframe": "15m", "version": "A",
+         "promoted": True, "commit": "abc1234",
+         "incubator_dir": "/x/inc/demo", "error": ""},
+        {"symbol": "CL", "timeframe": "5m", "version": "A",
+         "promoted": False, "commit": None, "error": "promote.py exited 1"},
+    ])
+    check("a promoted configuration reads PROMOTED and names where it landed",
+          "PROMOTED" in table and "/x/inc/demo" in table)
+    check("a promotion that FAILED is its own outcome, not a missing row - "
+          "the certification stands and the commit did not happen",
+          "PROMOTE FAILED" in table and "promote.py exited 1" in table)
+    check("an uncertified configuration is still a row, with its reason - a "
+          "table of the winners alone reads as a run in which nothing else "
+          "happened", "NOT CERTIFIED" in table and "0.91" in table)
+    check("every configuration Stage 3 indexed is present",
+          all(sym in table for sym in ("CL", "NQ")))
+
+    off = rp.promotion_summary_table([s3row("CL", "15m", certified=True)], [])
+    check("without --auto-promote a certified row says so rather than "
+          "claiming a promotion nobody ran",
+          "CERTIFIED" in off and "--auto-promote off" in off, off)
+    check("no rows still prints the heading and says so - an absent table "
+          "reads as a pipeline that did not finish",
+          "nothing reached a verdict" in rp.promotion_summary_table([], []))
+
+
 def test_dry_run_launches_nothing(tmp: Path) -> None:
     print("\n15. --dry-run prints the sequence and launches nothing")
     runner = FakeRunner()
@@ -514,6 +690,10 @@ def main() -> int:
         test_discord_after_1_2_3(tmp)
         test_stage_failure_aborts_discord_failure_does_not(tmp)
         test_auto_promote(tmp)
+        test_auto_promote_every_timeframe(tmp)
+        test_promote_only(tmp)
+        test_failure_reasons_are_distinguished()
+        test_summary_table(tmp)
         test_dry_run_launches_nothing(tmp)
         test_defaults_are_the_charter(tmp)
 

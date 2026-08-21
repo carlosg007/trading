@@ -8,6 +8,18 @@ parameters Stage 2 selected, runs them once over the untouched holdout, and
 writes one `gate_audit_<SYMBOL>.json` per contract carrying the official
 PASS/FAIL - plus `stage3_audit_summary.json` over the whole run.
 
+**The summary MERGES across timeframes** (2026-08-21). This stage certifies one
+timeframe per invocation, so a campaign that audits 5m, 15m and 30m runs it
+three times into that one file. Written as a plain overwrite, it kept only the
+last: three certifications existed as `gate_audit_<SYMBOL>_<TF>.json` on disk
+and the Discord card, which reads the summary, announced one of them. Each run
+now replaces its OWN timeframe's rows and carries every other timeframe's
+forward verbatim, `runs` records what each invocation covered, and `audits` is
+the consolidated index over the per-pair files - which remain the authoritative
+verdict a promotion rests on. `--rebuild-summary` reconstructs that index from
+the audits already on disk, reading no bars and re-scoring no gate, for the
+campaigns the old overwrite already flattened.
+
     python3 backtest/audit_gates.py --strat ema_trend_filter --tf 15m
 
     Gate R  REGIME        the certification. Generalization of the edge inside
@@ -119,6 +131,7 @@ import json                                                       # noqa: E402
 import sys                                                        # noqa: E402
 import time                                                       # noqa: E402
 import traceback                                                  # noqa: E402
+from datetime import datetime, timezone                           # noqa: E402
 from pathlib import Path                                          # noqa: E402
 
 import pandas as pd                                               # noqa: E402
@@ -149,7 +162,8 @@ from backtest.pipeline import (BEST_PARAMS_FILE, CHARTER_IS_END,   # noqa: E402
                                HOLDOUT_START, STAGE2_SUMMARY_FILE,
                                STAGE3_SUMMARY_FILE, next_step, pipeline_dir,
                                read_stage, stage_banner, write_stage)
-from backtest.profiler import REGIMES, RegimeProfiler              # noqa: E402
+from backtest.profiler import (REGIME_TO_QUADRANT, REGIMES,        # noqa: E402
+                               RegimeProfiler)
 from backtest.promote import INCUBATOR, promote, sha256            # noqa: E402
 from backtest.report import (FAIL, NOT_EVALUATED, PASS,            # noqa: E402
                              audit_acceptance_gates, criterion_text,
@@ -440,6 +454,23 @@ def load_params(strat_name: str, symbol: str, out_dir: Path,
         # the very bars it is meant to be unseen evidence about, and it would
         # pass almost everything.
         "stage1_regime": blob.get("stage1_regime"),
+        # The designation as Stage 2 writes it at the TOP LEVEL of the same
+        # file, since 2026-08-21. Read as well as `stage1_regime` rather than
+        # instead of it: a `best_params` written before the lift carries only
+        # the nested copy, and `target_regime` prefers whichever is present
+        # without either shape being the "new" one that invalidates the other.
+        "best_params_regime": _named_regime(blob.get("optimal_regime")),
+        "best_params_quadrant": blob.get("target_quadrant"),
+        # The four-quadrant table the designation beat, and the
+        # positive-expectancy runners-up. Reported on the audit, never scored:
+        # certifying in a secondary quadrant as well would give Gate R two
+        # chances at a 1.00 holdout profit factor. `regime_scores` is what the
+        # REGIME STARVATION diagnostic reads to say where the candidate was
+        # actually dominant in sample.
+        "regime_scores": blob.get("regime_scores") or (
+            (blob.get("stage1_regime") or {}).get("regime_scores") or {}),
+        "secondary_regimes": blob.get("secondary_regimes") or (
+            (blob.get("stage1_regime") or {}).get("secondary_regimes") or []),
         "best_params_file": str(path),
         # The parameter lock, charter clause 1. True when every bound value
         # came from Stage 2's winner untouched. `--param` is still allowed -
@@ -514,6 +545,41 @@ def _num(value) -> float | None:
     return None if (f != f) else f
 
 
+def _named_regime(value) -> str | None:
+    """
+    A regime NAME, or None - with the JSON round trip's fake names removed.
+
+    `"None"` is what a JSON round trip makes of the profiler's own token for
+    "no quadrant cleared the bar". It is not a regime name, and treating it as
+    one sends Gate R to a breakdown key that never exists, which comes back as
+    zero trades and reads on every table as a strategy that stopped trading.
+
+    Module level rather than a closure since 2026-08-21, because `_load_params`
+    now normalises Stage 2's top-level `optimal_regime` with the same rule
+    `target_regime` applies to the nested one. Two copies would be one edit
+    away from the two keys disagreeing about what `"None"` means.
+    """
+    text = str(value or "").strip()
+    return text if text and text not in ("None", "null", "nan") else None
+
+
+def regime_for_quadrant(code) -> str | None:
+    """
+    `"Q1"` -> `"High Volatility / Trending"`, and None for anything else.
+
+    Inverted from `profiler.REGIME_TO_QUADRANT`, which is itself inverted from
+    the integer map `mdlib.regimes` owns and `profiler` checks at import - so
+    there is still exactly one place where a code and a name are the same
+    statement. A `best_params` carrying a quadrant CODE and no name is
+    resolvable here rather than being reported as an undeclared regime.
+    """
+    text = str(code or "").strip().upper()
+    for regime, quad in REGIME_TO_QUADRANT.items():
+        if quad == text:
+            return regime
+    return None
+
+
 class UnknownRegimeError(ValueError):
     """A quadrant name no profiler produces. Gate R would read it as silence."""
 
@@ -535,13 +601,7 @@ def target_regime(prov: dict, target: dict | None,
     stage, not an output of it, and a configuration that arrives without one
     cannot be certified at all.
     """
-    def _named(value) -> str | None:
-        # "None" is what a JSON round trip makes of the profiler's own token
-        # for "no quadrant cleared the bar". It is not a regime name, and
-        # treating it as one would have Gate R look up a breakdown key that
-        # never exists and report the miss as a strategy that stopped trading.
-        text = str(value or "").strip()
-        return text if text and text not in ("None", "null") else None
+    _named = _named_regime
 
     def _checked(name: str, where: str) -> tuple[str, str]:
         # A name outside `REGIMES` is a BROKEN HANDOFF, not a strategy result,
@@ -561,20 +621,90 @@ def target_regime(prov: dict, target: dict | None,
         return _checked(str(override).strip(),
                         "--regime (operator override, not stage 1)")
 
-    regime = _named((prov.get("stage1_regime") or {}).get("optimal_regime"))
-    if regime:
-        where = prov.get("best_params_file")
-        return _checked(regime, f"stage 1, via {Path(where).name}" if where
-                        else "stage 1, via the stage 2 handoff")
-    regime = _named((target or {}).get("optimal_regime"))
-    if regime:
-        return _checked(regime, f"stage 1, via {STAGE2_SUMMARY_FILE}")
+    where = prov.get("best_params_file")
+    where_name = Path(where).name if where else "the stage 2 handoff"
+
+    # Stage 2 writes the designation at the top level of `best_params` since
+    # 2026-08-21, and nested under `stage1_regime` as it always did. The
+    # top-level copy is read FIRST and the nested one is the fallback, so a
+    # file written before the lift still certifies and a file written after it
+    # does not need the nested copy to agree. When both are present and they
+    # DISAGREE the top-level wins and the disagreement is recorded in the
+    # source string rather than resolved silently - a handoff whose two
+    # designations differ is a bug worth seeing on the audit.
+    top = _named(prov.get("best_params_regime")) or regime_for_quadrant(
+        prov.get("best_params_quadrant"))
+    nested = _named((prov.get("stage1_regime") or {}).get("optimal_regime"))
+    if top:
+        if nested and nested != top:
+            return _checked(top, f"stage 2 handoff {where_name} "
+                                 f"(top-level optimal_regime; its nested "
+                                 f"stage1_regime disagrees and names "
+                                 f"{nested!r})")
+        return _checked(top, f"stage 1, via {where_name}")
+    if nested:
+        return _checked(nested, f"stage 1, via {where_name}")
+
+    # Last resort: the Stage 2 SUMMARY row, for a `best_params` written before
+    # the regime scope travelled at all. Its matrix still carries the quadrant.
+    row = _named((target or {}).get("optimal_regime")) or regime_for_quadrant(
+        (target or {}).get("quadrant"))
+    if row:
+        return _checked(row, f"stage 1, via {STAGE2_SUMMARY_FILE}")
     return None, "not declared"
+
+
+def regime_starvation(regime: str | None, n_holdout: int,
+                      regime_scores: dict | None) -> dict | None:
+    """
+    The diagnostic for a Gate R that failed on SAMPLE, not on edge.
+
+    "Gate R FAIL" reads identically whether the strategy lost money in its own
+    environment or simply never entered it again, and those are fixed by
+    completely different work: the first is a dead edge, the second is a
+    designation pointing at a quadrant the holdout barely contains. The second
+    is also the more common failure of a best-of-four in-sample pick, and it is
+    invisible on the gate table - a quadrant with one holdout trade prints a
+    profit factor of 999 and a PASS on the factor row.
+
+    Returns None when the gate did not starve, so a caller can print it or not
+    without deciding anything. `dominant_quadrant` is where the candidate
+    actually made its money IN SAMPLE, read from the scored table Stage 2
+    embedded - not recomputed, and never taken from the holdout: naming a new
+    quadrant off the holdout is the best-of-four selection Gate R exists to
+    avoid, and this diagnostic must not smuggle one in through a print
+    statement.
+    """
+    if not regime:
+        return None
+    rows = [r for r in (regime_scores or {}).values()
+            if isinstance(r, dict) and r.get("score") is not None]
+    dominant = max(rows, key=lambda r: r["score"]) if rows else None
+    return {
+        "target_regime": regime,
+        "target_quadrant": quadrant_id(regime),
+        "holdout_trades": int(n_holdout),
+        "dominant_regime": (dominant or {}).get("regime"),
+        "dominant_quadrant": (dominant or {}).get("quadrant"),
+        "dominant_score": (dominant or {}).get("score"),
+        "dominant_basis": "in-sample alpha score, from the stage 2 handoff",
+        "message": (
+            f"[REGIME STARVATION] Quadrant "
+            f"{quadrant_id(regime) or '?'} ({regime}) had only "
+            f"{int(n_holdout)} holdout trades."
+            + (f" Candidate was dominant in "
+               f"{(dominant or {}).get('quadrant')} "
+               f"({(dominant or {}).get('regime')}) in sample."
+               if dominant else
+               " No in-sample quadrant scores travelled with this handoff, so "
+               "where it was dominant cannot be stated.")),
+    }
 
 
 def regime_gate(profile: dict | None, regime: str | None,
                 min_profit_factor: float = MIN_REGIME_PROFIT_FACTOR,
-                min_trades: int = MIN_REGIME_TRADES) -> dict:
+                min_trades: int = MIN_REGIME_TRADES,
+                regime_scores: dict | None = None) -> dict:
     """
     Did the edge survive out of sample INSIDE its designated quadrant?
 
@@ -646,11 +776,18 @@ def regime_gate(profile: dict | None, regime: str | None,
                   else f"{pf:.2f} in {regime}, below "
                        f"{float(min_profit_factor):.2f}")},
     ]
+    # Starvation is a FAIL on the trade count, whatever the factor did. A
+    # quadrant with three holdout trades and a 999 profit factor fails here and
+    # passes the factor row, so keying the diagnostic on the overall status
+    # would attach it to exactly the cases where it is least needed.
+    starved = (None if count_ok else
+               regime_starvation(regime, n, regime_scores))
     return {
         "name": name,
         "status": PASS if (count_ok and pf_ok) else FAIL,
         "target_regime": regime,
         "quadrant": quad,
+        "regime_starvation": starved,
         "measured": {
             "profit_factor": pf,
             "trade_count": n,
@@ -1053,7 +1190,14 @@ def certify_symbol(symbol: str, path: Path, tf: str, args: argparse.Namespace,
                                       symbol, tf, label, out_dir)
                       if ho_block.get("result") is not None else None)
         gate_r = regime_gate(ho_profile, regime,
-                             args.regime_min_pf, args.regime_min_trades)
+                             args.regime_min_pf, args.regime_min_trades,
+                             regime_scores=prov.get("regime_scores"))
+        # Printed on the console the moment it is known, not left to be found
+        # in the JSON. A Gate R that failed on sample size and one that failed
+        # on edge print the same word on the certification leaderboard, and the
+        # operator reading that table is the person who has to tell them apart.
+        if gate_r.get("regime_starvation"):
+            print(f"  {gate_r['regime_starvation']['message']}", flush=True)
         retention = retention_scores(block["metrics"],
                                      ho_block.get("metrics"))
 
@@ -1194,6 +1338,18 @@ def certify_symbol(symbol: str, path: Path, tf: str, args: argparse.Namespace,
                       for ver, v in versions.items()},
             "regime_measured": {
                 ver: (v["gate_audit"]["gates"][GATE_R].get("measured") or {})
+                for ver, v in versions.items()},
+            # WHY Gate R failed, not only that it did. A quadrant that
+            # starved out of sample and one whose edge inverted both print
+            # `FAIL` on the table, and they are fixed by completely different
+            # work - the first is a strategy that never met its own
+            # environment again, the second is a strategy that did and lost.
+            # Carried onto the summary so an orchestrator reporting a failed
+            # configuration can say which happened without re-reading the
+            # per-pair audit.
+            "regime_starvation": {
+                ver: ((v["gate_audit"]["gates"][GATE_R]
+                       .get("regime_starvation") or {}).get("message"))
                 for ver, v in versions.items()},
             "retention": {ver: v["retention"]["metrics"]
                           for ver, v in versions.items()},
@@ -1344,6 +1500,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--incubator", default=str(INCUBATOR),
                    help=f"Where a certified version is staged (default "
                         f"{INCUBATOR})")
+    p.add_argument("--rebuild-summary", action="store_true",
+                   help="Rebuild stage3_audit_summary.json from the "
+                        "gate_audit_<SYMBOL>_<TF>.json files already on disk, "
+                        "across EVERY timeframe. Reads no bars and re-scores "
+                        "no gate — it recovers the index for campaigns whose "
+                        "earlier timeframes an older Stage 3 overwrote.")
     p.add_argument("--param", action="append", default=[], metavar="K=V",
                    help="Override a parameter from the Stage 2 winner")
     p.add_argument("--defaults", action="store_true",
@@ -1429,10 +1591,105 @@ def certification_leaderboard(results: list[dict]) -> str:
         empty="nothing was certified — no contract completed the audit")
 
 
+def _row_key(row: dict) -> tuple[str, str, str]:
+    """A configuration's identity on the summary: contract, timeframe, version."""
+    return (str(row.get("symbol") or ""), str(row.get("timeframe") or ""),
+            str(row.get("version") or ""))
+
+
+def load_previous_summary(out_dir: Path, strat_name: str) -> dict | None:
+    """
+    The `stage3_audit_summary.json` an earlier timeframe's run left behind.
+
+    Read through `read_stage`, so a file written by another stage or belonging
+    to another strategy is REFUSED rather than merged - carrying one
+    strategy's certifications into another's summary is precisely what the
+    stage guard exists to prevent, and the Discord card would post the result.
+
+    A file that cannot be read is treated as ABSENT rather than fatal. This
+    run's verdicts are already on disk as `gate_audit_<SYMBOL>_<TF>.json` and
+    must not be thrown away because an earlier run left a truncated index.
+    """
+    path = Path(out_dir) / STAGE3_SUMMARY_FILE
+    if not path.exists():
+        return None
+    try:
+        return read_stage(path, 3, strat_name)
+    except Exception as e:                                        # noqa: BLE001
+        print(f"  ! ignoring the existing {path.name} ({type(e).__name__}: "
+              f"{e}); this run's summary replaces it.", file=sys.stderr)
+        return None
+
+
+def merge_stage3_rows(previous: list[dict], current: list[dict],
+                      run_timeframes: set[str]) -> tuple[list[dict], int]:
+    """
+    This run's rows plus every row an earlier run certified at ANOTHER
+    timeframe. Returns `(rows, carried)`.
+
+    Stage 3 certifies ONE timeframe per invocation - a gate audit is a verdict
+    about one (parameters, timeframe) pair - so a multi-timeframe pipeline
+    calls it once per timeframe. Without this merge each call OVERWROTE the
+    summary, and the card announced whichever timeframe happened to run last:
+    a run that certified CL at 5m and again at 15m posted one of them, the
+    other reached nobody, and the per-pair audit sat on disk unread with
+    nothing raising.
+
+    **This run is authoritative for the timeframes it ran.** Every prior row
+    at one of them is DROPPED rather than merged: a re-certification that no
+    longer covers a contract - Stage 2 stopped optimising it, or the audit
+    raised - must not leave the earlier verdict standing beside the new ones,
+    where it reads as current. Rows at other timeframes are carried verbatim,
+    transcribed and never re-scored, exactly like everything else in this file.
+    """
+    keys = {_row_key(r) for r in current}
+    carried = [r for r in previous
+               if str(r.get("timeframe") or "") not in run_timeframes
+               and _row_key(r) not in keys]
+    return list(current) + carried, len(carried)
+
+
+def consolidated_audits(rows: list[dict]) -> list[dict]:
+    """
+    The index over the per-pair `gate_audit_<SYMBOL>_<TF>.json` files.
+
+    One entry per configuration that reached a verdict, naming the file, its
+    SHA-256 and the verdict inside it. The per-pair audits stay
+    AUTHORITATIVE - this is a list of WHERE they are, so a reader, the Discord
+    card and Stage 5 can find every timeframe's certification without globbing
+    a directory in which a superseded sweep's audit sits indistinguishable
+    from a current one.
+
+    A row with no audit file is omitted here and kept in `results`: an index
+    entry pointing at nothing is worse than no entry, and the NOT AUDITED row
+    is already on the record where the card reads it. `exists` is checked
+    rather than assumed - the pipeline directory is one artifact root and a
+    hand-cleaned one leaves rows whose file is gone.
+    """
+    out: list[dict] = []
+    for row in rows:
+        path = row.get("audit_file")
+        if not path:
+            continue
+        out.append({
+            "symbol": row.get("symbol"),
+            "timeframe": row.get("timeframe"),
+            "version": row.get("version"),
+            "path": str(path),
+            "sha256": row.get("audit_sha256"),
+            "exists": Path(str(path)).exists(),
+            "status": row.get("status"),
+            "certified": bool(row.get("certified")),
+            "gate_regime": row.get("gate_regime"),
+        })
+    return out
+
+
 def write_stage3_summary(strat_name: str, out_dir: Path, results: list[dict],
                          errors: list[dict], skipped: list[dict],
                          args: argparse.Namespace,
-                         targets: list[dict], target_source: str) -> Path:
+                         targets: list[dict], target_source: str,
+                         source_path: str | Path | None = None) -> Path:
     """
     `stage3_audit_summary.json` - the stage's own handoff over the whole run.
 
@@ -1454,6 +1711,17 @@ def write_stage3_summary(strat_name: str, out_dir: Path, results: list[dict],
     failure or a missing Stage 2 parameter set - never a screening result,
     because this stage screens nothing on an aggregate. A shorter table reads
     as a complete one.
+
+    **It MERGES across timeframes rather than overwriting.** Stage 3 certifies
+    one timeframe per invocation, so a multi-timeframe pipeline runs it several
+    times into this one file; written as a plain overwrite it kept only the
+    last, and every earlier timeframe's certification vanished from the index
+    (and from the Discord card) while its `gate_audit_<SYMBOL>_<TF>.json` sat
+    on disk unread. `merge_stage3_rows` carries the other timeframes' rows
+    forward verbatim and lets this run replace its own; `runs` records what
+    each invocation covered, so `coverage` describes the whole certification
+    campaign rather than its final slice; and `audits` is the consolidated
+    index over the per-pair files, which remain the authoritative verdict.
     """
     rows = []
     for r in results:
@@ -1488,6 +1756,12 @@ def write_stage3_summary(strat_name: str, out_dir: Path, results: list[dict],
                 "gate1": g.get("gate1", NOT_EVALUATED),
                 "gate2": g.get("gate2", NOT_EVALUATED),
                 "gate3": g.get("gate3", NOT_EVALUATED),
+                # Present only when Gate R failed on the TRADE COUNT. `None`
+                # is "the quadrant was not starved", which is a different
+                # statement from "the strategy passed" - the status field
+                # above is what says that.
+                "regime_starvation": (r.get("regime_starvation")
+                                      or {}).get(ver),
                 "params": r.get("params") or {},
                 "params_locked": bool(r.get("params_locked")),
                 "in_stage1": bool(r.get("in_stage1", True)),
@@ -1518,7 +1792,7 @@ def write_stage3_summary(strat_name: str, out_dir: Path, results: list[dict],
             "oos_win_rate": None, "is_profit_factor": None,
             "holdout_profit_factor": None, "retention": {},
             "gate1": NOT_EVALUATED, "gate2": NOT_EVALUATED,
-            "gate3": NOT_EVALUATED,
+            "gate3": NOT_EVALUATED, "regime_starvation": None,
             "params": {}, "params_locked": False,
             "in_stage1": bool(e.get("in_stage1", True)),
             "exclude_days": [], "audit_file": None,
@@ -1527,9 +1801,47 @@ def write_stage3_summary(strat_name: str, out_dir: Path, results: list[dict],
             "error": e.get("error", ""),
         })
 
+    # This run's rows first, then everything an earlier timeframe's run
+    # certified. The merge is what makes this file the campaign's index rather
+    # than the last invocation's.
+    previous = load_previous_summary(out_dir, strat_name)
+    run_tf = str(args.tf)
+    rows, carried = merge_stage3_rows(
+        (previous or {}).get("results") or [], rows, {run_tf})
+    if carried:
+        print(f"  merged     {carried} row(s) from earlier timeframe(s) "
+              f"already in {STAGE3_SUMMARY_FILE}")
+
     audited = {(r["symbol"], r.get("timeframe")) for r in results}
+    # What THIS invocation covered, keyed by the timeframe it certified.
+    # `coverage` below is summed over these, so a campaign of three Stage 3
+    # runs reports what all three did rather than what the last one did.
+    runs = {k: v for k, v in ((previous or {}).get("runs") or {}).items()
+            if str(k) != run_tf}
+    runs[run_tf] = {
+        "timeframe": run_tf,
+        "targets": len(targets) or len(results) + len(errors) + len(skipped),
+        "audited": len(audited),
+        "certified": sum(1 for r in rows
+                         if r.get("certified")
+                         and str(r.get("timeframe") or "") == run_tf),
+        "errors": len(errors),
+        "skipped": len(skipped),
+        "complete": not (errors or skipped),
+        "target_source": target_source,
+        "in_sample": {"start": args.is_start, "end": args.is_end},
+        "holdout": {"start": args.holdout_start, "end": args.holdout_end},
+        "ran_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    timeframes = sorted({str(r.get("timeframe")) for r in rows
+                         if r.get("timeframe")})
+
     payload = {
         "strategy": strat_name,
+        # The module Stage 5 promotes FROM. Recorded because the Discord card
+        # prints the exact `promote.py` command for a certified configuration,
+        # and a command missing --source is a command nobody can paste.
+        "strategy_source": (str(source_path) if source_path else None),
         "in_sample": {"start": args.is_start, "end": args.is_end},
         "holdout": {
             "start": args.holdout_start, "end": args.holdout_end,
@@ -1538,7 +1850,11 @@ def write_stage3_summary(strat_name: str, out_dir: Path, results: list[dict],
         },
         "charter": {"start": CHARTER_IS_START, "end": CHARTER_IS_END,
                     "holdout_starts": HOLDOUT_START},
+        # The timeframe THIS run certified, kept for every reader that has
+        # only ever seen one; `timeframes` is the whole campaign, and the two
+        # are separate fields rather than one that changes meaning.
         "timeframe": args.tf,
+        "timeframes": timeframes,
         "target_source": target_source,
         "certification_rule": {
             "verdict_gate": GATE_R,
@@ -1549,21 +1865,178 @@ def write_stage3_summary(strat_name: str, out_dir: Path, results: list[dict],
         },
         "prop_firm_rules": {"applied": False,
                             "fields_checked": list(PROP_FIRM_FIELDS)},
+        # Summed over every Stage 3 invocation in `runs`, not only this one.
+        # With a single timeframe these are exactly the numbers they always
+        # were; with three they describe the campaign, which is what the file
+        # now indexes.
         "coverage": {
-            "targets": len(targets) or len(rows),
-            "audited": len(audited),
-            "certified": sum(1 for r in rows if r["certified"]),
-            "errors": len(errors),
-            "skipped": len(skipped),
-            "complete": not (errors or skipped),
+            "targets": sum(int(r.get("targets") or 0) for r in runs.values()),
+            "audited": sum(int(r.get("audited") or 0) for r in runs.values()),
+            "certified": sum(1 for r in rows if r.get("certified")),
+            "errors": sum(int(r.get("errors") or 0) for r in runs.values()),
+            "skipped": sum(int(r.get("skipped") or 0) for r in runs.values()),
+            "complete": all(bool(r.get("complete")) for r in runs.values()),
+            "timeframes": sorted(runs),
             "rule": ("Stage 3 prunes nothing on an aggregate metric. A row "
                      "that is NOT AUDITED is a run failure or a missing "
                      "Stage 2 parameter set, never a screening decision."),
         },
+        "runs": runs,
+        # The consolidated index over the per-pair audits. Those files remain
+        # the verdict a promotion rests on; this says where each one is.
+        "audits": consolidated_audits(rows),
         "results": rows,
     }
     return write_stage(Path(out_dir) / STAGE3_SUMMARY_FILE, 3, strat_name,
                        payload)
+
+
+def audit_to_result(blob: dict, path: Path) -> dict:
+    """
+    One `gate_audit_<SYMBOL>_<TF>.json` back in the shape `certify_symbol`
+    returns, so `write_stage3_summary` can index it without re-running it.
+
+    A pure transcription of the audit, field for field. Nothing is recomputed
+    and no verdict is re-derived: the audit is the authority, and a rebuilt
+    summary that scored anything itself would be free to disagree with the
+    file it claims to index.
+    """
+    versions = blob.get("versions") or {}
+    gate_names = ("gate1", "gate2", "gate3", GATE_R)
+
+    def gates_of(v: dict) -> dict:
+        g = ((v.get("gate_audit") or {}).get("gates") or {})
+        return {name: (g.get(name) or {}).get("status", NOT_EVALUATED)
+                for name in gate_names}
+
+    def gate_r_of(v: dict) -> dict:
+        return (((v.get("gate_audit") or {}).get("gates") or {})
+                .get(GATE_R) or {})
+
+    # The top-level `status`/`passed` are lifted out of the nested audits by
+    # `certify_symbol`; when they are absent the per-version block still holds
+    # them verbatim. Reading them from there is transcription, not a second
+    # opinion - it is the same field, one level down.
+    status = blob.get("status") or {
+        ver: (v.get("gate_audit") or {}).get("status", NOT_EVALUATED)
+        for ver, v in versions.items()}
+    passed = blob.get("passed") or {
+        ver: bool((v.get("gate_audit") or {}).get("passed"))
+        for ver, v in versions.items()}
+
+    return {
+        "symbol": blob.get("symbol"),
+        "timeframe": blob.get("timeframe"),
+        "path": path,
+        "status": status,
+        "passed": passed,
+        "target_regime": blob.get("target_regime"),
+        "target_quadrant": blob.get("target_quadrant"),
+        "params": blob.get("params") or {},
+        "params_locked": bool(blob.get("params_locked")),
+        "in_stage1": bool(blob.get("in_stage1", True)),
+        "incubator": blob.get("incubator") or {},
+        "gates": {ver: gates_of(v) for ver, v in versions.items()},
+        "regime_measured": {ver: (gate_r_of(v).get("measured") or {})
+                            for ver, v in versions.items()},
+        "regime_starvation": {
+            ver: ((gate_r_of(v).get("regime_starvation") or {}).get("message"))
+            for ver, v in versions.items()},
+        "retention": {ver: ((v.get("retention") or {}).get("metrics") or {})
+                      for ver, v in versions.items()},
+        "exclude_days": list((blob.get("entry_filters") or {})
+                             .get("exclude_days") or []),
+    }
+
+
+def rebuild_stage3_summary(strat_name: str, out_dir: Path,
+                           args: argparse.Namespace) -> int:
+    """
+    Rebuild `stage3_audit_summary.json` from the per-pair audits on disk.
+
+    Stage 2's `--reuse-scan` for Stage 3, and it exists for the same reason:
+    the expensive half of the stage is already on disk and the cheap half is
+    an index over it. It reads NO bars and runs NO simulation.
+
+    It is needed because the summary used to be OVERWRITTEN by each
+    invocation. Stage 3 certifies one timeframe per run, so a campaign that
+    audited CL at 5m, 15m and 30m left three verdicts in three
+    `gate_audit_<SYMBOL>_<TF>.json` files and a summary describing only the
+    last - and the Discord card, which reads the summary, announced one
+    timeframe and silently dropped the certifications from the others. The
+    merge in `write_stage3_summary` stops that happening again; this recovers
+    the campaigns it already happened to.
+
+    Only the SUFFIXED files are read. The unsuffixed `gate_audit_<SYMBOL>.json`
+    is a duplicate of whichever timeframe ran last, and reading both would
+    index one verdict twice under two names.
+
+    The windows come from the audits themselves, per timeframe, never from
+    this invocation's `--is-start`/`--holdout-end`: a rebuilt file must
+    describe the bars its verdicts were measured on, not the flags that
+    happened to be typed while rebuilding it.
+    """
+    prefix = GATE_AUDIT_FILE.format(symbol="")[: -len(".json")]
+    found: dict[str, list[tuple[dict, Path]]] = {}
+    for path in sorted(Path(out_dir).glob(f"{prefix}*_*.json")):
+        try:
+            blob = read_stage(path, 3, strat_name)
+        except Exception as e:                                    # noqa: BLE001
+            print(f"  ! skipping {path.name}: {type(e).__name__}: {e}",
+                  file=sys.stderr)
+            continue
+        tf = str(blob.get("timeframe") or "")
+        if not tf or not blob.get("versions"):
+            print(f"  ! skipping {path.name}: it records no timeframe or no "
+                  f"version", file=sys.stderr)
+            continue
+        found.setdefault(tf, []).append((blob, path))
+
+    if not found:
+        print(f"No per-pair gate audits under {out_dir}. There is nothing to "
+              f"rebuild from - the audits ARE the source, and this mode never "
+              f"re-runs one.", file=sys.stderr)
+        return 1
+
+    # Deleted rather than merged into. This mode reconstructs the whole index
+    # from the authoritative files, so a stale row for a pair whose audit has
+    # since been removed must not survive the rebuild.
+    summary = Path(out_dir) / STAGE3_SUMMARY_FILE
+    if summary.exists():
+        summary.unlink()
+
+    print(stage_banner(3, strat_name,
+                       f"REBUILD · {sum(len(v) for v in found.values())} "
+                       f"audit(s) across {len(found)} timeframe(s)"))
+    print("  no bars are read and no gate is re-scored; the per-pair audits "
+          "are the source\n  and this writes only the index over them.")
+
+    path_out = summary
+    for tf in sorted(found):
+        results = [audit_to_result(blob, path) for blob, path in found[tf]]
+        first = found[tf][0][0]
+        args.tf = tf
+        args.is_start = (first.get("in_sample") or {}).get("start")
+        args.is_end = (first.get("in_sample") or {}).get("end")
+        args.holdout_start = (first.get("holdout") or {}).get("start")
+        args.holdout_end = (first.get("holdout") or {}).get("end")
+        path_out = write_stage3_summary(
+            strat_name, out_dir, results, [], [], args, results,
+            f"REBUILT from {GATE_AUDIT_FILE.format(symbol='<SYMBOL>_<TF>')}",
+            source_path=resolve_strategy(args.strat))
+        print(f"  {tf:<5}{len(results)} audit(s) indexed")
+
+    print(certification_leaderboard(
+        [r for tf in sorted(found) for r in
+         (audit_to_result(b, p) for b, p in found[tf])]))
+    print(f"\n  summary    → {path_out}")
+    print(next_step([
+        "Post the Stage 3 certification card, now covering every timeframe:",
+        "",
+        f"  python3 backtest/discord_reporter.py --stage 3 "
+        f"--strat {strat_name}",
+    ]))
+    return 0
 
 
 def resolve_targets(strat_name: str, args: argparse.Namespace,
@@ -1635,6 +2108,12 @@ def main(argv: list[str] | None = None) -> int:
     path = resolve_strategy(args.strat)
     strat_name = path.parent.name if path.stem == "strat" else path.stem
     out_dir = pipeline_dir(strat_name, args.out_dir, create=True)
+
+    # Before the window check and before a strategy is loaded: this mode reads
+    # audits, not bars, and the windows it would be checking are the ones
+    # already recorded on those audits.
+    if getattr(args, "rebuild_summary", False):
+        return rebuild_stage3_summary(strat_name, out_dir, args)
 
     try:
         check_windows(args.is_start, args.is_end, args.holdout_start,
@@ -1746,7 +2225,8 @@ def main(argv: list[str] | None = None) -> int:
                  if r.get("exclude_days") else ""))
 
     summary_path = write_stage3_summary(strat_name, out_dir, results, errors,
-                                        skipped, args, targets, target_source)
+                                        skipped, args, targets, target_source,
+                                        source_path=path)
     print(f"\n  summary    → {summary_path}")
 
     staged = [(r["symbol"], ver, blk["dir"])
