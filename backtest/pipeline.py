@@ -56,6 +56,21 @@ STAGE_NAMES = {
     5: "PROMOTION · into the incubator",
 }
 
+# The charter's IN-SAMPLE window, and the first day of the holdout. Defined
+# here rather than in a stage because more than one stage has to agree about
+# it: Stage 1 screens on it, Stage 2 optimises on it, and Stage 3 measures
+# retention against the years AFTER it. Two stages holding their own copies of
+# these dates would drift by one edit, and the failure is silent - a Stage 2
+# sweep that ran a day into 2023 selects parameters on bars Gate 3 then scores
+# as unseen, and every number downstream still looks well-formed.
+CHARTER_IS_START = "2013-01-01"
+CHARTER_IS_END = "2022-12-31"
+# Everything from here on is the Stage 3 holdout. Stages 1 and 2 must not read
+# a bar of it - not to be conservative, but because a holdout that has been
+# optimised over is not a holdout, and nothing downstream can detect that it
+# was spent.
+HOLDOUT_START = "2023-01-01"
+
 SURVIVORS_FILE = "surviving_assets.json"
 # Stage 1's human-readable half. The JSON above is what Stage 2 reads; this is
 # what a person reads, and it is written on EVERY run - including one where
@@ -64,6 +79,14 @@ SURVIVORS_FILE = "surviving_assets.json"
 # configuration: the evidence has to land somewhere, and somewhere is a file.
 BASELINE_REPORT_FILE = "stage1_baseline_report.md"
 BEST_PARAMS_FILE = "best_params_{symbol}.json"
+# Stage 2's summary matrix: one row per (symbol, timeframe) optimised, in two
+# forms. The JSON is the handoff `discord_reporter.py --stage 2` reads and is
+# written through `write_stage`, so it carries the stage and strategy stamp
+# that lets `read_stage` refuse the wrong one. The CSV is the same rows for a
+# human and for a spreadsheet - it is NOT read back by any stage, because a
+# CSV round trip loses the types a parameter set is made of.
+STAGE2_SUMMARY_FILE = "stage2_summary.json"
+STAGE2_MATRIX_FILE = "stage2_summary_matrix.csv"
 GATE_AUDIT_FILE = "gate_audit_{symbol}.json"
 VERIFY_FILE = "verify_{symbol}.json"
 
@@ -180,6 +203,51 @@ def stage1_exclude_days(blob: dict[str, Any] | None
         days = tuple(sorted({int(d) for d in (pair.get("exclude_days") or [])}))
         if sym and tf and days:
             out[(str(sym), str(tf))] = days
+    return out
+
+
+def stage1_pairs(blob: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """
+    Stage 1's SURVIVING configurations, as exact `(symbol, timeframe)` pairs
+    with the regime scope each one cleared.
+
+    This is what Stage 2 sweeps. The pairs are exact rather than a cross
+    product because the survivors are ragged - NQ may survive at 5m and 15m
+    while GC survives only at 15m - and `--symbols`/`--tf` are two independent
+    axes, so expressing them as a product sweeps `GC 5m`, a configuration the
+    screen just dropped. Fitting parameters to a contract with no baseline edge
+    is the definition of the curve fit the screen exists to prevent, and
+    nothing downstream records that it happened.
+
+    The regime scope travels WITH the pair - `quadrant`, `optimal_regime`,
+    `kill_switch_regimes` - because Stage 2's output is what a live supervisor
+    eventually reads, and a parameter set that arrives without the environment
+    it was screened in reads as a licence to trade it everywhere. Nothing here
+    applies the scope: Stage 2 sweeps the whole window on purpose (masking the
+    sweep to a quadrant chosen as the best of four on these same bars stacks a
+    second in-sample selection under the first). It is carried, not enforced.
+
+    A pair with no `tf` is skipped rather than defaulted to the blob's
+    timeframe: a survivor whose timeframe cannot be read is a handoff bug, and
+    guessing it sweeps something nobody screened.
+    """
+    out: list[dict[str, Any]] = []
+    for pair in (blob or {}).get("surviving_pairs") or []:
+        if not isinstance(pair, dict):
+            continue
+        sym, tf = pair.get("symbol"), pair.get("tf") or pair.get("timeframe")
+        if not sym or not tf:
+            continue
+        out.append({
+            "symbol": str(sym),
+            "tf": str(tf),
+            "version": pair.get("version"),
+            "quadrant": pair.get("quadrant"),
+            "optimal_regime": pair.get("optimal_regime"),
+            "regime_pf": pair.get("regime_pf"),
+            "regime_trade_count": pair.get("regime_trade_count"),
+            "kill_switch_regimes": list(pair.get("kill_switch_regimes") or []),
+        })
     return out
 
 

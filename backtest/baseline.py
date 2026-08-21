@@ -164,9 +164,10 @@ from agents.tier3_workers import load_strategy                     # noqa: E402
 from backtest.event_calendar import (add_filter_args, describe_filters,   # noqa: E402
                                filter_config_kwargs)
 from backtest.engine import BacktestConfig                         # noqa: E402
-from backtest.pipeline import (BASELINE_REPORT_FILE, SURVIVORS_FILE,  # noqa: E402
-                               leaderboard, next_step, pipeline_dir,
-                               stage_banner, write_stage)
+from backtest.pipeline import (BASELINE_REPORT_FILE,               # noqa: E402
+                               CHARTER_IS_END, CHARTER_IS_START,
+                               SURVIVORS_FILE, leaderboard, next_step,
+                               pipeline_dir, stage_banner, write_stage)
 from backtest.profiler import (QUADRANT_TO_REGIME, REGIMES,         # noqa: E402
                                RegimeProfiler)
 from backtest.report import day_of_week_breakdown                   # noqa: E402
@@ -210,8 +211,10 @@ MIN_REGIME_TRADES = 30
 # still one flag away, and whichever window ran is written onto the handoff
 # beside `window_source` - a survivor is never recorded without recording the
 # bars it survived on.
-CHARTER_IS_START = "2013-01-01"
-CHARTER_IS_END = "2022-12-31"
+# Imported from `backtest.pipeline`, not declared here. Stage 2 enforces the
+# same two dates and Stage 3's holdout begins the day after them; a second copy
+# in this module would be one edit away from screening on a window Stage 2 then
+# optimises past.
 
 # Q1..Q4, the charter's own shorthand for the four quadrants, INVERTED from the
 # profiler's integer map rather than spelled out again: `mdlib.regimes` numbers
