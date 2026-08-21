@@ -3,7 +3,7 @@
   "version": "A",
   "description": "Promoted Version A (rule-based baseline).",
   "symbols": [
-    "GC"
+    "BTC"
   ],
   "timeframe": "5m",
   "params": {
@@ -27,7 +27,7 @@
   "source": "/home/cgrullon/src/trading/strategies/experimental/sma_momentum_crossover_20260818.py",
   "source_sha256": "884807fcc056c83f65606fff6fb7cb80f2f4dcef89983f5479115178a44059ff",
   "promoted_sha256": "884807fcc056c83f65606fff6fb7cb80f2f4dcef89983f5479115178a44059ff",
-  "promoted_utc": "2026-08-21T19:36:33+00:00",
+  "promoted_utc": "2026-08-21T21:52:57+00:00",
   "costs_included": false,
   "variants_tested": null,
   "metrics_status": "NOT RECORDED",
@@ -35,15 +35,15 @@
   "gate_audit_status": "PASS",
   "gate_audit": {
     "gate1": "FAIL",
-    "gate2": "NOT EVALUATED",
+    "gate2": "FAIL",
     "gate3": "FAIL",
     "gate_regime": "PASS"
   },
   "certification": {
-    "audit_file": "/mnt/backtest/artifacts/pipeline/sma_momentum_crossover_20260818/gate_audit_GC_5m.json",
-    "audit_sha256": "136bcf12f3a6c174c40cc939f2e9fd376d45f9b25504844d130a5868371a187e",
-    "audit_symbol": "GC",
-    "audit_generated_utc": "2026-08-21T19:33:34+00:00",
+    "audit_file": "/mnt/backtest/artifacts/pipeline/sma_momentum_crossover_20260818/gate_audit_BTC_5m.json",
+    "audit_sha256": "27fd26d958eb44a1c73ce4debf3a9e794ddd335a78a7873e0dbfd8065c9c0eea",
+    "audit_symbol": "BTC",
+    "audit_generated_utc": "2026-08-21T21:47:56+00:00",
     "in_sample": {
       "start": "2013-01-01",
       "end": "2022-12-31"
@@ -57,10 +57,10 @@
       "fast_window": 5,
       "slow_window": 20,
       "tp_atr_mult": 2.0,
-      "sl_atr_mult": 1.5,
+      "sl_atr_mult": 1.0,
       "trailing": false
     },
-    "params_source": "stage 2 winner (best_params_GC_5m.json)",
+    "params_source": "stage 2 winner (best_params_BTC_5m.json)",
     "variants_tested": 54,
     "wfo": {
       "train_years": 2,
