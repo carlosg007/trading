@@ -256,6 +256,18 @@ def stage1_pairs(blob: dict[str, Any] | None) -> list[dict[str, Any]]:
             "optimal_regime": pair.get("optimal_regime"),
             "regime_pf": pair.get("regime_pf"),
             "regime_trade_count": pair.get("regime_trade_count"),
+            "regime_net_pnl": pair.get("regime_net_pnl"),
+            "regime_win_rate": pair.get("regime_win_rate"),
+            # The alpha score that designated this quadrant, the floor it
+            # cleared, the full four-quadrant table and the positive
+            # runners-up. Carried for the same reason the quadrant is: Stage
+            # 2's output is what a live supervisor eventually reads, and a
+            # target quadrant that arrives with no record of what it beat
+            # cannot be told apart from one somebody typed.
+            "regime_score": pair.get("regime_score"),
+            "regime_sample_floor": pair.get("regime_sample_floor"),
+            "regime_scores": pair.get("regime_scores") or {},
+            "secondary_regimes": pair.get("secondary_regimes") or [],
             "kill_switch_regimes": list(pair.get("kill_switch_regimes") or []),
         })
     return out
@@ -318,3 +330,53 @@ def next_step(lines: list[str]) -> str:
     out.extend(f"  {ln}" for ln in lines)
     out.append("-" * W)
     return "\n".join(out)
+
+
+if __name__ == "__main__":
+    # Not a stage, and running it as one has to FAIL rather than exit 0.
+    #
+    # This module is the contract between the stages: it declares paths, the
+    # charter dates and the handoff readers, and it runs nothing. Without this
+    # block `python3 backtest/pipeline.py --strat X --symbols ALL --tf 15m`
+    # imports it, binds those constants, ignores every argument and exits 0 -
+    # producing an empty log, no artifacts and no Discord card, which is
+    # indistinguishable at the console from a pipeline that ran and found
+    # nothing. There is no argparse here on purpose: an unknown flag must not
+    # be the thing that raises, because the command is wrong even when every
+    # flag on it is spelled correctly.
+    import sys
+
+    print(
+        "\n".join(
+            [
+                "",
+                "=" * 78,
+                "backtest/pipeline.py IS NOT A STAGE - it is the contract between them.",
+                "=" * 78,
+                "",
+                "It declares where each stage writes and what the next one reads. It",
+                "spawns nothing, so run as a script it would exit 0 with an empty log.",
+                "",
+                "Nothing chains automatically: each stage prints the next one's command",
+                "and stops, so a human reads the evidence in between. Run them by hand:",
+                "",
+                "  1  python3 -u backtest/baseline.py    --strat X --symbols ALL --tf 15m",
+                "  2  python3 -u backtest/scan.py        --strat X",
+                "  3  python3 -u backtest/audit_gates.py --strat X --tf 15m",
+                "  4  python3 -u backtest/verify_full.py --strat X --tf 15m",
+                "  5  python3 -u backtest/promote.py     --strat X --version A \\",
+                "         --source <module.py> --audit-file <gate_audit_SYMBOL_TF.json>",
+                "",
+                "Discord cards are posted per stage, from that stage's handoff:",
+                "",
+                "  python3 -u backtest/discord_reporter.py --stage {1,2,3} --strat X",
+                "  python3 -u backtest/discord_reporter.py --stage 3 --strat X --dry-run",
+                "",
+                f"Handoffs live under {artifacts_root() / 'pipeline'}/<strategy>/",
+                "=" * 78,
+                "",
+            ]
+        ),
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
