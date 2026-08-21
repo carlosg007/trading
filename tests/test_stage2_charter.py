@@ -520,8 +520,20 @@ def test_stage2_card(blob: dict) -> None:
           HOLDOUT_START in text and "untouched" in text)
     for want in ("NQ", "GC", "5m", "15m"):
         check(f"the symbol/timeframe column carries {want}", want in text)
-    check("the selected best parameters are on the card",
-          "fast=5" in text and "slow=20" in text)
+    # The parameter sets are on the card TWICE: abbreviated in the table so
+    # the fixed-width columns align, and in full below it. Both are checked,
+    # because the abbreviation is only safe while the full copy is present -
+    # a reader retypes `--param` from the block, never from the table.
+    check("the table carries the selected parameters with abbreviated keys",
+          "f=5 s=20" in text and "f=3 s=40" in text, text)
+    check("the table says its keys are abbreviated",
+          "abbreviated" in text)
+    full = "\n".join(f["value"] for f in embed["fields"]
+                     if f["name"].startswith(dr.STAGE2_PARAM_FIELD_NAME))
+    check("the full, unabbreviated parameter sets are their own field",
+          "fast=5, slow=20" in full and "fast=3, slow=40" in full, full)
+    check("a configuration whose sweep failed is in the full block too, "
+          "saying so rather than going missing", "NOT OPTIMIZED" in full, full)
     check("the in-sample profit factor is on the card", "1.28" in text)
     check("the max drawdown is on the card", "-8.40" in text)
     check("the target regime quadrant is a column", "QUAD" in text)
@@ -565,6 +577,48 @@ def test_stage2_card(blob: dict) -> None:
     check("the totals still describe the whole matrix",
           [f["value"] for f in wide["fields"]
            if f["name"] == "Configurations"] == ["60"])
+
+    # The full block is the one part of the card that grows without bound, so
+    # it is what would push an embed past 6000 and be rejected with a 400
+    # nobody reads. It is sized against the finished embed and what does not
+    # fit is COUNTED, exactly like every other cap on these cards.
+    heavy = {"results": [
+        {"symbol": f"SYM{i}", "timeframe": "15m", "status": "OPTIMIZED",
+         "quadrant": "Q1", "optimal_regime": "High Volatility / Trending",
+         "params": ", ".join(f"param_number_{j}={j}.0" for j in range(12)),
+         "profit_factor": 1.1, "max_drawdown_pct": -5.0} for i in range(60)]}
+    big = dr.build_stage2_embed("probe", heavy, source="/mnt/x/s.json")
+    param_fields = [f for f in big["fields"]
+                    if f["name"].startswith(dr.STAGE2_PARAM_FIELD_NAME)]
+    check("a matrix of wide parameter sets still fits Discord's embed limit",
+          dr._embed_size(big) <= dr.MAX_EMBED_TOTAL, str(dr._embed_size(big)))
+    check("every full-parameter field is inside the 1024-character field cap",
+          all(len(f["value"]) <= dr.MAX_FIELD_VALUE for f in param_fields),
+          str([len(f["value"]) for f in param_fields]))
+    check("the block is capped at STAGE2_PARAM_MAX_FIELDS fields",
+          0 < len(param_fields) <= dr.STAGE2_PARAM_MAX_FIELDS)
+    check("and what did not fit is COUNTED on the card, not dropped in "
+          "silence", "further configuration(s) not shown"
+          in param_fields[-1]["value"], param_fields[-1]["value"][-140:])
+    printed = sum(1 for f in param_fields
+                  for line in f["value"].splitlines()
+                  if line.startswith("SYM"))
+    left_out = int(param_fields[-1]["value"]
+                   .split("further configuration(s)")[0].rsplit("_", 1)[-1])
+    check("the count of what was left off matches what was printed",
+          printed + left_out == 60, f"{printed} printed + {left_out} hidden")
+
+    # Nothing in the block is clipped: that is the whole reason it exists.
+    for field in param_fields:
+        check("no full-parameter line is truncated with an ellipsis",
+              dr.ELLIPSIS not in field["value"])
+
+    # A budget too small for even one field must not leave the description
+    # pointing at a block that is not there.
+    starved = dr.format_stage2_param_fields(
+        [{"symbol": "NQ", "timeframe": "15m", "params": "fast=5"}], budget=40)
+    check("a card with no room for the block reports every row as not shown",
+          starved == ([], 1), str(starved))
 
 
 def test_mode_resolution() -> None:
