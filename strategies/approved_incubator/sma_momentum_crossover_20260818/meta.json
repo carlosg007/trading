@@ -3,9 +3,9 @@
   "version": "A",
   "description": "Promoted Version A (rule-based baseline).",
   "symbols": [
-    "RTY"
+    "6S"
   ],
-  "timeframe": "5m",
+  "timeframe": "15m",
   "params": {
     "fast_window": 10,
     "slow_window": 30,
@@ -27,7 +27,7 @@
   "source": "/home/cgrullon/src/trading/strategies/experimental/sma_momentum_crossover_20260818.py",
   "source_sha256": "884807fcc056c83f65606fff6fb7cb80f2f4dcef89983f5479115178a44059ff",
   "promoted_sha256": "884807fcc056c83f65606fff6fb7cb80f2f4dcef89983f5479115178a44059ff",
-  "promoted_utc": "2026-08-21T21:53:09+00:00",
+  "promoted_utc": "2026-08-21T21:53:12+00:00",
   "costs_included": false,
   "variants_tested": null,
   "metrics_status": "NOT RECORDED",
@@ -35,15 +35,15 @@
   "gate_audit_status": "PASS",
   "gate_audit": {
     "gate1": "FAIL",
-    "gate2": "PASS",
-    "gate3": "FAIL",
+    "gate2": "FAIL",
+    "gate3": "PASS",
     "gate_regime": "PASS"
   },
   "certification": {
-    "audit_file": "/mnt/backtest/artifacts/pipeline/sma_momentum_crossover_20260818/gate_audit_RTY_5m.json",
-    "audit_sha256": "039ae1dd8f4d08a31d43143232a3a366c02b2f697d5460842e664cb07f3b1328",
-    "audit_symbol": "RTY",
-    "audit_generated_utc": "2026-08-21T21:49:33+00:00",
+    "audit_file": "/mnt/backtest/artifacts/pipeline/sma_momentum_crossover_20260818/gate_audit_6S_15m.json",
+    "audit_sha256": "d72ebf96cf2016de7f37e53a5580e0859029596eaaf01dcd911f3c4671d6ec95",
+    "audit_symbol": "6S",
+    "audit_generated_utc": "2026-08-21T21:44:20+00:00",
     "in_sample": {
       "start": "2013-01-01",
       "end": "2022-12-31"
@@ -54,13 +54,13 @@
       "end_basis": "the present - every bar the lake holds"
     },
     "params": {
-      "fast_window": 15,
-      "slow_window": 30,
+      "fast_window": 10,
+      "slow_window": 50,
       "tp_atr_mult": 3.0,
       "sl_atr_mult": 1.5,
       "trailing": false
     },
-    "params_source": "stage 2 winner (best_params_RTY_5m.json)",
+    "params_source": "stage 2 winner (best_params_6S_15m.json)",
     "variants_tested": 54,
     "wfo": {
       "train_years": 2,
