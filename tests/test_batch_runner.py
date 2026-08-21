@@ -78,7 +78,9 @@ from backtest.report_html import write_dual_reports
 from backtest.run import (LEADERBOARD_COLUMNS, SEL_A, SEL_A_ONLY, SEL_B,
                           SEL_NONE, leaderboard_row, parse_param, parse_symbols,
                           select_version, write_leaderboard)
-from backtest.scan import (SELECTED_GATE1, SELECTED_NO_GATE1, ScanError,
+from backtest.scan import (RANK_SHARPE, SELECTED_GATE1,
+                           SELECTED_GATE1_PLATEAU, SELECTED_NO_GATE1,
+                           SELECTED_NO_GATE1_PLATEAU, ScanError,
                            _batch_columns, expand_grid, format_scan_summary,
                            parse_param_dict, scan_from_csv, scan_symbol,
                            write_best_params, write_scan_table)
@@ -429,8 +431,117 @@ def test_best_params_export(tmp: Path) -> None:
         check("an empty table raises rather than exporting nothing", True)
 
 
+def test_scan_applies_entry_filters(tmp: Path) -> None:
+    """
+    The sweep runs the ENTRY filters, and runs them the way the engine does.
+
+    This is the check the Drop Unprofitable Days contract rests on. Stage 1
+    names the weekdays below a 1.00 profit factor, Stage 2 masks them out and
+    sweeps, and the winner it reports is
+    supposed to be the winner of the FILTERED week. Before the filters reached
+    `_combo_signals`, `cfg.exclude_days` travelled all the way into the sweep,
+    printed on the console, and changed not one signal - so every parameter set
+    was selected on the unfiltered week and then re-run filtered, and the two
+    numbers had no reason to agree.
+
+    Checked two ways, because either alone is passable by a bug. Parity against
+    an oracle built from `apply_entry_filters` + `_simulate` proves the sweep
+    filters IDENTICALLY to `run_backtest`; comparing against the unfiltered
+    sweep proves it filters AT ALL. A no-op mask would sail through the first.
+    """
+    print("\nscan_symbol applies cfg.exclude_days, exactly as the engine does")
+    from backtest.event_calendar import apply_entry_filters, session_weekday
+    from backtest.scan import _combo_signals, _entry_block_mask
+
+    path = write_strategy(tmp)
+    bars = synthetic_bars()
+    grid = {"fast": [3, 5], "slow": [20, 40]}
+    MON = (0,)
+
+    plain = BacktestConfig(variants_tested=None)
+    filtered = BacktestConfig(variants_tested=None, exclude_days=MON)
+
+    scan_plain = scan_symbol(path, bars, "ES", plain, grid,
+                             strat_name="scan_probe")
+    scan_filt = scan_symbol(path, bars, "ES", filtered, grid,
+                            strat_name="scan_probe")
+
+    check("an unfiltered sweep records no entry_filters block - "
+          "'not configured' is not 'ran and cut nothing'",
+          scan_plain["entry_filters"] is None)
+    info = scan_filt["entry_filters"]
+    check("a filtered sweep records the mask it ran under",
+          bool(info) and info.get("exclude_days") == [0], str(info)[:90])
+    check("...and how many entries it actually removed, across every column",
+          bool(info) and info["entries_suppressed_all_columns"] > 0,
+          f"{(info or {}).get('entries_suppressed_all_columns')} of "
+          f"{(info or {}).get('entries_offered_all_columns')}")
+
+    # The filter BINDS: the two sweeps are not the same table.
+    t_plain = scan_plain["table"].set_index("params")["trades"]
+    t_filt = scan_filt["table"].set_index("params")["trades"]
+    common = [k for k in t_plain.index if k in t_filt.index]
+    check("the filtered sweep is a different search, not the same one relabelled",
+          any(int(t_plain[k]) != int(t_filt[k]) for k in common),
+          f"{dict((k, (int(t_plain[k]), int(t_filt[k]))) for k in common)}")
+
+    # Parity, column by column, against the engine's own filter path.
+    def oracle_filtered(params: dict) -> tuple[pd.DataFrame, dict]:
+        fn, _ = load_strategy(path, params)
+        e, x = fn(bars)
+        e = pd.Series(e).reset_index(drop=True).fillna(False).astype(bool)
+        x = pd.Series(x).reset_index(drop=True).fillna(False).astype(bool)
+        e, _se, _info = apply_entry_filters(bars["ts"], e, None,
+                                            exclude_days=MON)
+        e, x = clean_signals(e, x)
+        trades = _simulate(bars, e, x, "ES", filtered)
+        days = pd.DatetimeIndex(np.unique(
+            pd.DatetimeIndex(bars["ts"]).values.astype("datetime64[D]"))
+        ).tz_localize("UTC")
+        result = _assemble_result([trades] if not trades.empty else [], days,
+                                  filtered)
+        return trades, summarize_result(result, include_trades=False)
+
+    identical, checked = True, 0
+    for _, row in scan_filt["table"].iterrows():
+        params = {"fast": int(row["fast"]), "slow": int(row["slow"])}
+        o_trades, o_metrics = oracle_filtered(params)
+        checked += 1
+        for label, got, want, tol in (
+                ("Sharpe", float(row["sharpe"]), float(o_metrics["sharpe"]), 1e-12),
+                ("trades", int(row["trades"]), len(o_trades), 0),
+                ("costs", float(row["total_costs"]),
+                 float(o_metrics["total_costs"]), 1e-9)):
+            if abs(got - want) > tol:
+                identical = False
+                check(f"{label} matches for {params}", False,
+                      f"scan {got} vs engine {want}")
+    check(f"every filtered column matches the engine trade for trade "
+          f"({checked} columns)", identical)
+
+    # And the mechanism, at the level a wrong widening would show up. The
+    # engine fills at the NEXT bar's open, so the mask is widened one bar
+    # backwards - which means no FILL may land on an excluded session. Checking
+    # the signal bar instead would pass while letting exactly one entry per
+    # excluded session fill inside it.
+    mask, _ = _entry_block_mask(bars, filtered)
+    ent, _exi, _se, _sx, offered, suppressed = _combo_signals(
+        path, bars, {}, {"fast": 3, "slow": 20}, filtered, block_mask=mask)
+    wd = session_weekday(bars["ts"])
+    check("no ENTRY fills on an excluded session - the mask is widened to the "
+          "fill bar", not bool((wd[ent] == 0).any()),
+          f"{int((wd[ent] == 0).sum())} Monday fills")
+    check("...and the suppression count is returned to the caller",
+          offered > 0 and suppressed > 0, f"{suppressed} of {offered}")
+
+    # Nothing configured must remain a genuinely untouched path.
+    mask_off, info_off = _entry_block_mask(bars, plain)
+    check("no filter configured builds no mask at all",
+          mask_off is None and info_off is None)
+
+
 def test_scan_selection_respects_gate1(tmp: Path) -> None:
-    print("\nselection is subject to Gate 1")
+    print("\nselection is subject to Gate 1, and ranks on the plateau")
 
     path = write_strategy(tmp)
     bars = synthetic_bars()
@@ -442,30 +553,53 @@ def test_scan_selection_respects_gate1(tmp: Path) -> None:
     table = scan["table"]
     best_overall = table.loc[table["sharpe"].idxmax()]
     passing = table[table["gate1"] == "PASS"]
+    # The charter's rule since 2026-08-21: the winner is the best SHARPE
+    # PLATEAU, not the single best cell. Gate 1 still bounds the POOL and still
+    # never eliminates the contract - a grid where nothing clears it produces a
+    # winner under a selection string that says so.
+    pool = passing if not passing.empty else table
+    best_plateau = float(pool["plateau_score"].max())
 
     if passing.empty:
         check("no combination cleared Gate 1, and the selection says so",
-              scan["selection"] == SELECTED_NO_GATE1, scan["selection"])
-        check("the fallback is the highest Sharpe overall",
-              abs(scan["winner"]["sharpe"] - float(best_overall["sharpe"])) < 1e-12)
+              scan["selection"] == SELECTED_NO_GATE1_PLATEAU, scan["selection"])
         check("the winner is not labelled as passing",
               scan["winner"]["gate1"] != "PASS", scan["winner"]["gate1"])
     else:
         check("the selection reports a Gate 1 pass",
-              scan["selection"] == SELECTED_GATE1, scan["selection"])
-        check("the winner is the best Sharpe AMONG the passing rows, not overall",
-              abs(scan["winner"]["sharpe"] - float(passing["sharpe"].max())) < 1e-12)
+              scan["selection"] == SELECTED_GATE1_PLATEAU, scan["selection"])
+
+    check("the winner is the best PLATEAU of the eligible rows",
+          abs(float(scan["winner"]["plateau"]["plateau_score"])
+              - best_plateau) < 1e-12,
+          f"{scan['winner']['plateau']['plateau_score']} vs {best_plateau}")
+
+    # The pre-charter rule is still available, and still means what it said:
+    # the single highest-Sharpe cell of the eligible pool.
+    spike = scan_symbol(path, bars, "ES", cfg,
+                        {"fast": [3, 5, 10], "slow": [10, 20, 40]},
+                        strat_name="scan_probe", rank=RANK_SHARPE)
+    expected = (float(passing["sharpe"].max()) if not passing.empty
+                else float(best_overall["sharpe"]))
+    check("--select sharpe restores the highest-Sharpe rule",
+          abs(spike["winner"]["sharpe"] - expected) < 1e-12)
+    check("and it is labelled as a Sharpe rank, never as a plateau",
+          spike["selection"] in (SELECTED_GATE1, SELECTED_NO_GATE1),
+          spike["selection"])
 
     # The branch the synthetic data does not reach is still exercised, by
     # scoring the same table against thresholds it does clear. Selection logic
     # that has only ever run down one branch is untested logic.
     rows = table.to_dict("records")
-    fake_pass = [dict(r, gate1="PASS") for r in rows[1:3]]
+    # Deliberately NOT the top row: the point of the check is that a passing
+    # row which is not the global best is still the winner.
+    by_plateau = sorted(rows, key=lambda r: r["plateau_score"], reverse=True)
+    fake_pass = [dict(r, gate1="PASS") for r in by_plateau[1:3]]
     pool = [r for r in fake_pass if r["gate1"] == "PASS"]
-    best_pass = max(pool, key=lambda r: r["sharpe"])
+    best_pass = max(pool, key=lambda r: r["plateau_score"])
     check("with passing rows present, the best of THOSE wins",
-          best_pass["sharpe"] == max(r["sharpe"] for r in pool)
-          and best_pass["sharpe"] < float(best_overall["sharpe"]),
+          best_pass["plateau_score"] == max(r["plateau_score"] for r in pool)
+          and best_pass["plateau_score"] < float(table["plateau_score"].max()),
           "a passing row that is not the global maximum is still the winner")
 
     try:
@@ -845,6 +979,7 @@ if __name__ == "__main__":
         tmp = Path(td)
         test_expand_grid()
         test_scan_matches_engine(tmp)
+        test_scan_applies_entry_filters(tmp)
         test_scan_selection_respects_gate1(tmp)
         test_parse_param_dict()
         test_best_params_export(tmp)
