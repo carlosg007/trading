@@ -240,6 +240,7 @@ python tests/test_daily_metrics.py      # the daily-close metric frequency contr
 python tests/test_pipeline_filters.py   # entry filters, DOW attribution, the 5 stages
 python tests/test_regime_cache.py      # regime quadrants, theta_vol, the lake join
 python tests/test_profiler_precomputed.py  # the profiler reads the cache, not its own pass
+python tests/test_stage1_charter.py     # the Stage 1 charter + the Discord card
 OMP_NUM_THREADS=1 \
   python tests/test_sma_momentum_crossover.py   # ADX vs TA-Lib, layers, ml_features
 
@@ -306,12 +307,24 @@ bt-run --strat X --symbols NQ --exclude-days 0,4     # no Mon/Fri ENTRIES
 # The Regime-Aware Screening Firewall (replaced the Drop Unprofitable Days
 # contract, 2026-08-20). Stage 1 profiles every configuration into four
 # volatility/trend quadrants and keeps only those with a quadrant at PF >= 1.00
-# over >= 30 trades; each survivor carries optimal_regime, regime_pf and
-# kill_switch_regimes into surviving_assets.json. NO weekday is blacklisted
-# any more, so Stage 1 writes no exclude_days and Stage 2 inherits none.
+# over >= 30 trades; each survivor carries version, optimal_regime, quadrant
+# (Q1..Q4), that quadrant's metrics and kill_switch_regimes into
+# surviving_assets.json. NO weekday is blacklisted any more, so Stage 1 writes
+# no exclude_days and Stage 2 inherits none.
 # Every stage ends by printing its own leaderboard.
 python3 backtest/baseline.py --strat X --symbols ALL --tf 15m \
     --min-profit-factor 1.25 --min-trades 50    # tighten the quadrant bars
+# STAGE 1 ONLY: --start/--end default to the charter window 2013-01-01..
+# 2022-12-31 (the years after it are the Stage 3 holdout) and Version B runs
+# by DEFAULT, because survival is decided on either version. --no-ml declines
+# it. Every other stage and bt-run are unchanged: --ml stays opt-in there.
+python3 backtest/baseline.py --strat X --symbols ALL --tf 15m --no-ml
+
+# Post Stage 1's leaderboard to $BT_DISCORD_WEBHOOK. Reads the handoff and
+# recomputes nothing; --dry-run prints the payload and sends nothing.
+python3 backtest/discord_reporter.py --stage 1 --strat X
+python3 backtest/discord_reporter.py --stage 1 --strat X \
+    --survivors /mnt/backtest/artifacts/pipeline/X/surviving_assets.json
 # Stage 2 still HONOURS an exclude_days a handoff carries; nothing writes one.
 python3 backtest/scan.py --strat X --tf 15m --ignore-stage1-exclude-days
 python3 backtest/scan.py --strat X --tf 15m --exclude-days 3,4   # CLI wins
@@ -956,6 +969,14 @@ one environment they cleared.
 - Defaults, deliberately unswept: a sweep here would screen on the best of N
   per contract, promoting whichever symbol had the most parameters to hide
   behind. The comparison is meant to be between CONTRACTS.
+- **Both versions run, over the charter window, by default (2026-08-21).**
+  `--start`/`--end` default to `2013-01-01`..`2022-12-31` — reading past the
+  end means screening on the Stage 3 holdout, which selects survivors on the
+  bars Gate 3 later measures retention against — and `--ml` is ON here alone,
+  because survival is decided on EITHER version and a Version-A-only screen
+  cannot separate "neither version carried it" from "only one was asked".
+  `--no-ml` declines it and reports NOT RUN everywhere. Which window ran and
+  who chose it is written onto the handoff as `in_sample_window`.
 - No gate table. Nothing at this stage is entitled to a gate verdict, and three
   lines of NOT EVALUATED under a heading teaches a reader to skip the gate
   table — the one thing they must not do at Stage 3.
@@ -983,7 +1004,9 @@ one environment they cleared.
   unfiltered edge. Which version carried it is recorded in the row's `reason`,
   on the leaderboard, and in the report.
 - **The handoff is exact pairs.** `surviving_pairs` is
-  `[{"symbol": "NQ", "tf": "5m", "optimal_regime": ..., "regime_pf": ...,
+  `[{"symbol": "NQ", "tf": "5m", "version": "A", "status": "PROMOTED",
+  "optimal_regime": ..., "quadrant": "Q1", "regime_pf": ...,
+  "regime_trade_count": ..., "regime_win_rate": ..., "regime_net_pnl": ...,
   "kill_switch_regimes": [...]}, ...]` and the printed Stage 2 command names
   only those symbols and timeframes. `surviving` is kept beside it as the
   symbol union, because that is what `scan.py` defaults `--symbols` to.
@@ -1019,8 +1042,17 @@ one environment they cleared.
     is the honest question for a strategy governed by a live supervisor able to
     stand it down.
   - **The handoff is scoped, and the scope travels.** Each entry of
-    `surviving_pairs` is exactly `{"symbol", "tf", "optimal_regime",
-    "regime_pf", "kill_switch_regimes"}`. The kill switch is DERIVED as the
+    `surviving_pairs` is exactly `{"symbol", "tf", "version", "status",
+    "optimal_regime", "quadrant", "regime_pf", "regime_trade_count",
+    "regime_win_rate", "regime_net_pnl", "kill_switch_regimes"}`.
+    `version` is which twin cleared the quadrant — survival is decided on
+    either, so a survivor with no version recorded is a pair nobody can
+    reproduce. `quadrant` is the charter's `Q1`..`Q4` id, inverted from
+    `mdlib.regimes` rather than spelled out again. A configuration that
+    cleared nothing is written to `dropped` with `status: "DROPPED"`, a
+    `reason`, an explicitly null `optimal_regime` and an empty kill switch;
+    `screen_results` carries EVERY configuration evaluated in one shape, and
+    is what the Discord card formats. The kill switch is DERIVED as the
     other three quadrants rather than measured: a quadrant that failed the bar
     and a quadrant the strategy never traded in are the same instruction to a
     supervisor, and reading "no evidence" as "permitted" is what puts a contract
@@ -1117,6 +1149,33 @@ a mini-scorecard per completed symbol. It is a progress indicator, not evidence
 `job.json` in the run's own directory. A job whose state is RUNNING but whose
 PID is gone reads as **STALE**, because a bar frozen at 12/27 looks identical
 whether the run is slow or dead.
+
+**`backtest/discord_reporter.py`** — the webhook notifier, and the only place
+this repo posts anything to Discord. Two cards over one transport:
+`--mode promotion` (the default, `--stage 5`) is the promotion scorecard, whose
+values are passed in on the command line; `--stage 1` / `--mode baseline` is
+Stage 1's regime-firewall leaderboard, read straight out of
+`surviving_assets.json`.
+
+- **It computes nothing and decides nothing.** The Stage 1 card prints the
+  `status` Stage 1 recorded rather than re-applying the survival hurdle, so a
+  card can never promote a configuration the stage dropped. A reporter that
+  re-derived a profit factor would be free to disagree with the stage it is
+  announcing, and the two would be compared by nobody.
+- **The handoff is read through `pipeline.read_stage`**, so a file written by
+  the wrong stage or belonging to another strategy is refused rather than
+  posted. A Discord card is exactly the artifact nobody cross-checks.
+- **A leaderboard is one fixed-width block in the embed DESCRIPTION**, not one
+  field per row: Discord caps an embed at 25 fields and 6000 characters, and a
+  full screen is 108 configurations. Rows past `STAGE1_MAX_ROWS` are COUNTED on
+  the card — a silently shortened leaderboard reads as a complete one — while
+  the Evaluated / Promoted / Dropped totals always describe the whole screen.
+- **The QUAD column carries the `Q1`..`Q4` id the handoff recorded**, with a
+  legend built FROM the rows. No short spelling of a regime name lives in this
+  module: a second one would be free to disagree with `mdlib.regimes`, and a
+  card naming the wrong environment is caught only in live trading.
+- **The webhook URL is a credential** — never printed, never echoed into a
+  failure message, only its host. `$BT_DISCORD_WEBHOOK` supplies it.
 
 **`backtest/promote.py`** — **Stage 5**. Promotes one version into
 `strategies/approved_incubator/<strat>/` and commits it. See the workflow below.

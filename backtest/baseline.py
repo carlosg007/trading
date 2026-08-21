@@ -3,15 +3,22 @@ backtest/baseline.py - STAGE 1 of 5: does this idea carry on this contract?
 
 Location: ~/src/trading/backtest/baseline.py
 
-Runs Version A (rules) and, with `--ml`, Version B (the same signals, ML
-filtered) on the strategy's DEFAULT parameters, one independent simulation per
-(symbol, timeframe) CONFIGURATION, and answers one question per configuration:
-is there anything here at all. Configurations that clear the screen are written
-to `surviving_assets.json` as exact (symbol, timeframe) pairs, and Stage 2
-sweeps only those.
+Runs BOTH versions - Version A (pure rules) and Version B (the same signals,
+ML filtered) - on the strategy's DEFAULT parameters, one independent simulation
+per (symbol, timeframe) CONFIGURATION, and answers one question per
+configuration: is there anything here at all. Configurations that clear the
+screen are written to `surviving_assets.json` as exact (symbol, timeframe)
+pairs, and Stage 2 sweeps only those.
 
-    python3 backtest/baseline.py --strat ema_trend_filter --symbols ALL --tf 15m \\
-        --start 2013-01-01 --end 2022-12-31
+    python3 backtest/baseline.py --strat ema_trend_filter --symbols ALL --tf 15m
+
+**The dual simulation is the default, and so is the window.** Survival is
+decided on EITHER version, so a screen that ran only the rules cannot
+distinguish a configuration neither version carried from one only half of which
+was ever asked; `--no-ml` is the deliberate way to accept that narrower answer
+for a cheaper run. `--start` / `--end` default to the charter's in-sample
+window, 2013-01-01..2022-12-31 - see CHARTER_IS_START. Reading past it means
+screening on the Stage 3 holdout.
 
 Where the output goes
 ---------------------
@@ -75,8 +82,14 @@ strategy with no environment; pairing the best factor with the largest count
 would advance exactly that.
 
 **A survivor is scoped, and the scope travels with it.** Each surviving pair
-carries `optimal_regime`, `regime_pf` and `kill_switch_regimes` — the three
-quadrants the contract must NOT trade in. The kill switch is DERIVED from the
+carries `status` (PROMOTED), the `version` that carried it, its
+`optimal_regime` and `quadrant` (Q1..Q4), that quadrant's own four metrics
+(`regime_pf`, `regime_trade_count`, `regime_win_rate`, `regime_net_pnl`), and
+`kill_switch_regimes` — the three quadrants the contract must NOT trade in.
+A configuration that cleared no quadrant is written to `dropped` with
+`status: "DROPPED"`, a `reason`, and an explicitly null `optimal_regime`;
+`screen_results` carries every configuration evaluated, in one shape, with the
+same keys. The kill switch is DERIVED from the
 optimal regime rather than measured: a quadrant that failed the bar and a
 quadrant the strategy never traded in are the same instruction to a supervisor,
 and reading "no evidence" as "permitted" is what puts a contract into the one
@@ -119,6 +132,10 @@ configuration writes one regime profile per version —
 directory. The report carries the four-quadrant matrix for every asset
 EVALUATED, survivors and drops alike: the matrix of a configuration that failed
 is how an operator sees whether it failed on its edge or on its sample size.
+
+`backtest/discord_reporter.py --stage 1` formats this stage's leaderboard
+straight off `surviving_assets.json` and posts it to $BT_DISCORD_WEBHOOK. It
+recomputes nothing — every number on that card is one this stage wrote.
 """
 
 from __future__ import annotations
@@ -150,7 +167,8 @@ from backtest.engine import BacktestConfig                         # noqa: E402
 from backtest.pipeline import (BASELINE_REPORT_FILE, SURVIVORS_FILE,  # noqa: E402
                                leaderboard, next_step, pipeline_dir,
                                stage_banner, write_stage)
-from backtest.profiler import REGIMES, RegimeProfiler               # noqa: E402
+from backtest.profiler import (QUADRANT_TO_REGIME, REGIMES,         # noqa: E402
+                               RegimeProfiler)
 from backtest.report import day_of_week_breakdown                   # noqa: E402
 from backtest.run import (load_bars, parse_param, parse_symbols,    # noqa: E402
                           parse_timeframes, resolve_strategy)
@@ -179,6 +197,29 @@ MIN_REGIME_PROFIT_FACTOR = 1.00
 # quadrant is not an environment, and the whole point of screening per quadrant
 # is that the counts get smaller.
 MIN_REGIME_TRADES = 30
+
+# The in-sample window the Regime-Switching Incubator Charter fixes for Stage
+# 1, and the DEFAULT for --start / --end since 2026-08-21.
+#
+# It was `None` before, which reads the lake end to end - and the last three
+# years of the lake are the Stage 3 HOLDOUT. A screen that quietly included
+# them selected which contracts advance on bars Gate 3 then measures retention
+# against, and nothing downstream could see that it had happened: every stage
+# after this one would report a holdout it had already been shown. The window
+# is a default rather than a hard limit, so a deliberate re-screen elsewhere is
+# still one flag away, and whichever window ran is written onto the handoff
+# beside `window_source` - a survivor is never recorded without recording the
+# bars it survived on.
+CHARTER_IS_START = "2013-01-01"
+CHARTER_IS_END = "2022-12-31"
+
+# Q1..Q4, the charter's own shorthand for the four quadrants, INVERTED from the
+# profiler's integer map rather than spelled out again: `mdlib.regimes` numbers
+# them and `backtest.profiler` checks that numbering against `REGIMES` at
+# import, so there is exactly one place where "Q1" and "High Volatility /
+# Trending" are the same statement. A second literal map here would be free to
+# transpose two quadrants, and every count in every table would still add up.
+QUADRANT_ID = {label: f"Q{q}" for q, label in QUADRANT_TO_REGIME.items()}
 
 # Ascending bar length, so the Stage 2 command lists timeframes the way an
 # operator reads them (1m, 5m, 15m, 30m) rather than the way `sorted` does
@@ -226,6 +267,18 @@ def _pair_label(symbol: str, tf: str) -> str:
     return f"{symbol:<5}· {tf:<4}"
 
 
+def quadrant_id(regime: str | None) -> str | None:
+    """
+    `Q1` for "High Volatility / Trending", and None for anything that is not
+    one of the four.
+
+    None rather than a placeholder string: a configuration that cleared no
+    quadrant has no quadrant, and `"Q0"` or `"-"` on a handoff would read as a
+    fifth environment nobody defined.
+    """
+    return QUADRANT_ID.get(regime) if regime else None
+
+
 # --------------------------------------------------------------------------
 # The regime screen
 # --------------------------------------------------------------------------
@@ -262,7 +315,8 @@ def best_quadrant(profile: dict | None,
         n = int(stats.get("trade_count", 0) or 0)
         if pf is None or pf < float(min_profit_factor) or n < int(min_trades):
             continue
-        cand = {"regime": regime, "profit_factor": pf, "trade_count": n,
+        cand = {"regime": regime, "quadrant": quadrant_id(regime),
+                "profit_factor": pf, "trade_count": n,
                 "win_rate": _num(stats.get("win_rate")),
                 "net_pnl": _num(stats.get("net_pnl"))}
         if best is None or (pf, n) > (best["profit_factor"],
@@ -482,11 +536,22 @@ def _row(symbol: str, tf: str, metrics_a: dict, metrics_b: dict | None,
         "regime_profile_a": profiles.get("A"),
         "regime_profile_b": profiles.get("B"),
         "regime_version": (best or {}).get("version"),
-        # The three fields the handoff carries, in the schema the live
-        # supervisor reads.
+        # The fields the handoff carries, in the schema the live supervisor
+        # reads. `status` is written rather than left to be re-derived from
+        # `survived`: PROMOTED and DROPPED are the two words the charter uses,
+        # and a reader who has to invert a boolean to find out which one this
+        # is will eventually invert it the other way.
+        "status": "PROMOTED" if survived else "DROPPED",
         "optimal_regime": optimal,
+        "optimal_quadrant": (best or {}).get("quadrant"),
         "regime_pf": (best or {}).get("profit_factor"),
         "regime_trade_count": (best or {}).get("trade_count"),
+        # The winning quadrant's other two numbers, carried because the screen
+        # decided on the PAIR (profit factor at a trade count) and a supervisor
+        # reading the handoff should not have to re-derive a win rate from a
+        # breakdown where it is free to apply a different trade floor.
+        "regime_win_rate": (best or {}).get("win_rate"),
+        "regime_net_pnl": (best or {}).get("net_pnl"),
         "kill_switch_regimes": kill_switch_regimes(optimal),
     }
 
@@ -894,6 +959,7 @@ def survivors_leaderboard(rows: list[dict]) -> str:
             _fmt(r["profit_factor_a"]),
             _fmt(r["profit_factor_b"], na="NOT RUN")
             if r["ml_evaluated"] else "NOT RUN",
+            r.get("optimal_quadrant") or "--",
             r.get("optimal_regime") or "none",
             _fmt(r.get("regime_pf")),
             f"{int(r.get('regime_trade_count') or 0):,}",
@@ -901,9 +967,9 @@ def survivors_leaderboard(rows: list[dict]) -> str:
         ])
     return leaderboard(
         "STAGE 1 SURVIVORS LEADERBOARD",
-        ["SYMBOL", "TF", "PF (A)", "PF (B)", "OPTIMAL REGIME", "REGIME PF",
-         "REGIME TRADES", "VER"],
-        body, align=["<", "<", ">", ">", "<", ">", ">", "<"],
+        ["SYMBOL", "TF", "PF (A)", "PF (B)", "QUAD", "OPTIMAL REGIME",
+         "REGIME PF", "REGIME TRADES", "VER"],
+        body, align=["<", "<", ">", ">", "<", "<", ">", ">", "<"],
         empty="no configuration cleared the regime firewall")
 
 
@@ -940,16 +1006,33 @@ def build_parser() -> argparse.ArgumentParser:
                         "'--tf 1m,5m,15m,30m' screens each in turn. Derived "
                         "timeframes are aggregated from the 1m parquet by the "
                         "lake reader. Default: the module's, then 15m.")
-    p.add_argument("--start", default=None, help="In-sample start, YYYY-MM-DD")
-    p.add_argument("--end", default=None, help="In-sample end, YYYY-MM-DD")
+    p.add_argument("--start", default=CHARTER_IS_START,
+                   help=f"In-sample start, YYYY-MM-DD (default "
+                        f"{CHARTER_IS_START} - the charter window)")
+    p.add_argument("--end", default=CHARTER_IS_END,
+                   help=f"In-sample end, YYYY-MM-DD (default {CHARTER_IS_END}). "
+                        f"The years after it are the Stage 3 HOLDOUT: a screen "
+                        f"that reads them selects which contracts advance on "
+                        f"the bars Gate 3 then measures retention against.")
     p.add_argument("--param", action="append", default=[], metavar="K=V",
                    help="Override a default parameter. Stage 1 runs one fixed "
                         "set across every contract; this changes that set, it "
                         "does not sweep.")
-    p.add_argument("--ml", action="store_true",
-                   help="Also run Version B. Off by default: the classifier "
-                        "refits once per completed trade, and 27 contracts of "
-                        "that is hours.")
+    # ON by default since 2026-08-21. The charter's Stage 1 is a DUAL
+    # simulation: survival is decided on EITHER version, so a screen that ran
+    # only the rules cannot say whether a configuration was dropped because
+    # neither version carried it or because only one of them was ever asked.
+    # The cost is real - the classifier refits once per completed trade - and
+    # `--no-ml` is the deliberate way to pay less for a narrower answer.
+    p.add_argument("--ml", dest="ml", action="store_true", default=True,
+                   help="Run Version B, the ML-filtered twin (DEFAULT). "
+                        "Survival is decided on either version, so both are "
+                        "run.")
+    p.add_argument("--no-ml", dest="ml", action="store_false",
+                   help="Skip Version B. Expensive to run - the classifier "
+                        "refits once per completed trade - but a skipped "
+                        "Version B is reported as NOT RUN everywhere, never "
+                        "as a Version B that scored nothing.")
     p.add_argument("--threshold", type=float, default=0.50,
                    help="Version B: P(win) at or above which an entry is kept")
     p.add_argument("--capital", type=float, default=100_000.0)
@@ -1026,6 +1109,95 @@ def stage2_command(strat: str, pairs: list[dict], start: str | None,
     return lines
 
 
+# --------------------------------------------------------------------------
+# The handoff lists. Three shapes over the same rows, named rather than built
+# inline in `main` so the schema the charter fixes can be checked without a
+# lake, a strategy module or a simulation.
+# --------------------------------------------------------------------------
+def surviving_pairs_from(rows: list[dict]) -> list[dict]:
+    """
+    The PROMOTED configurations, in the schema Stage 2 and the live supervisor
+    read.
+
+    `kill_switch_regimes` is DERIVED from `optimal_regime` rather than
+    measured, and that is deliberate. A quadrant that failed the profit-factor
+    bar and a quadrant the strategy never traded in are the same instruction to
+    a supervisor - stand down - and treating "no evidence" as "permitted" is
+    the reading that puts a contract into the one environment nobody sampled.
+    """
+    return [{"symbol": r["symbol"],
+             "tf": r["timeframe"],
+             # WHICH version carried it. Survival is decided on either, so a
+             # survivor with no version recorded is a pair nobody can
+             # reproduce: Version B is a classifier fitted on these same bars,
+             # and a pair that only B cleared is a different claim from one
+             # the rules carried on their own.
+             "version": r.get("regime_version"),
+             "status": "PROMOTED",
+             "optimal_regime": r["optimal_regime"],
+             "quadrant": r.get("optimal_quadrant"),
+             # The winning quadrant's own metrics, all four of them. The screen
+             # decided on the PAIR (profit factor at a trade count); recording
+             # the factor alone leaves the supervisor to re-derive the count
+             # from a breakdown where it is free to apply a different floor
+             # than the one that chose the name.
+             "regime_pf": r["regime_pf"],
+             "regime_trade_count": r.get("regime_trade_count"),
+             "regime_win_rate": r.get("regime_win_rate"),
+             "regime_net_pnl": r.get("regime_net_pnl"),
+             "kill_switch_regimes": list(r.get("kill_switch_regimes") or [])}
+            for r in rows if r["survived"]]
+
+
+def dropped_from(rows: list[dict]) -> list[dict]:
+    """
+    The DROPPED configurations, with the reason they were.
+
+    DROPPED is written as a word, not left to be inferred from absence, and
+    `optimal_regime` is explicitly None beside it: a configuration that cleared
+    no quadrant has no environment, and a best-effort second place here would
+    read as one it was cleared to trade in.
+    """
+    return [{"symbol": r["symbol"], "timeframe": r["timeframe"],
+             "status": "DROPPED",
+             "optimal_regime": None,
+             "kill_switch_regimes": [],
+             "reason": r["reason"], "profit_factor": r["profit_factor_a"]}
+            for r in rows if not r["survived"]]
+
+
+def screen_results_from(rows: list[dict]) -> list[dict]:
+    """
+    Every configuration EVALUATED, promoted and dropped alike, in one flat list
+    with the same keys - the table Stage 1 ends on, and what
+    `backtest/discord_reporter.py --stage 1` formats.
+
+    A separate list from `surviving_pairs` and `dropped` because those two are
+    handoffs (Stage 2 reads the first; the second is the audit trail for why a
+    contract is not in it) and this one is a REPORT. Joining a leaderboard back
+    together from two lists with different keys is how a dropped configuration
+    ends up printed under a promoted heading.
+    """
+    return [{"symbol": r["symbol"],
+             "tf": r["timeframe"],
+             "status": r.get("status"),
+             "version": r.get("regime_version"),
+             "optimal_regime": r.get("optimal_regime"),
+             "quadrant": r.get("optimal_quadrant"),
+             "regime_pf": r.get("regime_pf"),
+             "regime_trade_count": r.get("regime_trade_count"),
+             "regime_win_rate": r.get("regime_win_rate"),
+             "regime_net_pnl": r.get("regime_net_pnl"),
+             "kill_switch_regimes": list(r.get("kill_switch_regimes") or []),
+             "profit_factor_a": r.get("profit_factor_a"),
+             "profit_factor_b": r.get("profit_factor_b"),
+             "trades_a": r.get("trades_a"),
+             "trades_b": r.get("trades_b"),
+             "ml_evaluated": bool(r.get("ml_evaluated")),
+             "reason": r.get("reason")}
+            for r in rows]
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
@@ -1063,10 +1235,17 @@ def main(argv: list[str] | None = None) -> int:
     # it: one contract taken through every timeframe before the next starts.
     pairs = [(sym, tf) for sym in symbols for tf in timeframes]
 
+    charter_window = (args.start == CHARTER_IS_START
+                      and args.end == CHARTER_IS_END)
+    window_source = ("charter default (holdout untouched)" if charter_window
+                     else "operator override — check it against the Stage 3 "
+                          "holdout before reading Gate 3")
+
     header = {
         "Strategy": strat_name,
         "Module": str(path),
-        "Window": f"{args.start or 'lake start'} → {args.end or 'lake end'}",
+        "Window": f"{args.start or 'lake start'} → {args.end or 'lake end'} "
+                  f"· {window_source}",
         "Symbols": f"{len(symbols)} · {', '.join(symbols)}",
         "Timeframes": f"{len(timeframes)} · {', '.join(timeframes)}",
         "Configurations": len(pairs),
@@ -1080,7 +1259,9 @@ def main(argv: list[str] | None = None) -> int:
                                  "Volatility. Both thresholds are per "
                                  "(symbol, timeframe) — the ATR median is "
                                  "computed on THESE bars.",
-        "Version B": "evaluated" if args.ml else "NOT RUN (--ml is off)",
+        "Version B": ("evaluated" if args.ml
+                      else "NOT RUN (--no-ml). Survival was decided on Version "
+                           "A alone."),
         "Costs": f"{args.slippage_ticks:g} tick slippage each way, "
                  f"{args.contracts} contract(s), "
                  f"${args.capital:,.0f} capital",
@@ -1100,9 +1281,10 @@ def main(argv: list[str] | None = None) -> int:
                        f"{args.end or 'lake end'}"))
     print(f"  parameters : {bound or '(module defaults)'}")
     print(f"  screen     : {criterion}")
+    print(f"  window     : {args.start} -> {args.end} · {window_source}")
     print(f"  regimes    : ADX(14)>25 = Trending · ATR(14) > per-contract "
           f"median = High Volatility")
-    print(f"  Version B  : {'evaluated' if args.ml else 'NOT RUN (--ml is off)'}")
+    print(f"  Version B  : {'evaluated' if args.ml else 'NOT RUN (--no-ml)'}")
     print(f"  report     : {report_path}")
     print()
 
@@ -1144,14 +1326,10 @@ def main(argv: list[str] | None = None) -> int:
                         for r in tf_rows if not r["survived"]],
         }
 
-    # The exact configurations that survived, in the schema the live
-    # supervisor and Stage 2 read. Five fields and no more: the pair, the one
-    # environment it is cleared to trade in, the profit factor that cleared it,
-    # and the three quadrants it must stand down in.
-    #
-    # One entry per configuration that produced a profile, so a mixed run -
-    # some pairs cached, some not - says so per pair rather than under a single
-    # banner that would be true of only half of it.
+    # WHERE each version's quadrant labels came from, one entry per
+    # configuration that produced a profile - so a mixed run, some pairs
+    # cached and some not, says so per pair rather than under a single banner
+    # that would be true of only half of it.
     regime_sources: dict[str, str] = {}
     for r in rows:
         for label in ("a", "b"):
@@ -1161,27 +1339,14 @@ def main(argv: list[str] | None = None) -> int:
                     f"{r['symbol']}_{r['timeframe']}_version_{label}"] = (
                     prof.get("regime_source", "unrecorded"))
 
-    # `kill_switch_regimes` is DERIVED from `optimal_regime` rather than
-    # measured, and that is deliberate. A quadrant that failed the profit-factor
-    # bar and a quadrant the strategy never traded in are the same instruction
-    # to a supervisor - stand down - and treating "no evidence" as "permitted"
-    # is the reading that puts a contract into the one environment nobody
-    # sampled.
-    surviving_pairs = [{"symbol": r["symbol"],
-                        "tf": r["timeframe"],
-                        "optimal_regime": r["optimal_regime"],
-                        "regime_pf": r["regime_pf"],
-                        "kill_switch_regimes": list(
-                            r.get("kill_switch_regimes") or [])}
-                       for r in rows if r["survived"]]
+    surviving_pairs = surviving_pairs_from(rows)
     # And the symbol union, kept because `scan.py` defaults `--symbols` to it.
     # It is labelled as a union so it is never read as "survived at 15m" when
     # it survived at 1m only; `by_timeframe` and `surviving_pairs` are where
     # that question is answered.
     survivors = sorted({p["symbol"] for p in surviving_pairs})
-    dropped = [{"symbol": r["symbol"], "timeframe": r["timeframe"],
-                "reason": r["reason"], "profit_factor": r["profit_factor_a"]}
-               for r in rows if not r["survived"]]
+    dropped = dropped_from(rows)
+    screen_results = screen_results_from(rows)
 
     dest = write_stage(out_dir / SURVIVORS_FILE, 1, strat_name, {
         # Singular when one timeframe was screened, so a downstream reader that
@@ -1194,6 +1359,17 @@ def main(argv: list[str] | None = None) -> int:
         "surviving_is_union_across_timeframes": len(timeframes) > 1,
         "start": args.start,
         "end": args.end,
+        # Which window ran and who chose it. The charter fixes
+        # 2013-01-01..2022-12-31 and the years after it are the Stage 3
+        # holdout; a screen run over a wider window picked its survivors on
+        # bars Gate 3 later measures retention against, and that has to be
+        # legible from the handoff rather than reconstructed from a shell
+        # history.
+        "in_sample_window": {"start": args.start, "end": args.end,
+                             "charter_default": bool(charter_window),
+                             "source": window_source,
+                             "charter": {"start": CHARTER_IS_START,
+                                         "end": CHARTER_IS_END}},
         "params": bound,
         "params_source": "module DEFAULT_PARAMS with --param over them",
         "criterion": criterion,
@@ -1203,6 +1379,9 @@ def main(argv: list[str] | None = None) -> int:
         "entry_filters": cfg_kwargs,
         "surviving_pairs": surviving_pairs,
         "surviving": survivors,
+        "screen_results": screen_results,
+        "evaluated": len(rows),
+        "promoted": len(surviving_pairs),
         "regime_screen": {
             "regimes": list(REGIMES),
             "min_profit_factor": float(args.min_profit_factor),
@@ -1300,8 +1479,17 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  profiles  → {out_dir}/regime_profile_<SYMBOL>_<TF>_version_"
           f"<a|b>.json")
 
-    print(next_step(stage2_command(args.strat, surviving_pairs,
-                                   args.start, args.end)))
+    lines = stage2_command(args.strat, surviving_pairs, args.start, args.end)
+    lines += [
+        "",
+        "Post this leaderboard to Discord (reads the handoff, recomputes "
+        "nothing):",
+        "",
+        f"  python3 backtest/discord_reporter.py --stage 1 "
+        f"--strat {strat_name} \\",
+        f"      --survivors {dest}",
+    ]
+    print(next_step(lines))
     return 1 if errors else 0
 
 
