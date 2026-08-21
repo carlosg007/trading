@@ -1,0 +1,116 @@
+{
+  "name": "sma_momentum_crossover_20260818",
+  "version": "A",
+  "description": "Promoted Version A (rule-based baseline).",
+  "symbols": [
+    "NQ",
+    "ES",
+    "CL",
+    "GC"
+  ],
+  "timeframe": "15m",
+  "params": {
+    "fast_window": 15,
+    "slow_window": 50,
+    "macro_window": 200,
+    "adx_threshold": 20.0,
+    "use_macro_anchor": true,
+    "use_adx_filter": true,
+    "use_news_filter": false,
+    "sl_atr_mult": 1.0,
+    "tp_atr_mult": 1.5,
+    "trailing": false
+  },
+  "params_source": "locked from dual_metrics_NQ.json",
+  "risk": {
+    "sl_atr_mult": 1.0,
+    "tp_atr_mult": 1.5,
+    "trailing": false
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/sma_momentum_crossover_20260818.py",
+  "source_sha256": "884807fcc056c83f65606fff6fb7cb80f2f4dcef89983f5479115178a44059ff",
+  "promoted_sha256": "884807fcc056c83f65606fff6fb7cb80f2f4dcef89983f5479115178a44059ff",
+  "promoted_utc": "2026-08-21T16:56:10+00:00",
+  "costs_included": true,
+  "variants_tested": null,
+  "metrics_status": "locked from dual_metrics_NQ.json",
+  "metrics": {
+    "sharpe": 0.38993275867240995,
+    "sortino": 0.645056223445736,
+    "calmar": 0.20104409506779003,
+    "profit_factor": 1.1362453415058218,
+    "win_rate": 0.43946615824594853,
+    "max_drawdown_pct": -12.171384884895387,
+    "total_return_pct": 49.805579999998486,
+    "annualized_return_pct": 2.446985059905571,
+    "trade_count": 1049,
+    "total_pnl": 49805.57999999887,
+    "total_costs": 15294.420000001151,
+    "final_equity": 149805.57999999847,
+    "n_days": 4213,
+    "start": "2013-01-02 11:00:00+00:00",
+    "end": "2026-07-31 20:30:00+00:00",
+    "bars": 154508,
+    "initial_capital": 100000.0
+  },
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "PASS",
+    "gate2": "PASS",
+    "gate3": "PASS",
+    "gate_regime": "PASS"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/sma_momentum_crossover_20260818/gate_audit_NQ_30m.json",
+    "audit_sha256": "b3bca8b83372a90b89bbe66fccabc93e3f65e1946e4681fe0eb5e053498b16d7",
+    "audit_symbol": "NQ",
+    "audit_generated_utc": "2026-08-21T16:51:48+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "fast_window": 15,
+      "slow_window": 50,
+      "tp_atr_mult": 1.5,
+      "sl_atr_mult": 1.0,
+      "trailing": false
+    },
+    "params_source": "stage 2 winner (best_params_NQ_30m.json)",
+    "variants_tested": 54,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "FAIL",
+    "agrees_with_snapshot": false
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [
+    "import from 'backtest.event_calendar' is not allowed"
+  ],
+  "notes": ""
+}
