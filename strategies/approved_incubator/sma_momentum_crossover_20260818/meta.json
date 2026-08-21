@@ -3,7 +3,7 @@
   "version": "A",
   "description": "Promoted Version A (rule-based baseline).",
   "symbols": [
-    "6A"
+    "ETH"
   ],
   "timeframe": "30m",
   "params": {
@@ -27,23 +27,23 @@
   "source": "/home/cgrullon/src/trading/strategies/experimental/sma_momentum_crossover_20260818.py",
   "source_sha256": "884807fcc056c83f65606fff6fb7cb80f2f4dcef89983f5479115178a44059ff",
   "promoted_sha256": "884807fcc056c83f65606fff6fb7cb80f2f4dcef89983f5479115178a44059ff",
-  "promoted_utc": "2026-08-21T21:53:30+00:00",
+  "promoted_utc": "2026-08-21T21:53:33+00:00",
   "costs_included": false,
   "variants_tested": null,
   "metrics_status": "NOT RECORDED",
   "metrics": null,
   "gate_audit_status": "PASS",
   "gate_audit": {
-    "gate1": "FAIL",
+    "gate1": "PASS",
     "gate2": "PASS",
-    "gate3": "PASS",
+    "gate3": "FAIL",
     "gate_regime": "PASS"
   },
   "certification": {
-    "audit_file": "/mnt/backtest/artifacts/pipeline/sma_momentum_crossover_20260818/gate_audit_6A_30m.json",
-    "audit_sha256": "c78904ba0569dd5fe4ce2e36a181f602f99b64c3bf00357759c91d0441053dcc",
-    "audit_symbol": "6A",
-    "audit_generated_utc": "2026-08-21T21:40:11+00:00",
+    "audit_file": "/mnt/backtest/artifacts/pipeline/sma_momentum_crossover_20260818/gate_audit_ETH_30m.json",
+    "audit_sha256": "7bde497a63625cac4013398b7e3d12f942da3a75ca7aa4a104d7ac56ace19491",
+    "audit_symbol": "ETH",
+    "audit_generated_utc": "2026-08-21T21:40:53+00:00",
     "in_sample": {
       "start": "2013-01-01",
       "end": "2022-12-31"
@@ -54,13 +54,13 @@
       "end_basis": "the present - every bar the lake holds"
     },
     "params": {
-      "fast_window": 5,
+      "fast_window": 10,
       "slow_window": 50,
-      "tp_atr_mult": 3.0,
-      "sl_atr_mult": 1.5,
+      "tp_atr_mult": 1.5,
+      "sl_atr_mult": 1.0,
       "trailing": false
     },
-    "params_source": "stage 2 winner (best_params_6A_30m.json)",
+    "params_source": "stage 2 winner (best_params_ETH_30m.json)",
     "variants_tested": 54,
     "wfo": {
       "train_years": 2,
