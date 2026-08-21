@@ -3,7 +3,7 @@
   "version": "A",
   "description": "Promoted Version A (rule-based baseline).",
   "symbols": [
-    "6S"
+    "BTC"
   ],
   "timeframe": "15m",
   "params": {
@@ -27,7 +27,7 @@
   "source": "/home/cgrullon/src/trading/strategies/experimental/sma_momentum_crossover_20260818.py",
   "source_sha256": "884807fcc056c83f65606fff6fb7cb80f2f4dcef89983f5479115178a44059ff",
   "promoted_sha256": "884807fcc056c83f65606fff6fb7cb80f2f4dcef89983f5479115178a44059ff",
-  "promoted_utc": "2026-08-21T21:53:12+00:00",
+  "promoted_utc": "2026-08-21T21:53:15+00:00",
   "costs_included": false,
   "variants_tested": null,
   "metrics_status": "NOT RECORDED",
@@ -40,10 +40,10 @@
     "gate_regime": "PASS"
   },
   "certification": {
-    "audit_file": "/mnt/backtest/artifacts/pipeline/sma_momentum_crossover_20260818/gate_audit_6S_15m.json",
-    "audit_sha256": "d72ebf96cf2016de7f37e53a5580e0859029596eaaf01dcd911f3c4671d6ec95",
-    "audit_symbol": "6S",
-    "audit_generated_utc": "2026-08-21T21:44:20+00:00",
+    "audit_file": "/mnt/backtest/artifacts/pipeline/sma_momentum_crossover_20260818/gate_audit_BTC_15m.json",
+    "audit_sha256": "60e5b0eb3f94ab958cdfa82e79317be34c15dd4d04249e20748d6d1dd41aa017",
+    "audit_symbol": "BTC",
+    "audit_generated_utc": "2026-08-21T21:44:28+00:00",
     "in_sample": {
       "start": "2013-01-01",
       "end": "2022-12-31"
@@ -54,13 +54,13 @@
       "end_basis": "the present - every bar the lake holds"
     },
     "params": {
-      "fast_window": 10,
-      "slow_window": 50,
+      "fast_window": 5,
+      "slow_window": 20,
       "tp_atr_mult": 3.0,
       "sl_atr_mult": 1.5,
       "trailing": false
     },
-    "params_source": "stage 2 winner (best_params_6S_15m.json)",
+    "params_source": "stage 2 winner (best_params_BTC_15m.json)",
     "variants_tested": 54,
     "wfo": {
       "train_years": 2,
