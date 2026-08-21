@@ -1508,8 +1508,22 @@ optimization summary, read straight out of `stage2_summary.json`; `--stage 3` /
   `meta.json` open. Only configurations that were actually STAGED carry one.
 - **It re-scores nothing.** The card prints the `gate_regime` status and the
   `certified` flag Stage 3 recorded, so it can never announce a certification
-  the audit refused. A configuration Stage 3 could not audit is a row reading
-  NOT AUDITED, never a shorter table.
+  the audit refused.
+- **The table lists CERTIFIED configurations ONLY, from 2026-08-21**
+  (`STAGE3_CERTIFIED_ONLY`). STARVED, REJECTED, NOT CERT and NO AUDIT rows are
+  off the code block entirely — the card is read to answer "what may be
+  promoted", and that is the only row anybody acts on. Filtered on the STATUS
+  cell rather than on the `certified` flag directly, so the table and the
+  column cannot disagree about what the word means. **The exclusion is stated
+  on the card and the counts beside it are NOT filtered**: `Configurations`,
+  `Certified → Incubator` and `Audited` still describe the whole run, so a
+  shorter table can never read as a shorter certification run, and every
+  configuration's verdict stays on the handoff and in its own
+  `gate_audit_<SYMBOL>_<TF>.json`. With nothing certified the block carries the
+  header and `No certified configurations found.` rather than rendering empty —
+  a holdout that certified nothing is a result to read, not a table that failed
+  to draw. The `hidden` count is certified rows past `STAGE3_MAX_ROWS` and
+  never rows the filter removed.
 - **The table spans every timeframe the summary indexes**, now that Stage 3
   merges its per-timeframe invocations into one file. A card headed `15m` above
   a table carrying 5m rows described neither.

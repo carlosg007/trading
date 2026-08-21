@@ -26,9 +26,15 @@ Four cards, one transport
   thing on this card that would be acted on while wrong.
 - **`--mode audit`** (equivalently `--stage 3`): Stage 3's GATE AUDIT AND
   CERTIFICATION, read straight out of `stage3_audit_summary.json` - both
-  windows, and per configuration the symbol, timeframe, target regime
-  quadrant, Gate R's verdict, and the quadrant profit factor and trade count
-  it was measured on. **The table is built to a WIDTH** (45 characters,
+  windows, and per CERTIFIED configuration the symbol, timeframe, target
+  regime quadrant, Gate R's verdict, and the quadrant profit factor and trade
+  count it was measured on. **The table lists certified configurations only**
+  (`STAGE3_CERTIFIED_ONLY`) - the card is read to answer "what may be
+  promoted", and that is the only row anybody acts on. The exclusion is
+  STATED on the card and the counts beside it are not filtered, so a shorter
+  table can never read as a shorter certification run; every configuration's
+  verdict stays on the handoff and in its own per-pair audit file, which is
+  authoritative either way. **The table is built to a WIDTH** (45 characters,
   `STAGE3_TABLE_WIDTH`): Discord wraps a code block that overruns the
   viewport, and a wrapped fixed-width table is worse than none - every row
   becomes two, the second one unlabelled, and the columns a reader is
@@ -265,6 +271,28 @@ STAGE3_MAX_ROWS = 24
 # verdict to hit a number is how a table starts lying - so the way to keep it
 # is to keep the tokens in it short.
 STAGE3_TABLE_WIDTH = 45
+
+# The Stage 3 table lists CERTIFIED configurations ONLY (2026-08-21). Everything
+# else - STARVED, REJECTED, NOT CERT, NO AUDIT - is off the table entirely.
+# The card is read to answer "what may be promoted", and a certification is the
+# only row anybody acts on; five failing rows above three passing ones is the
+# reader scanning a STATUS column on a phone for the three that matter. What is
+# excluded is NOT hidden: `Configurations`, `Certified -> Incubator` and
+# `Audited` still count the whole run, the description says the table is
+# filtered, and the per-pair `gate_audit_<SYMBOL>_<TF>.json` files remain the
+# authoritative verdict for every configuration audited.
+STAGE3_CERTIFIED_ONLY = True
+
+# What the code block says when nothing certified. A header over an empty block
+# reads as a table that failed to render; the line states the RESULT, which is
+# what a holdout that certified nothing is.
+STAGE3_NO_ROWS_NOTE = "No certified configurations found."
+
+# Minimum column widths, so the header and the empty-table note keep the shape
+# a row has. Columns still size to their widest CELL above these - nothing is
+# ever clipped to hit a number. The sum with its separators is 43, inside
+# STAGE3_TABLE_WIDTH.
+STAGE3_MIN_WIDTHS = (3, 3, 2, 7, 4, 3, 9)
 
 # The profiler writes 999 as a profit factor when a quadrant never had a losing
 # trade (backtest/profiler.py). It is a SENTINEL, not a measured factor, and it
@@ -1292,8 +1320,19 @@ def format_stage3_table(rows: list[dict[str, Any]],
     """
     The certification table as one fixed-width block, plus the quadrant legend.
 
-    Returns `(text, hidden, legend)`. `hidden` is counted on the card by the
-    caller.
+    Returns `(text, hidden, legend)`. `hidden` is the number of CERTIFIED rows
+    that did not fit `max_rows`, and is counted on the card by the caller.
+
+    **Only CERTIFIED configurations are listed** (`STAGE3_CERTIFIED_ONLY`).
+    STARVED, REJECTED, NOT CERT and NO AUDIT rows are off the table entirely:
+    this card is read to answer "what may be promoted", and that is the only
+    row anybody acts on. The exclusion is stated on the card and the counts
+    beside it still describe the WHOLE run - `Configurations`, `Certified ->
+    Incubator` and `Audited` are unfiltered - so a shorter table can never read
+    as a shorter certification run. Every configuration's verdict remains on
+    the handoff and in its own `gate_audit_<SYMBOL>_<TF>.json`, which is the
+    authoritative file either way. With nothing certified the block carries the
+    header and `STAGE3_NO_ROWS_NOTE` rather than rendering empty.
 
     **It is built to a WIDTH, not to a column list** (`STAGE3_TABLE_WIDTH`,
     45 characters). Discord wraps a code block that overruns the viewport, and
@@ -1327,7 +1366,14 @@ def format_stage3_table(rows: list[dict[str, Any]],
     body: list[list[str]] = []
     legend: dict[str, str] = {}
 
-    ordered = sorted(rows, key=_stage3_sort_key)
+    # CERTIFIED rows only. Filtered on the STATUS cell rather than on the
+    # `certified` flag directly, so the table and the column can never
+    # disagree about what the word means - `_status_cell` is the one place the
+    # token is produced, and it transcribes the handoff's own flag.
+    ordered = sorted((r for r in rows
+                      if not STAGE3_CERTIFIED_ONLY
+                      or _status_cell(r, rule) == "CERTIFIED"),
+                     key=_stage3_sort_key)
     shown = ordered[: max(0, int(max_rows))]
     for row in shown:
         quad = row.get("quadrant")
@@ -1349,8 +1395,10 @@ def format_stage3_table(rows: list[dict[str, Any]],
             _status_cell(row, rule),
         ])
 
-    widths = [max(len(header[i]), *(len(r[i]) for r in body)) if body
-              else len(header[i]) for i in range(len(header))]
+    widths = [max(len(header[i]), STAGE3_MIN_WIDTHS[i],
+                  *(len(r[i]) for r in body)) if body
+              else max(len(header[i]), STAGE3_MIN_WIDTHS[i])
+              for i in range(len(header))]
     align = ["<", ">", "<", "<", ">", ">", "<"]
 
     def line(cells: list[str]) -> str:
@@ -1358,7 +1406,12 @@ def format_stage3_table(rows: list[dict[str, Any]],
                          for i, c in enumerate(cells)).rstrip()
 
     out = [line(header), line(["-" * w for w in widths])]
-    out.extend(line(r) for r in body)
+    # Nothing certified is a RESULT, not an empty render. The header stays
+    # above it so the block is recognisable as the same table.
+    if body:
+        out.extend(line(r) for r in body)
+    else:
+        out.append(STAGE3_NO_ROWS_NOTE)
     return "\n".join(out), len(ordered) - len(shown), legend
 
 
@@ -1640,15 +1693,20 @@ def build_stage3_embed(strat: str, blob: dict[str, Any],
         f"quadrant. Gates 1–3 are reported as evidence and cannot fail a "
         f"certification.",
         "```text",
-        table if table.strip() else "no configuration was audited",
+        table if table.strip() else STAGE3_NO_ROWS_NOTE,
         "```",
         # What the two number columns ARE. They are Gate R's own quadrant
         # numbers and not the blended sample, and an unlabelled profit factor
         # under a regime-gated verdict is the one value on this card a reader
         # must not have to guess at.
         "`PF` `N` — Gate R's factor and trades INSIDE the target quadrant, "
-        "on the holdout. `FAIL·N` starved there · `FAIL·PF` factor missed. "
-        "Blended IS/OOS: on the certified rows below.",
+        "on the holdout. Blended IS/OOS: on the certified rows below.",
+        # The table is filtered and says so. The counts in the fields below
+        # are NOT: they describe every configuration the run covered, so a
+        # short table can never read as a short certification run.
+        "_The table lists CERTIFIED configurations only — the counts below "
+        "cover every configuration audited, and each one's verdict is in its "
+        "own per-pair gate audit file._",
     ]
     promo_title, promo_lines, promo_pairs, promo_hidden = \
         format_stage3_promotions(strat, blob)
@@ -1664,8 +1722,8 @@ def build_stage3_embed(strat: str, blob: dict[str, Any],
             f"`{q}` {legend[q]}" for q in sorted(legend)))
     if hidden:
         description.append(
-            f"_{hidden} further configuration(s) are not shown — the full "
-            f"summary is in the handoff._")
+            f"_{hidden} further CERTIFIED configuration(s) are not shown — "
+            f"the full summary is in the handoff._")
 
     text = "\n".join(description)
     if len(text) > MAX_EMBED_DESCRIPTION:

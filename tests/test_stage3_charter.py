@@ -831,20 +831,50 @@ def test_stage3_card(blob: dict) -> None:
                 oos_trade_count=36)
     broke = {"symbol": "GC", "timeframe": "15m", "status": "NOT AUDITED",
              "certified": False, "gate_regime": "NOT AUDITED"}
-    small, _h, _l = dr.format_stage3_table([starved, dead, broke], 10, rule)
     check("a Gate R that failed on the SAMPLE reads FAIL·N and STARVED - 'it "
           "never traded there again' and 'the edge died' are fixed by "
           "different work and must not share a token",
-          "FAIL·N" in small and "STARVED" in small, small)
+          dr._gate_r_cell(starved, rule) == "FAIL·N"
+          and dr._status_cell(starved, rule) == "STARVED",
+          dr._status_cell(starved, rule))
     check("...and one that failed on the FACTOR reads FAIL·PF and REJECTED",
-          "FAIL·PF" in small and "REJECTED" in small, small)
+          dr._gate_r_cell(dead, rule) == "FAIL·PF"
+          and dr._status_cell(dead, rule) == "REJECTED",
+          dr._status_cell(dead, rule))
     check("the 999 sentinel renders as `--`: a quadrant with one winning "
           "holdout trade has no measured profit factor, and 999.00 beside a "
           "FAIL reads as the strongest row on the card",
-          "999" not in small, small)
+          dr._regime_pf_cell(starved) == "--", dr._regime_pf_cell(starved))
     check("a run that broke is NO AUDIT in both columns, never a FAIL - the "
           "run failing and the edge failing are different findings",
-          small.count("NO AUDIT") == 2 and "GC" in small, small)
+          dr._gate_r_cell(broke, rule) == "NO AUDIT"
+          and dr._status_cell(broke, rule) == "NO AUDIT",
+          dr._status_cell(broke, rule))
+    # The table lists CERTIFIED configurations only. None of the three above
+    # is one, so none of them is a row - the card is read to answer "what may
+    # be promoted", and that is the only row anybody acts on.
+    small, hidden_small, _l = dr.format_stage3_table([starved, dead, broke],
+                                                     10, rule)
+    check("a STARVED, a REJECTED and a NO AUDIT row are all OFF the table - "
+          "only certified configurations are listed",
+          "NQ" not in small and "CL" not in small and "GC" not in small,
+          small)
+    check("...and with nothing certified the block says so under the header, "
+          "rather than rendering as an empty table that reads as a failure "
+          "to draw one",
+          dr.STAGE3_NO_ROWS_NOTE in small
+          and small.splitlines()[0].startswith("SYM"), small)
+    check("...and nothing is counted as merely HIDDEN by the row cap: the "
+          "cap counts certified rows that did not fit, never rows the filter "
+          "removed", hidden_small == 0, str(hidden_small))
+    certified_only, _h, _l = dr.format_stage3_table(
+        [starved, dict(starved, symbol="ES", certified=True,
+                       gate_regime=PASS, status=PASS,
+                       oos_profit_factor=1.42, oos_trade_count=88)], 10, rule)
+    check("...while a certified configuration IS listed, with its Gate R "
+          "numbers beside it",
+          "ES" in certified_only and "CERTIFIED" in certified_only
+          and "NQ" not in certified_only, certified_only)
     check("with no threshold on the handoff the reason is left off rather "
           "than guessed, and the cell stays a bare FAIL",
           dr.gate_r_reason(dict(dead, regime_starvation=None), {}) == "",
@@ -856,8 +886,14 @@ def test_stage3_card(blob: dict) -> None:
 
     check("Certified counts Gate R's passes",
           fields.get("Certified → Incubator") == "1")
-    check("a NOT AUDITED configuration is still a row - the card is never "
-          "shorter than the stage's input", "ES" in desc and "GC" in desc)
+    check("an uncertified configuration is NOT a row - the table lists only "
+          "what may be promoted", "ES" not in desc and "GC" not in desc)
+    check("...but the card still COUNTS every configuration the run covered, "
+          "so a filtered table can never read as a shorter certification run",
+          fields.get("Configurations") == "3" and fields.get("Audited")
+          == "1/3", f"{fields.get('Configurations')} {fields.get('Audited')}")
+    check("...and says in words that the table is filtered",
+          "CERTIFIED configurations only" in desc)
 
     digest = ((blob["results"][0].get("seal") or {})
               .get("strategy_code", {}).get("sha256", ""))
@@ -892,8 +928,10 @@ def test_stage3_card(blob: dict) -> None:
                              gate_regime="FAIL", oos_profit_factor=99.0)]
     e = dr.build_stage3_embed("demo", lying)
     check("a huge quadrant factor does not become a PASS - the status is "
-          "transcribed, never re-derived",
-          "FAIL" in e["description"]
+          "transcribed, never re-derived, so the row is filtered OFF the "
+          "table and counted as nothing certified",
+          dr.STAGE3_NO_ROWS_NOTE in e["description"]
+          and "99.00" not in e["description"]
           and [f for f in e["fields"]
                if f["name"] == "Certified → Incubator"][0]["value"] == "0")
 
