@@ -219,7 +219,7 @@ bt-status  # = .venv/bin/python3 ~/src/trading/backtest/status.py
 streamlit run dashboard/app.py
 
 # Tests. No pytest config - each is a script that exits non-zero on failure.
-# Seventeen suites. Everything except test_streaming_lake, test_engine_batching
+# Eighteen suites. Everything except test_streaming_lake, test_engine_batching
 # and test_engine_vbt runs without the lake or a network (test_batch_runner's
 # --symbols checks and test_intraday_vol_mr's real-bar section skip, loudly,
 # without it). test_report_gates.py shells out to `node` for the trade
@@ -241,6 +241,7 @@ python tests/test_pipeline_filters.py   # entry filters, DOW attribution, the 5 
 python tests/test_regime_cache.py      # regime quadrants, theta_vol, the lake join
 python tests/test_profiler_precomputed.py  # the profiler reads the cache, not its own pass
 python tests/test_stage1_charter.py     # the Stage 1 charter + the Discord card
+python tests/test_stage2_charter.py     # the Stage 2 charter: pairs, window, plateau
 OMP_NUM_THREADS=1 \
   python tests/test_sma_momentum_crossover.py   # ADX vs TA-Lib, layers, ml_features
 
@@ -283,8 +284,11 @@ python3 backtest/promote.py --strat sma_crossover --version A \
 # <BT_ARTIFACTS>/pipeline/<strategy>/ - see backtest/pipeline.py.
 python3 backtest/baseline.py    --strat X --symbols ALL --tf 15m \
     --start 2013-01-01 --end 2022-12-31       # 1: drop PF<1.0 contracts
-python3 backtest/scan.py        --strat X --tf 15m \
-    --start 2013-01-01 --end 2022-12-31       # 2: sweep the survivors
+python3 backtest/scan.py        --strat X            # 2: optimise the survivors
+# STAGE 2 ONLY: with no --symbols and no --tf it sweeps Stage 1's EXACT
+# surviving (symbol, timeframe) pairs, and --start/--end default to the charter
+# window. An --end reaching 2023-01-01 is REFUSED, with no override: Stage 2
+# fits what it reads, so a holdout it has optimised over is not a holdout.
 
 # Stages 1 and 2 take a comma-separated --tf and evaluate each in turn.
 # The lake derives 5m/15m/30m/1h/2h/4h from the 1m parquet, so nothing
@@ -323,6 +327,8 @@ python3 backtest/baseline.py --strat X --symbols ALL --tf 15m --no-ml
 # Post Stage 1's leaderboard to $BT_DISCORD_WEBHOOK. Reads the handoff and
 # recomputes nothing; --dry-run prints the payload and sends nothing.
 python3 backtest/discord_reporter.py --stage 1 --strat X
+# Stage 2's parameter-optimization card, read from stage2_summary.json.
+python3 backtest/discord_reporter.py --stage 2 --strat X
 python3 backtest/discord_reporter.py --stage 1 --strat X \
     --survivors /mnt/backtest/artifacts/pipeline/X/surviving_assets.json
 # Stage 2 still HONOURS an exclude_days a handoff carries; nothing writes one.
@@ -742,12 +748,80 @@ runner calls, and `main()` is the stage that sweeps the in-sample window per
 contract and writes `best_params_<SYMBOL>.json`. The stage adds NOTHING to the
 search — same selection rule, same tie-break — because a second sweep
 implementation in a CLI would be free to disagree with the one `--scan` uses
-and the two would be compared by nobody. With no `--symbols` it sweeps Stage
-1's survivors. A
+and the two would be compared by nobody. A
 strategy declares `PARAM_GRID = {"ema_period": [15, 20, 30], ...}`; every
 combination becomes a COLUMN of a single `vbt.Portfolio.from_signals` call, so a
-27-cell grid costs roughly one backtest rather than 27. The winner is the
-highest Sharpe **among the combinations whose Gate 1 audit is PASS**.
+27-cell grid costs roughly one backtest rather than 27. The winner is the best
+**Sharpe plateau** among the combinations whose Gate 1 audit is PASS.
+
+**The charter binds four things about this stage (2026-08-21), and all four are
+enforced in the module rather than left to how the command was typed:**
+
+- **Its input is Stage 1's handoff, as EXACT PAIRS.** With no `--symbols` and
+  no `--tf`, `resolve_targets` sweeps the `(symbol, timeframe)` survivors
+  `surviving_assets.json` names, via `pipeline.stage1_pairs`. It is not the
+  cross product of the two unions: `--symbols` and `--tf` are independent axes,
+  the survivors are RAGGED (NQ at 5m and 15m, GC at 15m only), and the product
+  sweeps configurations the screen dropped. Naming `--symbols` gets those
+  contracts at the timeframes each one survived at; naming `--tf` is an
+  explicit override and crosses the axes. Either way a pair Stage 1 did not
+  promote is swept **and flagged** — in the banner, in `unscreened_pairs` on
+  the summary, and as `in_stage1: false` on its row — because a parameter set
+  for an unscreened pair must not reach Stage 3 looking like a screened one.
+  Each target carries its Stage 1 scope (version, quadrant, optimal regime,
+  kill switch) onto `best_params_<SYMBOL>_<TF>.json` as `stage1_regime`.
+  **It is transported, never applied**: the sweep runs the whole window, and
+  masking it to a quadrant that was itself chosen as the best of four on these
+  same bars would stack a second in-sample selection under the first
+  (`regime_applied_to_sweep: false`).
+- **The in-sample window is the charter's, and the holdout is not read.**
+  `check_in_sample_window` refuses a window reaching `HOLDOUT_START`
+  (2023-01-01) — and refuses an omitted `--end`, which runs to the end of the
+  lake — **before a bar is loaded**, with no override flag. Stage 1 lets a
+  deliberate re-screen through because a screen is a filter; an optimiser is
+  not. Whatever it reads has been fitted to, so a Stage 2 run that touched the
+  holdout leaves Gate 3 measuring retention on bars the winner was already
+  chosen on, and nothing downstream can detect it. A flag that spent the
+  holdout would be used, and it can only be spent once.
+- **Nothing is pruned.** No contract, timeframe, quadrant or parameter set is
+  eliminated here on an aggregate metric, and no prop-firm rule is applied —
+  those are CrossTrade's, against a live balance. **Gate 1 is a ranking
+  PREFERENCE and never a filter**: a grid where nothing clears it still
+  produces a winner, still writes `best_params_<SYMBOL>_<TF>.json` and still
+  advances, under a `selection` string that says plainly that nothing cleared
+  the gate. Stage 3 is what certifies. The guarantee is written as data, not
+  prose: `coverage` on the summary counts targets against optimised
+  configurations, and a shortfall is a RUN FAILURE (a sweep that raised), never
+  a screening result — the stage says so and exits 1.
+- **The winner is a plateau, not a spike.** `plateau_scores` reads the Sharpe
+  surface the one vectorbt call produced and scores every cell
+  `min(own Sharpe, mean Sharpe of its grid neighbours)`. A neighbour differs on
+  exactly ONE axis by one step in `axis_order` (numeric axes ascending with
+  `None` — "no take-profit", the limit of an ever-wider target — at the far
+  end; non-numeric axes keep their declared order, since there is no distance
+  between `True` and `False` to sort by). The `min` is the point and a mean
+  would defeat it: averaging a cell with its neighbours scores a spike's
+  NEIGHBOUR highly, so the sweep would answer an overfit by promoting the cell
+  beside it. A neighbour that never traded counts as 0.0 rather than being
+  dropped — the hole IS the evidence that the space around the cell does not
+  trade. Nothing about a market changes between a 20-bar mean and a 21-bar one,
+  so a Sharpe that does is a property of this sample. `is_spike` (neighbours
+  keep under `PLATEAU_SPIKE_RATIO`, 0.5, of the cell's Sharpe) is **reported
+  and never acted on** — Stage 2 drops nothing, including spikes. A grid with
+  one value per axis has no neighbours and the rank degenerates to Sharpe,
+  which is correct: with nothing adjacent tested there is no evidence either
+  way. `--select sharpe` restores the pre-charter single-best-cell rule, and
+  the `selection` string names which ran.
+- **Two files leave the stage beside the per-contract winners**:
+  `stage2_summary.json` (through `pipeline.write_stage`, so `read_stage` can
+  refuse the wrong strategy's) and `stage2_summary_matrix.csv`. Both carry
+  every configuration the stage was ASKED to optimise, errors included with
+  `params: "NOT OPTIMIZED"` — a shorter table reads as a complete one, and
+  "the sweep raised" is a different statement from "the grid produced no
+  measurable Sharpe". `rank_requested` and `rank` are separate fields: a
+  `--reuse-scan` rebuild of a table written before the plateau columns existed
+  can only be ranked on Sharpe however the sweep was invoked, and the Discord
+  card prints the one that was APPLIED.
 
 - **The sweep runs the ENTRY filters, from 2026-08-19, and inherits Stage 1's
   losing days automatically.** `_combo_signals` applies the block mask
@@ -821,10 +895,11 @@ highest Sharpe **among the combinations whose Gate 1 audit is PASS**.
     cell count before it sweeps and warns past `SIZE_WARN` (200). Nothing is
     refused — a grid somebody deliberately wrote is theirs to run — but the
     operator sees which claim they asked for before it starts.
-- **Ties break on the shallower drawdown.** Sharpe is the ranking metric
+- **Ties break on the shallower drawdown.** Sharpe is the underlying metric
   because it IS the risk-adjusted return; ranking on raw return would pick
   whichever set took the most risk to get there. Ties are real once risk is
-  swept — a target no bar ever reaches and `tp_atr_mult=None` produce the same
+  swept — and MORE common under the plateau rank, which floors a whole
+  neighbourhood at one number — a target no bar ever reaches and `tp_atr_mult=None` produce the same
   trade list — and between two identical Sharpes the smaller `abs(max
   drawdown)` wins rather than whichever the grid declared first. The rule and
   its tie-break live in ONE function, `_select_best_row`, shared by the sweep
@@ -902,8 +977,17 @@ name.
   5.6M bars × ~700 events would allocate 4e9 booleans.
 
 **`backtest/pipeline.py`** — not a stage; the contract BETWEEN them. Where each
-stage writes, what the next reads, and the banner that says which stage a log
-came from. `read_stage` refuses a file written by the wrong stage or belonging
+stage writes, what the next reads, the banner that says which stage a log came
+from, and the two dates every stage has to agree about. `CHARTER_IS_START` /
+`CHARTER_IS_END` (2013-01-01..2022-12-31) and `HOLDOUT_START` (2023-01-01) live
+here rather than in a stage because Stage 1 screens on that window, Stage 2
+optimises on it and refuses to read past it, and Stage 3 measures retention
+against the years after it — three copies would be one edit away from a Stage 2
+sweep that runs a day into a holdout Gate 3 then scores as unseen.
+`stage1_pairs` is the one place Stage 1's survivors are read back as exact
+`(symbol, timeframe)` pairs with the regime scope each cleared; it is what
+Stage 2 sweeps, and it exists so the ragged survivors are never flattened into
+the cross product of two axes. `read_stage` refuses a file written by the wrong stage or belonging
 to another strategy — certifying one strategy's gates against another's
 parameters is a mistake nothing downstream could detect. Handoffs are written
 atomically (temp file, `os.replace`) into
@@ -916,7 +1000,9 @@ tuple, and a handoff written before the contract existed simply yields `{}`.
 **Since the regime firewall replaced Stage 1's Drop Unprofitable Days contract
 (2026-08-20) that is what it always returns from a fresh Stage 1 run** — the
 inheritance path in Stage 2 and Stage 3 is unchanged and still honours a handoff
-that carries days, but nothing in the pipeline writes one any more. `leaderboard(title, header, rows)` renders the end-of-stage table for all
+that carries days, but nothing in the pipeline writes one any more. `STAGE2_SUMMARY_FILE` / `STAGE2_MATRIX_FILE` name Stage 2's summary matrix in
+its two forms — the JSON handoff the Discord card reads, and the CSV a human
+does. `leaderboard(title, header, rows)` renders the end-of-stage table for all
 three stages — one implementation, because these are read as a sequence and a
 Symbol column aligned one way in Stage 1 and another in Stage 2 makes two tables
 of the same contracts look like tables of different things. Columns size to
@@ -1151,15 +1237,32 @@ PID is gone reads as **STALE**, because a bar frozen at 12/27 looks identical
 whether the run is slow or dead.
 
 **`backtest/discord_reporter.py`** — the webhook notifier, and the only place
-this repo posts anything to Discord. Two cards over one transport:
+this repo posts anything to Discord. Three cards over one transport:
 `--mode promotion` (the default, `--stage 5`) is the promotion scorecard, whose
 values are passed in on the command line; `--stage 1` / `--mode baseline` is
 Stage 1's regime-firewall leaderboard, read straight out of
-`surviving_assets.json`.
+`surviving_assets.json`; `--stage 2` / `--mode scan` is Stage 2's parameter
+optimization summary, read straight out of `stage2_summary.json`.
+
+- **The Stage 2 card carries what the charter asks for and nothing derived**:
+  the strategy, the in-sample window (with the holdout date it did not touch),
+  and per configuration the symbol, timeframe, target regime quadrant, the
+  selected best parameters, the in-sample profit factor and the max drawdown.
+  Its counters say **Optimised → Stage 3**, never "promoted": Stage 2 promotes
+  nothing and drops nothing, so a heading borrowed from the Stage 1 card would
+  import a survival rate that does not exist, and the `Pruning` field states
+  the guarantee outright. A configuration whose sweep FAILED is on the card as
+  a row and in the `Failed to sweep` count — the one thing that can make the
+  table shorter than the stage's input. `STAGE2_MAX_ROWS` is lower than Stage
+  1's because each row carries a parameter set; what does not fit is COUNTED,
+  as everywhere else here. The `Selection` line prints the rank Stage 2 says
+  was APPLIED, which is not always the one requested.
 
 - **It computes nothing and decides nothing.** The Stage 1 card prints the
   `status` Stage 1 recorded rather than re-applying the survival hurdle, so a
-  card can never promote a configuration the stage dropped. A reporter that
+  card can never promote a configuration the stage dropped; the Stage 2 card
+  re-ranks nothing, so it can never name a parameter set the sweep did not
+  choose. A reporter that
   re-derived a profit factor would be free to disagree with the stage it is
   announcing, and the two would be compared by nobody.
 - **The handoff is read through `pipeline.read_stage`**, so a file written by

@@ -13,6 +13,17 @@ Two cards, one transport
   (symbol, timeframe) configuration screened, the quadrant it cleared, that
   quadrant's profit factor and trade count, and whether it was PROMOTED to
   Stage 2 or DROPPED.
+- **`--mode scan`** (equivalently `--stage 2`): Stage 2's PARAMETER
+  OPTIMIZATION summary, read straight out of `stage2_summary.json` - the
+  in-sample window, and per configuration the symbol, timeframe, target regime
+  quadrant, the selected best parameters, the in-sample profit factor and the
+  max drawdown.
+
+Three cards now, and the reason the count keeps growing is that each one
+announces a DIFFERENT decision. A Stage 2 card is not a promotion and not a
+screen: every configuration on it advanced, because Stage 2 prunes nothing, and
+the card says so rather than letting a reader infer a survival rate from a
+leaderboard's length.
 
 It reads no bars, opens no lake file, and computes nothing. The Stage 1 card
 reads a handoff, which is not the same thing: every number on it is one Stage 1
@@ -29,7 +40,9 @@ What it will not do
   hurdle, so a card can be posted for a strategy that was never certified. The
   card announces what it was told; `backtest/promote.py` is what refuses an
   uncertified version and `backtest/baseline.py` is what decides PROMOTED from
-  DROPPED.
+  DROPPED. The Stage 2 card in particular re-ranks nothing: `backtest/scan.py`
+  chose the winning parameter set off the Sharpe plateau, and this transcribes
+  the row it wrote.
 - **It does not invent a missing number.** `--pf` and `--dd` are taken as text,
   not floats. A numeric value is formatted (`1.42`, `-8.30 %`) and anything
   else - `NOT EVALUATED`, `n/a` - is printed verbatim. Coercing those to 0.0
@@ -82,8 +95,8 @@ REPO = Path(__file__).resolve().parent.parent
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from backtest.pipeline import (SURVIVORS_FILE, pipeline_dir,        # noqa: E402
-                               read_stage)
+from backtest.pipeline import (STAGE2_SUMMARY_FILE, SURVIVORS_FILE,  # noqa: E402
+                               pipeline_dir, read_stage)
 
 # Emerald green. Discord wants a decimal int; 0x2ECC71 == 3066993.
 EMERALD_GREEN = 0x2ECC71
@@ -106,6 +119,30 @@ MAX_EMBED_DESCRIPTION = 4096
 # legend and the truncation note. A full screen is 108 configurations; what is
 # left off is COUNTED on the card and the handoff path is printed beside it.
 STAGE1_MAX_ROWS = 40
+
+# The Stage 2 card carries a parameter set per row, which is far wider than a
+# Stage 1 row, so fewer of them fit the 4096-character description. Whatever
+# does not fit is COUNTED on the card, exactly as it is on the Stage 1 card:
+# a silently shortened optimisation summary reads as the whole stage, and
+# Stage 2 optimises EVERY survivor, so its table's length is the one number a
+# reader is entitled to trust.
+STAGE2_MAX_ROWS = 20
+
+# Parameter sets get long once risk axes are swept. Truncated with an ellipsis
+# rather than wrapped: the authoritative copy is in
+# best_params_<SYMBOL>_<TF>.json, which the card names, and a reflowing
+# fixed-width block is harder to read than a clipped one.
+STAGE2_MAX_PARAM_CHARS = 46
+
+# Stage 2's own colour, distinct from the Stage 1 slate and the promotion
+# green. Violet, and deliberately not green: an optimised parameter set is not
+# an approval to trade, and in a channel carrying all three cards the colour is
+# what separates them at a glance.
+VIOLET = 0x9B59B6
+
+# Stage 2 optimised the configuration; the sweep raised and it did not.
+OPTIMIZED = "OPTIMIZED"
+ERRORED = "ERROR"
 
 # The Stage 1 handoff, and the two words it records per configuration.
 PROMOTED = "PROMOTED"
@@ -439,6 +476,214 @@ def build_stage1_embed(strat: str, blob: dict[str, Any],
     }
 
 
+# --------------------------------------------------------------------------
+# Stage 2 · parameter optimization
+# --------------------------------------------------------------------------
+
+def default_scan_summary_path(strat: str, out_dir: str | None = None) -> Path:
+    """`<BT_ARTIFACTS>/pipeline/<strategy>/stage2_summary.json`."""
+    return pipeline_dir(strat, out_dir) / STAGE2_SUMMARY_FILE
+
+
+def load_stage2(path: str | Path, strat: str | None = None) -> dict[str, Any]:
+    """
+    Read Stage 2's summary handoff, and refuse the wrong one.
+
+    Through `pipeline.read_stage` for the same reason Stage 1's card is: it is
+    where "written by another stage" and "belongs to another strategy" are
+    already refusals. A card announcing one strategy's optimised parameters
+    under another's name would be believed - nobody re-derives a Discord post.
+    """
+    return read_stage(Path(path), 2, strat)
+
+
+def stage2_rows(blob: dict[str, Any]) -> list[dict[str, Any]]:
+    """
+    Every configuration Stage 2 was asked to optimise, in one shape.
+
+    `results` is the summary matrix Stage 2 writes for exactly this purpose.
+    Errored configurations are included and keep their `ERROR` status: Stage 2
+    prunes nothing, so a row missing from the card is a configuration whose
+    absence has to be explained, not one that quietly failed a hurdle.
+    """
+    results = blob.get("results")
+    if isinstance(results, list):
+        return [dict(r) for r in results if isinstance(r, dict)]
+    return []
+
+
+def _fmt_params(value: Any, limit: int = STAGE2_MAX_PARAM_CHARS) -> str:
+    """
+    A parameter set for one table cell.
+
+    Never `--`: a row that reached the card without parameters is either an
+    errored sweep (which says so) or a grid that produced no measurable Sharpe,
+    and both are findings. `NOT OPTIMIZED` and `(no winner)` are written by
+    Stage 2 and passed through verbatim.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return "not recorded"
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def format_stage2_table(rows: list[dict[str, Any]],
+                        max_rows: int = STAGE2_MAX_ROWS
+                        ) -> tuple[str, int, dict[str, str]]:
+    """
+    The optimisation summary as one fixed-width block, plus the quadrant legend.
+
+    Ordered by in-sample profit factor descending, which is the metric on the
+    card - not by the plateau score the sweep selected on, because that number
+    is not a column here and sorting a table on something it does not show is
+    how a reader concludes the order is arbitrary. Errored rows sort last and
+    keep their place in the count.
+
+    Returns `(text, hidden, legend)`; `hidden` is printed by the caller.
+    """
+    header = ["SYMBOL", "TF", "QUAD", "IS PF", "MAX DD", "BEST PARAMS"]
+    body: list[list[str]] = []
+    legend: dict[str, str] = {}
+
+    def _key(row: dict[str, Any]) -> tuple:
+        ok = str(row.get("status") or "").upper() == OPTIMIZED
+        try:
+            pf = float(row.get("profit_factor"))
+        except (TypeError, ValueError):
+            pf = float("-inf")
+        return (0 if ok else 1, -pf if ok else 0.0,
+                str(row.get("symbol") or ""), str(row.get("timeframe") or ""))
+
+    ordered = sorted(rows, key=_key)
+    shown = ordered[: max(0, int(max_rows))]
+    for row in shown:
+        quad = row.get("quadrant")
+        regime = row.get("optimal_regime")
+        if quad and regime:
+            legend[str(quad)] = str(regime)
+        dd = _fmt_metric(row.get("max_drawdown_pct"))
+        body.append([
+            str(row.get("symbol") or "?"),
+            str(row.get("timeframe") or "?"),
+            # `--` where Stage 1 attached no scope, which happens for a pair
+            # swept because it was named rather than because it survived. A
+            # blank cell would read as a quadrant nobody wrote down.
+            str(quad) if quad else "--",
+            _fmt_metric(row.get("profit_factor")),
+            dd if dd == "--" else f"{dd} %",
+            _fmt_params(row.get("params")),
+        ])
+
+    if not body:
+        # An empty string, not a bare header row. A header with nothing under
+        # it reads as a table whose rows were lost; the caller replaces this
+        # with a sentence saying the stage optimised nothing, which is a
+        # result and needs to be legible as one.
+        return "", len(ordered), legend
+
+    widths = [max(len(header[i]), *(len(r[i]) for r in body))
+              for i in range(len(header))]
+    align = ["<", "<", "<", ">", ">", "<"]
+
+    def line(cells: list[str]) -> str:
+        return "  ".join(format(c, f"{align[i]}{widths[i]}")
+                         for i, c in enumerate(cells)).rstrip()
+
+    out = [line(header), line(["-" * w for w in widths])]
+    out.extend(line(r) for r in body)
+    return "\n".join(out), len(ordered) - len(shown), legend
+
+
+def build_stage2_embed(strat: str, blob: dict[str, Any],
+                       source: str | Path | None = None,
+                       max_rows: int = STAGE2_MAX_ROWS) -> dict[str, Any]:
+    """
+    Stage 2's card. Pure - sends nothing, computes nothing, and every value on
+    it is transcribed from the summary Stage 2 wrote.
+
+    The window is on the card because an optimised parameter set is only
+    meaningful with the bars it was fitted to, and because it is the one field
+    that says the holdout was not touched. The coverage line is there because
+    Stage 2 prunes nothing: `12/12 optimised` is the claim, and anything less
+    is a run failure rather than a screening result.
+    """
+    rows = stage2_rows(blob)
+    optimized = [r for r in rows
+                 if str(r.get("status") or "").upper() == OPTIMIZED]
+    table, hidden, legend = format_stage2_table(rows, max_rows)
+
+    window = blob.get("in_sample_window") or {}
+    start = window.get("start") or blob.get("start") or "not recorded"
+    end = window.get("end") or blob.get("end") or "not recorded"
+    holdout = window.get("holdout_starts")
+    timeframes = blob.get("timeframes") or []
+    coverage = blob.get("coverage") or {}
+    rank = blob.get("rank") or "not recorded"
+
+    description = [
+        f"**In-sample window** `{start} → {end}`"
+        + (f" · holdout from `{holdout}` untouched" if holdout else ""),
+        # `rank` is what was APPLIED, which Stage 2 resolves - a rebuild of a
+        # table with no plateau columns is ranked on Sharpe however the sweep
+        # was invoked, and the card must not claim otherwise.
+        f"**Selection** best parameters by `{rank}` rank, per configuration",
+        "```text",
+        table if table.strip() else "no configuration was optimised",
+        "```",
+    ]
+    if legend:
+        description.append("**Target regimes** " + " · ".join(
+            f"`{q}` {legend[q]}" for q in sorted(legend)))
+    if hidden:
+        description.append(
+            f"_{hidden} further configuration(s) are not shown — the full "
+            f"matrix is in the handoff._")
+
+    text = "\n".join(description)
+    if len(text) > MAX_EMBED_DESCRIPTION:
+        # Trim the TABLE and never the header lines, for the same reason the
+        # Stage 1 card does: without the window and the selection rule the
+        # numbers underneath are unlabelled.
+        keep = MAX_EMBED_DESCRIPTION - 64
+        text = text[:keep] + "\n```\n_truncated — see the handoff._"
+
+    errors = len(rows) - len(optimized)
+    fields = [
+        {"name": "Configurations", "value": str(len(rows)), "inline": True},
+        # "Optimised" rather than "Promoted": Stage 2 promotes nothing and
+        # drops nothing. Every row advances to Stage 3, and a heading borrowed
+        # from the Stage 1 card would import a survival rate that does not
+        # exist here.
+        {"name": "Optimised → Stage 3", "value": str(len(optimized)),
+         "inline": True},
+        {"name": "Failed to sweep", "value": str(errors), "inline": True},
+        {"name": "Timeframes",
+         "value": ", ".join(f"`{t}`" for t in timeframes) or "not recorded",
+         "inline": True},
+        {"name": "Pruning",
+         "value": ("none — every Stage 1 survivor advances"
+                   if coverage.get("complete") is True
+                   else f"none by design; {errors} configuration(s) failed to "
+                        f"sweep and carry no parameters"),
+         "inline": True},
+        {"name": "Handoff", "value": _fmt_report(str(source or "")),
+         "inline": False},
+    ]
+
+    return {
+        "title": f"\U0001F39B\uFE0F Stage 2 · Parameter Optimization: {strat}",
+        "description": text,
+        # Violet when something was optimised, amber when nothing was. Amber
+        # rather than red for the same reason as Stage 1: a stage that produced
+        # no rows is a result to look at, not a crash.
+        "color": VIOLET if optimized else AMBER,
+        "fields": fields,
+        "footer": {"text": "backtest/discord_reporter.py · Stage 2 parameter "
+                           "optimization · values as recorded by scan.py, not "
+                           "recomputed"},
+    }
+
+
 def build_payload(embed: dict[str, Any]) -> dict[str, Any]:
     return {"embeds": [embed]}
 
@@ -511,15 +756,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="discord_reporter.py",
         description="Post a pipeline card to a Discord webhook: a promotion "
-                    "scorecard (--mode promotion) or Stage 1's regime-firewall "
-                    "leaderboard (--stage 1).",
+                    "scorecard (--mode promotion), Stage 1's regime-firewall "
+                    "leaderboard (--stage 1), or Stage 2's parameter "
+                    "optimization summary (--stage 2).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Values are printed as supplied - nothing here recomputes a metric.\n"
             f"--webhook may be omitted when ${ENV_WEBHOOK} is set.\n"
             "\n"
             "  --mode promotion   --strat X --symbol NQ --tf 15m --pf 1.42 ...\n"
-            "  --stage 1          --strat X [--survivors <surviving_assets.json>]"
+            "  --stage 1          --strat X [--survivors <surviving_assets.json>]\n"
+            "  --stage 2          --strat X [--summary <stage2_summary.json>]"
         ),
     )
     parser.add_argument("--webhook", default=os.environ.get(ENV_WEBHOOK),
@@ -528,12 +775,14 @@ def build_parser() -> argparse.ArgumentParser:
     # dest so they cannot disagree. A card labelled Stage 1 that was built by
     # the promotion path would announce a screen as a promotion.
     parser.add_argument("--mode", dest="mode", default=None,
-                        choices=["promotion", "baseline"],
+                        choices=["promotion", "baseline", "scan"],
                         help="promotion (default): the Stage 5 scorecard. "
-                             "baseline: Stage 1's regime-firewall leaderboard.")
+                             "baseline: Stage 1's regime-firewall leaderboard. "
+                             "scan: Stage 2's parameter optimization summary.")
     parser.add_argument("--stage", dest="stage", default=None,
-                        choices=["1", "5"],
-                        help="1 == --mode baseline, 5 == --mode promotion")
+                        choices=["1", "2", "5"],
+                        help="1 == --mode baseline, 2 == --mode scan, "
+                             "5 == --mode promotion")
     parser.add_argument("--strat", required=True, help="strategy name, e.g. sma_momentum_crossover")
     parser.add_argument("--symbol", default="", help="promotion mode: the contract the decision rests on, e.g. NQ")
     parser.add_argument("--tf", default="", help="promotion mode: timeframe, e.g. 15m")
@@ -541,14 +790,20 @@ def build_parser() -> argparse.ArgumentParser:
                         help="baseline mode: path to surviving_assets.json "
                              "(default: <BT_ARTIFACTS>/pipeline/<strat>/"
                              f"{SURVIVORS_FILE})")
+    parser.add_argument("--summary", default=None,
+                        help="scan mode: path to stage2_summary.json "
+                             "(default: <BT_ARTIFACTS>/pipeline/<strat>/"
+                             f"{STAGE2_SUMMARY_FILE})")
     parser.add_argument("--out-dir", default=None,
-                        help="baseline mode: override the pipeline directory "
-                             "the handoff is looked up in")
-    parser.add_argument("--max-rows", type=int, default=STAGE1_MAX_ROWS,
+                        help="baseline and scan modes: override the pipeline "
+                             "directory the handoff is looked up in")
+    parser.add_argument("--max-rows", type=int, default=None,
                         help=f"baseline mode: leaderboard rows on the card "
-                             f"(default {STAGE1_MAX_ROWS}). Whatever does not "
-                             f"fit is COUNTED on the card, never dropped in "
-                             f"silence.")
+                             f"(default {STAGE1_MAX_ROWS}; scan mode defaults "
+                             f"to {STAGE2_MAX_ROWS}, whose rows carry a "
+                             f"parameter set and are far wider). Whatever does "
+                             f"not fit is COUNTED on the card, never dropped "
+                             f"in silence.")
     parser.add_argument("--pf", default="", help="out-of-sample profit factor, or a token like 'NOT EVALUATED'")
     parser.add_argument("--dd", default="", help="max drawdown in percent, or a token like 'NOT EVALUATED'")
     parser.add_argument("--regime", default="", help="certified regime, e.g. 'High-Vol/Trending'")
@@ -567,7 +822,8 @@ def resolve_mode(mode: str | None, stage: str | None) -> str:
     card. Neither flag given is `promotion`, which is what this script was
     before the Stage 1 mode existed.
     """
-    from_stage = {"1": "baseline", "5": "promotion"}.get(stage or "")
+    from_stage = {"1": "baseline", "2": "scan",
+                  "5": "promotion"}.get(stage or "")
     if mode and from_stage and mode != from_stage:
         raise ValueError(f"--mode {mode} and --stage {stage} disagree "
                          f"(--stage {stage} means --mode {from_stage}).")
@@ -582,13 +838,33 @@ def _build_card(args: argparse.Namespace) -> tuple[dict[str, Any], str]:
         path = Path(args.survivors) if args.survivors else \
             default_survivors_path(args.strat, args.out_dir)
         blob = load_stage1(path, args.strat)
+        # `--max-rows` defaults to None so each card keeps its OWN row cap: a
+        # Stage 2 row carries a parameter set and is roughly twice as wide, and
+        # one shared default would either waste the Stage 1 card's description
+        # or overflow the Stage 2 one.
         embed = build_stage1_embed(args.strat, blob, source=path,
-                                   max_rows=args.max_rows)
+                                   max_rows=(args.max_rows
+                                             if args.max_rows is not None
+                                             else STAGE1_MAX_ROWS))
         rows = stage1_rows(blob)
         kept = sum(1 for r in rows
                    if str(r.get("status") or "").upper() == PROMOTED)
         return embed, (f"Stage 1 screen '{args.strat}' "
                        f"({kept}/{len(rows)} promoted)")
+
+    if mode == "scan":
+        path = Path(args.summary) if args.summary else \
+            default_scan_summary_path(args.strat, args.out_dir)
+        blob = load_stage2(path, args.strat)
+        embed = build_stage2_embed(args.strat, blob, source=path,
+                                   max_rows=(args.max_rows
+                                             if args.max_rows is not None
+                                             else STAGE2_MAX_ROWS))
+        rows = stage2_rows(blob)
+        done = sum(1 for r in rows
+                   if str(r.get("status") or "").upper() == OPTIMIZED)
+        return embed, (f"Stage 2 optimization '{args.strat}' "
+                       f"({done}/{len(rows)} optimised)")
 
     # The promotion card names one contract, so those two are required here
     # and only here. Checked rather than defaulted: a card headed `?` · `?` is
