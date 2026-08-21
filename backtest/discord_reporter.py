@@ -3,8 +3,8 @@ backtest.discord_reporter - post a pipeline card to a Discord webhook.
 
 Location:  ~/src/trading/backtest/discord_reporter.py
 
-Two cards, one transport
-------------------------
+Four cards, one transport
+-------------------------
 - **`--mode promotion`** (the default, and `--stage 5`): the handful of numbers
   a promotion decision rests on, passed in on the command line by whatever
   produced them (Stage 3's `gate_audit_<SYMBOL>.json`, Stage 5's `meta.json`).
@@ -24,12 +24,26 @@ Two cards, one transport
   declared it and nothing clipped. The table is what a reader scans; the block
   is what they retype into `--param`, and a clipped parameter set is the one
   thing on this card that would be acted on while wrong.
+- **`--mode audit`** (equivalently `--stage 3`): Stage 3's GATE AUDIT AND
+  CERTIFICATION, read straight out of `stage3_audit_summary.json` - both
+  windows, and per configuration the symbol, timeframe, target regime
+  quadrant, Gate R's verdict, the quadrant profit factor and trade count it
+  was measured on, the in-sample and out-of-sample blended profit factors side
+  by side, and the SHA-256 seal. Three profit factors per row, each labelled,
+  because only ONE of them decided anything: Gate R scores the quadrant, and
+  the other two are the blended-sample pair that says whether the edge
+  collapsed. The seals are printed twice for the same reason the Stage 2
+  parameter sets are - a 12-character prefix in the table to keep the columns
+  aligned, and all three hashes in full below it, which is the copy a reader
+  checks against a promoted `meta.json`.
 
-Three cards now, and the reason the count keeps growing is that each one
+Four cards now, and the reason the count keeps growing is that each one
 announces a DIFFERENT decision. A Stage 2 card is not a promotion and not a
 screen: every configuration on it advanced, because Stage 2 prunes nothing, and
 the card says so rather than letting a reader infer a survival rate from a
-leaderboard's length.
+leaderboard's length. A Stage 3 card is the first that carries a PASS - and
+its `Certified` count is Gate R's, not a roll-up of the three advisory gates
+printed beside it.
 
 It reads no bars, opens no lake file, and computes nothing. The Stage 1 card
 reads a handoff, which is not the same thing: every number on it is one Stage 1
@@ -48,7 +62,9 @@ What it will not do
   uncertified version and `backtest/baseline.py` is what decides PROMOTED from
   DROPPED. The Stage 2 card in particular re-ranks nothing: `backtest/scan.py`
   chose the winning parameter set off the Sharpe plateau, and this transcribes
-  the row it wrote.
+  the row it wrote. The Stage 3 card re-scores nothing: it prints the
+  `gate_regime` status and the `certified` flag `backtest/audit_gates.py`
+  recorded, so it can never announce a certification the audit refused.
 - **It does not invent a missing number.** `--pf` and `--dd` are taken as text,
   not floats. A numeric value is formatted (`1.42`, `-8.30 %`) and anything
   else - `NOT EVALUATED`, `n/a` - is printed verbatim. Coercing those to 0.0
@@ -102,7 +118,8 @@ REPO = Path(__file__).resolve().parent.parent
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from backtest.pipeline import (STAGE2_SUMMARY_FILE, SURVIVORS_FILE,  # noqa: E402
+from backtest.pipeline import (STAGE2_SUMMARY_FILE,               # noqa: E402
+                               STAGE3_SUMMARY_FILE, SURVIVORS_FILE,
                                pipeline_dir, read_stage)
 
 # Emerald green. Discord wants a decimal int; 0x2ECC71 == 3066993.
@@ -186,6 +203,33 @@ VIOLET = 0x9B59B6
 # Stage 2 optimised the configuration; the sweep raised and it did not.
 OPTIMIZED = "OPTIMIZED"
 ERRORED = "ERROR"
+
+# Stage 3's own colour. Teal, and once again deliberately not the promotion
+# green: a certification is a verdict about a holdout, not a decision to trade.
+# The four cards in a channel are slate (screen), violet (sweep), teal
+# (certification) and green (promotion), which is the only thing separating
+# them at a glance in a scrollback.
+TEAL = 0x1ABC9C
+
+# A Stage 3 row carries a quadrant, two profit factors, two trade counts and a
+# hash prefix, so it is wider than a Stage 1 row and narrower than a Stage 2
+# one. Whatever does not fit is COUNTED on the card, as everywhere else here.
+STAGE3_MAX_ROWS = 24
+
+# How much of each SHA-256 goes on the card. Twelve hex characters is 48 bits -
+# enough to tell two builds of the same strategy apart at a glance, which is
+# what a reader uses it for. The full 64 are in the seal, and the card says so:
+# a truncated hash presented as the hash is a checksum nobody can verify.
+SEAL_PREFIX_CHARS = 12
+
+# The seal block below the Stage 3 table: at most this many fields, each inside
+# Discord's 1024-character cap. The embed already carries six other fields and
+# Discord caps an embed at 25 fields and 6000 characters.
+STAGE3_SEAL_MAX_FIELDS = 6
+
+# The tokens Stage 3 records per configuration.
+CERTIFIED = "PASS"
+NOT_AUDITED = "NOT AUDITED"
 
 # The Stage 1 handoff, and the two words it records per configuration.
 PROMOTED = "PROMOTED"
@@ -999,6 +1043,329 @@ def build_stage2_embed(strat: str, blob: dict[str, Any],
     return embed
 
 
+# --------------------------------------------------------------------------
+# Stage 3 · gate audit & certification
+# --------------------------------------------------------------------------
+
+def default_audit_summary_path(strat: str, out_dir: str | None = None) -> Path:
+    """`<BT_ARTIFACTS>/pipeline/<strategy>/stage3_audit_summary.json`."""
+    return pipeline_dir(strat, out_dir) / STAGE3_SUMMARY_FILE
+
+
+def load_stage3(path: str | Path, strat: str | None = None) -> dict[str, Any]:
+    """
+    Read Stage 3's handoff, and refuse the wrong one.
+
+    Through `pipeline.read_stage` for the same reason the other two cards are:
+    a file written by another stage or belonging to another strategy is a
+    refusal there already. It matters most here - this card carries a
+    PASS/FAIL and a hash seal, and a certification announced under the wrong
+    strategy's name is the artifact nobody cross-checks.
+    """
+    return read_stage(Path(path), 3, strat)
+
+
+def stage3_rows(blob: dict[str, Any]) -> list[dict[str, Any]]:
+    """
+    Every configuration the certification run covered, in one shape.
+
+    Straight off `results`, which Stage 3 wrote with errors and skips already
+    in it as `NOT AUDITED` rows. Nothing is filtered here: a card shorter than
+    the stage's input reads as a complete certification, and "the audit raised"
+    is a different statement from "the edge did not hold out of sample".
+    """
+    return list(blob.get("results") or [])
+
+
+def _seal_prefix(row: dict[str, Any]) -> str:
+    """
+    The strategy-code hash, shortened for the table.
+
+    The CODE hash rather than the audit hash, because it is what a reader
+    compares against a promoted `meta.json`. `--` when nothing was staged: an
+    uncertified configuration has no seal, and a blank cell in a hash column
+    reads as a hash of nothing.
+    """
+    seal = row.get("seal") or {}
+    digest = ((seal.get("strategy_code") or {}).get("sha256") or "")
+    if not digest or digest == "NOT AVAILABLE":
+        return "--"
+    return digest[:SEAL_PREFIX_CHARS]
+
+
+def _stage3_sort_key(row: dict[str, Any]) -> tuple:
+    """
+    Certified first, then the strongest out-of-sample quadrant, then by name.
+
+    Sorted on the QUADRANT profit factor rather than the blended one, because
+    that is what Gate R decided on: ranking on the blend would put a
+    configuration with a broad mediocre result above one with a sharp edge in
+    its own environment, which inverts the question the stage asks. A row with
+    no measurable factor sorts last rather than being dropped.
+    """
+    certified = bool(row.get("certified"))
+    pf = _fmt_float(row.get("oos_profit_factor"))
+    return (not certified, -(pf if pf is not None else float("-inf")),
+            str(row.get("symbol") or ""), str(row.get("timeframe") or ""),
+            str(row.get("version") or ""))
+
+
+def _fmt_float(value: Any) -> float | None:
+    """A float, or None. NaN is None - it is not a number and must not sort."""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if f != f else f
+
+
+def format_stage3_table(rows: list[dict[str, Any]],
+                        max_rows: int = STAGE3_MAX_ROWS
+                        ) -> tuple[str, int, dict[str, str]]:
+    """
+    The certification table as one fixed-width block, plus the quadrant legend.
+
+    Returns `(text, hidden, legend)`. `hidden` is counted on the card by the
+    caller.
+
+    **IS PF and OOS PF sit next to each other on purpose.** "the holdout profit
+    factor is 1.10" and "1.10, down from 2.40" are different findings, and a
+    card printing only the second number would let a collapsing edge look like
+    a healthy one. `REG PF` beside them is the quadrant factor Gate R actually
+    scored - three profit factors on one row, each labelled, because two of
+    them are blended-sample numbers that decided nothing.
+
+    The QUAD column carries the `Q1`..`Q4` id the handoff recorded, with the
+    legend built FROM the rows. No short spelling of a regime name lives in
+    this module, for the same reason it does not on the Stage 1 card: a second
+    one would be free to disagree with `mdlib.regimes`.
+    """
+    header = ["SYMBOL", "TF", "VER", "QUAD", "GATE R", "REG PF", "REG N",
+              "IS PF", "OOS PF", "SEAL"]
+    body: list[list[str]] = []
+    legend: dict[str, str] = {}
+
+    ordered = sorted(rows, key=_stage3_sort_key)
+    shown = ordered[: max(0, int(max_rows))]
+    for row in shown:
+        quad = row.get("quadrant")
+        regime = row.get("target_regime")
+        if quad and regime:
+            legend[str(quad)] = str(regime)
+        body.append([
+            str(row.get("symbol") or "?"),
+            str(row.get("timeframe") or "?"),
+            f"V{row['version']}" if row.get("version") else "--",
+            str(quad) if quad else "--",
+            # The GATE R status verbatim from the handoff. Never re-derived
+            # from the numbers beside it: this module computes nothing, and a
+            # card that recomputed a verdict would be free to disagree with the
+            # audit it is announcing.
+            str(row.get("gate_regime") or NOT_AUDITED).upper(),
+            _fmt_metric(row.get("oos_profit_factor")),
+            _fmt_count(row.get("oos_trade_count")),
+            _fmt_metric(row.get("is_profit_factor")),
+            _fmt_metric(row.get("holdout_profit_factor")),
+            _seal_prefix(row),
+        ])
+
+    widths = [max(len(header[i]), *(len(r[i]) for r in body)) if body
+              else len(header[i]) for i in range(len(header))]
+    align = ["<", "<", "<", "<", "<", ">", ">", ">", ">", "<"]
+
+    def line(cells: list[str]) -> str:
+        return "  ".join(format(c, f"{align[i]}{widths[i]}")
+                         for i, c in enumerate(cells)).rstrip()
+
+    out = [line(header), line(["-" * w for w in widths])]
+    out.extend(line(r) for r in body)
+    return "\n".join(out), len(ordered) - len(shown), legend
+
+
+def format_stage3_seals(rows: list[dict[str, Any]],
+                        max_rows: int = STAGE3_MAX_ROWS) -> list[str]:
+    """
+    The full 64-character seals, one block per staged configuration.
+
+    The table carries a 12-character prefix, which is enough to tell two builds
+    apart and not enough to verify one. This is the copy a reader checks
+    against a promoted `meta.json`, so all three hashes are here in full and
+    labelled by what they cover - the code, the winning parameter file, and the
+    gate audit. Only configurations that were actually STAGED appear: a seal
+    for something nobody promoted is a checksum of a file the reader cannot
+    find.
+    """
+    lines: list[str] = []
+    for row in sorted(rows, key=_stage3_sort_key)[: max(0, int(max_rows))]:
+        seal = row.get("seal") or {}
+        if not seal:
+            continue
+        head = (f"{row.get('symbol') or '?'} {row.get('timeframe') or '?'} "
+                f"V{row.get('version') or '?'}")
+        for key, label in (("strategy_code", "code"),
+                           ("winning_parameters", "params"),
+                           ("gate_audit", "audit")):
+            digest = ((seal.get(key) or {}).get("sha256") or "NOT AVAILABLE")
+            lines.append(f"{head} {label:<7}{digest}")
+    return lines
+
+
+def build_stage3_embed(strat: str, blob: dict[str, Any],
+                       source: str | Path | None = None,
+                       max_rows: int = STAGE3_MAX_ROWS) -> dict[str, Any]:
+    """
+    Stage 3's card. Pure - sends nothing, computes nothing, and every value on
+    it is transcribed from the summary Stage 3 wrote.
+
+    Both windows are on the card because a certification is a claim about two
+    date ranges and is meaningless with either one missing: the in-sample
+    window says what the parameters were fitted to, and the holdout says what
+    they were then measured on. `Verdict` states in words that Gates 1-3 are
+    advisory, because a reader who has seen this pipeline before the charter
+    would otherwise read a `CERTIFIED` beside a failing Gate 1 as a bug.
+    """
+    rows = stage3_rows(blob)
+    certified = [r for r in rows if r.get("certified")]
+    audited = [r for r in rows
+               if str(r.get("status") or "").upper() != NOT_AUDITED]
+    table, hidden, legend = format_stage3_table(rows, max_rows)
+
+    is_window = blob.get("in_sample") or {}
+    ho_window = blob.get("holdout") or {}
+    rule = blob.get("certification_rule") or {}
+    coverage = blob.get("coverage") or {}
+    tf = blob.get("timeframe")
+
+    description = [
+        f"**In-sample** `{is_window.get('start') or 'not recorded'} → "
+        f"{is_window.get('end') or 'not recorded'}` "
+        f"· fitted at Stage 2, evidence only",
+        f"**Out-of-sample holdout** `{ho_window.get('start') or 'not recorded'}"
+        f" → {ho_window.get('end') or 'present'}` · the verdict",
+        f"**Verdict** Gate R — profit factor `>= "
+        f"{_fmt_metric(rule.get('min_profit_factor'))}` over "
+        f"`{_fmt_count(rule.get('min_trades'))}`+ trades INSIDE the target "
+        f"quadrant. Gates 1–3 are reported as evidence and cannot fail a "
+        f"certification.",
+        "```text",
+        table if table.strip() else "no configuration was audited",
+        "```",
+    ]
+    if legend:
+        description.append("**Target regimes** " + " · ".join(
+            f"`{q}` {legend[q]}" for q in sorted(legend)))
+    if hidden:
+        description.append(
+            f"_{hidden} further configuration(s) are not shown — the full "
+            f"summary is in the handoff._")
+    description.append(
+        f"_`SEAL` is the first {SEAL_PREFIX_CHARS} characters of the strategy "
+        f"code's SHA-256; the full seals are below._")
+
+    text = "\n".join(description)
+    if len(text) > MAX_EMBED_DESCRIPTION:
+        # Trim the TABLE and never the header lines: without the two windows
+        # and the verdict rule the numbers underneath are unlabelled.
+        keep = MAX_EMBED_DESCRIPTION - 64
+        text = text[:keep] + "\n```\n_truncated — see the handoff._"
+
+    fields = [
+        {"name": "Strategy", "value": f"`{strat}`", "inline": True},
+        {"name": "Timeframe", "value": f"`{tf}`" if tf else "not recorded",
+         "inline": True},
+        {"name": "Configurations", "value": str(len(rows)), "inline": True},
+        # "Certified" is Gate R and nothing else. Counted from the handoff's
+        # own `certified` flag rather than re-derived from the numbers on the
+        # card, so this can never announce a pass Stage 3 did not record.
+        {"name": "Certified → Incubator", "value": str(len(certified)),
+         "inline": True},
+        {"name": "Audited", "value": f"{len(audited)}/{len(rows)}",
+         "inline": True},
+        {"name": "Pruning",
+         "value": ("none on an aggregate metric; no prop-firm rule applied"
+                   if coverage.get("complete") is not False
+                   else f"none by design; "
+                        f"{coverage.get('errors', 0)} error(s), "
+                        f"{coverage.get('skipped', 0)} skipped"),
+         "inline": False},
+    ]
+
+    embed = {
+        "title": f"\U0001F510 Stage 3 · Gate Audit & Certification: {strat}",
+        "description": text,
+        # Teal when something was certified, amber when nothing was. Amber
+        # rather than red for the same reason as the other cards: a holdout
+        # that certified nothing is a result to read, not a crash.
+        "color": TEAL if certified else AMBER,
+        "fields": fields,
+        "footer": {"text": "backtest/discord_reporter.py · Stage 3 gate audit "
+                           "· values as recorded by audit_gates.py, not "
+                           "recomputed"},
+    }
+
+    # The full seals go in LAST, on whatever the rest of the card left of
+    # Discord's 6000 characters - sized against the FINISHED embed rather than
+    # a constant, exactly as the Stage 2 parameter block is, because the
+    # description holding the table is most of the budget.
+    handoff = {"name": "Handoff", "value": _fmt_report(str(source or "")),
+               "inline": False}
+    budget = (MAX_EMBED_TOTAL - _embed_size(embed)
+              - len(handoff["name"]) - len(handoff["value"]))
+    seal_fields, dropped = _seal_fields(
+        format_stage3_seals(rows, max_rows), budget)
+    if not seal_fields:
+        # The block did not fit. The note pointing at it must go with it: a
+        # line saying the full seals are below, with nothing below, is worse
+        # than the prefix it was added to explain.
+        embed["description"] = embed["description"].replace(
+            f"the full seals are below._",
+            f"the full seals are in the handoff._")
+    elif dropped:
+        seal_fields[-1]["value"] = seal_fields[-1]["value"].rstrip("`\n") + (
+            f"\n… {dropped} further seal line(s) — see the handoff." + FENCE_CLOSE)
+    embed["fields"] = fields + seal_fields + [handoff]
+    return embed
+
+
+def _seal_fields(lines: list[str], budget: int) -> tuple[list[dict], int]:
+    """
+    The seal block as Discord fields, and how many lines did not fit.
+
+    One field per chunk under `MAX_FIELD_VALUE`, at most `STAGE3_SEAL_MAX_FIELDS` of
+    them, and never past `budget`. A hash line is 80-odd characters and does
+    not wrap usefully, so a line that does not fit is COUNTED rather than
+    truncated: half a SHA-256 is not a shorter checksum, it is a different
+    string that looks like one.
+    """
+    if not lines or budget <= len(FENCE_OPEN) + len(FENCE_CLOSE) + NOTE_RESERVE:
+        return [], len(lines)
+
+    fields: list[dict] = []
+    spent = 0
+    i = 0
+    while i < len(lines) and len(fields) < STAGE3_SEAL_MAX_FIELDS:
+        chunk: list[str] = []
+        size = len(FENCE_OPEN) + len(FENCE_CLOSE)
+        while i < len(lines):
+            need = len(lines[i]) + (1 if chunk else 0)
+            if size + need > MAX_FIELD_VALUE:
+                break
+            name = "Seals (SHA-256)" if not fields else "Seals (cont.)"
+            if spent + size + need + len(name) + NOTE_RESERVE > budget:
+                break
+            chunk.append(lines[i])
+            size += need
+            i += 1
+        if not chunk:
+            break
+        name = "Seals (SHA-256)" if not fields else "Seals (cont.)"
+        fields.append({"name": name,
+                       "value": FENCE_OPEN + "\n".join(chunk) + FENCE_CLOSE,
+                       "inline": False})
+        spent += size + len(name)
+    return fields, len(lines) - i
+
+
 def build_payload(embed: dict[str, Any]) -> dict[str, Any]:
     return {"embeds": [embed]}
 
@@ -1072,8 +1439,9 @@ def build_parser() -> argparse.ArgumentParser:
         prog="discord_reporter.py",
         description="Post a pipeline card to a Discord webhook: a promotion "
                     "scorecard (--mode promotion), Stage 1's regime-firewall "
-                    "leaderboard (--stage 1), or Stage 2's parameter "
-                    "optimization summary (--stage 2).",
+                    "leaderboard (--stage 1), Stage 2's parameter "
+                    "optimization summary (--stage 2), or Stage 3's gate "
+                    "audit and certification (--stage 3).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Values are printed as supplied - nothing here recomputes a metric.\n"
@@ -1081,7 +1449,8 @@ def build_parser() -> argparse.ArgumentParser:
             "\n"
             "  --mode promotion   --strat X --symbol NQ --tf 15m --pf 1.42 ...\n"
             "  --stage 1          --strat X [--survivors <surviving_assets.json>]\n"
-            "  --stage 2          --strat X [--summary <stage2_summary.json>]"
+            "  --stage 2          --strat X [--summary <stage2_summary.json>]\n"
+            "  --stage 3          --strat X [--audit <stage3_audit_summary.json>]"
         ),
     )
     parser.add_argument("--webhook", default=os.environ.get(ENV_WEBHOOK),
@@ -1090,14 +1459,15 @@ def build_parser() -> argparse.ArgumentParser:
     # dest so they cannot disagree. A card labelled Stage 1 that was built by
     # the promotion path would announce a screen as a promotion.
     parser.add_argument("--mode", dest="mode", default=None,
-                        choices=["promotion", "baseline", "scan"],
+                        choices=["promotion", "baseline", "scan", "audit"],
                         help="promotion (default): the Stage 5 scorecard. "
                              "baseline: Stage 1's regime-firewall leaderboard. "
-                             "scan: Stage 2's parameter optimization summary.")
+                             "scan: Stage 2's parameter optimization summary. "
+                             "audit: Stage 3's gate audit and certification.")
     parser.add_argument("--stage", dest="stage", default=None,
-                        choices=["1", "2", "5"],
+                        choices=["1", "2", "3", "5"],
                         help="1 == --mode baseline, 2 == --mode scan, "
-                             "5 == --mode promotion")
+                             "3 == --mode audit, 5 == --mode promotion")
     parser.add_argument("--strat", required=True, help="strategy name, e.g. sma_momentum_crossover")
     parser.add_argument("--symbol", default="", help="promotion mode: the contract the decision rests on, e.g. NQ")
     parser.add_argument("--tf", default="", help="promotion mode: timeframe, e.g. 15m")
@@ -1109,14 +1479,19 @@ def build_parser() -> argparse.ArgumentParser:
                         help="scan mode: path to stage2_summary.json "
                              "(default: <BT_ARTIFACTS>/pipeline/<strat>/"
                              f"{STAGE2_SUMMARY_FILE})")
+    parser.add_argument("--audit", default=None,
+                        help="audit mode: path to stage3_audit_summary.json "
+                             "(default: <BT_ARTIFACTS>/pipeline/<strat>/"
+                             f"{STAGE3_SUMMARY_FILE})")
     parser.add_argument("--out-dir", default=None,
-                        help="baseline and scan modes: override the pipeline "
-                             "directory the handoff is looked up in")
+                        help="baseline, scan and audit modes: override the "
+                             "pipeline directory the handoff is looked up in")
     parser.add_argument("--max-rows", type=int, default=None,
-                        help=f"baseline mode: leaderboard rows on the card "
-                             f"(default {STAGE1_MAX_ROWS}; scan mode defaults "
-                             f"to {STAGE2_MAX_ROWS}, whose rows carry a "
-                             f"parameter set and are far wider). Whatever does "
+                        help=f"leaderboard rows on the card. Each mode keeps "
+                             f"its OWN default, because the rows are different "
+                             f"widths: baseline {STAGE1_MAX_ROWS}, scan "
+                             f"{STAGE2_MAX_ROWS} (each row carries a parameter "
+                             f"set), audit {STAGE3_MAX_ROWS}. Whatever does "
                              f"not fit is COUNTED on the card, never dropped "
                              f"in silence.")
     parser.add_argument("--pf", default="", help="out-of-sample profit factor, or a token like 'NOT EVALUATED'")
@@ -1137,7 +1512,7 @@ def resolve_mode(mode: str | None, stage: str | None) -> str:
     card. Neither flag given is `promotion`, which is what this script was
     before the Stage 1 mode existed.
     """
-    from_stage = {"1": "baseline", "2": "scan",
+    from_stage = {"1": "baseline", "2": "scan", "3": "audit",
                   "5": "promotion"}.get(stage or "")
     if mode and from_stage and mode != from_stage:
         raise ValueError(f"--mode {mode} and --stage {stage} disagree "
@@ -1180,6 +1555,22 @@ def _build_card(args: argparse.Namespace) -> tuple[dict[str, Any], str]:
                    if str(r.get("status") or "").upper() == OPTIMIZED)
         return embed, (f"Stage 2 optimization '{args.strat}' "
                        f"({done}/{len(rows)} optimised)")
+
+    if mode == "audit":
+        path = Path(args.audit) if args.audit else \
+            default_audit_summary_path(args.strat, args.out_dir)
+        blob = load_stage3(path, args.strat)
+        embed = build_stage3_embed(args.strat, blob, source=path,
+                                   max_rows=(args.max_rows
+                                             if args.max_rows is not None
+                                             else STAGE3_MAX_ROWS))
+        rows = stage3_rows(blob)
+        # `certified` is Stage 3's own flag, not a count re-derived from the
+        # numbers on the card. A reporter that recomputed a verdict would be
+        # free to announce a pass the audit did not record.
+        passed = sum(1 for r in rows if r.get("certified"))
+        return embed, (f"Stage 3 certification '{args.strat}' "
+                       f"({passed}/{len(rows)} certified)")
 
     # The promotion card names one contract, so those two are required here
     # and only here. Checked rather than defaulted: a card headed `?` · `?` is
