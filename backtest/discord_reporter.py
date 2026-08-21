@@ -17,7 +17,13 @@ Two cards, one transport
   OPTIMIZATION summary, read straight out of `stage2_summary.json` - the
   in-sample window, and per configuration the symbol, timeframe, target regime
   quadrant, the selected best parameters, the in-sample profit factor and the
-  max drawdown.
+  max drawdown. Its parameter sets are printed TWICE and deliberately: once in
+  the table with the keys abbreviated (`f=5 s=50 tp=1.5 sl=1.0`) so the
+  fixed-width columns stay aligned, and once below it under
+  `Optimized Parameters (Full)` with every key spelled as the strategy
+  declared it and nothing clipped. The table is what a reader scans; the block
+  is what they retype into `--param`, and a clipped parameter set is the one
+  thing on this card that would be acted on while wrong.
 
 Three cards now, and the reason the count keeps growing is that each one
 announces a DIFFERENT decision. A Stage 2 card is not a promotion and not a
@@ -84,6 +90,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -128,11 +135,47 @@ STAGE1_MAX_ROWS = 40
 # reader is entitled to trust.
 STAGE2_MAX_ROWS = 20
 
-# Parameter sets get long once risk axes are swept. Truncated with an ellipsis
-# rather than wrapped: the authoritative copy is in
-# best_params_<SYMBOL>_<TF>.json, which the card names, and a reflowing
-# fixed-width block is harder to read than a clipped one.
+# Parameter sets get long once risk axes are swept, and a fixed-width table
+# column that reflows is harder to read than a clipped one. So the TABLE cell
+# carries the parameter set with its keys abbreviated (`f=5 s=50 tp=1.5`) and
+# is clipped past this many characters - and every row's UNABBREVIATED,
+# UNCLIPPED parameter set is printed below the table in its own field. The
+# table is for scanning; that block is the copy a reader retypes.
 STAGE2_MAX_PARAM_CHARS = 46
+ELLIPSIS = "\u2026"
+
+# The full-parameter block below the table. One field per chunk, each inside
+# Discord's 1024-character field cap, and at most this many chunks - the embed
+# already carries six other fields and Discord caps an embed at 25 fields and
+# 6000 characters.
+STAGE2_PARAM_FIELD_NAME = "Optimized Parameters (Full)"
+STAGE2_PARAM_MAX_FIELDS = 6
+FENCE_OPEN = "```text\n"
+FENCE_CLOSE = "\n```"
+# Characters held back from the embed budget for the "N further ..." note, so
+# a block that had to leave rows out can always say so.
+NOTE_RESERVE = 96
+# Continuation indent for a parameter set too wide for one field.
+INDENT_WIDTH = 4
+
+# The line under the table that says its cells are abbreviated, in its two
+# forms: the full sets are below, or - when the embed had no room for them -
+# they are in the handoff. The second is deliberately the SHORTER string, so
+# swapping it in after the budget has been measured can only shrink the embed.
+ABBREV_NOTE = ("_Table parameter keys are abbreviated \u2014 the full "
+               "key=value sets are below._")
+ABBREV_NOTE_NO_BLOCK = ("_Table parameter keys are abbreviated \u2014 the "
+                        "full sets are in the handoff._")
+
+# Tokens that say what KIND of parameter something is rather than which one it
+# is. Every period is a period and every stop multiple is quoted in ATRs, so
+# inside one parameter set they distinguish nothing while costing most of the
+# column width. Dropped only to build the TABLE's abbreviation; the full block
+# prints the key exactly as the strategy declared it.
+PARAM_NOISE_TOKENS = frozenset({
+    "window", "windows", "period", "periods", "length", "len", "lookback",
+    "mult", "multiple", "multiplier", "factor", "atr", "bars", "num",
+})
 
 # Stage 2's own colour, distinct from the Stage 1 slate and the promotion
 # green. Violet, and deliberately not green: an optimised parameter set is not
@@ -512,19 +555,122 @@ def stage2_rows(blob: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
+# `fast_window=5, slow_window=50` -> [("fast_window", "5"), ...]. Split only
+# where a comma is followed by an identifier and an `=`, so a value that
+# itself contains a comma - `windows=(5, 10)` - is not torn in half.
+_PARAM_SPLIT = re.compile(r",\s*(?=[A-Za-z_][A-Za-z0-9_]*\s*=)")
+
+
+def parse_param_pairs(value: Any) -> list[tuple[str, str]]:
+    """
+    Split Stage 2's `k=v, k=v` parameter string into pairs, TEXTUALLY.
+
+    No types are restored and no value is reformatted: `False`, `None` and
+    `1.5` reach the card as the characters Stage 2 wrote. This module is a
+    transcription, and a reporter that parsed `None` into a float would be
+    free to print a take-profit that was never modelled.
+
+    Returns `[]` for anything that is not a parameter list - `NOT OPTIMIZED`,
+    `(no winner)`, an empty cell - so the caller passes those through verbatim
+    instead of rendering them as a malformed pair.
+    """
+    text = str(value or "").strip()
+    if not text or "=" not in text:
+        return []
+    pairs: list[tuple[str, str]] = []
+    for chunk in _PARAM_SPLIT.split(text):
+        key, sep, val = chunk.partition("=")
+        if not sep or not key.strip():
+            return []
+        pairs.append((key.strip(), val.strip()))
+    return pairs
+
+
+def _abbrev_key(key: str) -> str:
+    """One key, shortened: `fast_window` -> `f`, `tp_atr_mult` -> `tp`."""
+    tokens = [t for t in key.split("_") if t]
+    if not tokens:
+        return key
+    significant = [t for t in tokens if t.lower() not in PARAM_NOISE_TOKENS]
+    if not significant:
+        # Every token was noise (`atr_mult`); keep them rather than return an
+        # empty name, and let the collision rule below decide if it is unique.
+        significant = tokens
+    if len(significant) == 1:
+        token = significant[0]
+        return token if len(token) <= 3 else token[0]
+    return "".join(t[0] for t in significant)
+
+
+def abbreviate_param_keys(keys: list[str]) -> dict[str, str]:
+    """
+    Map each key to its table abbreviation, refusing to collapse two keys into
+    one.
+
+    A collision gives EVERY key that collided its full name back rather than
+    numbering them: `sl_atr_mult` and `slow_window` both shortening to `s` and
+    being told apart by a trailing `1` is exactly how a stop distance gets read
+    as a moving-average length. A wider column is the cheap failure.
+    """
+    proposed = {k: _abbrev_key(k) for k in keys}
+    taken: dict[str, list[str]] = {}
+    for key, short in proposed.items():
+        taken.setdefault(short, []).append(key)
+    return {k: (short if len(taken[short]) == 1 else k)
+            for k, short in proposed.items()}
+
+
+def compact_params(value: Any) -> str:
+    """
+    The parameter set as a table cell: keys abbreviated, values verbatim,
+    space separated (`f=5 s=50 tp=1.5 sl=1.0 t=False`).
+
+    Nothing is dropped - every parameter Stage 2 recorded is on the cell, only
+    its NAME is shortened, and the full names are printed below the table. A
+    cell that omitted a parameter would describe a run nobody performed.
+    """
+    pairs = parse_param_pairs(value)
+    if not pairs:
+        return str(value or "").strip()
+    short = abbreviate_param_keys([k for k, _ in pairs])
+    return " ".join(f"{short[k]}={v}" for k, v in pairs)
+
+
 def _fmt_params(value: Any, limit: int = STAGE2_MAX_PARAM_CHARS) -> str:
     """
-    A parameter set for one table cell.
+    A parameter set for one table cell, abbreviated and then clipped.
 
     Never `--`: a row that reached the card without parameters is either an
     errored sweep (which says so) or a grid that produced no measurable Sharpe,
     and both are findings. `NOT OPTIMIZED` and `(no winner)` are written by
     Stage 2 and passed through verbatim.
+
+    The ellipsis is a backstop now rather than the card's answer to a wide
+    parameter set: whatever is clipped here is printed in full, under its real
+    key names, in the block below the table.
     """
-    text = str(value or "").strip()
+    text = compact_params(value)
     if not text:
         return "not recorded"
-    return text if len(text) <= limit else text[: limit - 1] + "…"
+    return text if len(text) <= limit else text[: limit - 1] + ELLIPSIS
+
+
+def _stage2_sort_key(row: dict[str, Any]) -> tuple:
+    """
+    The card's row order: optimised configurations by in-sample profit factor
+    descending, errored ones last, ties by symbol and timeframe.
+
+    One function because the table and the full-parameter block below it are
+    read as the same list - row three of one has to be row three of the other,
+    and two sorts would be free to disagree about which contract that is.
+    """
+    ok = str(row.get("status") or "").upper() == OPTIMIZED
+    try:
+        pf = float(row.get("profit_factor"))
+    except (TypeError, ValueError):
+        pf = float("-inf")
+    return (0 if ok else 1, -pf if ok else 0.0,
+            str(row.get("symbol") or ""), str(row.get("timeframe") or ""))
 
 
 def format_stage2_table(rows: list[dict[str, Any]],
@@ -545,16 +691,7 @@ def format_stage2_table(rows: list[dict[str, Any]],
     body: list[list[str]] = []
     legend: dict[str, str] = {}
 
-    def _key(row: dict[str, Any]) -> tuple:
-        ok = str(row.get("status") or "").upper() == OPTIMIZED
-        try:
-            pf = float(row.get("profit_factor"))
-        except (TypeError, ValueError):
-            pf = float("-inf")
-        return (0 if ok else 1, -pf if ok else 0.0,
-                str(row.get("symbol") or ""), str(row.get("timeframe") or ""))
-
-    ordered = sorted(rows, key=_key)
+    ordered = sorted(rows, key=_stage2_sort_key)
     shown = ordered[: max(0, int(max_rows))]
     for row in shown:
         quad = row.get("quadrant")
@@ -594,6 +731,160 @@ def format_stage2_table(rows: list[dict[str, Any]],
     return "\n".join(out), len(ordered) - len(shown), legend
 
 
+def stage2_param_lines(rows: list[dict[str, Any]]) -> list[str]:
+    """
+    One line per configuration: `SYMBOL  TF  <parameter set, verbatim>`.
+
+    The parameter set is the string Stage 2 wrote, with its real key names and
+    nothing clipped - this block exists so the card carries a copy that can be
+    retyped into `--param` without opening the handoff. The symbol and
+    timeframe columns are padded so the sets line up under each other; a
+    reader comparing two contracts is comparing the values, and ragged left
+    edges are what makes that hard.
+
+    Rows arrive in the table's order, so line 1 here is row 1 there.
+    """
+    if not rows:
+        return []
+    cells = [(str(r.get("symbol") or "?"), str(r.get("timeframe") or "?"),
+              str(r.get("params") or "").strip() or "not recorded")
+             for r in rows]
+    sym_w = max(len(c[0]) for c in cells)
+    tf_w = max(len(c[1]) for c in cells)
+    return [f"{sym:<{sym_w}}  {tf:<{tf_w}}  {params}"
+            for sym, tf, params in cells]
+
+
+def format_stage2_param_fields(rows: list[dict[str, Any]],
+                               budget: int = MAX_EMBED_TOTAL,
+                               max_fields: int = STAGE2_PARAM_MAX_FIELDS,
+                               name: str = STAGE2_PARAM_FIELD_NAME
+                               ) -> tuple[list[dict[str, Any]], int]:
+    """
+    The full parameter sets as embed fields, packed to Discord's limits.
+
+    The table above them abbreviates and clips, because a fixed-width column
+    has to align; this is the unabbreviated record, and it covers EVERY
+    configuration in the matrix - including the rows the table's own row cap
+    left off, and including a failed sweep's `NOT OPTIMIZED`, which is a
+    finding rather than a missing parameter set.
+
+    `budget` is what is left of the 6000-character embed after the description
+    and the other fields, and a line that does not fit is COUNTED in the
+    returned `hidden` - the same rule as every other cap on these cards, and
+    for the same reason: a silently shortened list of winning parameters reads
+    as the whole stage. A line too wide for one field is WRAPPED, never
+    clipped; the whole point of the block is that nothing in it is cut.
+
+    Returns `(fields, hidden)`.
+    """
+    lines = stage2_param_lines(rows)
+    if not lines:
+        return [], 0
+
+    fence_cost = len(FENCE_OPEN) + len(FENCE_CLOSE)
+    # Room for the "N further ..." note, which is appended to the last field.
+    room = int(budget) - NOTE_RESERVE
+    width = min(MAX_FIELD_VALUE, room) - fence_cost - len(name) - len(" \u00b7 cont.")
+    if width <= 0:
+        return [], len(lines)
+
+    wrapped: list[str] = []
+    for line in lines:
+        wrapped.extend(_wrap_param_line(line, width))
+
+    fields: list[dict[str, Any]] = []
+    cursor = 0
+    while cursor < len(wrapped) and len(fields) < max_fields:
+        label = name if not fields else f"{name} \u00b7 cont."
+        # Recomputed per field: `room` shrinks as fields are appended, and a
+        # capacity fixed at the first field's size is how an embed clears a
+        # local check and is rejected with a 400 nobody reads.
+        capacity = min(MAX_FIELD_VALUE, room - len(label)) - fence_cost
+        if capacity <= 0:
+            break
+        chunk: list[str] = []
+        used = 0
+        while cursor < len(wrapped):
+            addition = len(wrapped[cursor]) + (1 if chunk else 0)
+            if used + addition > capacity:
+                break
+            chunk.append(wrapped[cursor])
+            used += addition
+            cursor += 1
+        if not chunk:
+            break
+        field = {"name": label,
+                 "value": FENCE_OPEN + "\n".join(chunk) + FENCE_CLOSE,
+                 "inline": False}
+        fields.append(field)
+        room -= len(field["name"]) + len(field["value"])
+
+    # `hidden` counts CONFIGURATIONS, not wrapped physical lines: a reader
+    # chasing "3 further configurations" into the handoff is looking for three
+    # contracts, and a count of line fragments would send them looking for a
+    # number of rows that is not in the file. A configuration whose line was
+    # cut mid-wrap counts as hidden, because a half-printed parameter set is
+    # not a printed one.
+    cut_mid_row = (cursor < len(wrapped)
+                   and wrapped[cursor].startswith(" " * INDENT_WIDTH))
+    hidden = len(lines) - _count_configurations(wrapped[:cursor], cut_mid_row)
+    if hidden > 0:
+        note = (f"\n_{hidden} further configuration(s) not shown \u2014 see "
+                f"`best_params_<SYMBOL>_<TF>.json`._")
+        if fields:
+            fields[-1]["value"] += note
+    return fields, max(0, hidden)
+
+
+def _param_field(name: str, lines: list[str], index: int) -> dict[str, Any]:
+    """One packed field. Continuations say so rather than repeating the name
+    unqualified, which would read as a second, different list."""
+    return {
+        "name": name if index == 0 else f"{name} \u00b7 cont.",
+        "value": FENCE_OPEN + "\n".join(lines) + FENCE_CLOSE,
+        "inline": False,
+    }
+
+
+def _wrap_param_line(line: str, width: int) -> list[str]:
+    """
+    Wrap one configuration's line to `width`, continuations indented.
+
+    Wrapped rather than clipped, and split on the parameter separator rather
+    than mid-token: half of `sl_atr_mult=1.0` on one line and half on the next
+    is a value a reader can misread as a whole one.
+    """
+    if len(line) <= width or width <= INDENT_WIDTH + 1:
+        return [line]
+    out: list[str] = []
+    remaining = line
+    indent = ""
+    while len(remaining) > width:
+        cut = remaining.rfind(" ", 0, width + 1)
+        if cut <= len(indent):
+            cut = width
+        out.append(remaining[:cut].rstrip())
+        indent = " " * INDENT_WIDTH
+        remaining = indent + remaining[cut:].lstrip()
+    out.append(remaining)
+    return out
+
+
+def _count_configurations(lines: list[str], cut_mid_row: bool = False) -> int:
+    """
+    How many WHOLE configurations a slice of wrapped lines covers.
+
+    A continuation is indented, so it is not a row of its own. `cut_mid_row`
+    says the slice ended with a configuration's continuation still to come, and
+    that row is not counted: a half-printed parameter set is not a printed one,
+    and counting it would leave a reader one contract short with nothing on the
+    card saying so.
+    """
+    whole = sum(1 for line in lines if not line.startswith(" " * INDENT_WIDTH))
+    return max(0, whole - 1) if cut_mid_row else whole
+
+
 def build_stage2_embed(strat: str, blob: dict[str, Any],
                        source: str | Path | None = None,
                        max_rows: int = STAGE2_MAX_ROWS) -> dict[str, Any]:
@@ -608,6 +899,7 @@ def build_stage2_embed(strat: str, blob: dict[str, Any],
     is a run failure rather than a screening result.
     """
     rows = stage2_rows(blob)
+    ordered = sorted(rows, key=_stage2_sort_key)
     optimized = [r for r in rows
                  if str(r.get("status") or "").upper() == OPTIMIZED]
     table, hidden, legend = format_stage2_table(rows, max_rows)
@@ -638,6 +930,11 @@ def build_stage2_embed(strat: str, blob: dict[str, Any],
         description.append(
             f"_{hidden} further configuration(s) are not shown — the full "
             f"matrix is in the handoff._")
+    if any(str(r.get("params") or "").strip() for r in rows):
+        # The table's cells are abbreviated and clipped, so the card has to say
+        # where the copy that is neither lives. Without this line an `f=5` cell
+        # reads as the parameter name the strategy declared.
+        description.append(ABBREV_NOTE)
 
     text = "\n".join(description)
     if len(text) > MAX_EMBED_DESCRIPTION:
@@ -666,11 +963,9 @@ def build_stage2_embed(strat: str, blob: dict[str, Any],
                    else f"none by design; {errors} configuration(s) failed to "
                         f"sweep and carry no parameters"),
          "inline": True},
-        {"name": "Handoff", "value": _fmt_report(str(source or "")),
-         "inline": False},
     ]
 
-    return {
+    embed = {
         "title": f"\U0001F39B\uFE0F Stage 2 · Parameter Optimization: {strat}",
         "description": text,
         # Violet when something was optimised, amber when nothing was. Amber
@@ -682,6 +977,26 @@ def build_stage2_embed(strat: str, blob: dict[str, Any],
                            "optimization · values as recorded by scan.py, not "
                            "recomputed"},
     }
+
+    # The full parameter sets go in LAST, on whatever the rest of the card
+    # left of Discord's 6000 characters. Sized against the FINISHED embed
+    # rather than against a constant, because the description holding the
+    # table is most of it: a fixed reservation would either starve this block
+    # under a wide table or overflow the embed under a narrow one.
+    handoff = {"name": "Handoff", "value": _fmt_report(str(source or "")),
+               "inline": False}
+    budget = (MAX_EMBED_TOTAL - _embed_size(embed)
+              - len(handoff["name"]) - len(handoff["value"]))
+    param_fields, _hidden = format_stage2_param_fields(ordered, budget=budget)
+    if not param_fields:
+        # The block did not fit at all. The note must not keep pointing at it:
+        # a line saying the full parameters are below, with nothing below, is
+        # worse than the clipped cells it was added to explain. The
+        # replacement is SHORTER, so the budget just measured still holds.
+        embed["description"] = embed["description"].replace(
+            ABBREV_NOTE, ABBREV_NOTE_NO_BLOCK)
+    embed["fields"] = fields + param_fields + [handoff]
+    return embed
 
 
 def build_payload(embed: dict[str, Any]) -> dict[str, Any]:
