@@ -219,7 +219,7 @@ bt-status  # = .venv/bin/python3 ~/src/trading/backtest/status.py
 streamlit run dashboard/app.py
 
 # Tests. No pytest config - each is a script that exits non-zero on failure.
-# Eighteen suites. Everything except test_streaming_lake, test_engine_batching
+# Nineteen suites. Everything except test_streaming_lake, test_engine_batching
 # and test_engine_vbt runs without the lake or a network (test_batch_runner's
 # --symbols checks and test_intraday_vol_mr's real-bar section skip, loudly,
 # without it). test_report_gates.py shells out to `node` for the trade
@@ -242,6 +242,7 @@ python tests/test_regime_cache.py      # regime quadrants, theta_vol, the lake j
 python tests/test_profiler_precomputed.py  # the profiler reads the cache, not its own pass
 python tests/test_stage1_charter.py     # the Stage 1 charter + the Discord card
 python tests/test_stage2_charter.py     # the Stage 2 charter: pairs, window, plateau
+python tests/test_stage3_charter.py     # the Stage 3 charter: Gate R, retention, the seal
 OMP_NUM_THREADS=1 \
   python tests/test_sma_momentum_crossover.py   # ADX vs TA-Lib, layers, ml_features
 
@@ -295,13 +296,23 @@ python3 backtest/scan.py        --strat X            # 2: optimise the survivors
 # resamples in the stage. Stages 3 and 4 take ONE timeframe.
 python3 backtest/baseline.py --strat X --symbols ALL --tf 1m,5m,15m,30m \
     --start 2013-01-01 --end 2022-12-31
+python3 backtest/audit_gates.py --strat X --tf 15m            # 3: certify
+# STAGE 3 ONLY: with no --symbols it certifies the EXACT (symbol, timeframe)
+# pairs stage2_summary.json optimised, with the parameters LOCKED. The windows
+# default to the charter's, and --holdout-end defaults to the PRESENT rather
+# than a hardcoded year. The VERDICT is Gate R: profit factor >= 1.00 over
+# >= 30 trades inside the ONE quadrant Stage 1 designated, measured on the
+# holdout. Gates 1-3 are computed and reported as EVIDENCE and cannot fail a
+# certification - nothing is pruned on a blended-sample metric and no
+# prop-firm rule is applied. A pass is SHA-256 sealed and staged into
+# strategies/approved_incubator/, never git-committed.
+python3 backtest/audit_gates.py --strat X --tf 15m --no-promote   # certify only
 python3 backtest/audit_gates.py --strat X --tf 15m \
-    --is-start 2013-01-01 --is-end 2022-12-31 \
-    --holdout-start 2023-01-01 --holdout-end 2026-01-01   # 3: certify
+    --regime-min-pf 1.25 --regime-min-trades 50   # tighten Gate R's bars
 python3 backtest/verify_full.py --strat X --tf 15m \
     --start 2010-01-01 --end 2026-01-01       # 4: tear sheets + cost drag
 python3 backtest/promote.py --strat X --version A --source <module.py> \
-    --audit-file /mnt/backtest/artifacts/pipeline/X/gate_audit_NQ.json  # 5
+    --audit-file /mnt/backtest/artifacts/pipeline/X/gate_audit_NQ_15m.json  # 5
 
 # The entry filters. Available on all five stages AND on bt-run, spelled
 # identically because they come from one add_filter_args().
@@ -329,6 +340,10 @@ python3 backtest/baseline.py --strat X --symbols ALL --tf 15m --no-ml
 python3 backtest/discord_reporter.py --stage 1 --strat X
 # Stage 2's parameter-optimization card, read from stage2_summary.json.
 python3 backtest/discord_reporter.py --stage 2 --strat X
+# Stage 3's gate-audit & certification card, read from
+# stage3_audit_summary.json: both windows, the target quadrant, Gate R, the
+# IS/OOS profit factors and the SHA-256 seal.
+python3 backtest/discord_reporter.py --stage 3 --strat X
 python3 backtest/discord_reporter.py --stage 1 --strat X \
     --survivors /mnt/backtest/artifacts/pipeline/X/surviving_assets.json
 # Stage 2 still HONOURS an exclude_days a handoff carries; nothing writes one.
@@ -1002,7 +1017,10 @@ tuple, and a handoff written before the contract existed simply yields `{}`.
 inheritance path in Stage 2 and Stage 3 is unchanged and still honours a handoff
 that carries days, but nothing in the pipeline writes one any more. `STAGE2_SUMMARY_FILE` / `STAGE2_MATRIX_FILE` name Stage 2's summary matrix in
 its two forms — the JSON handoff the Discord card reads, and the CSV a human
-does. `leaderboard(title, header, rows)` renders the end-of-stage table for all
+does. `STAGE3_SUMMARY_FILE` (`stage3_audit_summary.json`) is Stage 3's
+equivalent: one file for the whole certification run, beside the per-contract
+`gate_audit_<SYMBOL>_<TF>.json` files that remain the AUTHORITATIVE verdict a
+promotion rests on — the summary is the index over them, never a replacement. `leaderboard(title, header, rows)` renders the end-of-stage table for all
 three stages — one implementation, because these are read as a sequence and a
 Symbol column aligned one way in Stage 1 and another in Stage 2 makes two tables
 of the same contracts look like tables of different things. Columns size to
@@ -1183,17 +1201,101 @@ one environment they cleared.
   table, and carried in full on every handoff row.
 
 **`backtest/audit_gates.py`** — **Stage 3**, and the only script that produces a
-gate verdict anybody may act on. Runs the three separate pieces of evidence —
-in-sample metrics, walk-forward + Monte Carlo, and the holdout — and writes
-`gate_audit_<SYMBOL>.json`.
+gate verdict anybody may act on. Locks the parameters Stage 2 selected, runs
+them once over the untouched holdout, and writes `gate_audit_<SYMBOL>_<TF>.json`
+per configuration plus `stage3_audit_summary.json` over the run.
+
+**The Regime-Switching Incubator Charter binds this stage from 2026-08-21, and
+it changed what a certification IS.** The verdict is no longer the roll-up of
+Gates 1, 2 and 3. It is **Gate R**, and all six clauses are enforced in the
+module rather than left to how the command was typed:
+
+- **The verdict is Gate R — the edge, out of sample, inside ONE quadrant.**
+  `regime_gate` reads the holdout's four-quadrant profile and scores only the
+  `optimal_regime` Stage 1 designated: `MIN_REGIME_PROFIT_FACTOR` (1.00) over
+  `MIN_REGIME_TRADES` (30) in that quadrant, **imported from
+  `backtest.baseline`** so a screen and a certification can never be held to
+  different numbers. Both bars bind on the SAME quadrant. Three outcomes are
+  kept apart because they are fixed by different work: a FAIL on the count
+  (including a quadrant the strategy never traded out of sample, which the note
+  says outright rather than reporting as a loss), a FAIL on the factor, and
+  **NOT EVALUATED when no quadrant was designated — which is not a pass.** The
+  quadrant is an INPUT: re-picking the best of four on the holdout would make
+  Gate R a selection made on the bars it exists to be unseen evidence about,
+  and almost anything clears 1.00 given four attempts. A quadrant name outside
+  `profiler.REGIMES` RAISES — left alone it reads as zero trades, which is a
+  broken handoff reported as a strategy that stopped trading.
+- **Gates 1, 2 and 3 are computed in full, reported in full, and CANNOT fail a
+  certification.** They score the BLENDED sample across every market state, and
+  a strategy whose live supervisor stands it down outside its quadrant never
+  trades that sample — failing it there prunes on a result nobody will realise.
+  `charter_audit` folds Gate R in, sets `status`/`passed` from it alone, and
+  keeps the pre-charter roll-up verbatim as `aggregate_status` so the verdict
+  reads as MOVED rather than quietly dropped. **A configuration can now be
+  CERTIFIED with a failing Gate 1. That is the intended effect.** The audit's
+  shape is unchanged, so `promote.load_gate_certification` and Stage 5 need no
+  change — what moved is what `status` means.
+- **The parameters are LOCKED.** Targets come from `stage2_summary.json` as
+  exact `(symbol, timeframe)` pairs via `stage2_targets`, not from a glob of
+  `best_params_*.json` — a superseded sweep's winner sits in that directory
+  indistinguishable from a current one. `--param` still overrides, because an
+  operator correcting the record outranks a file, but it BREAKS THE LOCK and
+  says so: `params_locked: false` with every overridden key named. Rows Stage 2
+  recorded as ERROR are carried through as skips with a reason, never dropped —
+  a Stage 3 input shorter than the Stage 2 output turns "the sweep never ran"
+  into "this was certified and failed".
+- **`--holdout-end` defaults to the PRESENT**, not to a hardcoded year. A fixed
+  end silently stops certifying against the newest bars the moment a year rolls
+  over, and the verdict looks identical either way. `check_windows` accepts an
+  open-ended holdout for that reason and still refuses an open-ended or
+  overlapping IN-SAMPLE window. The window defaults now come from
+  `pipeline.CHARTER_IS_START` / `CHARTER_IS_END` / `HOLDOUT_START` rather than
+  from three more copies of the same dates.
+- **No prop-firm rule reaches a verdict.** `_assert_no_prop_firm_rules` REFUSES
+  a config carrying `trailing_drawdown_pct` or `daily_loss_limit` and records
+  the absence on the audit. The stage never sets them, so the check reads as
+  paranoia; it is written down because what it guards is invisible — a trailing
+  drawdown set here cuts the equity curve short and changes nothing else on the
+  console.
+- **`retention_scores` is clause 5, and it is REPORTED, never scored.** Profit
+  factor, Sharpe, max drawdown and win rate, in-sample against holdout. The
+  drawdown ratio is inverted (`|in-sample| / |holdout|`) so above 1.00 means
+  "held up" on every row — a raw `oos/is` would score a strategy that drew down
+  twice as deep at 2.00 and sort it to the top. A ratio is `None`, never 0.0,
+  when either side is missing or the denominator is zero.
+- **A pass is sealed and staged.** `seal_and_promote` writes
+  `strategies/approved_incubator/<strategy>/` through `backtest.promote.promote`
+  — reused rather than reimplemented, so Stage 3 and Stage 5 cannot disagree
+  about what was promoted — and adds a `seal` block to its `meta.json`: SHA-256
+  of the strategy code, of `best_params_<SYMBOL>_<TF>.json` and of
+  `gate_audit_<SYMBOL>_<TF>.json`. Three hashes because they can be separated:
+  the same code under a different winning cell is a different strategy with the
+  same code checksum. A missing artifact reads `"NOT AVAILABLE"` rather than
+  being omitted. **Nothing is git-committed** — `commit=False`, always; the
+  commit and the four-choice menu stay Stage 5's, in front of a human.
+  `--no-promote` declines the staging, and a refusal is RETURNED as an error row
+  rather than raised, so a completed certification is not thrown away because
+  staging hit a read-only checkout.
+- **`stage3_audit_summary.json`** is the run's handoff, written through
+  `pipeline.write_stage` and read by `discord_reporter.py --stage 3`. It
+  computes NOTHING — every value is transcribed from an audit this run already
+  wrote, so the index can never disagree with the verdicts it indexes. Errors
+  and skips are rows with `status: "NOT AUDITED"`, which is deliberately not
+  `FAIL`: "the run broke" and "the edge did not generalise" must not share a
+  token.
+- Audits are written per PAIR (`gate_audit_<SYMBOL>_<TF>.json`) as well as to
+  the unsuffixed name Stage 5's documented command uses. Certifying NQ at 30m
+  after certifying it at 15m would otherwise replace the 15m verdict with no
+  trace; the replacement is now announced and the per-pair file survives it.
 
 - **`check_windows` refuses an in-sample window that runs into the holdout**,
   before any bars are read. It also refuses an omitted `--is-end`, which runs
   to the end of the lake and eats the holdout. This is the one check that can
   invalidate everything else in the file.
-- Parameters come from Stage 2's `best_params_<SYMBOL>.json`. A missing file is
-  an ERROR, not a silent fall back to the defaults — `--defaults` is how you say
-  you meant it. `variants_tested` travels with them onto the audit.
+- Parameters come from Stage 2's `best_params_<SYMBOL>_<TF>.json`. A missing
+  file is an ERROR, not a silent fall back to the defaults — `--defaults` is how
+  you say you meant it, and it reports NO lock rather than claiming one.
+  `variants_tested` travels with them onto the audit.
 - **`_resolve_filters` inherits Stage 2's `exclude_days`** so the certification
   is of the week the parameters were actually selected on. Certifying the whole
   week when the winner was chosen with Monday masked out scores a strategy
@@ -1204,14 +1306,17 @@ in-sample metrics, walk-forward + Monte Carlo, and the holdout — and writes
   its dates can be rule-generated and approximate, and an approximate blocking
   window must not creep into a gate verdict unasked.
 - **`certification_leaderboard` is the table the stage ends on** — one row per
-  (contract, VERSION), with Gate 1, Gate 2 and Gate 3 shown SEPARATELY, then the
-  rolled-up `CERTIFIED` / `NOT CERTIFIED`, then the excluded days the gates were
-  run on. The three gates are separate columns because they fail for different
-  reasons and are fixed by different work, and because a `NOT EVAL` is a run
-  that has not been done rather than a statement about the strategy — one
-  PASS/FAIL column makes those indistinguishable. `FINAL STATUS` is
-  `audit["passed"]`, so a NOT EVALUATED reads as NOT CERTIFIED, which is what
-  Stage 5 enforces.
+  (contract, VERSION): the target `QUAD`, `GATE R (OOS REGIME)` with the
+  quadrant profit factor and trade count it was measured on, then Gate 1,
+  Gate 2 and Gate 3 SEPARATELY, then the rolled-up `CERTIFIED` /
+  `NOT CERTIFIED`, then the excluded days the gates were run on. The quadrant
+  travels with the profit factor because an OOS PF with no quadrant beside it
+  is a blended number under a regime-gated verdict. The three advisory gates
+  stay separate columns because they fail for different reasons and are fixed
+  by different work, and because a `NOT EVAL` is a run that has not been done
+  rather than a statement about the strategy — one PASS/FAIL column makes those
+  indistinguishable. `FINAL STATUS` is `audit["passed"]`, now Gate R alone, so
+  a NOT EVALUATED reads as NOT CERTIFIED, which is what Stage 5 enforces.
 - The walk-forward runs with FIXED parameters unless `--wfo-grid` is passed,
   which is recorded as `wfo_optimized: false`; with nothing selected per fold
   the ratio compares two time periods rather than fitted-versus-unseen.
@@ -1237,12 +1342,38 @@ PID is gone reads as **STALE**, because a bar frozen at 12/27 looks identical
 whether the run is slow or dead.
 
 **`backtest/discord_reporter.py`** — the webhook notifier, and the only place
-this repo posts anything to Discord. Three cards over one transport:
+this repo posts anything to Discord. Four cards over one transport:
 `--mode promotion` (the default, `--stage 5`) is the promotion scorecard, whose
 values are passed in on the command line; `--stage 1` / `--mode baseline` is
 Stage 1's regime-firewall leaderboard, read straight out of
 `surviving_assets.json`; `--stage 2` / `--mode scan` is Stage 2's parameter
-optimization summary, read straight out of `stage2_summary.json`.
+optimization summary, read straight out of `stage2_summary.json`; `--stage 3` /
+`--mode audit` is Stage 3's gate audit and certification, read straight out of
+`stage3_audit_summary.json`.
+
+- **The Stage 3 card carries the whole claim per configuration**: the strategy,
+  BOTH windows (in-sample, so a reader knows what the parameters were fitted
+  to, and the holdout, which is the verdict — an open end prints as `present`),
+  the symbol, timeframe, target regime quadrant, Gate R's status, the quadrant
+  profit factor and trade count Gate R was measured on, the IS and OOS blended
+  profit factors side by side, and the SHA-256 seal. **Three profit factors per
+  row, each labelled**, because only one of them decided anything: `REG PF` is
+  what Gate R scored, and `IS PF`/`OOS PF` are the blended pair that says
+  whether the edge collapsed. Printing the holdout factor alone would let a
+  1.10 that fell from 2.40 read as a healthy one. The `Verdict` line states in
+  words that Gates 1–3 are advisory, because a `CERTIFIED` beside a failing
+  Gate 1 otherwise reads as a bug in the roll-up.
+- **Seals are printed twice**, for the same reason Stage 2's parameter sets
+  are: a 12-character prefix in the table so the fixed-width columns stay
+  aligned, and all three hashes in full below it, which is the copy a reader
+  checks against a promoted `meta.json`. A truncated hash presented as the hash
+  is a checksum nobody can verify. Only configurations that were actually
+  STAGED get a seal block — a checksum of a file the reader cannot find is
+  worse than none.
+- **It re-scores nothing.** The card prints the `gate_regime` status and the
+  `certified` flag Stage 3 recorded, so it can never announce a certification
+  the audit refused. A configuration Stage 3 could not audit is a row reading
+  NOT AUDITED, never a shorter table.
 
 - **The Stage 2 card carries what the charter asks for and nothing derived**:
   the strategy, the in-sample window (with the holdout date it did not touch),
@@ -1584,6 +1715,16 @@ Recalibrated 2026-08-16 for single-strategy account governance.
 | **2 · Robustness** | WFO efficiency | >= 0.50 |
 | | Monte Carlo 95% max DD | <= 18.0 % |
 | **3 · OOS Holdout** | Holdout / IS retention | >= 0.80 (<= 20% degradation) |
+
+**These three are the `bt-run` dual-version audit, and since 2026-08-21 they no
+longer decide a Stage 3 CERTIFICATION.** `backtest/audit_gates.py` folds in
+**Gate R** — profit factor >= 1.00 over >= 30 trades inside the one quadrant
+Stage 1 designated, measured on the holdout — and takes its verdict from that
+alone; Gates 1, 2 and 3 are computed and reported there as evidence and cannot
+fail a certification. Everything in this section is unchanged for `bt-run`,
+which evaluates Gate 1 and reports the other two as NOT EVALUATED. See the
+`backtest/audit_gates.py` entry above for why the verdict moved and what is
+kept on the file so the move is legible (`aggregate_status`).
 
 **Sharpe no longer fails Gate 1.** It is still computed on daily closes, still
 printed on every scorecard and tear sheet, and still the metric Gate 3
