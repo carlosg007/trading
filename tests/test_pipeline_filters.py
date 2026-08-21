@@ -1830,27 +1830,42 @@ def test_stage2_winners_leaderboard() -> None:
 
 def test_stage3_certification_leaderboard() -> None:
     print("\n29e. STAGE 3 GATE CERTIFICATION LEADERBOARD")
-    from backtest.audit_gates import certification_leaderboard
+    from backtest.audit_gates import GATE_R, certification_leaderboard
     from backtest.report import FAIL, NOT_EVALUATED, PASS
 
+    # Under the Regime-Switching Incubator Charter the verdict is Gate R -
+    # the holdout profit factor and trade count INSIDE the designated
+    # quadrant. Gates 1-3 are still on the row and still individually, but
+    # they are advisory: NQ/A below certifies with a FAILING Gate 1, which is
+    # the whole point of the change and would have been impossible before it.
     results = [
-        {"symbol": "ES", "timeframe": "15m", "path": Path("gate_audit_ES.json"),
+        {"symbol": "ES", "timeframe": "15m",
+         "path": Path("gate_audit_ES_15m.json"),
          "status": {"A": FAIL}, "passed": {"A": False},
+         "target_quadrant": "Q2",
          "gates": {"A": {"gate1": FAIL, "gate2": NOT_EVALUATED,
-                         "gate3": NOT_EVALUATED}},
+                         "gate3": NOT_EVALUATED, GATE_R: FAIL}},
+         "regime_measured": {"A": {"profit_factor": 0.61,
+                                   "trade_count": 400}},
          "exclude_days": []},
-        {"symbol": "NQ", "timeframe": "15m", "path": Path("gate_audit_NQ.json"),
+        {"symbol": "NQ", "timeframe": "15m",
+         "path": Path("gate_audit_NQ_15m.json"),
          "status": {"A": PASS, "B": FAIL}, "passed": {"A": True, "B": False},
-         "gates": {"A": {"gate1": PASS, "gate2": PASS, "gate3": PASS},
+         "target_quadrant": "Q1",
+         "gates": {"A": {"gate1": FAIL, "gate2": PASS, "gate3": PASS,
+                         GATE_R: PASS},
                    "B": {"gate1": PASS, "gate2": FAIL,
-                         "gate3": NOT_EVALUATED}},
+                         "gate3": NOT_EVALUATED, GATE_R: FAIL}},
+         "regime_measured": {"A": {"profit_factor": 1.42, "trade_count": 88},
+                             "B": {"profit_factor": 0.90, "trade_count": 40}},
          "exclude_days": [0, 4]},
     ]
     out = certification_leaderboard(results)
     check("the leaderboard is titled as specified",
           "STAGE 3 GATE CERTIFICATION LEADERBOARD" in out)
-    for col in ("SYMBOL", "TF", "GATE 1 (IS)", "GATE 2 (WFO/MC)",
-                "GATE 3 (OOS)", "FINAL STATUS"):
+    for col in ("SYMBOL", "TF", "QUAD", "GATE R (OOS REGIME)", "OOS PF",
+                "OOS N", "GATE 1 (IS)", "GATE 2 (WFO/MC)", "GATE 3 (OOS)",
+                "FINAL STATUS"):
         check(f"...and carries the {col!r} column", col in out)
     body = [ln for ln in out.splitlines()
             if ln.strip().startswith(("NQ", "ES"))]
@@ -1858,12 +1873,23 @@ def test_stage3_certification_leaderboard() -> None:
           len(body) == 3, str(body))
     check("what passed sorts first", "CERTIFIED" in body[0]
           and "NOT CERTIFIED" not in body[0], body[0])
+
+    # The charter's central claim, on the table: the verdict follows Gate R,
+    # and an aggregate gate cannot veto it. Before 2026-08-21 this row would
+    # have read NOT CERTIFIED on the strength of the Gate 1 FAIL beside it.
+    check("a CERTIFIED row can carry a FAILING advisory Gate 1 - nothing is "
+          "pruned on a blended-sample metric",
+          "CERTIFIED" in body[0] and "FAIL" in body[0], body[0])
+    check("the quadrant Gate R was measured in is on the row - an OOS profit "
+          "factor with no quadrant beside it is a blended number under a "
+          "regime-gated verdict", "Q1" in body[0], body[0])
+    check("...with the quadrant's own profit factor and trade count",
+          "1.42" in body[0] and "88" in body[0], body[0])
     check("a gate that was never run reads NOT EVAL, never PASS and never FAIL",
           "NOT EVAL" in out and sum("NOT EVAL" in ln for ln in body) == 2,
           str(body))
-    check("...and a version with one NOT EVAL is NOT CERTIFIED",
-          all("NOT CERTIFIED" in ln for ln in body if "NOT EVAL" in ln),
-          str(body))
+    check("a FAILING Gate R is NOT CERTIFIED however the advisory gates read",
+          all("NOT CERTIFIED" in ln for ln in body[1:]), str(body[1:]))
     check("the certified week is on the row - the gates were run on it",
           "Mon, Fri" in body[0], body[0])
     check("no completed audit still prints the table",
