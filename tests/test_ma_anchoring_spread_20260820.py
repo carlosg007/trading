@@ -87,7 +87,8 @@ from agents.tier3_workers import (apply_ml_signal_filter,        # noqa: E402
                                   StrategyLoadError)
 from agents.tier3_workers import _bar_timestamps as SHARED_TIMESTAMPS  # noqa: E402
 from backtest.engine import unpack_signals                       # noqa: E402
-from strategies.experimental import ema_crossover as EC          # noqa: E402
+from strategies.experimental import (                            # noqa: E402
+    ema_crossover_20260821 as EC)
 from strategies.experimental import ma_anchoring_spread_20260820 as M  # noqa: E402
 
 MODULE_PATH = (REPO / "strategies" / "experimental"
@@ -900,7 +901,7 @@ def test_the_walk_kernel_is_the_shared_one_character_for_character() -> None:
     mine = inspect.getsource(M._walk_loop)
     theirs = inspect.getsource(EC._walk_loop)
     assert mine == theirs, (
-        "this module's _walk_loop has drifted from ema_crossover's - the stop, "
+        "this module's _walk_loop has drifted from ema_crossover_20260821's - the stop, "
         "target and trailing behaviour are no longer the shared ones")
 
 

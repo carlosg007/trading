@@ -355,7 +355,7 @@ trade count read without knowing them is being read wrong.
 
    `_walk` keeps a `sig_exit` argument per side regardless, and this module
    passes an all-False array into both. The slots stay so the kernel remains
-   identical to `ema_crossover`'s, which `tests/test_risk_params.py` pins;
+   identical to `ema_crossover_20260821`'s, which `tests/test_risk_params.py` pins;
    wiring the opposite crossover into them is a one-line change if the
    specification ever gains that exit.
 
@@ -367,7 +367,7 @@ trade count read without knowing them is being read wrong.
    this module contains session logic at all, which strategies otherwise must
    not.
 
-   `_walk` here is an independent COPY of the one in `ema_crossover.py`, not an
+   `_walk` here is an independent COPY of the one in `ema_crossover_20260821.py`, not an
    import. Strategy modules are loaded from a file path and are deliberately
    self-contained — the same reason `_wilder`, `_atr` and `_session_masks` are
    duplicated across every module in this directory. The copies are pinned
@@ -477,7 +477,7 @@ DEFAULT_PARAMS = {"fast_period": 9, "slow_period": 21, "trend_period": 200,
 # Opening either to [False, True] doubles the grid.
 #
 # THIS GRID SEARCHES NO "NO TAKE-PROFIT" POINT, AND THAT IS A REAL GAP.
-# `ema_crossover` puts `None` in its target axis so that "does the take-profit
+# `ema_crossover_20260821` puts `None` in its target axis so that "does the take-profit
 # earn its place at all?" is a question the sweep ANSWERS. This grid was
 # specified without it, deliberately and after the point was raised, so the
 # question is not asked here: every one of the 1,296 cells exits on a target.
@@ -832,7 +832,7 @@ def _walk_loop(long_entry_ok: np.ndarray,
     THREE-state machine over the bars: flat, long, or short — each side under
     its own stop and target.
 
-    This kernel is DUPLICATED VERBATIM in `ema_crossover.py`,
+    This kernel is DUPLICATED VERBATIM in `ema_crossover_20260821.py`,
     `ema_trend_filter.py` and `sma_momentum_crossover.py`, by the same convention that duplicates `_wilder`,
     `_atr` and `_session_masks` across this directory: strategy modules are
     loaded from a file path and are deliberately self-contained.

@@ -599,7 +599,7 @@ def test_the_loader_binds_the_hook_and_others_still_get_the_default() -> None:
           list(hook(bars).columns) == list(M.ML_FEATURES))
 
     _fn2, info2 = load_strategy(
-        REPO / "strategies" / "experimental" / "ema_crossover.py")
+        REPO / "strategies" / "experimental" / "ema_crossover_20260821.py")
     check("a module that declares none gets None, which selects the default",
           info2.get("ml_feature_fn") is None)
 

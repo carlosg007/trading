@@ -555,11 +555,11 @@ def _roc(series: pd.Series, periods: int) -> pd.Series:
 # --------------------------------------------------------------------------
 # The position walk
 # --------------------------------------------------------------------------
-# The kernel below is COPIED BYTE FOR BYTE from `ema_crossover.py`, and the
+# The kernel below is COPIED BYTE FOR BYTE from `ema_crossover_20260821.py`, and the
 # list of modules its own docstring names predates this one — the copy is
 # character-for-character identical and
 # `tests/test_ma_anchoring_spread_20260820.py` pins it that way against
-# `ema_crossover._walk_loop`, so editing this copy alone fails loudly. Two
+# `ema_crossover_20260821._walk_loop`, so editing this copy alone fails loudly. Two
 # things it does that this strategy relies on: it anchors the stop, the target
 # and the trailing high-water mark on the FILL bar's open rather than the
 # signal bar's close, and it enters only from flat — which is what turns this
@@ -583,7 +583,7 @@ def _walk_loop(long_entry_ok: np.ndarray,
     THREE-state machine over the bars: flat, long, or short — each side under
     its own stop and target.
 
-    This kernel is DUPLICATED VERBATIM in `ema_crossover.py`,
+    This kernel is DUPLICATED VERBATIM in `ema_crossover_20260821.py`,
     `ema_trend_filter.py` and `sma_momentum_crossover.py`, by the same convention that duplicates `_wilder`,
     `_atr` and `_session_masks` across this directory: strategy modules are
     loaded from a file path and are deliberately self-contained.

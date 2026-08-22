@@ -27,7 +27,7 @@ equity curve:
     the string "false" as True; a mis-wired branch would leave both modes
     trailing. Either way the sweep reports two distinct columns that ran the
     same simulation, and half the grid is wasted while looking full.
-  * THE TWO MODULES' WALKS DRIFTING APART. `ema_crossover` and
+  * THE TWO MODULES' WALKS DRIFTING APART. `ema_crossover_20260821` and
     `ema_trend_filter` each carry their own copy of the state machine, by the
     same convention that duplicates `_atr` and `_session_masks` across this
     directory. Copies drift. Section 3 runs both on identical arrays and
@@ -68,10 +68,11 @@ if str(REPO) not in sys.path:
 
 from agents.tier3_workers import load_strategy                   # noqa: E402
 from backtest.scan import _same_value, expand_grid               # noqa: E402
-from strategies.experimental import ema_crossover as EC          # noqa: E402
+from strategies.experimental import (                            # noqa: E402
+    ema_crossover_20260821 as EC)
 from strategies.experimental import ema_trend_filter as ETF      # noqa: E402
-from strategies.experimental import (sma_momentum_crossover      # noqa: E402
-                                     as SMC)
+from strategies.experimental import (                            # noqa: E402
+    sma_momentum_crossover_20260818 as SMC)
 
 FAILURES: list[str] = []
 
@@ -521,29 +522,29 @@ def synthetic(n: int = 4000, seed: int = 5, drift: float = 0.02) -> pd.DataFrame
 # measure that on. The 800-bar default is exercised where it matters, against
 # real bars, by the runner.
 #
-# `sma_momentum_crossover` is exercised at macro_window=100 for the same
+# `sma_momentum_crossover_20260818` is exercised at macro_window=100 for the same
 # reason, and at its own default windows otherwise. Its `adx_threshold` is a
 # non-risk parameter and so belongs in this dict, in the module's positional
 # order — `_signal_arrays` takes it fourth, after the three windows.
 MODULES = (
-    ("ema_crossover", EC, {"fast_period": 9, "slow_period": 21}),
+    ("ema_crossover_20260821", EC, {"fast_period": 9, "slow_period": 21}),
     ("ema_trend_filter", ETF, {"fast_period": 9, "slow_period": 21,
                                "trend_period": 100}),
-    ("sma_momentum_crossover", SMC, {"fast_window": 10, "slow_window": 30,
+    ("sma_momentum_crossover_20260818", SMC, {"fast_window": 10, "slow_window": 30,
                                      "macro_window": 100,
                                      "adx_threshold": 20.0}),
 )
 
-# Which modules trade both ways. `ema_crossover` is long only by its own
+# Which modules trade both ways. `ema_crossover_20260821` is long only by its own
 # specification and returns the two-mask form of the contract; `ema_trend_filter`
 # is symmetric and returns four. Declared rather than detected, for the same
 # reason `TP_NONE_SEARCHED` is: a table somebody chose fails in both directions,
 # so a module quietly losing its short side is a failure here rather than a
 # check that silently stops checking anything.
 BIDIRECTIONAL = {
-    "ema_crossover": False,
+    "ema_crossover_20260821": False,
     "ema_trend_filter": True,
-    "sma_momentum_crossover": True,
+    "sma_momentum_crossover_20260818": True,
 }
 
 # The per-bar drift that gives the short side something to work with. See
@@ -566,7 +567,7 @@ def _masks(mod, bars: pd.DataFrame, **params):
 
 # Does each module's PARAM_GRID include the `None` (no take-profit) point?
 #
-# `ema_crossover` does, and that is the convention: a sweep that never tries
+# `ema_crossover_20260821` does, and that is the convention: a sweep that never tries
 # "no target" cannot tell you the target earned its place, only which target
 # scored best among the ones offered.
 #
@@ -577,15 +578,15 @@ def _masks(mod, bars: pd.DataFrame, **params):
 # about it, and its 162-cell grid does not ask. Answering it needs one
 # out-of-band run at the winning cell with tp_atr_mult=None.
 #
-# `sma_momentum_crossover` does NOT, and it is the same gap for the same
+# `sma_momentum_crossover_20260818` does NOT, and it is the same gap for the same
 # reason: its grid was specified as [1.5, 2.0, 3.0] in the strategy request,
 # and it has no signal exit and no session flatten either, so the stop and the
 # target are its ENTIRE exit rule. Recorded at its PARAM_GRID with the
 # out-of-band run that answers the question.
 TP_NONE_SEARCHED = {
-    "ema_crossover": True,
+    "ema_crossover_20260821": True,
     "ema_trend_filter": False,
-    "sma_momentum_crossover": False,
+    "sma_momentum_crossover_20260818": False,
 }
 
 # The grid-size bound, per module, declared for the same reason as the table
@@ -609,9 +610,9 @@ TP_NONE_SEARCHED = {
 # signal configurations. `tests/test_pipeline_filters.py` pins both numbers.
 # The cap is on the declared count, which is what the scanner actually fits.
 MAX_GRID_CELLS = {
-    "ema_crossover": 200,
+    "ema_crossover_20260821": 200,
     "ema_trend_filter": 1296,
-    "sma_momentum_crossover": 200,
+    "sma_momentum_crossover_20260818": 200,
 }
 
 
@@ -847,9 +848,9 @@ def test_the_two_walks_are_the_same_machine() -> None:
     # not a proof - a branch neither side's fixture reaches would pass it.
     import inspect
     sources = {name: inspect.getsource(mod._walk_loop)
-               for name, mod in (("ema_crossover", EC),
+               for name, mod in (("ema_crossover_20260821", EC),
                                  ("ema_trend_filter", ETF),
-                                 ("sma_momentum_crossover", SMC))}
+                                 ("sma_momentum_crossover_20260818", SMC))}
     check("the three walk copies are character-for-character the same source",
           len(set(sources.values())) == 1,
           " / ".join(f"{k}:{len(v)}" for k, v in sources.items()))
@@ -971,7 +972,7 @@ def test_leaderboard_and_promote_carry_the_risk_settings() -> None:
           risk_columns({"fast_window": 10}) ==
           {"sl_atr_mult": None, "tp_atr_mult": None, "trailing": None})
 
-    row = leaderboard_row("20260816_000000", "ema_crossover", "NQ", "15m",
+    row = leaderboard_row("20260816_000000", "ema_crossover_20260821", "NQ", "15m",
                           {"sharpe": 1.4}, None, **risk_columns(bound))
     check("the row carries them and keeps the column order",
           list(row) == LEADERBOARD_COLUMNS
@@ -1014,7 +1015,7 @@ def test_promote_records_the_runs_params_not_the_modules() -> None:
                           "gate_audit": {"status": "PASS", "gates": {}}}}))
 
         out = promote("risk_probe", "A",
-                      REPO / "strategies" / "experimental" / "ema_crossover.py",
+                      REPO / "strategies" / "experimental" / "ema_crossover_20260821.py",
                       metrics_path=snap, commit=False, incubator=td / "inc")
         meta = out["meta"]
         check("meta.params is the winning cell, not DEFAULT_PARAMS",
@@ -1029,7 +1030,7 @@ def test_promote_records_the_runs_params_not_the_modules() -> None:
         # --params still outranks the snapshot: an operator correcting the
         # record on purpose beats a file.
         out2 = promote("risk_probe2", "A",
-                       REPO / "strategies" / "experimental" / "ema_crossover.py",
+                       REPO / "strategies" / "experimental" / "ema_crossover_20260821.py",
                        metrics_path=snap, params={"sl_atr_mult": 3.0},
                        commit=False, incubator=td / "inc")
         check("--params wins over the snapshot",
@@ -1039,7 +1040,7 @@ def test_promote_records_the_runs_params_not_the_modules() -> None:
 
         # And with no snapshot the old behaviour stands: the module's defaults.
         out3 = promote("risk_probe3", "A",
-                       REPO / "strategies" / "experimental" / "ema_crossover.py",
+                       REPO / "strategies" / "experimental" / "ema_crossover_20260821.py",
                        commit=False, incubator=td / "inc")
         check("no snapshot falls back to the module's DEFAULT_PARAMS",
               out3["meta"]["params"] == EC.DEFAULT_PARAMS

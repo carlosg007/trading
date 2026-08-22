@@ -554,7 +554,7 @@ def _walk_loop(long_entry_ok: np.ndarray,
     THREE-state machine over the bars: flat, long, or short — each side under
     its own stop and target.
 
-    This kernel is DUPLICATED VERBATIM in `ema_crossover.py`,
+    This kernel is DUPLICATED VERBATIM in `ema_crossover_20260821.py`,
     `ema_trend_filter.py` and `sma_momentum_crossover.py`, by the same convention that duplicates `_wilder`,
     `_atr` and `_session_masks` across this directory: strategy modules are
     loaded from a file path and are deliberately self-contained.

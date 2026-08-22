@@ -1659,7 +1659,7 @@ aligned to it, in one of the two shapes the engine accepts:
 (entries, exits, short_entries, short_exits)      # bidirectional
 ```
 
-Neither is deprecated. A long-only strategy returns two — `ema_crossover` does,
+Neither is deprecated. A long-only strategy returns two — `ema_crossover_20260821` does,
 and that keeps the compatibility path exercised by a real module rather than
 only by a test. Anything else (a three-tuple, a bare Series) RAISES: silently
 taking the first two masks of a three-tuple is how a strategy's short side
