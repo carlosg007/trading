@@ -60,9 +60,11 @@ if str(REPO) not in sys.path:
 
 from agents.tier3_workers import (apply_ml_signal_filter,        # noqa: E402
                                   causal_features, load_strategy)
-from strategies.experimental import sma_momentum_crossover as M  # noqa: E402
+from strategies.experimental import (                            # noqa: E402
+    sma_momentum_crossover_20260818 as M)
 
-MODULE_PATH = REPO / "strategies" / "experimental" / "sma_momentum_crossover.py"
+MODULE_PATH = (REPO / "strategies" / "experimental"
+               / "sma_momentum_crossover_20260818.py")
 
 FAILURES: list[str] = []
 
@@ -754,7 +756,8 @@ def test_a_malformed_matrix_raises_rather_than_falling_back() -> None:
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("  sma_momentum_crossover — the three layers and the feature hook")
+    print("  sma_momentum_crossover_20260818 — the three layers and the "
+          "feature hook")
     print("=" * 60)
 
     test_adx_matches_talib()

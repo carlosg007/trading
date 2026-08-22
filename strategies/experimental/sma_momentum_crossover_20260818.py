@@ -239,7 +239,7 @@ import pandas as pd
 # real identifier and this constant is the assertion that the two agree;
 # `tests/test_sma_momentum_crossover.py` pins it against the module's own
 # filename so a rename cannot leave the two disagreeing.
-STRATEGY_NAME = "sma_momentum_crossover"
+STRATEGY_NAME = "sma_momentum_crossover_20260818"
 
 TIMEFRAME = "15m"
 SYMBOLS = ["NQ", "ES", "CL", "GC"]
