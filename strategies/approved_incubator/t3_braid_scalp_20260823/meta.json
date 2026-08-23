@@ -3,7 +3,7 @@
   "version": "A",
   "description": "Promoted Version A (rule-based baseline).",
   "symbols": [
-    "HO"
+    "NQ"
   ],
   "timeframe": "30m",
   "params": {
@@ -30,7 +30,7 @@
   "source": "/home/cgrullon/src/trading/strategies/experimental/t3_braid_scalp_20260823.py",
   "source_sha256": "d184de94fa3bba9d828dc17247b820abd1d7ae5bd86fb89393458401a166e929",
   "promoted_sha256": "d184de94fa3bba9d828dc17247b820abd1d7ae5bd86fb89393458401a166e929",
-  "promoted_utc": "2026-08-23T02:56:37+00:00",
+  "promoted_utc": "2026-08-23T02:56:40+00:00",
   "costs_included": false,
   "variants_tested": null,
   "metrics_status": "NOT RECORDED",
@@ -38,15 +38,15 @@
   "gate_audit_status": "PASS",
   "gate_audit": {
     "gate1": "FAIL",
-    "gate2": "PASS",
-    "gate3": "FAIL",
+    "gate2": "FAIL",
+    "gate3": "PASS",
     "gate_regime": "PASS"
   },
   "certification": {
-    "audit_file": "/mnt/backtest/artifacts/pipeline/t3_braid_scalp_20260823/gate_audit_HO_30m.json",
-    "audit_sha256": "72ddba6d3f959dce8ef6be25c8770f0dc159a4d72e9bbe2e2887170e852dc9fe",
-    "audit_symbol": "HO",
-    "audit_generated_utc": "2026-08-23T02:50:48+00:00",
+    "audit_file": "/mnt/backtest/artifacts/pipeline/t3_braid_scalp_20260823/gate_audit_NQ_30m.json",
+    "audit_sha256": "1a927fd015b291d7cfb359d314ee543cca7e3eafbbb5dfb9114b5944e17fd343",
+    "audit_symbol": "NQ",
+    "audit_generated_utc": "2026-08-23T02:51:18+00:00",
     "in_sample": {
       "start": "2013-01-01",
       "end": "2022-12-31"
@@ -57,13 +57,13 @@
       "end_basis": "the present - every bar the lake holds"
     },
     "params": {
-      "t3_period": 14,
+      "t3_period": 5,
       "stiffness_threshold": 25.0,
       "sl_atr_mult": 2.0,
-      "tp_atr_mult": 3.0,
-      "trailing": true
+      "tp_atr_mult": 1.5,
+      "trailing": false
     },
-    "params_source": "stage 2 winner (best_params_HO_30m.json)",
+    "params_source": "stage 2 winner (best_params_NQ_30m.json)",
     "variants_tested": 162,
     "wfo": {
       "train_years": 2,
