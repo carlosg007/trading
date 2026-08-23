@@ -1,0 +1,98 @@
+{
+  "name": "t3_braid_scalp_20260823",
+  "version": "A",
+  "description": "Promoted Version A (rule-based baseline).",
+  "symbols": [
+    "GC"
+  ],
+  "timeframe": "30m",
+  "params": {
+    "t3_period": 5,
+    "t3_vfactor": 0.7,
+    "braid_fast": 3,
+    "braid_slow": 7,
+    "stiffness_period": 20,
+    "stiffness_threshold": 35.0,
+    "use_t3_filter": true,
+    "use_braid_filter": true,
+    "use_stiffness_filter": true,
+    "use_news_filter": false,
+    "sl_atr_mult": 1.5,
+    "tp_atr_mult": 2.0,
+    "trailing": false
+  },
+  "params_source": "t3_braid_scalp_20260823.py DEFAULT_PARAMS",
+  "risk": {
+    "sl_atr_mult": 1.5,
+    "tp_atr_mult": 2.0,
+    "trailing": false
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/t3_braid_scalp_20260823.py",
+  "source_sha256": "d184de94fa3bba9d828dc17247b820abd1d7ae5bd86fb89393458401a166e929",
+  "promoted_sha256": "d184de94fa3bba9d828dc17247b820abd1d7ae5bd86fb89393458401a166e929",
+  "promoted_utc": "2026-08-23T02:56:34+00:00",
+  "costs_included": false,
+  "variants_tested": null,
+  "metrics_status": "NOT RECORDED",
+  "metrics": null,
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "FAIL",
+    "gate2": "NOT EVALUATED",
+    "gate3": "PASS",
+    "gate_regime": "PASS"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/t3_braid_scalp_20260823/gate_audit_GC_30m.json",
+    "audit_sha256": "f36e0c7964bfa35ad341fcd47e19d03b56f9d434581c6311e45341a0a5c5d87a",
+    "audit_symbol": "GC",
+    "audit_generated_utc": "2026-08-23T02:50:33+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "t3_period": 9,
+      "stiffness_threshold": 25.0,
+      "sl_atr_mult": 1.0,
+      "tp_atr_mult": 1.5,
+      "trailing": false
+    },
+    "params_source": "stage 2 winner (best_params_GC_30m.json)",
+    "variants_tested": 162,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "NOT EVALUATED",
+    "agrees_with_snapshot": null
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [
+    "import from 'backtest.event_calendar' is not allowed"
+  ],
+  "notes": ""
+}
