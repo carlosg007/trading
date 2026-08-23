@@ -350,6 +350,19 @@ python3 backtest/discord_reporter.py --stage 1 --strat X \
 python3 backtest/scan.py --strat X --tf 15m --ignore-stage1-exclude-days
 python3 backtest/scan.py --strat X --tf 15m --exclude-days 3,4   # CLI wins
 
+# TEMPORAL CHUNKING, for a sweep that will not fit in RAM. OFF by default.
+# The peak of a Stage 2 sweep is NOT the bars - it is the four stacked signal
+# masks, 4 x n_bars x n_combinations bytes, allocated in full before the first
+# vectorbt call (so --max-cells cannot reduce them). One contract of 1m bars
+# over 16 years against a 432-cell grid is 9.0 GiB. The banner prints that
+# projection and names a --chunk-years when it exceeds --memory-budget-gib;
+# nothing is chunked automatically, because a chunked sweep is an
+# APPROXIMATION and switching it on silently would make two runs of the same
+# grid incomparable.
+python3 backtest/scan.py --strat X --symbols NQ --tf 1m --chunk-years 2
+python3 backtest/scan.py --strat X --chunk-years 2 --chunk-warmup 2000 \
+    --chunk-settlement 4000        # explicit warm-up and settlement tail
+
 # What macro calendar a news-filtered run would actually use, and whether its
 # dates are published or rule-generated. Reads no bars; costs nothing.
 python3 backtest/event_calendar.py --start 2015-01-01 --end 2026-01-01
@@ -1051,6 +1064,64 @@ name.
   the roll puts it back on its own date in both EST and EDT.
 - O(n log m) via merged intervals and `searchsorted`. The broadcast form on
   5.6M bars × ~700 events would allocate 4e9 booleans.
+
+**`backtest/data_loader.py`** — temporal chunking, added 2026-08-23 for
+`--symbols ALL` sweeps that OOM. `iter_temporal_chunks(source, chunk_years=2,
+warmup_bars=500, settlement_bars=0)` yields one contract's bars as
+chronological calendar blocks, each carrying a warm-up tail from the block
+before it. `source` is a DataFrame, a parquet path, a `LakeSource(symbol, tf)`
+or `(symbol, tf)`; only the last two reduce the LOAD peak, because a frame the
+caller already holds cannot be un-held.
+
+- **The peak it removes is not the bars.** `mdlib.lake.iter_bars` already
+  streams one symbol at a time. What kills a Stage 2 sweep is `scan_symbol`'s
+  four stacked boolean masks — `4 x n_bars x n_combinations` bytes, resident
+  before the first vectorbt call, so `_simulate_columns`' column batching does
+  not touch them. 5.6M 1-minute bars against a 432-cell grid is 9.0 GiB; eight
+  2-year chunks make it 1.1 GiB. `projected_sweep_bytes` is that arithmetic and
+  the Stage 2 banner prints it.
+- **THIS IS THE THING CLAUDE.md FORBIDS, AND IT IS PAID FOR RATHER THAN
+  IGNORED.** `backtest/engine.py::_chunk_bounds` chunks bars EXACTLY, placing a
+  boundary only where the strategy is flat. A data loader cannot: the
+  boundaries are fixed before any signal exists. So `scan_symbol_chunked`
+  carries a **settlement tail** (a trade opened near the payload end can close
+  inside the same simulation), attributes every trade to the ONE chunk whose
+  payload contains its ENTRY (so the concatenation is a partition, never a
+  pile), and **counts what is still lost**: a trade open when its chunk's frame
+  ends is invisible to `vbt.Portfolio.trades` and is reported as
+  `chunking.truncated_trades`, never dropped in silence.
+  `tests/test_temporal_chunking.py` pins that count against the trades actually
+  missing from a contiguous sweep, exactly.
+- **A chunked sweep is an APPROXIMATION; the engine's batching is not.** With
+  an adequate tail the two agree column for column on the suite's fixture, and
+  that is not guaranteed in general — a path-dependent strategy can resolve a
+  boundary differently. `--chunk-years` is therefore OFF by default and the
+  record travels onto `best_params_<SYMBOL>_<TF>.json` as `chunking`, so Stage
+  3 can see that the parameters it is certifying were selected on one.
+- **500 warm-up bars is not enough for this repository's own strategies.** A
+  windowed indicator is exact once its window is full; a RECURSIVE one only
+  decays its seed, by `(1 - alpha)^w`. `required_warmup_bars` computes the
+  bars needed, and the tolerance is relative to the SEED ERROR — which is
+  price-scale, because `ewm` restarts at the chunk's first value. A span
+  EMA(50) warmed 346 bars still lands 9.4e-05 out in price units; a 200-bar
+  trend EMA at the specified 500-bar default lands **0.75** out.
+  `--chunk-warmup auto` sizes the window from the strategy's declared
+  parameters and prints what it chose — and cannot see a length that is a
+  module CONSTANT, which `double_rsi_macd_scalp_20260823`'s 200-EMA is.
+- **The pad that completes a derived timeframe's final bucket stops at the
+  requested `--end`.** 5m..4h are RESAMPLED from 1m and a resample labels each
+  bucket at its start, so a read stopping at the last bar's LABEL builds that
+  bar from one minute — one bar in 221,685 on NQ 15m, wrong in every column
+  but `open`, at the end of the window where the last trade closes. The reader
+  widens by one bar to cover it and **never past `--end`**: finishing a bucket
+  across a holdout boundary would spend fifteen minutes of the holdout on a
+  memory optimisation, and it can only be spent once. At the wall the final
+  bucket therefore stays truncated, which is exactly what
+  `backtest.run.load_bars` produces for the same window — the two paths see the
+  same last bar.
+- Boundaries are anchored on a GLOBAL grid of `chunk_years`-year blocks, not on
+  the first bar, so two contracts with different histories are cut the same way
+  and their chunked sweeps are comparable.
 
 **`backtest/pipeline.py`** — not a stage; the contract BETWEEN them. Where each
 stage writes, what the next reads, the banner that says which stage a log came

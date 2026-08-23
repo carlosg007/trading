@@ -149,6 +149,10 @@ REPO = Path(__file__).resolve().parent.parent
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+from backtest.data_loader import (DEFAULT_CHUNK_YEARS,        # noqa: E402
+                                  LakeSource, auto_warmup_bars,
+                                  iter_temporal_chunks, peak_rss_bytes,
+                                  projected_sweep_bytes, suggest_chunk_years)
 from backtest.engine import (BacktestConfig, TRADE_COLUMNS,   # noqa: E402
                              _assemble_result, _cost_arrays, _shift_to_fill,
                              apply_flat_by_close, clean_signals_ls,
@@ -815,7 +819,8 @@ def _simulate_columns(bars: pd.DataFrame,
                       cfg: BacktestConfig,
                       max_cells: int = MAX_CELLS,
                       s_ent: np.ndarray | None = None,
-                      s_exi: np.ndarray | None = None) -> list[pd.DataFrame]:
+                      s_exi: np.ndarray | None = None,
+                      report_open: bool = False):
     """
     One trade list per column, from batched multi-column `from_signals` calls.
 
@@ -835,6 +840,23 @@ def _simulate_columns(bars: pd.DataFrame,
     long-only strategy produces the numbers it always did. With shorts present
     the four-mask long/short mode is used and `direction` is not passed at all -
     vectorbtpro refuses the two together.
+
+    `report_open` returns `(trade_lists, open_entry_indices)` instead of the
+    trade lists alone: one array per column holding the ENTRY BAR INDEX of
+    every position still open when the bars ran out. Closed trades are the
+    only ones with realised P&L, so those are all this function has ever
+    returned - and on a contiguous run the open one at the very end is a
+    position the strategy genuinely still holds, which realised nothing and is
+    correctly absent.
+
+    ON A TEMPORALLY CHUNKED RUN IT IS NOT THAT. A position open when a CHUNK
+    ends is a trade the contiguous run would have closed, dropped from the
+    results by the `status == 1` filter below - which is exactly the failure
+    CLAUDE.md names for calendar chunking: "a position open on 31 December is
+    silently dropped, which flatters results". Dropped trades are not neutral;
+    they remove losers as readily as winners and the equity curve still looks
+    plausible. `scan_symbol_chunked` asks for these indices so the drop is
+    COUNTED and reported rather than being invisible.
     """
     if vbt is None:
         raise ImportError(
@@ -853,6 +875,8 @@ def _simulate_columns(bars: pd.DataFrame,
 
     out: list[pd.DataFrame] = [pd.DataFrame(columns=TRADE_COLUMNS)
                                for _ in range(n_cols)]
+    open_entries: list[np.ndarray] = [np.empty(0, dtype=np.int64)
+                                      for _ in range(n_cols)]
 
     for lo, hi in _batch_columns(n_bars, n_cols, max_cells):
         cols = [f"c{j}" for j in range(lo, hi)]
@@ -902,6 +926,14 @@ def _simulate_columns(bars: pd.DataFrame,
             pf = vbt.Portfolio.from_signals(**common, direction="longonly")
 
         rec = pf.trades.records
+        if report_open:
+            # Read BEFORE the status filter below removes them. An open record
+            # carries a real `entry_idx` and no exit, which is precisely the
+            # trade a chunk boundary cut in half.
+            still_open = rec[rec["status"] == 0]
+            for col_i, part in still_open.groupby("col", sort=False):
+                open_entries[lo + int(col_i)] = np.asarray(
+                    part["entry_idx"].to_numpy(), dtype=np.int64)
         rec = rec[rec["status"] == 1]     # closed only - an open position at
         if not rec.empty:                 # the end of the data realised nothing
             for col_i, part in rec.groupby("col", sort=False):
@@ -932,111 +964,65 @@ def _simulate_columns(bars: pd.DataFrame,
         del pf, rec, common, e_df, x_df, se_df, sx_df, fees, price
         gc.collect()
 
-    return out
+    return (out, open_entries) if report_open else out
 
 
-def scan_symbol(strategy_path: str | Path,
-                bars: pd.DataFrame,
-                symbol: str,
-                cfg: BacktestConfig,
-                grid: dict[str, Iterable],
-                base_params: dict | None = None,
-                max_cells: int = MAX_CELLS,
-                strat_name: str | None = None,
-                rank: str = RANK_PLATEAU) -> dict[str, Any]:
+def session_days(frames) -> pd.DatetimeIndex:
     """
-    Sweep `grid` over one symbol's bars and pick a winner.
+    The unique SESSION days spanned by one or more bar frames, as the daily
+    index `_assemble_result` collapses an equity curve onto.
 
-    Every combination becomes a COLUMN of one `vbt.Portfolio.from_signals`
-    call, so the whole grid costs roughly one backtest rather than one per
-    cell. The resulting Sharpe surface is then read for a PLATEAU: selection is
-    the best `plateau_score` (`plateau_scores`) among the combinations whose
-    Gate 1 audit is PASS, which is the highest Sharpe that still survives one
-    step in any direction on the grid. When nothing clears Gate 1 the best
-    plateau overall is returned with `selection` set to say so.
-
-    Nothing is ever dropped for failing Gate 1. The sweep always hands back a
-    winner when any combination produced a measurable Sharpe, because Stage 2's
-    job under the charter is to optimise every configuration Stage 1 passed it,
-    not to re-screen them: labelling how the winner got there is the
-    alternative to either inventing a pass or refusing to produce a result.
-    The gate audit on the eventual run will fail either way.
-
-    Returns a dict with `table` (one row per combination, including the plateau
-    columns), `winner` (`{params, metrics, gate1, plateau}` or None),
-    `selection`, `rank`, `plateau` (the surface's summary), `evaluated`, and
-    `rejected` (combinations the strategy itself refused, with the reason).
+    Accepts several frames because a chunked sweep computes this per payload
+    and has to union them: every risk-adjusted ratio in this repository is
+    computed on DAILY closes (`backtest/engine.py`), so a day count assembled
+    from a subset of the chunks would annualise the whole run by the wrong
+    root. Duplicates across chunk payloads cannot arise — the payloads
+    partition the history — but they are dropped anyway, because a day counted
+    twice would deflate the mean return per day and nothing would raise.
     """
-    base_params = dict(base_params or {})
-    combos = expand_grid(grid)
-    if not combos:
-        raise ScanError(
-            f"{strat_name or Path(strategy_path).stem} declares no PARAM_GRID, "
-            f"so --scan has nothing to sweep. Add one, or drop --scan.")
+    if isinstance(frames, pd.DataFrame):
+        frames = [frames]
+    stamps = [pd.DatetimeIndex(f["ts"]).values.astype("datetime64[D]")
+              for f in frames if len(f)]
+    if not stamps:
+        return pd.DatetimeIndex([], tz="UTC")
+    return pd.DatetimeIndex(np.unique(np.concatenate(stamps))).tz_localize("UTC")
 
-    n_bars = len(bars)
-    if n_bars == 0:
-        raise ScanError(f"no bars for {symbol} - nothing to sweep")
 
-    # The ENTRY suppression mask, built ONCE for the whole sweep. It reads
-    # timestamps and nothing else - no price, no parameter - so it is identical
-    # for every column, and rebuilding it per combination would reload the
-    # macro calendar once per grid cell. `filter_info` is returned on the scan
-    # so a table swept with Monday masked out is never read as one swept on the
-    # whole week: the two produce different winners from the same grid, and
-    # nothing in the CSV would otherwise say which had happened.
-    block_mask, filter_info = _entry_block_mask(bars, cfg)
+def _finalise_scan(symbol: str,
+                   cfg: BacktestConfig,
+                   grid: dict[str, Iterable],
+                   rank: str,
+                   strat_name: str | None,
+                   valid: list[dict],
+                   rejected: list[dict],
+                   n_combinations: int,
+                   trade_lists: list[pd.DataFrame],
+                   days: pd.DatetimeIndex,
+                   filter_info: dict | None,
+                   offered_total: int,
+                   suppressed_total: int,
+                   extra: dict | None = None) -> dict[str, Any]:
+    """
+    Turn one trade list per surviving combination into the scan result.
 
-    valid: list[dict] = []
-    rejected: list[dict] = []
-    ent_cols: list[np.ndarray] = []
-    exi_cols: list[np.ndarray] = []
-    s_ent_cols: list[np.ndarray] = []
-    s_exi_cols: list[np.ndarray] = []
-    offered_total = suppressed_total = 0
+    Everything after the simulation — the per-column metrics, the Gate 1 audit,
+    the plateau surface, the winner and the sorted table — lives here so the
+    CONTIGUOUS sweep (`scan_symbol`) and the CHUNKED one
+    (`scan_symbol_chunked`) cannot disagree about how a winner is chosen. Two
+    copies of this would be free to rank differently, and the two would be
+    compared by nobody: a chunked run exists precisely where the contiguous one
+    could not be run at all, so there would be no second opinion to catch it.
 
-    for combo in combos:
-        try:
-            e, x, se, sx, offered, suppressed = _combo_signals(
-                strategy_path, bars, base_params, combo, cfg,
-                block_mask=block_mask)
-        except Exception as exc:                                # noqa: BLE001
-            # A strategy that refuses a combination is not a failure of the
-            # sweep. sma_crossover raises on fast >= slow, which is most of a
-            # square grid, and dropping those silently would report a 9-cell
-            # search that only ever tested 3.
-            rejected.append({"params": dict(combo),
-                             "reason": f"{type(exc).__name__}: {exc}"})
-            continue
-        valid.append(dict(combo))
-        offered_total += offered
-        suppressed_total += suppressed
-        ent_cols.append(e)
-        exi_cols.append(x)
-        s_ent_cols.append(se)
-        s_exi_cols.append(sx)
+    `days` is supplied rather than derived from the bars because the chunked
+    path unions its payloads — see `session_days`.
 
-    if not valid:
-        raise ScanError(
-            f"every one of the {len(combos)} combinations in the grid was "
-            f"rejected by the strategy. First reason: "
-            f"{rejected[0]['reason'] if rejected else 'unknown'}")
-
-    ent = np.column_stack(ent_cols)
-    exi = np.column_stack(exi_cols)
-    s_ent = np.column_stack(s_ent_cols)
-    s_exi = np.column_stack(s_exi_cols)
-    del ent_cols, exi_cols, s_ent_cols, s_exi_cols
-
-    trade_lists = _simulate_columns(bars, ent, exi, symbol, cfg,
-                                    max_cells=max_cells,
-                                    s_ent=s_ent, s_exi=s_exi)
-    del ent, exi, s_ent, s_exi
-
-    days = pd.DatetimeIndex(np.unique(
-        pd.DatetimeIndex(bars["ts"]).values.astype("datetime64[D]"))
-    ).tz_localize("UTC")
-
+    `extra` is merged into the returned dict and is how the chunked path
+    attaches its `chunking` record. It cannot overwrite a key this function
+    computed; a collision raises, because a scan whose `winner` came from
+    somewhere other than the ranking above is the one thing no reader would
+    think to check.
+    """
     from agents.tier3_workers import summarize_result
 
     rows: list[dict] = []
@@ -1144,9 +1130,9 @@ def scan_symbol(strategy_path: str | Path,
         filter_info["entries_suppressed_all_columns"] = int(suppressed_total)
         filter_info["columns"] = len(valid)
 
-    return {
+    result = {
         "symbol": symbol,
-        "combinations": len(combos),
+        "combinations": int(n_combinations),
         "evaluated": len(valid),
         "rejected": rejected,
         "table": table,
@@ -1179,6 +1165,461 @@ def scan_symbol(strategy_path: str | Path,
         # are indistinguishable from their tables alone.
         "entry_filters": filter_info,
     }
+
+    for key, value in (extra or {}).items():
+        if key in result:
+            # A caller cannot overwrite the ranking's own output. The chunked
+            # path attaches metadata about HOW the sweep was run; if it could
+            # also replace `winner` or `table`, a scan result would carry a
+            # winner that this function did not choose and every consumer -
+            # the CSV, the handoff, Stage 3's locked parameters - would trust
+            # it.
+            raise ScanError(
+                f"a scan extra tried to overwrite {key!r}, which the ranking "
+                f"itself produced")
+        result[key] = value
+    return result
+
+
+def scan_symbol(strategy_path: str | Path,
+                bars: pd.DataFrame,
+                symbol: str,
+                cfg: BacktestConfig,
+                grid: dict[str, Iterable],
+                base_params: dict | None = None,
+                max_cells: int = MAX_CELLS,
+                strat_name: str | None = None,
+                rank: str = RANK_PLATEAU) -> dict[str, Any]:
+    """
+    Sweep `grid` over one symbol's bars and pick a winner.
+
+    Every combination becomes a COLUMN of one `vbt.Portfolio.from_signals`
+    call, so the whole grid costs roughly one backtest rather than one per
+    cell. The resulting Sharpe surface is then read for a PLATEAU: selection is
+    the best `plateau_score` (`plateau_scores`) among the combinations whose
+    Gate 1 audit is PASS, which is the highest Sharpe that still survives one
+    step in any direction on the grid. When nothing clears Gate 1 the best
+    plateau overall is returned with `selection` set to say so.
+
+    Nothing is ever dropped for failing Gate 1. The sweep always hands back a
+    winner when any combination produced a measurable Sharpe, because Stage 2's
+    job under the charter is to optimise every configuration Stage 1 passed it,
+    not to re-screen them: labelling how the winner got there is the
+    alternative to either inventing a pass or refusing to produce a result.
+    The gate audit on the eventual run will fail either way.
+
+    Returns a dict with `table` (one row per combination, including the plateau
+    columns), `winner` (`{params, metrics, gate1, plateau}` or None),
+    `selection`, `rank`, `plateau` (the surface's summary), `evaluated`, and
+    `rejected` (combinations the strategy itself refused, with the reason).
+    """
+    base_params = dict(base_params or {})
+    combos = expand_grid(grid)
+    if not combos:
+        raise ScanError(
+            f"{strat_name or Path(strategy_path).stem} declares no PARAM_GRID, "
+            f"so --scan has nothing to sweep. Add one, or drop --scan.")
+
+    n_bars = len(bars)
+    if n_bars == 0:
+        raise ScanError(f"no bars for {symbol} - nothing to sweep")
+
+    # The ENTRY suppression mask, built ONCE for the whole sweep. It reads
+    # timestamps and nothing else - no price, no parameter - so it is identical
+    # for every column, and rebuilding it per combination would reload the
+    # macro calendar once per grid cell. `filter_info` is returned on the scan
+    # so a table swept with Monday masked out is never read as one swept on the
+    # whole week: the two produce different winners from the same grid, and
+    # nothing in the CSV would otherwise say which had happened.
+    block_mask, filter_info = _entry_block_mask(bars, cfg)
+
+    valid: list[dict] = []
+    rejected: list[dict] = []
+    ent_cols: list[np.ndarray] = []
+    exi_cols: list[np.ndarray] = []
+    s_ent_cols: list[np.ndarray] = []
+    s_exi_cols: list[np.ndarray] = []
+    offered_total = suppressed_total = 0
+
+    for combo in combos:
+        try:
+            e, x, se, sx, offered, suppressed = _combo_signals(
+                strategy_path, bars, base_params, combo, cfg,
+                block_mask=block_mask)
+        except Exception as exc:                                # noqa: BLE001
+            # A strategy that refuses a combination is not a failure of the
+            # sweep. sma_crossover raises on fast >= slow, which is most of a
+            # square grid, and dropping those silently would report a 9-cell
+            # search that only ever tested 3.
+            rejected.append({"params": dict(combo),
+                             "reason": f"{type(exc).__name__}: {exc}"})
+            continue
+        valid.append(dict(combo))
+        offered_total += offered
+        suppressed_total += suppressed
+        ent_cols.append(e)
+        exi_cols.append(x)
+        s_ent_cols.append(se)
+        s_exi_cols.append(sx)
+
+    if not valid:
+        raise ScanError(
+            f"every one of the {len(combos)} combinations in the grid was "
+            f"rejected by the strategy. First reason: "
+            f"{rejected[0]['reason'] if rejected else 'unknown'}")
+
+    ent = np.column_stack(ent_cols)
+    exi = np.column_stack(exi_cols)
+    s_ent = np.column_stack(s_ent_cols)
+    s_exi = np.column_stack(s_exi_cols)
+    del ent_cols, exi_cols, s_ent_cols, s_exi_cols
+
+    trade_lists = _simulate_columns(bars, ent, exi, symbol, cfg,
+                                    max_cells=max_cells,
+                                    s_ent=s_ent, s_exi=s_exi)
+    del ent, exi, s_ent, s_exi
+
+    days = session_days(bars)
+    return _finalise_scan(
+        symbol=symbol, cfg=cfg, grid=grid, rank=rank, strat_name=strat_name,
+        valid=valid, rejected=rejected, n_combinations=len(combos),
+        trade_lists=trade_lists, days=days, filter_info=filter_info,
+        offered_total=offered_total, suppressed_total=suppressed_total)
+
+
+
+def _span_years(bars: pd.DataFrame) -> float:
+    """The calendar span of a bar frame, in years. Zero for an empty frame."""
+    if len(bars) < 2:
+        return 0.0
+    ts = pd.DatetimeIndex(pd.to_datetime(bars["ts"], utc=True))
+    return float((ts[-1] - ts[0]).total_seconds()) / (365.25 * 24 * 3600.0)
+
+
+def warn_if_sweep_will_not_fit(n_bars: int,
+                               n_combinations: int,
+                               budget_gib: float,
+                               symbol: str,
+                               tf: str,
+                               span_years: float) -> str | None:
+    """
+    Print the mask projection when a contiguous sweep is about to allocate more
+    than the budget, and name the `--chunk-years` that would fit.
+
+    ADVISORY ONLY, AND THAT IS THE POINT. Chunking is an approximation of the
+    contiguous sweep, so switching it on automatically would change the numbers
+    a run reports without the operator having asked — and the table would carry
+    no sign of it beyond a key most readers do not know to look for. Every
+    other decision of this kind in the pipeline is printed and left to a human,
+    and this one is more consequential than most: a sweep that OOMs is loud,
+    while a sweep that quietly reports approximate metrics is not.
+
+    Returns the message it printed, or None when the sweep fits.
+    """
+    projected = projected_sweep_bytes(n_bars, n_combinations)
+    budget = float(budget_gib) * (2 ** 30)
+    if projected <= budget:
+        return None
+    # `span_years` is the CALENDAR span the bars cover and is passed in rather
+    # than derived from their count: bars-per-year is 252 at 1d and ~350,000 at
+    # 1m, so a suggestion computed from the count alone is wrong by three
+    # orders of magnitude on exactly the timeframe that needs it.
+    suggestion = suggest_chunk_years(n_bars, n_combinations,
+                                     max(float(span_years), 1.0 / 252.0),
+                                     int(budget))
+    msg = (f"  MEMORY: {symbol} {tf} — {n_bars:,} bars x {n_combinations} "
+           f"combination(s) needs about "
+           f"{projected / 2 ** 30:.1f} GiB of signal masks, over the "
+           f"{budget_gib:.1f} GiB budget. The masks are allocated in full "
+           f"before the first vectorbt call, so --max-cells does not reduce "
+           f"this. Re-run with --chunk-years "
+           f"{suggestion or 1} to sweep it in blocks (and read what "
+           f"`chunking` records: a chunked sweep is an approximation).")
+    print(msg, flush=True)
+    return msg
+
+
+def scan_symbol_chunked(strategy_path: str | Path,
+                        source: Any,
+                        symbol: str,
+                        cfg: BacktestConfig,
+                        grid: dict[str, Iterable],
+                        base_params: dict | None = None,
+                        max_cells: int = MAX_CELLS,
+                        strat_name: str | None = None,
+                        rank: str = RANK_PLATEAU,
+                        chunk_years: int = DEFAULT_CHUNK_YEARS,
+                        warmup_bars: int | str = "auto",
+                        settlement_bars: int | None = None,
+                        start: Any = None,
+                        end: Any = None,
+                        tf: str | None = None,
+                        progress: bool = True) -> dict[str, Any]:
+    """
+    `scan_symbol`, sweeping one temporal chunk at a time instead of holding the
+    whole history.
+
+    THE REASON THIS EXISTS is the arithmetic in `backtest/data_loader.py`: the
+    peak of a Stage 2 sweep is not the bars, it is the four stacked boolean
+    masks, `4 x n_bars x n_combinations` bytes, all resident before the first
+    vectorbt call. One contract of 1-minute bars over sixteen years against the
+    432-cell grid `double_rsi_macd_scalp_20260823` declares is 9.0 GiB in four
+    allocations. Eight 2-year chunks divide `n_bars` by eight and the same
+    sweep peaks near 1.1 GiB.
+
+    `source` is anything `iter_temporal_chunks` accepts - a frame, a parquet
+    path, a `LakeSource`, or `(symbol, tf)`. Only the last two reduce the LOAD
+    peak as well; a frame the caller is already holding cannot be un-held.
+
+    WHAT IS DIFFERENT FROM THE CONTIGUOUS SWEEP, and it is not nothing:
+
+      * **Trades are attributed by ENTRY timestamp** to exactly one chunk's
+        payload, so the concatenation across chunks is a partition. A trade
+        entering in the warm-up belongs to the previous chunk; one entering in
+        the settlement tail belongs to the next.
+      * **A trade still open when its chunk's frame ends is LOST**, because
+        `vbt.Portfolio.trades` realises nothing for an open position. That is
+        the calendar-chunking failure CLAUDE.md forbids, and it is not
+        prevented here - it is bounded by the settlement tail and COUNTED.
+        `chunking.truncated_trades` is the count and
+        `chunking.truncated_columns` is how many grid cells lost at least one.
+        A non-zero count means the tail is too short for this strategy's
+        holding period, and the answer is a longer `settlement_bars`, not a
+        smaller grid.
+      * **A path-dependent strategy can resolve a boundary differently.** Its
+        position state at the payload's first bar is whatever the warm-up
+        produced, which is not guaranteed to be what sixteen contiguous years
+        would have produced. The warm-up makes it converge; nothing makes it
+        identical.
+
+    So: a chunked sweep is an APPROXIMATION and the contiguous one is not. Use
+    it where the contiguous sweep would not complete at all, and read the
+    winner as a candidate to be certified contiguously at Stage 3 - which is
+    what Stage 3 does anyway, with the parameters locked.
+
+    The result dict is `scan_symbol`'s, with one extra key, `chunking`, that
+    records every one of the above so a table produced this way is never read
+    as one produced contiguously.
+    """
+    base_params = dict(base_params or {})
+    combos = expand_grid(grid)
+    if not combos:
+        raise ScanError(
+            f"{strat_name or Path(strategy_path).stem} declares no PARAM_GRID, "
+            f"so --scan has nothing to sweep. Add one, or drop --scan.")
+
+    if isinstance(warmup_bars, str) and warmup_bars.strip().isdigit():
+        warmup_bars = int(warmup_bars.strip())
+    elif isinstance(warmup_bars, str) and warmup_bars.lower().strip() != "auto":
+        raise ScanError(
+            f"--chunk-warmup must be a whole number of bars or 'auto'; got "
+            f"{warmup_bars!r}")
+    if isinstance(warmup_bars, str) and warmup_bars.lower().strip() == "auto":
+        # Sized from the strategy's OWN declared parameters, not from a
+        # constant. Read `auto_warmup_bars` before trusting it: a strategy
+        # whose slowest indicator is a module CONSTANT rather than a parameter
+        # is invisible to it, which is why the number used is printed below
+        # rather than only recorded.
+        warmup_bars = auto_warmup_bars(params=base_params, grid=grid)
+    warmup_bars = int(warmup_bars)
+    settlement = int(warmup_bars if settlement_bars is None
+                     else settlement_bars)
+
+    valid: list[dict] = []
+    rejected: list[dict] = []
+    per_column: list[list[pd.DataFrame]] = []
+    day_frames: list[pd.DataFrame] = []
+    chunk_rows: list[dict] = []
+    filter_info: dict | None = None
+    offered_total = suppressed_total = 0
+    truncated_total = 0
+    truncated_columns: set[int] = set()
+    rss_before = peak_rss_bytes()
+    n_bars_total = 0
+
+    for chunk in iter_temporal_chunks(source, chunk_years=chunk_years,
+                                      warmup_bars=warmup_bars,
+                                      settlement_bars=settlement,
+                                      start=start, end=end,
+                                      symbol=symbol, tf=tf):
+        bars = chunk.frame
+        n_bars_total += chunk.payload_len
+        if progress:
+            print(f"  {chunk.describe()}", flush=True)
+
+        block_mask, info = _entry_block_mask(bars, cfg)
+
+        ent_cols: list[np.ndarray] = []
+        exi_cols: list[np.ndarray] = []
+        s_ent_cols: list[np.ndarray] = []
+        s_exi_cols: list[np.ndarray] = []
+        chunk_valid: list[dict] = []
+
+        for combo in combos:
+            try:
+                e, x, se, sx, offered, suppressed = _combo_signals(
+                    strategy_path, bars, base_params, combo, cfg,
+                    block_mask=block_mask)
+            except Exception as exc:                            # noqa: BLE001
+                if valid and any(_combo_key(combo) == _combo_key(v)
+                                 for v in valid):
+                    # A combination that bound on an earlier chunk and refuses
+                    # this one is not a rejection, it is a data-dependent
+                    # failure - and dropping the column here would misalign
+                    # every trade list after it against `valid`. Loud, because
+                    # a silently shorter column list would attribute one
+                    # combination's trades to another's parameters.
+                    raise ScanError(
+                        f"{symbol}: combination {combo} bound on an earlier "
+                        f"chunk and raised on chunk {chunk.index + 1} "
+                        f"({chunk.payload_start_ts:%Y-%m-%d}): "
+                        f"{type(exc).__name__}: {exc}") from exc
+                if chunk.index == 0:
+                    rejected.append({"params": dict(combo),
+                                     "reason": f"{type(exc).__name__}: {exc}"})
+                continue
+            chunk_valid.append(dict(combo))
+            offered_total += offered
+            suppressed_total += suppressed
+            ent_cols.append(e)
+            exi_cols.append(x)
+            s_ent_cols.append(se)
+            s_exi_cols.append(sx)
+
+        if not chunk_valid:
+            raise ScanError(
+                f"every one of the {len(combos)} combinations in the grid was "
+                f"rejected by the strategy. First reason: "
+                f"{rejected[0]['reason'] if rejected else 'unknown'}")
+        if not valid:
+            valid = chunk_valid
+            per_column = [[] for _ in valid]
+            filter_info = dict(info) if info else None
+        elif len(chunk_valid) != len(valid):
+            raise ScanError(
+                f"{symbol}: chunk {chunk.index + 1} evaluated "
+                f"{len(chunk_valid)} combinations where the first chunk "
+                f"evaluated {len(valid)}. The columns would no longer line up "
+                f"with the parameters they belong to.")
+
+        ent = np.column_stack(ent_cols)
+        exi = np.column_stack(exi_cols)
+        s_ent = np.column_stack(s_ent_cols)
+        s_exi = np.column_stack(s_exi_cols)
+        del ent_cols, exi_cols, s_ent_cols, s_exi_cols
+
+        trade_lists, open_entries = _simulate_columns(
+            bars, ent, exi, symbol, cfg, max_cells=max_cells,
+            s_ent=s_ent, s_exi=s_exi, report_open=True)
+        del ent, exi, s_ent, s_exi
+
+        lo_ts = chunk.payload_start_ts
+        hi_ts = chunk.payload_end_ts
+        pay = chunk.payload_slice
+        chunk_truncated = 0
+        for j, trades in enumerate(trade_lists):
+            if len(trades):
+                # ATTRIBUTION BY ENTRY, which is what makes the concatenation a
+                # partition rather than a pile. A trade whose entry is in this
+                # chunk's warm-up was already counted by the previous chunk;
+                # one entering in the settlement tail is the next chunk's.
+                entry = pd.DatetimeIndex(trades["entry_time"])
+                keep = (entry >= lo_ts) & (entry <= hi_ts)
+                if keep.any():
+                    per_column[j].append(trades.loc[keep])
+            if not chunk.is_last:
+                cut = open_entries[j]
+                if cut.size:
+                    n_cut = int(((cut >= pay.start) & (cut < pay.stop)).sum())
+                    if n_cut:
+                        chunk_truncated += n_cut
+                        truncated_columns.add(j)
+        truncated_total += chunk_truncated
+
+        day_frames.append(chunk.payload_frame[["ts"]].copy())
+        chunk_rows.append({
+            "index": chunk.index,
+            "start": str(lo_ts),
+            "end": str(hi_ts),
+            "bars": int(chunk.payload_len),
+            "warmup": int(chunk.warmup_len),
+            "settlement": int(chunk.settlement_len),
+            "warmup_short": bool(chunk.warmup_short and not chunk.is_first),
+            "truncated_trades": int(chunk_truncated),
+        })
+
+        del bars, trade_lists, open_entries, block_mask
+        # The request's explicit reference cleanup. `_simulate_columns` already
+        # does this per COLUMN batch; this is the per-CHUNK one, and it is what
+        # keeps the previous chunk's frame from staying resident behind the
+        # next chunk's masks.
+        gc.collect()
+
+    if not valid:
+        raise ScanError(
+            f"no temporal chunk of {symbol} held any bars - nothing to sweep")
+
+    merged: list[pd.DataFrame] = []
+    for parts in per_column:
+        if parts:
+            merged.append(pd.concat(parts, ignore_index=True))
+        else:
+            merged.append(pd.DataFrame(columns=TRADE_COLUMNS))
+    del per_column
+    gc.collect()
+
+    if filter_info is not None:
+        filter_info = dict(filter_info)
+        filter_info["entries_offered_all_columns"] = int(offered_total)
+        filter_info["entries_suppressed_all_columns"] = int(suppressed_total)
+        filter_info["columns"] = len(valid)
+
+    chunking = {
+        "chunk_years": int(chunk_years),
+        "warmup_bars": int(warmup_bars),
+        "settlement_bars": int(settlement),
+        "chunks": chunk_rows,
+        "bars_total": int(n_bars_total),
+        "bars_largest_chunk": int(max((r["bars"] for r in chunk_rows),
+                                      default=0)),
+        # The number the whole exercise is for. Reported both ways so the
+        # saving is legible without re-deriving it.
+        "projected_bytes_contiguous": projected_sweep_bytes(n_bars_total,
+                                                            len(valid)),
+        "projected_bytes_chunked": projected_sweep_bytes(
+            max((r["bars"] for r in chunk_rows), default=0), len(valid)),
+        "peak_rss_bytes": peak_rss_bytes(),
+        "peak_rss_delta_bytes": peak_rss_bytes() - rss_before,
+        # Non-zero means trades were dropped at a boundary. See the docstring:
+        # the fix is a longer settlement tail, and the number must never be
+        # read as noise.
+        "truncated_trades": int(truncated_total),
+        "truncated_columns": len(truncated_columns),
+        "warmup_short_chunks": sum(1 for r in chunk_rows if r["warmup_short"]),
+        "equivalence": (
+            "APPROXIMATE - trades are attributed by entry to one chunk and a "
+            "trade outliving its settlement tail is dropped and counted. Not "
+            "comparable bar-for-bar with a contiguous sweep."),
+    }
+    if progress:
+        gib = 2 ** 30
+        print(f"  chunked sweep: {len(chunk_rows)} chunk(s), "
+              f"{n_bars_total:,} bars, {len(valid)} column(s) — "
+              f"mask peak {chunking['projected_bytes_chunked'] / gib:.2f} GiB "
+              f"vs {chunking['projected_bytes_contiguous'] / gib:.2f} GiB "
+              f"contiguous", flush=True)
+        if truncated_total:
+            print(f"  WARNING: {truncated_total} trade(s) across "
+                  f"{len(truncated_columns)} column(s) were still open at a "
+                  f"chunk boundary and are NOT in these results. Raise "
+                  f"--chunk-settlement above {settlement} bars.", flush=True)
+
+    return _finalise_scan(
+        symbol=symbol, cfg=cfg, grid=grid, rank=rank, strat_name=strat_name,
+        valid=valid, rejected=rejected, n_combinations=len(combos),
+        trade_lists=merged, days=session_days(day_frames),
+        filter_info=filter_info, offered_total=offered_total,
+        suppressed_total=suppressed_total, extra={"chunking": chunking})
 
 
 def write_scan_table(scan: dict, out_dir: str | Path) -> Path:
@@ -1490,6 +1931,15 @@ def write_best_params(scan: dict, strategy: str, symbol: str, tf: str,
         "rank": scan.get("rank"),
         "plateau": (scan["winner"] or {}).get("plateau"),
         "plateau_surface": scan.get("plateau"),
+        # None for a contiguous sweep, which is the exact one. A dict here
+        # means the winner was chosen from a TEMPORALLY CHUNKED sweep, whose
+        # trade list is an approximation of the contiguous one - it carries the
+        # chunk spans, the warm-up and settlement the boundaries were run with,
+        # and `truncated_trades`, the count of trades that outlived a
+        # settlement tail and are absent from the metrics above. Stage 3
+        # certifies the parameters this file names, so it has to be able to see
+        # that they were selected on an approximation and how good one it was.
+        "chunking": scan.get("chunking"),
         # The regime scope Stage 1 screened this pair in, carried through
         # UNCHANGED. Stage 2 sweeps the whole window on purpose - masking the
         # search to a quadrant that was itself chosen as the best of four on
@@ -1498,6 +1948,27 @@ def write_best_params(scan: dict, strategy: str, symbol: str, tf: str,
         # set eventually reaches a live supervisor, and one that arrives with
         # no environment attached reads as a licence to trade it in all four.
         "stage1_regime": (dict(stage1_pair) if stage1_pair else None),
+        # The designation, lifted to the TOP LEVEL of this file as well as
+        # nested under `stage1_regime`. Stage 3 reads `optimal_regime` here
+        # first, and a reader (or the CrossTrade supervisor) should not have to
+        # know which stage's sub-object a certification target is buried in.
+        # `optimal_regime` stays a plain STRING - the name - because that is
+        # what it is everywhere else in this repo; the `Q1`..`Q4` code sits
+        # beside it in `target_quadrant` rather than turning one key into
+        # sometimes-a-string-sometimes-a-dict.
+        "optimal_regime": (stage1_pair or {}).get("optimal_regime"),
+        "target_quadrant": (stage1_pair or {}).get("quadrant"),
+        # The whole scored four-quadrant table the designation beat, keyed by
+        # regime: in-sample profit factor, net P&L, trade count, alpha score,
+        # and - for anything ineligible - which bar it missed. Without it a
+        # target quadrant on this file is a name with no evidence under it, and
+        # Gate R would be certifying a choice nobody can audit.
+        "regime_scores": (stage1_pair or {}).get("regime_scores") or {},
+        # Positive-expectancy runners-up. Metadata for the live supervisor,
+        # never a second certification target: two permitted quadrants give
+        # Gate R two chances at a 1.00 holdout profit factor, which is the
+        # best-of-N selection the single-quadrant rule exists to prevent.
+        "secondary_regimes": (stage1_pair or {}).get("secondary_regimes") or [],
         "regime_applied_to_sweep": False,
         # The window is written whole rather than left to `start`/`end` alone,
         # because "was the holdout touched" has to be answerable from the file
@@ -1767,6 +2238,52 @@ def build_parser() -> argparse.ArgumentParser:
                         "worth: those days were chosen on this same in-sample "
                         "window, so the only way to see whether it helped is "
                         "to sweep both ways and compare.")
+    p.add_argument("--chunk-years", type=int, default=None, metavar="N",
+                   help="Sweep the history in N-year temporal chunks instead "
+                        "of holding it all at once. OFF by default, and that "
+                        "default is deliberate: a chunked sweep is an "
+                        "APPROXIMATION of the contiguous one (trades are "
+                        "attributed to the chunk their ENTRY falls in, and a "
+                        "trade outliving the settlement tail is dropped and "
+                        "COUNTED as chunking.truncated_trades), so turning it "
+                        "on silently would make two runs of the same grid "
+                        "incomparable for a reason nothing on the table says. "
+                        "Use it when the contiguous sweep will not fit in RAM "
+                        "— the banner prints the projection that decides that. "
+                        "With it on, the bars are read one chunk of years at a "
+                        "time through the lake's year partitions, so the load "
+                        "peak drops with the sweep peak.")
+    p.add_argument("--chunk-warmup", default="auto", metavar="BARS",
+                   help="Bars of history prepended to each chunk so its "
+                        "indicators are not cold-started (default: auto). "
+                        "`auto` sizes the window from the strategy's own "
+                        "declared parameters via "
+                        "backtest.data_loader.auto_warmup_bars. A RECURSIVE "
+                        "indicator never forgets its seed exactly, only "
+                        "exponentially: a span EMA(200) needs 1,382 bars to "
+                        "get the seed under 1e-6 and a Wilder(200) needs "
+                        "2,758, so the 500 that reads as generous is short by "
+                        "a factor of three for a 200-bar trend filter. A "
+                        "strategy whose slowest length is a module CONSTANT is "
+                        "invisible to `auto` — check the number it printed "
+                        "against what the module actually computes.")
+    p.add_argument("--chunk-settlement", type=int, default=None, metavar="BARS",
+                   help="Bars appended to each chunk so a trade opened near "
+                        "the end of the chunk can still close inside it "
+                        "(default: the same as --chunk-warmup). This is what "
+                        "stands between temporal chunking and the failure "
+                        "CLAUDE.md names for it — a position open at the "
+                        "boundary is dropped from the results, and dropped "
+                        "trades remove losers as readily as winners. Whatever "
+                        "it is set to, the trades that still outlive it are "
+                        "counted and printed rather than lost quietly.")
+    p.add_argument("--memory-budget-gib", type=float, default=8.0,
+                   metavar="GIB",
+                   help="The mask allocation above which the banner warns and "
+                        "suggests a --chunk-years (default: 8.0). Advisory "
+                        "only: nothing is chunked automatically, because that "
+                        "would change the numbers a run reports without the "
+                        "operator asking.")
     add_filter_args(p)
     return p
 
@@ -2190,16 +2707,34 @@ def main(argv: list[str] | None = None) -> int:
                           f"combination(s) from {csv}")
                     print(f"  selection: {scan['selection']}")
                 else:
-                    bars = load_bars(sym, tf, args.start, args.end)
                     cfg = BacktestConfig(
                         initial_capital=args.capital, contracts=args.contracts,
                         slippage_ticks=args.slippage_ticks,
                         flat_by_close=args.flat_by_close,
                         notes=f"stage 2 scan {sym} {tf}", **pair_kwargs)
-                    scan = scan_symbol(path, bars, sym, cfg, grid,
-                                       base_params=base_params,
-                                       strat_name=strat_name,
-                                       rank=args.rank)
+                    if args.chunk_years:
+                        # The bars are never materialised whole: the source is
+                        # a lake spec and each chunk reads only its own years
+                        # through the year-partition pruning in
+                        # `mdlib.lake._read_native`.
+                        scan = scan_symbol_chunked(
+                            path, LakeSource(symbol=sym, tf=tf), sym, cfg,
+                            grid, base_params=base_params,
+                            strat_name=strat_name, rank=args.rank,
+                            chunk_years=args.chunk_years,
+                            warmup_bars=args.chunk_warmup,
+                            settlement_bars=args.chunk_settlement,
+                            start=args.start, end=args.end, tf=tf)
+                    else:
+                        bars = load_bars(sym, tf, args.start, args.end)
+                        warn_if_sweep_will_not_fit(
+                            len(bars), len(expand_grid(grid)),
+                            args.memory_budget_gib, sym, tf,
+                            span_years=_span_years(bars))
+                        scan = scan_symbol(path, bars, sym, cfg, grid,
+                                           base_params=base_params,
+                                           strat_name=strat_name,
+                                           rank=args.rank)
                     print(format_scan_summary(scan))
                     csv = write_scan_table(scan, tf_dir)
                 dest = write_best_params(
