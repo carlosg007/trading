@@ -3,7 +3,7 @@
   "version": "A",
   "description": "Promoted Version A (rule-based baseline).",
   "symbols": [
-    "SI"
+    "YM"
   ],
   "timeframe": "1h",
   "params": {
@@ -28,7 +28,7 @@
   "source": "/home/cgrullon/src/trading/strategies/experimental/ma_anchoring_spread_20260820.py",
   "source_sha256": "3c87f3720be7dd06950d86eb242f32918b3c0f0348a94641f845795c5d512f40",
   "promoted_sha256": "3c87f3720be7dd06950d86eb242f32918b3c0f0348a94641f845795c5d512f40",
-  "promoted_utc": "2026-08-23T07:45:36+00:00",
+  "promoted_utc": "2026-08-23T07:45:39+00:00",
   "costs_included": false,
   "variants_tested": null,
   "metrics_status": "NOT RECORDED",
@@ -36,15 +36,15 @@
   "gate_audit_status": "PASS",
   "gate_audit": {
     "gate1": "FAIL",
-    "gate2": "NOT EVALUATED",
+    "gate2": "FAIL",
     "gate3": "PASS",
     "gate_regime": "PASS"
   },
   "certification": {
-    "audit_file": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/gate_audit_SI_1h.json",
-    "audit_sha256": "87502c3a8d75372cde0e3cf0779e5180bdb0b8d5aa5a9276a96e85e18f62ac35",
-    "audit_symbol": "SI",
-    "audit_generated_utc": "2026-08-23T07:38:25+00:00",
+    "audit_file": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/gate_audit_YM_1h.json",
+    "audit_sha256": "3e87a00b4b003fe4a61c23c6324f942a95ee34818569e45541ea54f0e2288b71",
+    "audit_symbol": "YM",
+    "audit_generated_utc": "2026-08-23T07:38:45+00:00",
     "in_sample": {
       "start": "2013-01-01",
       "end": "2022-12-31"
@@ -56,13 +56,13 @@
     },
     "params": {
       "fast_window": 10,
-      "slow_window": 200,
-      "spread_threshold": 0.015,
-      "sl_atr_mult": 1.0,
-      "tp_atr_mult": null,
-      "trailing": true
+      "slow_window": 100,
+      "spread_threshold": 0.01,
+      "sl_atr_mult": 2.0,
+      "tp_atr_mult": 2.0,
+      "trailing": false
     },
-    "params_source": "stage 2 winner (best_params_SI_1h.json)",
+    "params_source": "stage 2 winner (best_params_YM_1h.json)",
     "variants_tested": 270,
     "wfo": {
       "train_years": 2,
