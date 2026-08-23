@@ -46,6 +46,13 @@ import numpy as np                                               # noqa: E402
 import pandas as pd                                              # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
+
+# The RUN's parameters, as a metrics snapshot records them. `promote` layers
+# these over the module's DEFAULT_PARAMS — the promoted meta.json describes
+# the run, not the module, because the promoted Sharpe came from the winning
+# grid cell and recording the defaults beside it would describe a strategy
+# nobody backtested. Named so the fixture and the assertion cannot drift.
+SNAPSHOT_PARAMS = {"fast_period": 10}
 sys.path.insert(0, str(REPO))
 
 from backtest.promote import (VERSION_B_TEMPLATE, inspect_source,   # noqa: E402
@@ -85,7 +92,7 @@ def clearing_metrics(**over) -> dict:
         "final_equity": 174_000.0, "trade_count": 640, "n_days": 1_500,
         "meta": {"strategy": "sma_crossover", "symbol": "NQ",
                  "timeframe": "15m", "start": "2018-01-01", "end": "2023-12-31",
-                 "bars": 149_000, "params": {"fast_window": 10},
+                 "bars": 149_000, "params": SNAPSHOT_PARAMS,
                  "initial_capital": 100_000.0, "costs_included": True,
                  "variants_tested": 1,
                  # What the strategy module declares about itself, with its
@@ -1004,16 +1011,44 @@ def test_write_dual_reports(tmp: Path) -> None:
 # --------------------------------------------------------------------------
 # 7. Promotion
 # --------------------------------------------------------------------------
-SOURCE = REPO / "strategies" / "experimental" / "sma_crossover.py"
+# Any live strategy module serves: these cases promote a FILE — copying it,
+# hashing it and writing the meta — and assert nothing about what it
+# computes. `sma_crossover.py` filled this role until it was deleted.
+SOURCE = REPO / "strategies" / "experimental" / "ema_crossover_20260821.py"
+SOURCE_NAME = SOURCE.stem
+# One key of the module's own DEFAULT_PARAMS, overridden. Named here so the
+# call and the assertion cannot drift apart.
+PARAM_OVERRIDE = {"fast_period": 20}
+
+
+def _source_module():
+    """
+    The promoted module, IMPORTED, so the AST reader can be checked against it.
+
+    `inspect_source` reads TIMEFRAME, SYMBOLS and DEFAULT_PARAMS out of the
+    file WITHOUT importing it — that is the whole point of the function, since
+    promotion must not execute a strategy to describe it. Comparing its answers
+    against the real import is a stronger check than comparing them against
+    literals retyped here, and it does not go stale the next time this suite is
+    pointed at a different module.
+    """
+    import importlib
+    return importlib.import_module(
+        f"strategies.experimental.{SOURCE_NAME}")
 
 
 def test_inspect_source() -> None:
     print("\npromote.inspect_source")
+    mod = _source_module()
     info = inspect_source(SOURCE)
-    check("TIMEFRAME is read without importing", info["timeframe"] == "1d")
-    check("SYMBOLS is read", info["symbols"] == ["NQ"])
+    check("TIMEFRAME is read without importing",
+          info["timeframe"] == mod.TIMEFRAME,
+          f"{info['timeframe']!r} vs {mod.TIMEFRAME!r}")
+    check("SYMBOLS is read", info["symbols"] == list(mod.SYMBOLS),
+          f"{info['symbols']} vs {list(mod.SYMBOLS)}")
     check("DEFAULT_PARAMS is read",
-          info["params"] == {"fast_window": 10, "slow_window": 30})
+          info["params"] == dict(mod.DEFAULT_PARAMS),
+          f"{info['params']} vs {dict(mod.DEFAULT_PARAMS)}")
     check("signal_fn is found", info["has_signal_fn"])
     check("make_signal_fn is found", info["has_make_signal_fn"])
 
@@ -1030,9 +1065,9 @@ def test_promote_version_a(tmp: Path) -> None:
     }, default=str), encoding="utf-8")
 
     inc = tmp / "incubator"
-    out = promote("sma_crossover", "A", SOURCE, metrics_path=metrics_path,
+    out = promote(SOURCE_NAME, "A", SOURCE, metrics_path=metrics_path,
                   commit=False, incubator=inc)
-    dest = inc / "sma_crossover"
+    dest = inc / SOURCE_NAME
 
     check("strat.py was written", (dest / "strat.py").exists())
     check("meta.json was written", (dest / "meta.json").exists())
@@ -1044,9 +1079,12 @@ def test_promote_version_a(tmp: Path) -> None:
     meta = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
     check("meta records the version", meta["version"] == "A")
     check("meta records the symbol", meta["symbols"] == ["NQ"])
-    check("meta records the timeframe", meta["timeframe"] == "1d")
+    check("meta records the timeframe",
+          meta["timeframe"] == _source_module().TIMEFRAME)
     check("meta records the parameters",
-          meta["params"] == {"fast_window": 10, "slow_window": 30})
+          meta["params"] == {**dict(_source_module().DEFAULT_PARAMS),
+                             **SNAPSHOT_PARAMS},
+          str(meta["params"]))
     check("meta records the source sha256", meta["source_sha256"] == sha256(SOURCE))
     check("meta records a timestamp", bool(meta["promoted_utc"]))
     check("meta locks the metrics snapshot",
@@ -1058,13 +1096,19 @@ def test_promote_version_a(tmp: Path) -> None:
 
     # Overrides win over what the module declares.
     out2 = promote("sma_over", "A", SOURCE, symbol="ES", timeframe="30m",
-                   params={"fast_window": 20}, commit=False, incubator=inc,
+                   params=PARAM_OVERRIDE, commit=False, incubator=inc,
                    variants_tested=42)
     m2 = out2["meta"]
     check("--symbol overrides the module", m2["symbols"] == ["ES"])
     check("--timeframe overrides the module", m2["timeframe"] == "30m")
+    # MERGED, not replaced: the override lands on top of the module's declared
+    # defaults, so every other key survives. That is what `params_source`
+    # records and what makes a promoted meta.json describe the run rather than
+    # the module.
     check("--params merges over DEFAULT_PARAMS",
-          m2["params"] == {"fast_window": 20, "slow_window": 30})
+          m2["params"] == {**dict(_source_module().DEFAULT_PARAMS),
+                           **PARAM_OVERRIDE},
+          str(m2["params"]))
     check("--variants-tested is recorded", m2["variants_tested"] == 42)
 
 

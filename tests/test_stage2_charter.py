@@ -675,7 +675,7 @@ def test_cli(tmp: Path, blob: dict) -> None:
 
     out = subprocess.run(
         [sys.executable, str(REPO / "backtest" / "scan.py"),
-         "--strat", "sma_crossover", "--symbols", "NQ",
+         "--strat", "ema_crossover_20260821", "--symbols", "NQ",
          "--start", "2013-01-01", "--end", "2023-06-30"],
         capture_output=True, text=True, timeout=120)
     check("scan.py refuses a holdout window before it reads a bar",

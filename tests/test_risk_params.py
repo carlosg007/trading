@@ -28,7 +28,7 @@ equity curve:
     trailing. Either way the sweep reports two distinct columns that ran the
     same simulation, and half the grid is wasted while looking full.
   * THE TWO MODULES' WALKS DRIFTING APART. `ema_crossover_20260821` and
-    `ema_trend_filter` each carry their own copy of the state machine, by the
+    `ma_anchoring_spread_20260820` each carry their own copy of the state machine, by the
     same convention that duplicates `_atr` and `_session_masks` across this
     directory. Copies drift. Section 3 runs both on identical arrays and
     requires identical output.
@@ -70,7 +70,8 @@ from agents.tier3_workers import load_strategy                   # noqa: E402
 from backtest.scan import _same_value, expand_grid               # noqa: E402
 from strategies.experimental import (                            # noqa: E402
     ema_crossover_20260821 as EC)
-from strategies.experimental import ema_trend_filter as ETF      # noqa: E402
+from strategies.experimental import (                            # noqa: E402
+    ma_anchoring_spread_20260820 as MAS)
 from strategies.experimental import (                            # noqa: E402
     sma_momentum_crossover_20260818 as SMC)
 
@@ -476,9 +477,9 @@ def synthetic(n: int = 4000, seed: int = 5, drift: float = 0.02) -> pd.DataFrame
 
     `n` is 4000 because 1500 was not enough, and the way it was not enough is
     the point. Both modules gate entries to 09:30-15:30 ET, which is a quarter
-    of a 24-hour futures session, and `ema_trend_filter` additionally needs a
-    crossover, the anchor trend and expanding volatility to line up on the same
-    bar. At 1500 bars that yielded TWO trades, and neither of them ever reached
+    of a 24-hour futures session, and `ma_anchoring_spread_20260820`
+    additionally needs the macro anchor, the spread hurdle and an expanding
+    spread to line up on the same bar. At 1500 bars that yielded TWO trades, and neither of them ever reached
     a 1.0 x ATR target — so `test_risk_params_change_the_trades` compared a
     take-profit run against a no-take-profit run, got identical exits, and the
     check passed or failed on whether two arbitrary trades happened to hit a
@@ -490,8 +491,9 @@ def synthetic(n: int = 4000, seed: int = 5, drift: float = 0.02) -> pd.DataFrame
 
     `drift` is the per-bar mean. The default +0.02 is the frame every existing
     case here was calibrated on. NEGATIVE drift is what the short side needs:
-    `ema_trend_filter` only shorts below its anchor EMA, so on an up-drifting
-    frame it finds one short in 4000 bars and every short assertion would be
+    `ma_anchoring_spread_20260820` only shorts below its macro anchor, so on
+    an up-drifting frame it finds few shorts in 4000 bars and every short
+    assertion would be
     resting on whether that single trade happened to reach a level. Same
     generator, same seed, mirrored slope - see `SHORT_DRIFT`.
     """
@@ -513,11 +515,13 @@ def synthetic(n: int = 4000, seed: int = 5, drift: float = 0.02) -> pd.DataFrame
 # `*base.values()`, so these must be listed in the module's own positional
 # order.
 #
-# `ema_trend_filter` is exercised at trend_period=100 rather than at its
-# DEFAULT_PARAMS value of 800. That is a fixture decision, not a claim about
-# the strategy: EMA(800) stays NaN until bar 799, so on a 4000-bar frame it
-# spends a fifth of the sample warming up and yields four entries instead of
-# seven. Nothing here tests the anchor length — these cases test that the risk
+# `ma_anchoring_spread_20260820` is exercised at slow_window=50 rather than at
+# its DEFAULT_PARAMS value of 200, and at a spread_threshold of 0.004 rather
+# than 0.015. That is a fixture decision, not a claim about the strategy: the
+# 200-bar anchor stays NaN until bar 199 and the 1.5% hurdle is rarely cleared
+# by a synthetic walk, so at the declared defaults this frame yields too few
+# entries to measure anything. Nothing here tests the anchor length — these
+# cases test that the risk
 # parameters reach the simulation — so the shorter anchor buys trades to
 # measure that on. The 800-bar default is exercised where it matters, against
 # real bars, by the runner.
@@ -528,8 +532,10 @@ def synthetic(n: int = 4000, seed: int = 5, drift: float = 0.02) -> pd.DataFrame
 # order — `_signal_arrays` takes it fourth, after the three windows.
 MODULES = (
     ("ema_crossover_20260821", EC, {"fast_period": 9, "slow_period": 21}),
-    ("ema_trend_filter", ETF, {"fast_period": 9, "slow_period": 21,
-                               "trend_period": 100}),
+    ("ma_anchoring_spread_20260820", MAS, {"fast_window": 10,
+                                           "slow_window": 50,
+                                           "spread_threshold": 0.004,
+                                           "exit_revert_mult": 0.5}),
     ("sma_momentum_crossover_20260818", SMC, {"fast_window": 10, "slow_window": 30,
                                      "macro_window": 100,
                                      "adx_threshold": 20.0}),
@@ -543,7 +549,7 @@ MODULES = (
 # check that silently stops checking anything.
 BIDIRECTIONAL = {
     "ema_crossover_20260821": False,
-    "ema_trend_filter": True,
+    "ma_anchoring_spread_20260820": True,
     "sma_momentum_crossover_20260818": True,
 }
 
@@ -585,7 +591,28 @@ def _masks(mod, bars: pd.DataFrame, **params):
 # out-of-band run that answers the question.
 TP_NONE_SEARCHED = {
     "ema_crossover_20260821": True,
-    "ema_trend_filter": False,
+    "ma_anchoring_spread_20260820": True,
+    "sma_momentum_crossover_20260818": False,
+}
+
+# Whether the module REFUSES `tp_atr_mult=None` unless `trailing=True`.
+#
+# Declared per module for the same reason as the two tables above, and it
+# describes a real split in this directory rather than an oversight. A fixed
+# stop with no target and no signal exit leaves a runner with no bounded exit
+# at all — it is carried to the end of the data and closed by nothing — so the
+# modules written after that was noticed refuse the combination outright, and
+# the earlier ones accept it. `double_rsi_macd_scalp_20260823` carries the same
+# rule.
+#
+# The consequence the checks below have to respect: a module in this column
+# REJECTS part of its own declared grid, by design. `backtest/scan.py` counts
+# those cells as REJECTED and still reports them in `variants_tested`, so the
+# search is reported at its true size — which is why "every declared cell
+# binds" cannot be asserted flatly for such a module.
+TP_NONE_REQUIRES_TRAILING = {
+    "ema_crossover_20260821": False,
+    "ma_anchoring_spread_20260820": True,
     "sma_momentum_crossover_20260818": False,
 }
 
@@ -596,22 +623,16 @@ TP_NONE_SEARCHED = {
 # N draws from one sample of bars, and that maximum climbs with N whether or
 # not anything in the market has changed.
 #
-# `ema_trend_filter` was widened to 864 cells on 2026-08-17, then to 1,296 the
-# same day when its four confluence conditions became toggles and two of them
-# joined the sweep. That is an EXEMPTION somebody wrote down, not a relaxation
-# of the rule: it fails in both directions, so shrinking the grid back without
-# updating this line is also a failure, and every other module still has to
-# clear 200. What makes 1,296 reportable rather than merely permitted is that
-# `variants_tested` travels onto every report, leaderboard row and stage-3
-# audit, and `backtest/scan.py` prints the cell count before it sweeps.
-#
-# Note the declared cells exceed the DISTINCT strategies: `trend_period` is a
-# dead axis wherever `use_trend` is False, so 1,296 cells are 972 distinct
-# signal configurations. `tests/test_pipeline_filters.py` pins both numbers.
-# The cap is on the declared count, which is what the scanner actually fits.
+# `ma_anchoring_spread_20260820` declares 324 cells, over the bound. That is an
+# EXEMPTION somebody wrote down, not a relaxation of the rule: it fails in both
+# directions, so shrinking the grid back without updating this line is also a
+# failure, and every other module still has to clear 200. What makes 324
+# reportable rather than merely permitted is that `variants_tested` travels
+# onto every report, leaderboard row and stage-3 audit, and
+# `backtest/scan.py` prints the cell count before it sweeps.
 MAX_GRID_CELLS = {
     "ema_crossover_20260821": 200,
-    "ema_trend_filter": 1296,
+    "ma_anchoring_spread_20260820": 324,
     "sma_momentum_crossover_20260818": 200,
 }
 
@@ -639,9 +660,14 @@ def test_validation_rejects_what_it_should() -> None:
                 ok = True
             check(f"{name}: rejects {label}", ok)
 
-        # And the good ones bind.
+        # And the good ones bind. `tp=None` is paired with the trailing flag
+        # the module's own contract requires — see TP_NONE_REQUIRES_TRAILING.
+        # Passing it bare would be asserting that every module accepts a
+        # configuration half of them deliberately refuse.
+        no_tp_trailing = TP_NONE_REQUIRES_TRAILING[name]
         for label, params in (("tp=None", {**base, "sl_atr_mult": 2.0,
-                                           "tp_atr_mult": None}),
+                                           "tp_atr_mult": None,
+                                           "trailing": no_tp_trailing}),
                               ("tp=3.0", {**base, "sl_atr_mult": 2.0,
                                           "tp_atr_mult": 3.0})):
             try:
@@ -685,8 +711,17 @@ def test_risk_params_change_the_trades() -> None:
                   not no_tp.equals(with_tp),
                   f"{int(no_tp.sum())} vs {int(with_tp.sum())} exits")
 
-            trail_x = _x(2.0, None, True)
-            fixed_x = _x(2.0, None, False)
+            # A FINITE take-profit on both sides of this comparison, where
+            # every other case here passes None. The newer modules refuse
+            # `tp_atr_mult=None` unless `trailing=True` — with a fixed stop and
+            # no target a runner has no bounded exit — so the no-target,
+            # fixed-stop pair this case used to run is a configuration those
+            # modules will not accept at all. The flag under test is
+            # `trailing`, and holding the target constant across the two runs
+            # tests it exactly as well while staying expressible for every
+            # module in the table.
+            trail_x = _x(2.0, 3.0, True)
+            fixed_x = _x(2.0, 3.0, False)
             check(f"{tag}: trailing=False is a different simulation",
                   not trail_x.equals(fixed_x),
                   f"{int(trail_x.sum())} vs {int(fixed_x.sum())} exits")
@@ -747,8 +782,12 @@ def test_indicators_track_the_settings() -> None:
         check(f"{name}: a take-profit line when tp is set",
               any("Take Profit" in k for k in with_tp))
 
+        # A finite target here, for the reason given in
+        # `test_risk_params_change_the_trades`: the newer modules refuse
+        # `tp_atr_mult=None` with `trailing=False`, and the label under test is
+        # the STOP's, which does not depend on whether a target is drawn.
         fixed = mod.indicators(bars, **base, sl_atr_mult=2.0,
-                               tp_atr_mult=None, trailing=False)
+                               tp_atr_mult=3.0, trailing=False)
         check(f"{name}: the stop line is labelled Trailing or Fixed to match",
               any(k.startswith("Trailing Stop") for k in no_tp)
               and any(k.startswith("Fixed Stop") for k in fixed),
@@ -825,7 +864,7 @@ def test_the_two_walks_are_the_same_machine() -> None:
         for tp in (np.nan, 3.0):
             for tr in (True, False):
                 a = _run_raw(EC._walk, fx, sl, tp, tr)
-                for other in (ETF, SMC):
+                for other in (MAS, SMC):
                     b = _run_raw(other._walk, fx, sl, tp, tr)
                     for x, y in zip(a, b):
                         if not np.array_equal(x, y, equal_nan=True):
@@ -849,7 +888,7 @@ def test_the_two_walks_are_the_same_machine() -> None:
     import inspect
     sources = {name: inspect.getsource(mod._walk_loop)
                for name, mod in (("ema_crossover_20260821", EC),
-                                 ("ema_trend_filter", ETF),
+                                 ("ma_anchoring_spread_20260820", MAS),
                                  ("sma_momentum_crossover_20260818", SMC))}
     check("the three walk copies are character-for-character the same source",
           len(set(sources.values())) == 1,
@@ -909,9 +948,33 @@ def test_grids_are_reportable_and_fully_valid() -> None:
                 mod.make_signal_fn(**{**mod.DEFAULT_PARAMS, **combo})
             except ValueError as e:
                 rejected.append((combo, str(e)))
-        check(f"{name}: every declared cell binds",
-              not rejected,
-              f"{len(rejected)} rejected, first: {rejected[0] if rejected else ''}")
+
+        if TP_NONE_REQUIRES_TRAILING[name]:
+            # This module refuses its own (no-target, fixed-stop) cells by
+            # design. Every rejection must be THAT one and no other: a cell
+            # refused for a different reason is a grid the sweep would report
+            # as REJECTED with nobody knowing why, and `variants_tested` would
+            # carry a number nobody could reproduce.
+            wrong = [(c, e) for c, e in rejected
+                     if not (c.get("tp_atr_mult") is None
+                             and not c.get("trailing")
+                             and "trailing=True" in e)]
+            check(f"{name}: every declared cell binds or is refused only for "
+                  f"the no-target fixed-stop rule",
+                  not wrong,
+                  f"{len(wrong)} refused for another reason, first: "
+                  f"{wrong[0] if wrong else ''}")
+            expected = [c for c in combos
+                        if c.get("tp_atr_mult") is None and not c.get("trailing")]
+            check(f"{name}: the refused cells are exactly the "
+                  f"{len(expected)} no-target fixed-stop ones",
+                  len(rejected) == len(expected),
+                  f"{len(rejected)} rejected, {len(expected)} expected")
+        else:
+            check(f"{name}: every declared cell binds",
+                  not rejected,
+                  f"{len(rejected)} rejected, first: "
+                  f"{rejected[0] if rejected else ''}")
 
         # The loader must accept every cell too - it rejects unknown parameter
         # names, so a grid key the signature does not take raises there.

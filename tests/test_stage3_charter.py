@@ -305,7 +305,7 @@ def test_holdout_isolation() -> None:
     # sweep fails an hour in on a window that was wrong from the first line.
     out = subprocess.run(
         [sys.executable, str(REPO / "backtest" / "audit_gates.py"),
-         "--strat", "sma_crossover", "--is-end", "2023-06-30"],
+         "--strat", "ema_crossover_20260821", "--is-end", "2023-06-30"],
         capture_output=True, text=True, cwd=REPO, timeout=180)
     check("the CLI refuses a spent holdout before it reads a bar, and exits 2",
           out.returncode == 2 and "holdout" in out.stderr.lower(),
