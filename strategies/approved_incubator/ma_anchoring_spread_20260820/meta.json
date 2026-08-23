@@ -3,7 +3,7 @@
   "version": "A",
   "description": "Promoted Version A (rule-based baseline).",
   "symbols": [
-    "LE"
+    "RB"
   ],
   "timeframe": "1h",
   "params": {
@@ -28,7 +28,7 @@
   "source": "/home/cgrullon/src/trading/strategies/experimental/ma_anchoring_spread_20260820.py",
   "source_sha256": "3c87f3720be7dd06950d86eb242f32918b3c0f0348a94641f845795c5d512f40",
   "promoted_sha256": "3c87f3720be7dd06950d86eb242f32918b3c0f0348a94641f845795c5d512f40",
-  "promoted_utc": "2026-08-23T07:45:30+00:00",
+  "promoted_utc": "2026-08-23T07:45:33+00:00",
   "costs_included": false,
   "variants_tested": null,
   "metrics_status": "NOT RECORDED",
@@ -37,14 +37,14 @@
   "gate_audit": {
     "gate1": "FAIL",
     "gate2": "PASS",
-    "gate3": "PASS",
+    "gate3": "FAIL",
     "gate_regime": "PASS"
   },
   "certification": {
-    "audit_file": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/gate_audit_LE_1h.json",
-    "audit_sha256": "04d5546b10baaaeb71546be3d0397e57d65a001203f900d1394e877ae97e5794",
-    "audit_symbol": "LE",
-    "audit_generated_utc": "2026-08-23T07:36:45+00:00",
+    "audit_file": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/gate_audit_RB_1h.json",
+    "audit_sha256": "454b89df78c31e458919470ff0053ab5886a96d879150f84c2d6cc79bce27806",
+    "audit_symbol": "RB",
+    "audit_generated_utc": "2026-08-23T07:37:54+00:00",
     "in_sample": {
       "start": "2013-01-01",
       "end": "2022-12-31"
@@ -55,14 +55,14 @@
       "end_basis": "the present - every bar the lake holds"
     },
     "params": {
-      "fast_window": 10,
-      "slow_window": 100,
-      "spread_threshold": 0.01,
+      "fast_window": 21,
+      "slow_window": 200,
+      "spread_threshold": 0.015,
       "sl_atr_mult": 2.0,
       "tp_atr_mult": 3.0,
       "trailing": false
     },
-    "params_source": "stage 2 winner (best_params_LE_1h.json)",
+    "params_source": "stage 2 winner (best_params_RB_1h.json)",
     "variants_tested": 270,
     "wfo": {
       "train_years": 2,
