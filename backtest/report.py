@@ -519,6 +519,90 @@ def losing_weekdays(breakdown: pd.DataFrame,
     return [int(d) for d in bad["weekday"].tolist()]
 
 
+# The profit-factor bar a weekday has to clear to stay in the strategy. The same
+# 1.00 Stage 1 screens a whole CONTRACT on, and the same number Gate 1 binds on,
+# so a session cannot survive the day-of-week screen on a profit factor the gate
+# would later reject.
+DOW_MIN_PROFIT_FACTOR = 1.00
+
+
+def unprofitable_weekdays(breakdown: pd.DataFrame,
+                          min_trades: int = 20,
+                          min_profit_factor: float = DOW_MIN_PROFIT_FACTOR
+                          ) -> list[dict]:
+    """
+    EVERY weekday whose profit factor is below the bar - the days to exclude.
+
+    This is the automated half of what `losing_weekdays` offers a human. Stage 1
+    calls it to fill `dropped_days` / `exclude_days` in `surviving_assets.json`,
+    Stage 2 masks those sessions out before it sweeps, and Stage 3 certifies on
+    the same pruned week. Read the caveat in `backtest/baseline.py` first: the
+    days are chosen IN-SAMPLE, on the same bars Stage 2 then optimises over, so
+    this is one more layer of selection and not a free improvement. It is
+    recorded as such at every handoff rather than disappearing into the
+    parameters.
+
+    The rule, in full, because "unprofitable" has more than one edge case:
+
+      * **Profit factor, not net P&L.** PF < 1.00 means the session gave back
+        more than it took in after costs, which is the same statement Stage 1
+        screens a whole contract on. Ranking on dollars instead would drop a
+        thin day that lost a little ahead of a heavily-traded day that lost
+        more per trade.
+      * **Only Monday-Friday.** A Saturday row is a bug worth seeing (see
+        `day_of_week_breakdown`), not a session to prune.
+      * **Only days at or above `min_trades`.** The same floor
+        `losing_weekdays` enforces, for the same reason: a losing Tuesday over
+        eight trades is noise, and pruning it is how a day-of-week filter
+        manufactures an in-sample Sharpe. A day below the floor stays in
+        however badly it scored.
+      * **An UNDEFINED profit factor is never dropped.** `day_of_week_breakdown`
+        returns NaN where a day had no losing trades at all, and `NaN < 1.00` is
+        False in numpy as well as in Python - but relying on that would make the
+        behaviour an accident of the comparison rather than a decision. A day
+        that never lost is the opposite of one to exclude, and a day with zero
+        trades has produced no evidence to exclude it on.
+
+    Returns a list of row dicts in WEEKDAY order (Mon first), one per day to
+    drop, each carrying `day_name` for the artifact and the metrics that
+    condemned it. Zero, one or five days is all the same shape: an empty list
+    means every weekday cleared the bar, which is a result, not a missing value.
+    """
+    from .event_calendar import WEEKDAY_FULL_NAMES
+
+    if breakdown is None or breakdown.empty:
+        return []
+    out = []
+    for _, r in breakdown.sort_values("weekday").iterrows():
+        d = int(r["weekday"])
+        pf = r["profit_factor"]
+        if d > 4 or int(r["trades"]) < int(min_trades) or pd.isna(pf):
+            continue
+        if float(pf) >= float(min_profit_factor):
+            continue
+        out.append({
+            "weekday": d,
+            "day": str(r["day"]),
+            "day_name": WEEKDAY_FULL_NAMES[d],
+            "trades": int(r["trades"]),
+            "net_pnl": float(r["net_pnl"]),
+            "win_rate": (None if pd.isna(r["win_rate"])
+                         else float(r["win_rate"])),
+            "profit_factor": float(pf),
+            "pct_of_net_pnl": (None if pd.isna(r["pct_of_net_pnl"])
+                               else float(r["pct_of_net_pnl"])),
+        })
+    return out
+
+
+def exclude_days_basis(min_trades: int = 20,
+                       min_profit_factor: float = DOW_MIN_PROFIT_FACTOR) -> str:
+    """The rule `unprofitable_weekdays` applied, in one line, for the record."""
+    return (f"every Mon-Fri session with profit factor < "
+            f"{float(min_profit_factor):.2f} over at least {int(min_trades)} "
+            f"trades, attributed by ENTRY session date")
+
+
 def format_day_of_week(breakdown: pd.DataFrame,
                        min_trades: int = 20,
                        indent: str = "  ") -> str:

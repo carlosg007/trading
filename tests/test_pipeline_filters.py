@@ -684,15 +684,20 @@ def test_baseline_screen() -> None:
           why)
     check("...and the reason names the best quadrant and how far short it fell",
           "0.94" in why and REGIMES[0] in why, why)
-    edge, why, _ = screen({"A": _profile(hvt=(1.00, 30)), "B": None})
-    check("exactly 1.00 over exactly 30 trades is on the boundary and survives",
+    edge, why, _ = screen({"A": _profile(hvt=(1.00, 50)), "B": None})
+    check("exactly 1.00 over exactly 50 trades is on the boundary and survives",
           edge, why)
     loosened, why, _ = screen({"A": _profile(hvt=(1.14, 400)), "B": None})
     check("1.14 now survives, where the 1.15 bar dropped it", loosened, why)
 
-    thin, why, _ = screen({"A": _profile(hvt=(2.40, 29)), "B": None})
-    check("a 2.40 PF over 29 trades in that quadrant is NOT an environment",
-          not thin and "29" in why and "< 30" in why, why)
+    thin, why, _ = screen({"A": _profile(hvt=(2.40, 49)), "B": None})
+    check("a 2.40 PF over 49 trades in that quadrant is NOT an environment",
+          not thin and "49" in why and "sample floor of 50" in why, why)
+    # The floor scales past the flat 50 once the run is large enough.
+    corner, why, _ = screen({"A": _profile(hvt=(2.40, 60), lvr=(0.9, 4940)),
+                             "B": None})
+    check("...nor is 60 trades out of 5,000 - the 10% share binds where the "
+          "flat 50 would not", not corner and "500" in why, why)
 
     # Both bars bind on the SAME quadrant - the whole point of the screen.
     split, why, _ = screen({"A": _profile(hvt=(1.90, 11), lvr=(0.90, 400)),
@@ -729,9 +734,10 @@ def test_baseline_screen() -> None:
           and screen({"A": _profile(hvt=(1.20, 80)), "B": None},
                      min_trades=200)[0] is False)
 
-    # best_quadrant's tie-break: equal factors, the better-evidenced one wins.
-    tied = best_quadrant(_profile(hvt=(1.40, 40), lvr=(1.40, 900)))
-    check("a tie on profit factor breaks on the LARGER trade count",
+    # Equal factors, unequal alpha: the engine wins, not the corner.
+    tied = best_quadrant(_profile(hvt=(1.40, 90), lvr=(1.40, 900)))
+    check("equal profit factors resolve on alpha contribution, and the "
+          "larger book wins",
           tied["regime"] == REGIMES[3] and tied["trade_count"] == 900,
           str(tied))
     check("a profile with nothing clearing returns None, not a best-effort pick",
@@ -1754,8 +1760,11 @@ def test_stage1_survivors_leaderboard() -> None:
                     ok, why, dow, 1, 1.0, profiles=profiles, best=best)
 
     # NQ survives on B's quadrant (1.72); ES on A's (1.20); CL clears nothing.
+    # B's quadrant has to out-SCORE A's, not merely out-factor it: the two
+    # versions are ranked on alpha contribution since 2026-08-21, so a sharp
+    # 65-trade corner no longer beats a 200-trade book at 1.02.
     nq = row("NQ", "15m", 1.10, {"A": _profile(hvt=(1.02, 200)),
-                                 "B": _profile(lvt=(1.72, 65))})
+                                 "B": _profile(lvt=(1.72, 200))})
     es = row("ES", "5m", 1.08, {"A": _profile(hvr=(1.20, 310)), "B": None})
     cl = row("CL", "5m", 0.70, {"A": _profile(lvr=(0.70, 400)), "B": None})
 

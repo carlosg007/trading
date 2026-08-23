@@ -239,6 +239,120 @@ def _check_version_b_alone(tmp_dir: str | None = None) -> None:
 # test suite quietly depositing artifacts on the NFS mount beside the ones a
 # promotion cites. Renaming them back reintroduces exactly that.
 # --------------------------------------------------------------------------
+def _check_true_home_regime(tmp_dir: str | None = None) -> None:
+    """
+    TRUE HOME REGIME DISCOVERY — the designation rule, on hand-built
+    breakdowns where the right answer is arithmetic rather than a simulation.
+
+    Every check here is a case where ranking on profit factor alone gives the
+    WRONG quadrant, which is what the rule was changed on 2026-08-21 to stop.
+    """
+    print("\n5. designate(): alpha contribution, the sample floor, secondaries")
+    from backtest.profiler import (DESIGNATION_MIN_TRADES, REGIMES,
+                                   SCORE_PF_CEILING, designate,
+                                   designation_floor, quadrant_score,
+                                   rank_quadrants)
+
+    def q(pf, n, net, win=50.0):
+        return {"profit_factor": pf, "trade_count": n, "net_pnl": net,
+                "win_rate": win}
+
+    check("the score is net P&L x profit factor",
+          quadrant_score(q(1.28, 120, 12_000.0)) == 12_000.0 * 1.28,
+          str(quadrant_score(q(1.28, 120, 12_000.0))))
+    check("a missing term scores None, never 0.0 — which is a score a "
+          "quadrant can legitimately have",
+          quadrant_score({"trade_count": 40}) is None
+          and quadrant_score(q(1.2, 40, 0.0)) == 0.0)
+
+    check(f"the floor is the LARGER of {DESIGNATION_MIN_TRADES} and 10%",
+          (designation_floor(120), designation_floor(5000),
+           designation_floor(0)) == (50, 500, 50),
+          f"{designation_floor(120)} {designation_floor(5000)}")
+    check("...and a fraction of 0 reduces it to the flat count, which is the "
+          "pre-2026-08-21 behaviour",
+          designation_floor(5000, 30, 0.0) == 30)
+    check("the share ROUNDS UP — 10% of 761 is 77, not 76",
+          designation_floor(761) == 77, str(designation_floor(761)))
+
+    # The engine beats the corner. Under the old profit-factor rank this
+    # designated Q3, and Gate R then certified in a quadrant holding a
+    # handful of holdout trades while the money was made in Q1.
+    d = designate({REGIMES[0]: q(1.28, 120, 12_000.0),
+                   REGIMES[2]: q(1.55, 45, 4_500.0)}, 165)
+    check("the ALPHA ENGINE is designated, not the sharpest per-trade edge",
+          d["primary"]["quadrant"] == "Q1", str(d["primary"]))
+    check("...and the runner-up is a SECONDARY carrying why it was not "
+          "designated",
+          [x["quadrant"] for x in d["secondaries"]] == ["Q3"]
+          and "sample floor" in d["secondaries"][0]["reason"],
+          str(d["secondaries"]))
+
+    # A quadrant that LOST money is never a home regime, whatever its factor
+    # rounds to: net_pnl x PF is only monotone above zero, and at PF 0.00 the
+    # product is exactly 0.0 and would outrank every losing quadrant.
+    d = designate({REGIMES[0]: q(0.0, 80, -9_000.0),
+                   REGIMES[1]: q(0.5, 80, -5_000.0)}, 160)
+    check("a total-loss quadrant (PF 0.00) does not score 0.0 into first "
+          "place — nothing is designated at all",
+          d["primary"] is None, str(d["primary"]))
+    check("...and the reason names the bar that failed, not a trade count",
+          "not positive" in d["reason"], d["reason"])
+
+    # The 999 sentinel is "gross loss was zero", not a measured factor.
+    d = designate({REGIMES[0]: q(1.30, 4000, 900_000.0),
+                   REGIMES[3]: q(999, 60, 9_000.0)}, 4060)
+    check("an unbeaten 60-trade quadrant cannot outrank a 4,000-trade engine "
+          "on a sentinel",
+          d["primary"]["quadrant"] == "Q1", str(d["primary"]))
+    capped = {r["quadrant"]: r["pf_capped"] for r in d["scores"]}
+    check(f"...the cap at {SCORE_PF_CEILING:.0f} is RECORDED on the row it "
+          f"bit, and the reported profit factor is left as measured",
+          capped["Q4"] is True and capped["Q1"] is False
+          and next(r for r in d["scores"]
+                   if r["quadrant"] == "Q4")["profit_factor"] == 999,
+          str(capped))
+
+    # Every quadrant comes back, including the ones that lost. A ranking that
+    # dropped them makes "disqualified on sample size" and "never traded"
+    # the same absent row.
+    rows = rank_quadrants({REGIMES[0]: q(1.4, 90, 9_000.0),
+                           REGIMES[1]: q(0.4, 300, -3_000.0)}, floor=50)
+    check("every quadrant present in the breakdown is scored and returned",
+          [r["quadrant"] for r in rows] == ["Q1", "Q2"], str(rows))
+    check("...an absent quadrant is absent, not invented as a zero row",
+          all(r["quadrant"] not in ("Q3", "Q4") for r in rows))
+
+    # An exact score tie resolves on evidence, not on declaration order.
+    d = designate({REGIMES[0]: q(1.20, 100, 6_000.0),
+                   REGIMES[3]: q(1.20, 300, 6_000.0)}, 400)
+    check("an exact tie on score breaks on the LARGER trade count",
+          d["primary"]["quadrant"] == "Q4", str(d["primary"]["quadrant"]))
+
+    print("\n5b. the artifact carries the designation and what it beat")
+    bars = synthetic_bars()
+    prof = _profile(bars, synthetic_trades(bars), out_dir=tmp_dir)
+    for key in ("optimal_quadrant", "optimal_score", "optimal_net_pnl",
+                "regime_scores", "secondary_regimes", "designation"):
+        check(f"...the profile carries {key!r}", key in prof,
+              str(sorted(prof)))
+    check("the designation block states the rule and the floor it applied",
+          "Net_PnL" in prof["designation"]["rule"]
+          and isinstance(prof["designation"]["sample_floor"], int),
+          str(prof["designation"]))
+    check("optimal_quadrant and optimal_regime are the SAME statement",
+          (prof["optimal_regime"] == "None")
+          or (prof["optimal_quadrant"]
+              == {"High Volatility / Trending": "Q1",
+                  "High Volatility / Ranging": "Q2",
+                  "Low Volatility / Trending": "Q3",
+                  "Low Volatility / Ranging": "Q4"}[prof["optimal_regime"]]),
+          f"{prof['optimal_regime']} / {prof['optimal_quadrant']}")
+    check("regime_scores is keyed by regime and covers every traded quadrant",
+          set(prof["regime_scores"]) == set(prof["regime_breakdown"]),
+          str(sorted(prof["regime_scores"])))
+
+
 def _isolated(fn):
     with tempfile.TemporaryDirectory() as tmp:
         prior = os.environ.get("BT_ARTIFACTS")
@@ -268,6 +382,10 @@ def test_either_version_can_carry_a_configuration():
     _isolated(_check_version_b_alone)
 
 
+def test_true_home_regime_designation():
+    _isolated(_check_true_home_regime)
+
+
 def main() -> int:
     print("=" * 60)
     print("  the Stage 1 regime seam: profiler -> screen")
@@ -275,7 +393,8 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         os.environ["BT_ARTIFACTS"] = tmp
         for fn in (_check_generate_profile, _check_screen_consumes_a_real_profile,
-                   _check_no_trades, _check_version_b_alone):
+                   _check_no_trades, _check_version_b_alone,
+                   _check_true_home_regime):
             try:
                 fn(None)
             except AssertionError:

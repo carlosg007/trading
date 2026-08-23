@@ -165,10 +165,16 @@ def test_screen_threshold() -> None:
     check("MIN_REGIME_PROFIT_FACTOR is 1.00",
           baseline.MIN_REGIME_PROFIT_FACTOR == 1.00,
           str(baseline.MIN_REGIME_PROFIT_FACTOR))
-    check("MIN_REGIME_TRADES is 30",
+    check("MIN_REGIME_TRADES is 30 — Gate R's holdout floor, no longer "
+          "Stage 1's",
           baseline.MIN_REGIME_TRADES == 30, str(baseline.MIN_REGIME_TRADES))
+    check("STAGE1_MIN_TRADES is 50, over a 10% share of the placed trades",
+          (baseline.STAGE1_MIN_TRADES,
+           baseline.STAGE1_MIN_TRADE_FRACTION) == (50, 0.10),
+          f"{baseline.STAGE1_MIN_TRADES} {baseline.STAGE1_MIN_TRADE_FRACTION}")
 
-    # max(PF_A, PF_B) >= 1.00 AND N >= 30, per quadrant, either version.
+    # max(PF_A, PF_B) >= 1.00 AND positive net P&L AND N >= max(50, 10%),
+    # per quadrant, either version.
     R = profiler.REGIMES
     def prof_with(pf, n, regime=R[0]):
         return {"trades_profiled": n,
@@ -177,18 +183,42 @@ def test_screen_threshold() -> None:
                                               "win_rate": 50.0,
                                               "net_pnl": 1.0}}}
 
-    ok, why, best = baseline.screen({"A": prof_with(1.02, 40), "B": None})
-    check("PF 1.02 over 40 trades survives at the 1.00 bar", ok, why)
+    ok, why, best = baseline.screen({"A": prof_with(1.02, 60), "B": None})
+    check("PF 1.02 over 60 trades survives at the 1.00 bar", ok, why)
 
-    ok, _, _ = baseline.screen({"A": prof_with(0.99, 40), "B": None})
+    ok, _, _ = baseline.screen({"A": prof_with(0.99, 60), "B": None})
     check("PF 0.99 does not survive", not ok)
 
-    ok, _, _ = baseline.screen({"A": prof_with(1.50, 29), "B": None})
-    check("PF 1.50 over 29 trades does not survive (trade floor binds)", not ok)
+    ok, _, _ = baseline.screen({"A": prof_with(1.50, 49), "B": None})
+    check("PF 1.50 over 49 trades does not survive (the 50-trade floor "
+          "binds)", not ok)
+    ok, _, _ = baseline.screen({"A": prof_with(1.50, 50), "B": None})
+    check("...and exactly 50 clears it", ok)
+
+    # The floor SCALES: 10% of the placed trades once that exceeds 50. A
+    # quadrant holding 1% of a 5,000-trade run is a corner of the window, not
+    # an environment, and a flat 50 would designate it.
+    big = {"trades_profiled": 5000,
+           "regime_breakdown": {R[0]: {"profit_factor": 1.40, "trade_count": 60,
+                                       "win_rate": 50.0, "net_pnl": 900.0},
+                                R[1]: {"profit_factor": 0.90, "trade_count": 4940,
+                                       "win_rate": 50.0, "net_pnl": -1.0}}}
+    ok, why, _ = baseline.screen({"A": big, "B": None})
+    check("60 trades out of 5,000 does not survive — the 10% share binds "
+          "where the flat 50 would not", not ok, why)
+
+    # A quadrant that LOST money is never a home regime, whatever its factor
+    # rounds to. `net_pnl x PF` is only monotone above zero.
+    losing = {"trades_profiled": 200,
+              "regime_breakdown": {R[0]: {"profit_factor": 1.05,
+                                          "trade_count": 200,
+                                          "win_rate": 50.0, "net_pnl": -500.0}}}
+    ok, why, _ = baseline.screen({"A": losing, "B": None})
+    check("a quadrant with negative net P&L is never designated", not ok, why)
 
     # Version B carries it when A cannot - the max() in the operator's rule.
-    ok, why, best = baseline.screen({"A": prof_with(0.80, 40),
-                                     "B": prof_with(1.30, 40)})
+    ok, why, best = baseline.screen({"A": prof_with(0.80, 60),
+                                     "B": prof_with(1.30, 60)})
     check("Version B alone can carry the quadrant", ok and best["version"] == "B",
           why)
 

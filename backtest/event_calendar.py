@@ -145,6 +145,13 @@ _FOMC_ANCHORS = {1: 29, 3: 19, 4: 30, 6: 15, 7: 30, 9: 18, 11: 5, 12: 15}
 
 WEEKDAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
+# The same seven days spelled out. The short form is what a console table and a
+# `--exclude-days` audit line want; the long form is what the Stage 1 handoff
+# writes as `worst_day`, because "Mon" in a JSON artifact read six months later
+# is one abbreviation away from being mistaken for a month.
+WEEKDAY_FULL_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
+                      "Saturday", "Sunday")
+
 
 class CalendarError(RuntimeError):
     """

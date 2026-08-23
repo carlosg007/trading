@@ -184,8 +184,10 @@ from backtest.pipeline import (BASELINE_REPORT_FILE,               # noqa: E402
                                CHARTER_IS_END, CHARTER_IS_START,
                                SURVIVORS_FILE, leaderboard, next_step,
                                pipeline_dir, stage_banner, write_stage)
-from backtest.profiler import (QUADRANT_TO_REGIME, REGIMES,         # noqa: E402
-                               RegimeProfiler)
+from backtest.profiler import (DESIGNATION_MIN_TRADE_FRACTION,       # noqa: E402
+                               DESIGNATION_MIN_TRADES, DESIGNATION_RULE,
+                               QUADRANT_TO_REGIME, REGIME_TO_QUADRANT,
+                               REGIMES, RegimeProfiler, designate)
 from backtest.report import day_of_week_breakdown                   # noqa: E402
 from backtest.run import (load_bars, parse_param, parse_symbols,    # noqa: E402
                           parse_timeframes, resolve_strategy)
@@ -213,7 +215,30 @@ MIN_REGIME_PROFIT_FACTOR = 1.00
 # the configuration's total. A 1.60 profit factor over nine trades in one
 # quadrant is not an environment, and the whole point of screening per quadrant
 # is that the counts get smaller.
+#
+# **This is now GATE R's floor, and no longer Stage 1's.** `audit_gates`
+# imports it from here so a screen and a certification cannot be held to
+# different numbers, and it is deliberately LOWER than the designation floor
+# below: a holdout is shorter than the window that chose the quadrant, so
+# holding it to the in-sample floor would fail configurations for the length
+# of the holdout rather than for anything about the strategy.
 MIN_REGIME_TRADES = 30
+
+# **Stage 1's own floor since 2026-08-21: `max(50, 10% of the trades placed in
+# a quadrant)`.** Imported from `backtest.profiler` rather than declared again,
+# because the profiler applies it when it DESIGNATES a home regime and this
+# stage applies it when it SCREENS on one - two copies would be one edit away
+# from a survivor whose handoff names a quadrant its own profile artifact
+# refused to designate.
+#
+# It replaced a flat 30 on the same day the ranking moved from profit factor
+# to alpha contribution (net P&L x profit factor). Both halves of that change
+# have teeth: a configuration whose only quadrant at or above 1.00 holds 30-49
+# trades no longer survives, and a configuration with two qualifying quadrants
+# is now scoped to the one that MADE the money rather than the one with the
+# sharpest per-trade edge. Neither is a tightening of Gate R.
+STAGE1_MIN_TRADES = DESIGNATION_MIN_TRADES
+STAGE1_MIN_TRADE_FRACTION = DESIGNATION_MIN_TRADE_FRACTION
 
 # The in-sample window the Regime-Switching Incubator Charter fixes for Stage
 # 1, and the DEFAULT for --start / --end since 2026-08-21.
@@ -303,45 +328,80 @@ def quadrant_id(regime: str | None) -> str | None:
 # --------------------------------------------------------------------------
 def best_quadrant(profile: dict | None,
                   min_profit_factor: float = MIN_REGIME_PROFIT_FACTOR,
-                  min_trades: int = MIN_REGIME_TRADES) -> dict | None:
+                  min_trades: int = STAGE1_MIN_TRADES,
+                  min_trade_fraction: float = STAGE1_MIN_TRADE_FRACTION
+                  ) -> dict | None:
     """
-    The best quadrant of one version's profile that CLEARS BOTH bars, or None.
+    The TRUE HOME REGIME of one version's profile - the quadrant that clears
+    every designation bar and contributes the most alpha - or None.
 
-    Both bars are applied to the same quadrant, which is the whole point: a
-    1.80 profit factor in a quadrant with eleven trades and a 0.90 in one with
-    four hundred describe a strategy with no environment, and pairing the best
-    factor with the largest count would let exactly that through.
+    **This delegates to `backtest.profiler.designate` and adds no rule of its
+    own.** Until 2026-08-21 it ranked on profit factor with its own trade floor
+    and its own tie-break while the profiler ranked on profit factor with a
+    different floor and no tie-break, so a `regime_profile_*.json` and the
+    `surviving_assets.json` written beside it could name DIFFERENT home
+    quadrants for the same result, and nothing raised. There is now one
+    implementation and one answer.
 
-    Ranked on profit factor, ties broken on the LARGER trade count. Ties are
-    real - a quadrant no bar reaches and one the strategy never traded in both
-    round to the same number - and between two equal factors the one measured
-    over more trades is the better-evidenced claim, not the one the quadrant
-    order happened to put first.
+    Three bars, all applied to the SAME quadrant, which is the whole point: a
+    1.80 profit factor over eleven trades and a 0.90 over four hundred describe
+    a strategy with no environment, and pairing the best factor with the
+    largest count would let exactly that through.
+
+    - positive net P&L, because a home regime is somewhere the strategy MAKES
+      money, and because `net_pnl x profit_factor` is only monotone above zero;
+    - profit factor at or above `min_profit_factor`;
+    - at least `max(min_trades, min_trade_fraction x trades placed)` trades.
+
+    Ranked on ALPHA CONTRIBUTION (`net_pnl x profit_factor`), not on profit
+    factor. A 1.55 factor over 45 trades and a 1.28 over 4,000 are both real,
+    and the second is the engine the strategy actually runs on; the old rule
+    scoped the survivor to the first and sent Gate R to certify a corner of the
+    window. Ties break on the larger trade count, then on the declared regime
+    order - the better-evidenced claim rather than whichever the quadrant order
+    put first.
 
     A profit factor of `inf` (the quadrant never lost) is a result and clears;
-    the profiler's 999 sentinel for the same case is left as it is rather than
-    normalised here, because rewriting another module's sentinel in a screen is
-    how two modules come to disagree about what 999 meant.
+    the profiler's 999 sentinel for the same case is capped for SCORING only,
+    so an unbeaten 51-trade quadrant cannot outrank a 4,000-trade engine by two
+    orders of magnitude on a number nobody measured.
+
+    `trades_profiled` on the profile is what the fraction is taken of - the
+    trades PLACED in a quadrant, not the trade list. An unplaced trade belongs
+    to no quadrant, so counting it would raise every quadrant's bar on the
+    strength of trades no quadrant could claim. A profile written before that
+    key existed falls back to the breakdown's own total, which is the same
+    number whenever nothing was unplaced.
     """
     if not profile:
         return None
-    best = None
-    for regime in REGIMES:
-        stats = (profile.get("regime_breakdown") or {}).get(regime)
-        if not stats:
-            continue
-        pf = _num(stats.get("profit_factor"))
-        n = int(stats.get("trade_count", 0) or 0)
-        if pf is None or pf < float(min_profit_factor) or n < int(min_trades):
-            continue
-        cand = {"regime": regime, "quadrant": quadrant_id(regime),
-                "profit_factor": pf, "trade_count": n,
-                "win_rate": _num(stats.get("win_rate")),
-                "net_pnl": _num(stats.get("net_pnl"))}
-        if best is None or (pf, n) > (best["profit_factor"],
-                                      best["trade_count"]):
-            best = cand
-    return best
+    breakdown = profile.get("regime_breakdown") or {}
+    placed = profile.get("trades_profiled")
+    if placed is None:
+        placed = sum(int((v or {}).get("trade_count", 0) or 0)
+                     for v in breakdown.values())
+    decision = designate(breakdown, int(placed or 0),
+                         min_trades=min_trades,
+                         fraction=min_trade_fraction,
+                         min_profit_factor=min_profit_factor)
+    primary = decision["primary"]
+    if not primary:
+        return None
+    return {"regime": primary["regime"],
+            "quadrant": primary["quadrant"],
+            "profit_factor": primary["profit_factor"],
+            "trade_count": primary["trade_count"],
+            "win_rate": primary["win_rate"],
+            "net_pnl": primary["net_pnl"],
+            # The score that chose it, and the runners-up it beat. Carried so
+            # a handoff can record WHY this quadrant and not the sharper one,
+            # without a reader re-deriving the ranking from the breakdown -
+            # where they are free to apply a different floor than the one that
+            # made the decision.
+            "score": primary["score"],
+            "sample_floor": decision["sample_floor"],
+            "secondaries": decision["secondaries"],
+            "scores": {r["regime"]: r for r in decision["scores"]}}
 
 
 def _top_quadrant(profile: dict | None) -> dict | None:
@@ -383,7 +443,9 @@ def kill_switch_regimes(optimal_regime: str | None) -> list[str]:
 
 def screen(profiles: dict | None,
            min_profit_factor: float = MIN_REGIME_PROFIT_FACTOR,
-           min_trades: int = MIN_REGIME_TRADES) -> tuple[bool, str, dict | None]:
+           min_trades: int = STAGE1_MIN_TRADES,
+           min_trade_fraction: float = STAGE1_MIN_TRADE_FRACTION
+           ) -> tuple[bool, str, dict | None]:
     """
     Did this configuration carry an edge in ANY ONE regime? Returns
     `(survived, reason, best)`.
@@ -423,13 +485,20 @@ def screen(profiles: dict | None,
 
     clearing = []
     for label, prof in views:
-        q = best_quadrant(prof, min_profit_factor, min_trades)
+        q = best_quadrant(prof, min_profit_factor, min_trades,
+                          min_trade_fraction)
         if q:
             clearing.append({**q, "version": label})
     if clearing:
-        best = max(clearing, key=lambda q: (q["profit_factor"],
+        # Ranked on the SAME alpha score that chose each version's quadrant.
+        # Ranking the two versions on profit factor while ranking the four
+        # quadrants on score would let Version B's sharp corner outrank
+        # Version A's engine, and the handoff would scope the survivor to a
+        # quadrant that lost the comparison it was entered in.
+        best = max(clearing, key=lambda q: (q["score"] or 0.0,
                                             q["trade_count"]))
-        return True, (f"Version {best['version']} profit factor "
+        return True, (f"Version {best['version']} alpha score "
+                      f"{(best['score'] or 0.0):,.0f} — profit factor "
                       f"{best['profit_factor']:.2f} over "
                       f"{best['trade_count']:,} trades in "
                       f"{best['regime']}"), best
@@ -444,9 +513,28 @@ def screen(profiles: dict | None,
         return False, (f"best quadrant {top['profit_factor']:.2f} (Version "
                        f"{label}, {top['regime']}) < "
                        f"{float(min_profit_factor):.2f}"), None
-    return False, (f"Version {label} clears {float(min_profit_factor):.2f} in "
-                   f"{top['regime']} but on only {top['trade_count']:,} "
-                   f"trades < {int(min_trades)}"), None
+    # The factor cleared, so the drop was net P&L or the sample floor - and
+    # `designate` already worked out which, per quadrant, in words. Restating
+    # it as "on only N trades" here was true while the trade count was the only
+    # other bar; it now prints "on only 200 trades < 50" for a quadrant dropped
+    # for LOSING money, which sends the reader to fix the wrong thing.
+    reasons = []
+    for lbl, prof in views:
+        breakdown = (prof or {}).get("regime_breakdown") or {}
+        placed = (prof or {}).get("trades_profiled")
+        if placed is None:
+            placed = sum(int((v or {}).get("trade_count", 0) or 0)
+                         for v in breakdown.values())
+        d = designate(breakdown, int(placed or 0), min_trades=min_trades,
+                      fraction=min_trade_fraction,
+                      min_profit_factor=min_profit_factor)
+        row = next((r for r in d["scores"] if r["regime"] == top["regime"]),
+                   None)
+        if row and not row["eligible"]:
+            reasons.append(f"Version {lbl} {top['regime']}: {row['reason']}")
+    return False, ("; ".join(reasons) or
+                   f"Version {label} clears {float(min_profit_factor):.2f} in "
+                   f"{top['regime']} but clears no other designation bar"), None
 
 
 # --------------------------------------------------------------------------
@@ -571,6 +659,18 @@ def _row(symbol: str, tf: str, metrics_a: dict, metrics_b: dict | None,
         # breakdown where it is free to apply a different trade floor.
         "regime_win_rate": (best or {}).get("win_rate"),
         "regime_net_pnl": (best or {}).get("net_pnl"),
+        # The alpha score that DESIGNATED this quadrant, the floor it cleared,
+        # the whole scored table and the positive-expectancy runners-up. The
+        # score travels because "why this quadrant and not the sharper one" is
+        # otherwise only answerable by re-deriving the ranking downstream,
+        # where a reader is free to apply a different floor than the one that
+        # made the decision. The runners-up are metadata for the live
+        # supervisor and NEVER a second certification target - two permitted
+        # quadrants give Gate R two chances at a 1.00 holdout profit factor.
+        "regime_score": (best or {}).get("score"),
+        "regime_sample_floor": (best or {}).get("sample_floor"),
+        "regime_scores": (best or {}).get("scores") or {},
+        "secondary_regimes": (best or {}).get("secondaries") or [],
         "kill_switch_regimes": kill_switch_regimes(optimal),
     }
 
@@ -865,7 +965,11 @@ def write_markdown_report(path: Path, text: str) -> Path:
 # --------------------------------------------------------------------------
 def profile_versions(bars: pd.DataFrame, out: dict, symbol: str, tf: str,
                      strat_name: str, out_dir: Path | str | None = None,
-                     quiet: bool = True) -> dict[str, dict | None]:
+                     quiet: bool = True,
+                     min_profit_factor: float = MIN_REGIME_PROFIT_FACTOR,
+                     min_trades: int = STAGE1_MIN_TRADES,
+                     min_trade_fraction: float = STAGE1_MIN_TRADE_FRACTION
+                     ) -> dict[str, dict | None]:
     """
     The four-quadrant regime profile of BOTH versions of one configuration.
 
@@ -878,6 +982,13 @@ def profile_versions(bars: pd.DataFrame, out: dict, symbol: str, tf: str,
     Returns `{"A": profile, "B": profile_or_None}`. `B` is None when `--ml` was
     off — a version that never ran has no regime profile, which is a different
     statement from one that has an empty breakdown.
+
+    The three designation bars are passed THROUGH to the profiler rather than
+    applied afterwards by the screen. The profiler writes `optimal_regime` onto
+    its own artifact, the screen reads the same breakdown, and if the two ran
+    at different floors the artifact would name a home quadrant the handoff
+    beside it refused - the exact disagreement `best_quadrant` was rewritten to
+    remove.
 
     `quiet` by default: this stage's console is one progress line per
     configuration, and 108 configurations x 2 versions is 216 ten-line tables.
@@ -892,7 +1003,9 @@ def profile_versions(bars: pd.DataFrame, out: dict, symbol: str, tf: str,
             continue
         profiles[label] = RegimeProfiler(
             bars, version["result"], strat_name, symbol, tf,
-            out_dir=out_dir, version=label.lower(), quiet=quiet
+            out_dir=out_dir, version=label.lower(), quiet=quiet,
+            min_trades=min_trades, min_trade_fraction=min_trade_fraction,
+            min_profit_factor=min_profit_factor,
         ).generate_profile()
     return profiles
 
@@ -933,9 +1046,13 @@ def run_symbol(symbol: str, path: Path, tf: str, params: dict,
     metrics_b = b["metrics"] if b else None
 
     strat_name = path.parent.name if path.stem == "strat" else path.stem
-    profiles = profile_versions(bars, out, symbol, tf, strat_name, out_dir)
+    profiles = profile_versions(
+        bars, out, symbol, tf, strat_name, out_dir,
+        min_profit_factor=args.min_profit_factor,
+        min_trades=args.min_trades,
+        min_trade_fraction=args.min_trade_fraction)
     survived, reason, best = screen(profiles, args.min_profit_factor,
-                                    args.min_trades)
+                                    args.min_trades, args.min_trade_fraction)
 
     # Version A's trades, deliberately, even when --ml ran: the weekday table
     # describes what the RULES did, and attributing it on Version B's surviving
@@ -1065,10 +1182,24 @@ def build_parser() -> argparse.ArgumentParser:
                         f"1.00 break-even a blended screen would use, because "
                         f"the quadrant is the best of four and a bar cleared "
                         f"by a hair is a bar cleared by selection.")
-    p.add_argument("--min-trades", type=int, default=MIN_REGIME_TRADES,
-                   help=f"Trade floor the winning QUADRANT must clear on its "
-                        f"own trade count, not the configuration's total "
-                        f"(default {MIN_REGIME_TRADES})")
+    p.add_argument("--min-trades", type=int, default=STAGE1_MIN_TRADES,
+                   help=f"Absolute trade floor the designated QUADRANT must "
+                        f"clear on its own trade count, not the "
+                        f"configuration's total (default "
+                        f"{STAGE1_MIN_TRADES}). The floor actually applied is "
+                        f"the LARGER of this and --min-trade-fraction of the "
+                        f"trades placed in a quadrant.")
+    # `%` is doubled because argparse runs every help string through
+    # `help % params`, and a bare "10%" raises `unsupported format character`
+    # the moment anyone types --help. It is a crash in the ONE code path that
+    # exists to explain the flag.
+    p.add_argument("--min-trade-fraction", type=float,
+                   default=STAGE1_MIN_TRADE_FRACTION,
+                   help=f"Share of the run's placed trades the designated "
+                        f"quadrant must hold (default "
+                        f"{STAGE1_MIN_TRADE_FRACTION * 100:.0f}%%). 0 reduces "
+                        f"the floor to the flat --min-trades count, which is "
+                        f"the pre-2026-08-21 behaviour.")
     p.add_argument("--out-dir", default=None,
                    help="Override <BT_ARTIFACTS>/pipeline/<strategy>/")
     add_filter_args(p)
@@ -1164,6 +1295,16 @@ def surviving_pairs_from(rows: list[dict]) -> list[dict]:
              "regime_trade_count": r.get("regime_trade_count"),
              "regime_win_rate": r.get("regime_win_rate"),
              "regime_net_pnl": r.get("regime_net_pnl"),
+             # The alpha score that designated this quadrant over the other
+             # three, the sample floor it cleared, the whole scored table, and
+             # the positive-expectancy runners-up. Stage 2 transports all four
+             # onto `best_params_<SYMBOL>_<TF>.json`, so Gate R's target can
+             # always be checked against the quadrants it beat instead of read
+             # as a name somebody chose.
+             "regime_score": r.get("regime_score"),
+             "regime_sample_floor": r.get("regime_sample_floor"),
+             "regime_scores": r.get("regime_scores") or {},
+             "secondary_regimes": r.get("secondary_regimes") or [],
              "kill_switch_regimes": list(r.get("kill_switch_regimes") or [])}
             for r in rows if r["survived"]]
 
@@ -1207,6 +1348,10 @@ def screen_results_from(rows: list[dict]) -> list[dict]:
              "regime_trade_count": r.get("regime_trade_count"),
              "regime_win_rate": r.get("regime_win_rate"),
              "regime_net_pnl": r.get("regime_net_pnl"),
+             "regime_score": r.get("regime_score"),
+             "regime_sample_floor": r.get("regime_sample_floor"),
+             "regime_scores": r.get("regime_scores") or {},
+             "secondary_regimes": r.get("secondary_regimes") or [],
              "kill_switch_regimes": list(r.get("kill_switch_regimes") or []),
              "profit_factor_a": r.get("profit_factor_a"),
              "profit_factor_b": r.get("profit_factor_b"),
@@ -1247,8 +1392,12 @@ def main(argv: list[str] | None = None) -> int:
     out_dir = pipeline_dir(strat_name, args.out_dir, create=True)
     report_path = out_dir / BASELINE_REPORT_FILE
     criterion = (f"optimal_regime_PF >= {args.min_profit_factor:.2f} AND "
-                 f"optimal_regime_trade_count >= {args.min_trades} in ANY of "
-                 f"the 4 regime quadrants, on either version")
+                 f"optimal_regime_net_pnl > 0 AND "
+                 f"optimal_regime_trade_count >= max({args.min_trades}, "
+                 f"{args.min_trade_fraction:.0%} of placed trades) in ANY of "
+                 f"the 4 regime quadrants, on either version; among the "
+                 f"quadrants that clear, the one designated is the one with "
+                 f"the highest alpha score (net P&L x profit factor)")
 
     # Symbol-major, so the progress counter reads the way an operator watches
     # it: one contract taken through every timeframe before the next starts.
@@ -1394,6 +1543,7 @@ def main(argv: list[str] | None = None) -> int:
         "criterion": criterion,
         "min_profit_factor": args.min_profit_factor,
         "min_trades": args.min_trades,
+        "min_trade_fraction": args.min_trade_fraction,
         "ml_evaluated": bool(args.ml),
         "entry_filters": cfg_kwargs,
         "surviving_pairs": surviving_pairs,
@@ -1405,7 +1555,13 @@ def main(argv: list[str] | None = None) -> int:
             "regimes": list(REGIMES),
             "min_profit_factor": float(args.min_profit_factor),
             "min_trades": int(args.min_trades),
+            "min_trade_fraction": float(args.min_trade_fraction),
             "rule": criterion,
+            # The designation rule in one string, from the module that applies
+            # it. A handoff that records the quadrant without recording how it
+            # was chosen cannot be compared with one written before the
+            # ranking moved from profit factor to alpha contribution.
+            "designation_rule": DESIGNATION_RULE,
             "classification": ("ADX(14) > 25 is Trending; ATR(14) above the "
                                "contract's own median ATR is High Volatility. "
                                "Both thresholds are per (symbol, timeframe)."),

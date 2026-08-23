@@ -173,15 +173,20 @@ def test_quadrant_ids() -> None:
 # 3. The survival hurdle
 # --------------------------------------------------------------------------
 def test_hurdle() -> None:
-    print("\n3. The hurdle is N >= 30 AND PF >= 1.00, on ONE quadrant")
-    keep, why, best = screen({"A": profile(hvt=(1.00, 30)), "B": None})
-    check("exactly 1.00 over exactly 30 trades is on the boundary and clears",
-          keep and best["trade_count"] == 30, why)
+    print("\n3. The hurdle is PF >= 1.00 AND positive net P&L AND "
+          "N >= max(50, 10% of placed), on ONE quadrant")
+    keep, why, best = screen({"A": profile(hvt=(1.00, 50)), "B": None})
+    check("exactly 1.00 over exactly 50 trades is on the boundary and clears",
+          keep and best["trade_count"] == 50, why)
     check("0.99 over 400 trades does not clear",
           not screen({"A": profile(hvt=(0.99, 400)), "B": None})[0])
-    check("2.40 over 29 trades does not clear - a factor over 29 trades is "
+    check("2.40 over 49 trades does not clear - a factor over 49 trades is "
           "not an environment",
-          not screen({"A": profile(hvt=(2.40, 29)), "B": None})[0])
+          not screen({"A": profile(hvt=(2.40, 49)), "B": None})[0])
+    check("the floor SCALES: 60 of 5,000 placed trades is 1.2% of the run "
+          "and does not clear, where the flat 50 would have",
+          not screen({"A": profile(hvt=(1.80, 60), lvr=(0.90, 4940)),
+                      "B": None})[0])
     check("the best factor and the largest count in DIFFERENT quadrants do "
           "not combine into a pass",
           not screen({"A": profile(hvt=(1.90, 11), lvr=(0.90, 900)),
@@ -218,18 +223,38 @@ def test_hurdle() -> None:
 # --------------------------------------------------------------------------
 def test_optimal_tagging() -> None:
     print("\n4. The winning quadrant is tagged; the other three are muted")
+    # The ALPHA ENGINE wins, not the sharpest corner. Q1 contributes
+    # $12,000 x 1.28 = 15,360; Q3's 1.55 factor over 45 trades is both the
+    # smaller contribution and below the 50-trade floor. Before 2026-08-21 the
+    # rank was profit factor alone and this same fixture designated Q3 - which
+    # is what sent Gate R to certify in a quadrant holding a handful of holdout
+    # trades while the money was being made next door.
     profiles = {"A": profile(hvt=(1.28, 120), lvt=(1.55, 45)), "B": None}
     r = row("NQ", "15m", profiles, ml=False)
-    check("the HIGHEST-performing qualifying quadrant wins, not the first",
-          r["optimal_regime"] == REGIMES[2] and r["regime_pf"] == 1.55,
+    check("the quadrant that CONTRIBUTES the alpha wins, not the one with the "
+          "sharpest per-trade edge",
+          r["optimal_regime"] == REGIMES[0] and r["regime_pf"] == 1.28,
           f"{r['optimal_regime']} {r['regime_pf']}")
     check("...tagged with its Q id as well as its name",
-          r["optimal_quadrant"] == "Q3", str(r["optimal_quadrant"]))
+          r["optimal_quadrant"] == "Q1", str(r["optimal_quadrant"]))
     check("...and its own trade count, win rate and net P&L travel with it",
           (r["regime_trade_count"], r["regime_win_rate"], r["regime_net_pnl"])
-          == (45, 55.0, 4500.0), str(r["regime_trade_count"]))
+          == (120, 55.0, 12000.0), str(r["regime_trade_count"]))
+    check("...with the alpha score that chose it and the floor it cleared",
+          (r["regime_score"], r["regime_sample_floor"]) == (15360.0, 50),
+          f"{r['regime_score']} {r['regime_sample_floor']}")
+    check("the runner-up is recorded as a SECONDARY, with why it could not "
+          "be designated - a quadrant dropped on sample size and one that "
+          "lost money are not the same instruction to a supervisor",
+          [x["quadrant"] for x in r["secondary_regimes"]] == ["Q3"]
+          and "sample floor" in r["secondary_regimes"][0]["reason"],
+          str(r["secondary_regimes"]))
+    check("...and the whole scored table travels, all four bars visible",
+          set(r["regime_scores"]) == {REGIMES[0], REGIMES[2]}
+          and r["regime_scores"][REGIMES[2]]["eligible"] is False,
+          str(sorted(r["regime_scores"])))
     check("the other THREE quadrants are the kill switch, in regime order",
-          r["kill_switch_regimes"] == [REGIMES[0], REGIMES[1], REGIMES[3]],
+          r["kill_switch_regimes"] == [REGIMES[1], REGIMES[2], REGIMES[3]],
           str(r["kill_switch_regimes"]))
     check("a failing quadrant and one never traded are muted identically - "
           "'no evidence' must not read as 'permitted'",
@@ -249,10 +274,21 @@ def test_optimal_tagging() -> None:
           kill_switch_regimes(None) == []
           and kill_switch_regimes("not a regime") == [])
 
-    tied = best_quadrant(profile(hvt=(1.40, 40), lvr=(1.40, 900)))
-    check("a tie on profit factor breaks on the LARGER trade count",
+    tied = best_quadrant(profile(hvt=(1.40, 90), lvr=(1.40, 900)))
+    check("the larger engine wins on score, not on the shared factor",
           tied["regime"] == REGIMES[3] and tied["quadrant"] == "Q4",
           str(tied))
+    # A genuine score tie: same net P&L, same factor, different counts.
+    even = {"regime_breakdown": {
+                REGIMES[0]: {"trade_count": 100, "profit_factor": 1.20,
+                             "win_rate": 55.0, "net_pnl": 6000.0},
+                REGIMES[3]: {"trade_count": 300, "profit_factor": 1.20,
+                             "win_rate": 55.0, "net_pnl": 6000.0}},
+            "trades_profiled": 400}
+    check("an exact tie on score breaks on the LARGER trade count - the "
+          "better-evidenced claim, not whichever the quadrant order put first",
+          best_quadrant(even)["quadrant"] == "Q4",
+          str(best_quadrant(even)["quadrant"]))
 
 
 # --------------------------------------------------------------------------
@@ -263,7 +299,7 @@ def stage1_rows() -> list[dict]:
         row("NQ", "15m", {"A": profile(hvt=(1.28, 120), lvr=(0.4, 300)),
                           "B": profile(lvr=(0.9, 80))}),
         row("GC", "30m", {"A": profile(hvr=(0.61, 400)),
-                          "B": profile(lvt=(1.61, 44))}),
+                          "B": profile(lvt=(1.61, 60))}),
         row("CL", "15m", {"A": profile(hvt=(0.94, 500)),
                           "B": profile(hvt=(0.88, 260))}),
     ]
@@ -386,7 +422,7 @@ def test_stage1_card(blob: dict) -> None:
           "regime name lives in the notifier",
           REGIMES[0] in text and REGIMES[2] in text)
     check("the quadrant PF is on the card", "1.28" in text and "1.61" in text)
-    check("...and the trade count N beside it", "120" in text and "44" in text)
+    check("...and the trade count N beside it", "120" in text and "60" in text)
     check("the version that carried each pair is shown",
           "VA" in text and "VB" in text)
     check("PROMOTED and DROPPED are both printed as words",

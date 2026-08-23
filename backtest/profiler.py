@@ -37,6 +37,246 @@ if tuple(QUADRANT_TO_REGIME[q] for q in (1, 2, 3, 4)) != REGIMES:
         f"backtest.profiler.REGIMES orders them {list(REGIMES)}. A cached "
         f"quadrant and a profiled label would name different environments.")
 
+# "Q1" and "High Volatility / Trending" as the same statement, inverted from
+# the integer map checked above rather than spelled out again.
+# `backtest.baseline.QUADRANT_ID` is an alias for this dict, not a second copy:
+# a transposed literal there would move every trade between quadrants with
+# every count in every table still adding up.
+REGIME_TO_QUADRANT = {label: f"Q{q}" for q, label in QUADRANT_TO_REGIME.items()}
+
+
+# --------------------------------------------------------------------------
+# TRUE HOME REGIME DISCOVERY - scoring, the sample floor, and designation
+#
+# One implementation, used by the profiler here, by Stage 1's screen
+# (`backtest.baseline.best_quadrant`) and, through the handoff, by Gate R.
+# Before 2026-08-21 the profiler ranked on profit factor alone while Stage 1
+# ranked on profit factor with a different trade floor and a different
+# tie-break, so a profile artifact and the handoff beside it could name
+# DIFFERENT home quadrants for the same run with nothing raising.
+# --------------------------------------------------------------------------
+
+# The sample floor for a DESIGNATION. Two bars, and the LARGER binds: 50
+# trades absolute, or 10% of everything the run placed in a quadrant.
+#
+# The absolute bar is there because a quadrant is picked as the best of four,
+# and a profit factor over a few dozen trades clears any bar by accident often
+# enough to matter across a 108-configuration screen. The fraction is there
+# because 50 stops being a meaningful floor once a run places 5,000 trades -
+# a quadrant holding 1% of the sample is a corner of the window, not the
+# environment the strategy lives in.
+#
+# This is DELIBERATELY stricter than Gate R's holdout floor
+# (`baseline.MIN_REGIME_TRADES`, 30). They answer different questions: this
+# one asks whether there is enough in-sample evidence to NAME a home regime,
+# and Gate R asks whether the named one still traded out of sample. A holdout
+# is shorter than the window that chose it, so holding it to the designation
+# floor would fail configurations for the length of the holdout.
+DESIGNATION_MIN_TRADES = 50
+DESIGNATION_MIN_TRADE_FRACTION = 0.10
+
+# A quadrant is only a candidate to be someone's HOME if it made money there.
+# `Net_PnL x PF` is monotone in both terms only over positive net P&L: at a
+# profit factor of 0.00 - a quadrant that never had a winning trade - the
+# product is exactly 0.0 and would rank ABOVE a quadrant that lost $5,000 at
+# a 0.50 factor (-2,500). Requiring positive expectancy removes that inversion
+# from the selection path entirely rather than patching the formula, and every
+# quadrant is still SCORED and reported so the ranking can be checked.
+DESIGNATION_MIN_PROFIT_FACTOR = 1.00
+
+# The profiler writes 999 when a quadrant never had a losing trade. That is a
+# SENTINEL, not a measured factor, and `net_pnl * 999` ranks on it rather than
+# on evidence - one unbeaten 51-trade quadrant would outscore a 4,000-trade
+# engine by two orders of magnitude. Capped for SCORING only; the reported
+# `profit_factor` is left exactly as the profiler computed it, and a row whose
+# factor was capped says so.
+SCORE_PF_CEILING = 10.0
+
+DESIGNATION_RULE = ("primary = max(Net_PnL x Profit_Factor) among quadrants "
+                    "with positive net P&L, profit factor >= "
+                    f"{DESIGNATION_MIN_PROFIT_FACTOR:.2f} and at least "
+                    f"max({DESIGNATION_MIN_TRADES}, "
+                    f"{DESIGNATION_MIN_TRADE_FRACTION:.0%} of profiled trades)")
+
+
+def _score_num(value):
+    """A float, or None - never a NaN masquerading as a measurement."""
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if out != out else out
+
+
+def designation_floor(total_profiled: int,
+                      min_trades: int = DESIGNATION_MIN_TRADES,
+                      fraction: float = DESIGNATION_MIN_TRADE_FRACTION) -> int:
+    """
+    How many trades a quadrant needs before it may be NAMED the home regime.
+
+    `max(min_trades, ceil(fraction * total_profiled))`. The larger of the two
+    binds, so the floor is an absolute minimum on a short run and a share of
+    the sample on a long one. `fraction=0` reduces it to the flat count, which
+    is how a caller asks for the pre-2026-08-21 behaviour.
+
+    `total_profiled` is the trades PLACED in a quadrant, not the trade list:
+    an unplaced trade (entry outside the frame, or inside the 14-bar indicator
+    warm-up) is in no quadrant, so counting it would raise every quadrant's
+    bar on the strength of trades no quadrant could ever claim.
+    """
+    total = max(int(total_profiled or 0), 0)
+    share = -((-total * float(fraction or 0.0)) // 1)      # ceil, no math import
+    return max(int(min_trades or 0), int(share))
+
+
+def quadrant_score(stats: dict | None) -> float | None:
+    """
+    `Net_PnL x Profit_Factor` for one quadrant - the alpha contribution, not
+    the per-trade edge.
+
+    Ranking on profit factor alone answers "where is this strategy sharpest",
+    which is not the same question as "where does this strategy make its
+    money". A 1.55 factor over 45 trades and a 1.28 over 4,000 are both real,
+    and the second is the engine. Multiplying by net P&L is what makes the
+    score prefer it; a Sharpe computed inside the quadrant would express the
+    same preference, and is not used here because the profiler is handed a
+    trade list rather than an equity curve, and a Sharpe over per-trade P&L is
+    not the daily-close Sharpe every other number in this repo means.
+
+    `None` when either term is missing - never 0.0, which is a score a
+    quadrant can legitimately have.
+    """
+    if not stats:
+        return None
+    pf = _score_num(stats.get("profit_factor"))
+    net = _score_num(stats.get("net_pnl"))
+    if pf is None or net is None:
+        return None
+    return net * min(pf, SCORE_PF_CEILING)
+
+
+def rank_quadrants(breakdown: dict | None, floor: int,
+                   min_profit_factor: float = DESIGNATION_MIN_PROFIT_FACTOR
+                   ) -> list[dict]:
+    """
+    Every quadrant in `breakdown`, scored and sorted best first, each carrying
+    whether it is ELIGIBLE to be designated and - when it is not - which bar
+    it missed.
+
+    Every quadrant is returned, including the ones that lost money. A ranking
+    that dropped them would make "this quadrant was disqualified on sample
+    size" and "this quadrant was never traded" the same absent row, and they
+    are fixed by different work.
+
+    Sorted on score, ties broken on the LARGER trade count and then on the
+    declared regime order. Ties are real: a quadrant no bar reaches and one
+    the strategy never traded in round to the same numbers, and between two
+    equal scores the better-evidenced one is the honest winner rather than
+    whichever the quadrant order happened to put first.
+    """
+    rows = []
+    for regime in REGIMES:
+        stats = (breakdown or {}).get(regime)
+        if not stats:
+            continue
+        pf = _score_num(stats.get("profit_factor"))
+        net = _score_num(stats.get("net_pnl"))
+        n = int(stats.get("trade_count", 0) or 0)
+        score = quadrant_score(stats)
+
+        reasons = []
+        if score is None:
+            reasons.append("no profit factor or net P&L was recorded")
+        else:
+            if net <= 0:
+                reasons.append(f"net P&L {net:,.2f} is not positive")
+            if pf is not None and pf < float(min_profit_factor):
+                reasons.append(f"profit factor {pf:.2f} is below "
+                               f"{float(min_profit_factor):.2f}")
+            if n < int(floor):
+                reasons.append(f"{n} trades is below the sample floor "
+                               f"of {int(floor)}")
+        rows.append({
+            "regime": regime,
+            "quadrant": REGIME_TO_QUADRANT[regime],
+            "trade_count": n,
+            "profit_factor": pf,
+            "net_pnl": net,
+            "win_rate": _score_num(stats.get("win_rate")),
+            "score": score,
+            "pf_capped": bool(pf is not None and pf > SCORE_PF_CEILING),
+            "eligible": not reasons,
+            "reason": "; ".join(reasons) or "clears every designation bar",
+        })
+    rows.sort(key=lambda r: (r["score"] is not None,
+                             r["score"] if r["score"] is not None else 0.0,
+                             r["trade_count"],
+                             -REGIMES.index(r["regime"])), reverse=True)
+    return rows
+
+
+def designate(breakdown: dict | None, total_profiled: int,
+              min_trades: int = DESIGNATION_MIN_TRADES,
+              fraction: float = DESIGNATION_MIN_TRADE_FRACTION,
+              min_profit_factor: float = DESIGNATION_MIN_PROFIT_FACTOR
+              ) -> dict:
+    """
+    The TRUE HOME REGIME: one primary quadrant, its positive-expectancy
+    runners-up, and the whole scored table that produced them.
+
+    `primary` is None when nothing clears the bars - which is a finding, not a
+    missing value, and is why `reason` is populated either way. A strategy with
+    no environment must not be handed one by falling back to the best of a bad
+    set: the quadrant becomes Gate R's certification target and a live
+    supervisor's permission to trade, and neither may be derived from a
+    quadrant that lost money or was measured over 20 trades.
+
+    `secondaries` are the OTHER quadrants with positive expectancy - eligible
+    ones that lost on score, and profitable ones disqualified only on sample
+    size, each carrying why. They are metadata for the live supervisor and are
+    NOT a second certification target: naming two quadrants a strategy may
+    trade doubles Gate R's chances of clearing 1.00 out of sample, which is
+    the best-of-four selection Gate R exists to avoid.
+    """
+    floor = designation_floor(total_profiled, min_trades, fraction)
+    rows = rank_quadrants(breakdown, floor, min_profit_factor)
+    eligible = [r for r in rows if r["eligible"]]
+    primary = eligible[0] if eligible else None
+
+    secondaries = [
+        r for r in rows
+        if r is not primary
+        and r["net_pnl"] is not None and r["net_pnl"] > 0
+        and (r["eligible"] or r["trade_count"] < floor)
+    ]
+
+    if primary:
+        reason = (f"{primary['regime']} scores "
+                  f"{primary['score']:,.2f} (net P&L {primary['net_pnl']:,.2f} "
+                  f"x PF {primary['profit_factor']:.2f}) over "
+                  f"{primary['trade_count']} trades")
+    elif rows:
+        near = rows[0]
+        reason = (f"no quadrant clears the designation bars; the closest is "
+                  f"{near['regime']} - {near['reason']}")
+    else:
+        reason = "no quadrant holds a single trade"
+
+    return {
+        "primary": primary,
+        "secondaries": secondaries,
+        "scores": rows,
+        "sample_floor": floor,
+        "sample_floor_basis": (
+            f"max({int(min_trades)} trades, {float(fraction):.0%} of the "
+            f"{int(total_profiled or 0)} trades placed in a quadrant)"),
+        "min_profit_factor": float(min_profit_factor),
+        "score_formula": "net_pnl * min(profit_factor, "
+                         f"{SCORE_PF_CEILING:.1f})",
+        "rule": DESIGNATION_RULE,
+        "reason": reason,
+    }
+
 
 def _resolve_out_dir(out_dir, strat_name: str) -> str:
     """
@@ -123,7 +363,10 @@ def _closed_trades(portfolio) -> pd.DataFrame:
 
 class RegimeProfiler:
     def __init__(self, df, portfolio, strat_name, symbol, tf, out_dir=None,
-                 version: str = "", quiet: bool = False):
+                 version: str = "", quiet: bool = False,
+                 min_trades: int = DESIGNATION_MIN_TRADES,
+                 min_trade_fraction: float = DESIGNATION_MIN_TRADE_FRACTION,
+                 min_profit_factor: float = DESIGNATION_MIN_PROFIT_FACTOR):
         """
         `version` suffixes the artifact filename ("a" ->
         `regime_profile_NQ_15m_version_a.json`) and is empty by default, so a
@@ -138,6 +381,13 @@ class RegimeProfiler:
         contracts x 4 timeframes x 2 versions, and 216 ten-line tables on a
         console whose stated job is one progress line per configuration is how
         the last one goes unread.
+
+        `min_trades`, `min_trade_fraction` and `min_profit_factor` are the
+        DESIGNATION bars - what a quadrant must clear before it may be named
+        the home regime. They are not Gate R's bars and not Stage 1's survival
+        bars; see `designate`. They are arguments rather than constants because
+        Stage 1 exposes them on the CLI, and a screen re-run at a different
+        floor must not be silently comparable to one run at the default.
         """
         self.df = df.copy()
         self.df.index = _entry_timestamps(self.df)
@@ -147,6 +397,9 @@ class RegimeProfiler:
         self.tf = tf
         self.version = str(version or "")
         self.quiet = bool(quiet)
+        self.min_trades = int(min_trades)
+        self.min_trade_fraction = float(min_trade_fraction)
+        self.min_profit_factor = float(min_profit_factor)
         self.out_dir = _resolve_out_dir(out_dir, strat_name)
         os.makedirs(self.out_dir, exist_ok=True)
 
@@ -276,10 +529,23 @@ class RegimeProfiler:
                 "timeframe": self.tf,
                 "version": self.version,
                 "optimal_regime": "None",
+                "optimal_quadrant": None,
                 "optimal_profit_factor": None,
                 "optimal_trade_count": 0,
+                "optimal_net_pnl": None,
+                "optimal_score": None,
                 "kill_switch_conditions": [],
                 "regime_breakdown": {},
+                # The same keys a profiled run carries, so a caller reading
+                # `regime_scores` never has to branch on whether anything
+                # traded. An ABSENT key and an empty table are the same
+                # `.get()` and mean different things.
+                "regime_scores": {},
+                "secondary_regimes": [],
+                "designation": designate({}, 0, min_trades=self.min_trades,
+                                         fraction=self.min_trade_fraction,
+                                         min_profit_factor=self
+                                         .min_profit_factor),
                 "trades_profiled": 0,
                 "trades_unplaced": 0,
                 "artifact": None,
@@ -305,8 +571,6 @@ class RegimeProfiler:
         
         # 5. Calculate Metrics per Regime
         profile = {}
-        best_regime = "None"
-        best_pf = 0
         
         self._say("\n" + "="*80)
         self._say(f" REGIME PROFILE: {self.symbol} {self.tf} | {self.strat_name}")
@@ -337,14 +601,52 @@ class RegimeProfiler:
             }
             
             self._say(f" {regime:<30} | {count:<8} | {win_rate:>5.1f}%  | {pf:>13.2f} | ${net_pnl:,.2f}")
-            
-            # Select Optimal Regime (Must have > 30 trades and highest PF)
-            if pf > best_pf and count >= 30:
-                best_pf = pf
-                best_regime = regime
-                
         self._say("="*80)
-        self._say(f"✅ OPTIMAL ENVIRONMENT: {best_regime} (PF: {best_pf:.2f})\n")
+
+        # 5b. TRUE HOME REGIME DISCOVERY. The primary quadrant is the one that
+        # CONTRIBUTES the alpha (net P&L x profit factor), not the one with the
+        # sharpest per-trade edge, and it has to clear a sample floor that
+        # scales with the run. `designate` is shared with Stage 1's screen, so
+        # this artifact and the handoff written beside it can never name
+        # different home quadrants for the same result.
+        placed = int(len(trades) - unplaced)
+        decision = designate(profile, placed,
+                             min_trades=self.min_trades,
+                             fraction=self.min_trade_fraction,
+                             min_profit_factor=self.min_profit_factor)
+        primary = decision["primary"]
+        best_regime = primary["regime"] if primary else "None"
+
+        self._say(f" {'ALPHA SCORE (net P&L x PF)':<30} | {'SCORE':>14} | "
+                  f"{'ELIGIBLE':<9}| WHY NOT")
+        self._say("-" * 80)
+        for row in decision["scores"]:
+            score = (f"{row['score']:>14,.0f}" if row["score"] is not None
+                     else f"{'not scored':>14}")
+            self._say(f" {row['regime']:<30} | {score} | "
+                      f"{'yes' if row['eligible'] else 'no':<9}| "
+                      f"{'' if row['eligible'] else row['reason']}")
+        self._say("=" * 80)
+        if primary:
+            self._say(f"✅ TRUE HOME REGIME: {best_regime} "
+                      f"[{primary['quadrant']}]  score "
+                      f"{primary['score']:,.0f} = net "
+                      f"${primary['net_pnl']:,.2f} x PF "
+                      f"{primary['profit_factor']:.2f} over "
+                      f"{primary['trade_count']} trades "
+                      f"(sample floor {decision['sample_floor']})")
+        else:
+            self._say(f"⚠  NO HOME REGIME DESIGNATED — "
+                      f"{decision['reason']}")
+        for extra in decision["secondaries"]:
+            note = ("" if extra["eligible"]
+                    else f"  — not designatable: {extra['reason']}")
+            self._say(f"   secondary alpha: {extra['regime']} "
+                      f"[{extra['quadrant']}] n={extra['trade_count']}"
+                      + (f" score {extra['score']:,.0f}"
+                         if extra["score"] is not None else "")
+                      + note)
+        self._say("")
 
         # 6. Save Artifact for the Live Supervisor
         file_path = self.artifact_path
@@ -354,7 +656,10 @@ class RegimeProfiler:
             "timeframe": self.tf,
             "version": self.version,
             "optimal_regime": best_regime,
-            # The optimal quadrant's own numbers, beside its name. Stage 1
+            # `Q1`..`Q4` beside the name, so a reader (and the CrossTrade
+            # supervisor) never has to re-derive the code from the spelling.
+            "optimal_quadrant": REGIME_TO_QUADRANT.get(best_regime),
+            # The designated quadrant's own numbers, beside its name. Stage 1
             # screens on the PAIR (profit factor at a trade count), and a name
             # with no numbers under it forces every reader to re-derive them
             # from the breakdown - where a reader is free to apply a different
@@ -363,9 +668,26 @@ class RegimeProfiler:
                                       ).get("profit_factor"),
             "optimal_trade_count": (profile.get(best_regime) or {}
                                     ).get("trade_count", 0),
+            "optimal_net_pnl": (profile.get(best_regime) or {}).get("net_pnl"),
+            "optimal_score": (primary or {}).get("score"),
             "kill_switch_conditions": ([r for r in choices if r != best_regime]
                                        if best_regime in profile else []),
             "regime_breakdown": profile,
+            # The whole scored table, keyed by regime: in-sample profit factor,
+            # net P&L, trade count, the alpha score, and - for anything that
+            # cannot be designated - which bar it missed. This is what Stage 2
+            # embeds in `best_params_<SYMBOL>_<TF>.json`, so a Gate R target
+            # can always be checked against the four quadrants it beat rather
+            # than read as a name somebody chose.
+            "regime_scores": {r["regime"]: r for r in decision["scores"]},
+            # Quadrants with POSITIVE expectancy that are not the primary -
+            # metadata for the live supervisor, never a second certification
+            # target. Two permitted quadrants would give Gate R two chances at
+            # a 1.00 holdout profit factor, which is the best-of-N selection
+            # the single-quadrant rule exists to prevent.
+            "secondary_regimes": decision["secondaries"],
+            "designation": {k: v for k, v in decision.items()
+                            if k not in ("primary", "secondaries", "scores")},
             "trades_profiled": int(len(trades) - unplaced),
             "trades_unplaced": int(unplaced),
             "artifact": file_path,
