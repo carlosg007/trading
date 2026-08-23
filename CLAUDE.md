@@ -219,7 +219,7 @@ bt-status  # = .venv/bin/python3 ~/src/trading/backtest/status.py
 streamlit run dashboard/app.py
 
 # Tests. No pytest config - each is a script that exits non-zero on failure.
-# Thirty suites. Everything except test_streaming_lake, test_engine_batching
+# Thirty-one suites. Everything except test_streaming_lake, test_engine_batching
 # and test_engine_vbt runs without the lake or a network (test_batch_runner's
 # --symbols checks skip, loudly, without it). test_report_gates.py shells out
 # to `node` for the trade inspector's own checks and skips them, loudly, when
@@ -247,6 +247,7 @@ python tests/test_temporal_chunking.py  # chunk continuity, warm-up, the trades 
 python tests/test_portfolio_config.py   # the four-account routing table and its guards
 python tests/test_portfolio_manager.py  # ATR sizing, signal netting, account routing
 python tests/test_memory_guard.py       # the memory tiers, and that a halt is re-raised
+python tests/test_incubator_tracker.py  # the promotion criteria and the account move
 
 # `pytest tests/` is the gate. tests/conftest.py routes the script-style
 # suites (the ones with a `check()` helper, whose results pytest cannot see)
@@ -396,6 +397,19 @@ python scripts/validate_lake.py --quick             # skip price checks
 # overrides). mdlib.lake picks these up automatically; re-run after a data pull.
 python scripts/precompute_regimes.py --symbols NQ,GC --tf 15m,30m
 python scripts/precompute_regimes.py --symbols ALL --tf 15m --force
+
+# THE INCUBATOR TRACKER. Audits the forward paper trades in
+# data/incubator_ledger.json against the four loose promotion criteria and,
+# with --auto-promote, moves a strategy Incubator-Odd -> Prop-Odd (or Even) in
+# config/portfolios.json. Reads no bars and runs no backtest. It WRITES ONLY
+# under --auto-promote; --dry-run wins if both are given. Posts a summary embed
+# when $DISCORD_WEBHOOK_URL or $BT_DISCORD_WEBHOOK is set — --no-discord never
+# posts.
+python3 scripts/incubator_tracker.py                       # evaluate and print
+python3 scripts/incubator_tracker.py --auto-promote        # act on it
+python3 scripts/incubator_tracker.py --dry-run --no-discord
+python3 scripts/incubator_tracker.py --ledger data/incubator_ledger.json \
+    --config config/portfolios.json --json /tmp/incubator_audit.json
 
 # Rebuild the per-symbol coverage reference (writes reference/futures/coverage*.csv)
 python scripts/coverage_summary.py
@@ -1786,6 +1800,54 @@ a funding program rather than to a market.
   clamp bounding the breach, and a symbol outside its portfolio's quadrant is
   STOOD DOWN rather than sized smaller. It never emits `FLATTEN` — it does not
   know what is open.
+- **`promotion_daemon.py`** — the forward-incubation promotion rule and the
+  file surgery that acts on it, added 2026-08-23. Stage 3 certified a strategy
+  on historical bars; this asks whether it kept working on bars nobody had
+  then, from the FORWARD PAPER TRADES in `data/incubator_ledger.json` and never
+  from a backtest. `evaluate_strategy_promotion` scores four LOOSE criteria —
+  >= 14 calendar days (and >= 10 active sessions where the ledger records
+  them), >= 14 closed trades, realized profit factor strictly > 1.00, and a
+  realized forward drawdown inside `derived.allowable_forward_dd_usd`
+  ($2,500 x 0.40 = $1,000 as shipped). `promote_strategy` moves the strategy
+  `Incubator-Odd` -> `Prop-Odd` (or `Even`) in `config/portfolios.json` and
+  stamps `GRADUATED_PROP` / `graduated_at` / `target_portfolio` onto the
+  ledger.
+  - **A missing metric FAILS its criterion; it is never a zero.** An absent
+    trade count is a ledger nobody filled in, not a strategy that placed no
+    trades, and the two must not be indistinguishable at the moment an account
+    is handed over. `active_sessions` is the one documented exception and
+    reports NOT RECORDED without blocking, so a ledger written before the field
+    existed still promotes.
+  - **An entry carrying its own `trades` is scored on them**, and when the
+    summary beside them disagrees the evaluation FAILS rather than picking one:
+    the readings are "the summary is stale" and "the trade list is
+    incomplete", and both are reasons not to move an account. `metrics.source`
+    records which path ran. A profit factor with no losing trade is `None` and
+    falls back to the sign of net P&L — never the profiler's 999 sentinel,
+    which means "undefined" and sorts like the best result on the board.
+  - **The route is a TABLE, not a name.** `PROMOTION_ROUTES` is spelled out, so
+    `Incubator-Test` raises instead of promoting onto a `Prop-Test` account
+    that does not exist. Session dates come from
+    `backtest.event_calendar.session_date` (imported, not reimplemented) and
+    the allowable drawdown is READ from the loader's `derived` block rather
+    than multiplied out a second time.
+  - **Two files, one decision, and no atomic write across both.** Each is
+    written temp-then-`os.replace`, and the config is validated through
+    `load_portfolio_config` while it is still the temp file, so a mutation that
+    would make the routing table unloadable never reaches the real path. The
+    config is written FIRST because that ordering has a recovery: a failed
+    ledger write rolls the config back. The reverse would leave a ledger
+    reading GRADUATED_PROP over a config still routing to the sim account —
+    invisible, and skipped by every later run as already done.
+- **`scripts/incubator_tracker.py`** is the CLI over it: resolve each ledger
+  entry to its incubator account, print the ASCII status table, and — ONLY
+  under `--auto-promote` — graduate what cleared. It computes nothing itself.
+  The account comes from `active_strategies` in the config and there is NO
+  fallback to the `portfolio` a ledger entry names: taking it would produce a
+  PROMOTE verdict for a strategy no incubator portfolio holds, which
+  `promote_strategy` then refuses, so the row would clear every criterion on
+  the table and fail on the way out. Such a row is UNROUTED and the note says
+  which portfolio the ledger claims.
 - **No risk management anywhere in this package.** The drawdown figures in the
   config are a specification handed to CrossTrade NAM, like
   `compliance_rules/*.json`; nothing here reads an account balance.
