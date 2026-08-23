@@ -219,12 +219,18 @@ bt-status  # = .venv/bin/python3 ~/src/trading/backtest/status.py
 streamlit run dashboard/app.py
 
 # Tests. No pytest config - each is a script that exits non-zero on failure.
-# Thirty-one suites. Everything except test_streaming_lake, test_engine_batching
+# Thirty-two suites. Everything except test_streaming_lake, test_engine_batching
 # and test_engine_vbt runs without the lake or a network (test_batch_runner's
 # --symbols checks skip, loudly, without it). test_report_gates.py shells out
 # to `node` for the trade inspector's own checks and skips them, loudly, when
 # node is absent. test_temporal_chunking.py has one case that reads the lake
-# and skips loudly without it.
+# and skips loudly without it, as does test_regime_daemon.py - whose one lake
+# case is the live-vs-cached quadrant agreement check, and is the regression
+# that would catch the live daemon and the pipeline drifting apart.
+#
+# test_regime_daemon.py is ASSERT-based, so pytest collects it case by case
+# rather than routing it to the subprocess runner. Run it directly with
+# `.venv/bin/pytest tests/test_regime_daemon.py -q`, not as a script.
 python tests/test_tier1.py              # intent routing, vault, synthesis errors
 python tests/test_tier2.py              # compliance, robustness, lifecycle
 python tests/test_tier3_workers.py      # worker tools, metrics, RAM ceiling
@@ -248,6 +254,7 @@ python tests/test_portfolio_config.py   # the four-account routing table and its
 python tests/test_portfolio_manager.py  # ATR sizing, signal netting, account routing
 python tests/test_memory_guard.py       # the memory tiers, and that a halt is re-raised
 python tests/test_incubator_tracker.py  # the promotion criteria and the account move
+python tests/test_regime_daemon.py      # live regimes, the state cache, the ML gate, CrossTrade
 
 # `pytest tests/` is the gate. tests/conftest.py routes the script-style
 # suites (the ones with a `check()` helper, whose results pytest cannot see)
@@ -410,6 +417,13 @@ python3 scripts/incubator_tracker.py --auto-promote        # act on it
 python3 scripts/incubator_tracker.py --dry-run --no-discord
 python3 scripts/incubator_tracker.py --ledger data/incubator_ledger.json \
     --config config/portfolios.json --json /tmp/incubator_audit.json
+
+# THE MASTER REGIME DAEMON. Classifies LIVE bars into the same four quadrants
+# the pipeline certifies against, and publishes them to data/live_regime_state.json.
+# Reads no lake and runs no backtest; the caller owns the bar feed.
+python3 realtime/regime_daemon.py            # what is wired up: anchors, models
+python3 realtime/regime_reader.py            # what is currently published
+python3 realtime/regime_reader.py --symbol NQ
 
 # Rebuild the per-symbol coverage reference (writes reference/futures/coverage*.csv)
 python scripts/coverage_summary.py
@@ -1851,6 +1865,106 @@ a funding program rather than to a market.
 - **No risk management anywhere in this package.** The drawdown figures in the
   config are a specification handed to CrossTrade NAM, like
   `compliance_rules/*.json`; nothing here reads an account balance.
+
+**`realtime/`** — the live regime service, added 2026-08-23. Sits ABOVE
+`backtest/` and beside `portfolio/`; **nothing in `backtest/` may import from
+here**, for the same reason nothing there may import from `portfolio/` — a
+research number that depended on live account or feed state would be tuned to a
+broker rather than to a market. Three modules, split by what they do: the
+daemon WRITES, the reader READS, the formatter FORMATS and sends nothing.
+
+- **`regime_daemon.py`** — `MasterRegimeDaemon`. `calculate_regime(symbol,
+  bars)` labels the last bar into `Q1_HIGH_VOL_TREND` / `Q2_HIGH_VOL_CHOP` /
+  `Q3_LOW_VOL_TREND` / `Q4_LOW_VOL_MEAN_REVERSION`, `evaluate_ml_gate` runs the
+  Version B confirmation model, and `update_state` publishes to
+  `data/live_regime_state.json`.
+  - **Not one threshold is restated here.** `ADX_TREND_THRESHOLD`, the
+    indicator lengths, the four-way encoding and `classify()` itself are
+    IMPORTED from `mdlib/regimes.py`; the schema labels are inverted out of
+    `portfolio.config_loader.CANONICAL_QUADRANT`. A live daemon and a backtest
+    that disagree about what Q1 means is the failure nothing downstream can
+    detect: a strategy certified in High-Vol/Trending would be stood down in
+    the environment it was certified for and turned loose in the one it never
+    traded, with every log line reading correctly.
+  - **The ADX comparator is strictly `>`, not `>=`.** The specification for
+    this module was written `ADX >= 25`; `mdlib/regimes.py` and
+    `backtest/profiler.py` have always used `>`, and every cached quadrant,
+    every Stage 1 designation and every Gate R verdict was drawn on it.
+    Matching the wording in the live daemon alone would move the boundary there
+    and leave the backtests behind it. At ADX exactly 25.00000 the daemon says
+    Ranging.
+  - **theta_vol is LOADED, never computed.** It is the pinned in-sample median
+    ATR(14) written into each `{SYMBOL}_{TF}_regime.parquet` by
+    `mdlib.regimes`, read back through `provenance()`, and overridable by an
+    operator anchors file (`$BT_THETA_ANCHORS`, else
+    `config/theta_vol_anchors.json`). A symbol with no anchor raises
+    `ThetaAnchorMissing` and is not classified. Taking a median of the live
+    window instead would make the boundary a property of the REQUEST: on a
+    quiet morning every bar reads high-volatility, and a Q1-certified strategy
+    is handed permission for a market it is not in, with a plausible-looking
+    equity curve behind it.
+  - **An anchor is per (symbol, TIMEFRAME).** NQ's is 7.90 at 15m and 11.33 at
+    30m — the same tape, a 43% different boundary — so an anchor applied at the
+    wrong timeframe silently relabels roughly a third of the session. The
+    timeframe is part of the key, part of the state file and part of every
+    error message. **ES and CL have no regime cache on this box**, so they
+    cannot be classified until `scripts/precompute_regimes.py` has run for
+    them; the daemon says so on stderr at construction rather than at the first
+    signal.
+  - **Micros resolve to their full-size parent** (`MNQ`→`NQ`, `MES`→`ES`,
+    `MCL`→`CL`, `MGC`→`GC`) because they quote the same price series at the
+    same tick size — only the multiplier differs, and a multiplier appears
+    nowhere in an ADX or an ATR. The tick sizes are RECONCILED against
+    `backtest/specs.py` on every construction rather than asserted in a
+    comment: were they ever to differ, every ATR comparison for that contract
+    would be wrong by the same factor, in price units, silently.
+  - **The warm-up is `Q0_UNDEFINED_WARMUP`, never Q4.** `NaN > theta` is False,
+    so the naive encoding files every warm-up bar under Low-Vol/Ranging — a
+    populated label on bars where no indicator exists. Fewer than
+    `2 x ADX_LENGTH + 1` bars reports Q0 with NULL indicators, and a consumer
+    must treat it as "no regime" exactly as `mdlib.regimes` requires of
+    quadrant 0.
+  - **The ML gate fails loud, not open and not closed.** No model registered
+    for a strategy returns **True** — the documented pass-through that keeps a
+    rule-based Version A trading. A model that is registered but fails to load,
+    declares no feature order, or is missing a feature the caller did not
+    supply **raises `MLGateError`**. True there would trade unfiltered while
+    every log line read "ML confirmed"; False is indistinguishable from a model
+    that looked and vetoed. Both are silent. Feature ORDER comes from the
+    model's sidecar and never from the caller's dict — see `models/README.md`.
+  - **Every record carries `bar_ts` beside `updated_at`.** The first is the
+    market's clock and the second is the daemon's; a daemon looping over a dead
+    feed keeps `updated_at` fresh forever while `bar_ts` stops, and telling
+    those apart is the job.
+
+- **`regime_reader.py`** — `get_current_regime(symbol)`, and deliberately
+  dependency-light: `json`, `os`, `pathlib`, `datetime`, and nothing else. It
+  imports neither pandas nor the daemon, so it keeps answering when the
+  daemon's numeric stack is what is broken. Non-blocking with no locks, because
+  the daemon publishes through `os.replace` and a reader sees the previous
+  complete document or the new one. **It returns no defaults**: a missing file
+  or an unpublished symbol RAISES, since `{"regime": None}` becomes "not in the
+  permitted quadrant" downstream and stands a strategy down for a missing file
+  in a way that looks exactly like a market that moved. `age_seconds` and
+  `bar_age_seconds` are reported on every read and `max_age_s` turns either
+  into a refusal; `is_regime_permitted` accepts an id or a schema label and
+  never permits Q0.
+
+- **`crosstrade_formatter.py`** — the two wire forms, and it SENDS NOTHING;
+  `live/dispatcher.py` remains the only module in this repository that puts an
+  order on the wire. `format_crosstrade_command` builds the semicolon
+  plain-text place order (upper-cased, carrying `key` and `tif`),
+  `format_crosstrade_json` the structured object (lower-cased, carrying
+  `strategy_tag` and no key — that endpoint takes the credential in the
+  request, and a key in the body is a key in every payload log), and
+  `format_flatten_command` the flatten, which carries no side and no quantity
+  because a flatten closes whatever is open and a wrong guess at the position
+  opens the opposite one. Field ORDER in the text form is part of the contract.
+  Legal sides and order types are IMPORTED from `live.dispatcher` rather than
+  restated; MARKET only, since none of these signatures carries a price and a
+  LIMIT defaulted to the market turns a bounded entry into an unbounded one.
+  `redact()` exists because a log file outlives the session that wrote it and a
+  command copied out of one is directly replayable.
 
 **`data_pull/`** — vendor downloaders. The only layer that touches a vendor API.
 
