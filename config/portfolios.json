@@ -1,0 +1,100 @@
+{
+  "version": "1.0.0",
+  "base_currency": "USD",
+  "portfolios": {
+    "Incubator-Odd": {
+      "portfolio_id": "Incubator-Odd",
+      "account_type": "incubator_sim",
+      "target_account": "Incubator-Odd",
+      "default_account_size": 50000,
+      "risk_profile": {
+        "fixed_risk_budget_usd": 250.0,
+        "max_trailing_drawdown_usd": 2500.0,
+        "max_forward_incubation_dd_pct": 0.40,
+        "clamping": {
+          "min_contracts": 1,
+          "max_contracts": 5
+        }
+      },
+      "basket": {
+        "assets": ["MNQ", "MCL"],
+        "correlation_group": "Index_Energy_Uncorrelated",
+        "regime_quadrants": ["Q1_LOW_VOL_TREND", "Q3_LOW_VOL_MEAN_REVERSION"],
+        "structures": ["MOMENTUM_TREND", "MEAN_REVERSION_SCALP"]
+      },
+      "active_strategies": []
+    },
+    "Incubator-Even": {
+      "portfolio_id": "Incubator-Even",
+      "account_type": "incubator_sim",
+      "target_account": "Incubator-Even",
+      "default_account_size": 50000,
+      "risk_profile": {
+        "fixed_risk_budget_usd": 250.0,
+        "max_trailing_drawdown_usd": 2500.0,
+        "max_forward_incubation_dd_pct": 0.40,
+        "clamping": {
+          "min_contracts": 1,
+          "max_contracts": 5
+        }
+      },
+      "basket": {
+        "assets": ["MES", "MGC"],
+        "correlation_group": "Index_Metals_Uncorrelated",
+        "regime_quadrants": ["Q2_HIGH_VOL_TREND", "Q4_HIGH_VOL_CHOP"],
+        "structures": ["BREAKOUT_EXPANSION", "VOLATILITY_PULLBACK"]
+      },
+      "active_strategies": []
+    },
+    "Prop-Odd": {
+      "portfolio_id": "Prop-Odd",
+      "account_type": "prop_eval",
+      "target_account": "Prop-Odd",
+      "default_account_size": 50000,
+      "risk_profile": {
+        "fixed_risk_budget_usd": 250.0,
+        "max_trailing_drawdown_usd": 2500.0,
+        "max_forward_incubation_dd_pct": 0.40,
+        "clamping": {
+          "min_contracts": 1,
+          "max_contracts": 5
+        }
+      },
+      "basket": {
+        "assets": ["MNQ", "MCL"],
+        "correlation_group": "Index_Energy_Uncorrelated",
+        "regime_quadrants": ["Q1_LOW_VOL_TREND", "Q3_LOW_VOL_MEAN_REVERSION"],
+        "structures": ["MOMENTUM_TREND", "MEAN_REVERSION_SCALP"]
+      },
+      "active_strategies": []
+    },
+    "Prop-Even": {
+      "portfolio_id": "Prop-Even",
+      "account_type": "prop_eval",
+      "target_account": "Prop-Even",
+      "default_account_size": 50000,
+      "risk_profile": {
+        "fixed_risk_budget_usd": 250.0,
+        "max_trailing_drawdown_usd": 2500.0,
+        "max_forward_incubation_dd_pct": 0.40,
+        "clamping": {
+          "min_contracts": 1,
+          "max_contracts": 5
+        }
+      },
+      "basket": {
+        "assets": ["MES", "MGC"],
+        "correlation_group": "Index_Metals_Uncorrelated",
+        "regime_quadrants": ["Q2_HIGH_VOL_TREND", "Q4_HIGH_VOL_CHOP"],
+        "structures": ["BREAKOUT_EXPANSION", "VOLATILITY_PULLBACK"]
+      },
+      "active_strategies": []
+    }
+  },
+  "asset_metadata": {
+    "MNQ": { "point_value": 2.0, "tick_size": 0.25, "sector": "Equity_Index" },
+    "MES": { "point_value": 5.0, "tick_size": 0.25, "sector": "Equity_Index" },
+    "MCL": { "point_value": 100.0, "tick_size": 0.01, "sector": "Energy" },
+    "MGC": { "point_value": 10.0, "tick_size": 0.10, "sector": "Metals" }
+  }
+}
