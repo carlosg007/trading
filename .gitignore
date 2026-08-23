@@ -8,3 +8,10 @@ __pycache__/
 *.csv
 scratch/
 courses/
+
+# Pipeline run logs — stdout captures from bt-run and the five stages.
+# Reproducible output rather than source, like the *.parquet and *.csv rules
+# above: the evidence a promotion decision rests on lives in
+# /mnt/backtest/artifacts/<strat>_<timestamp>/, which is timestamped and never
+# overwritten. A 2.9 MB stdout capture in git history is not that.
+*.log
