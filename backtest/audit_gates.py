@@ -121,6 +121,22 @@ than of one fitted classifier.
 
 from __future__ import annotations
 
+# --- .env bootstrap --------------------------------------------------------
+# Load ~/src/trading/.env before ANYTHING reads os.environ. This runs at import
+# time, above the local imports below, because several modules resolve their
+# BT_* variables while being imported (backtest.run's ARTIFACTS_ROOT) - loading
+# the file inside main() would be too late for those and would work here, which
+# is the kind of difference nobody notices until one runner silently uses the
+# default path. Existing environment variables WIN: load_dotenv does not
+# override them, so an explicit `BT_ARTIFACTS=... bt-run` still beats the file.
+from pathlib import Path                                           # noqa: E402
+from dotenv import load_dotenv                                     # noqa: E402
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(PROJECT_ROOT / ".env")
+# ---------------------------------------------------------------------------
+
+
 import os
 
 for _var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
