@@ -3,9 +3,9 @@
   "version": "A",
   "description": "Promoted Version A (rule-based baseline).",
   "symbols": [
-    "PL"
+    "CL"
   ],
-  "timeframe": "15m",
+  "timeframe": "1h",
   "params": {
     "fast_window": 21,
     "slow_window": 200,
@@ -28,23 +28,23 @@
   "source": "/home/cgrullon/src/trading/strategies/experimental/ma_anchoring_spread_20260820.py",
   "source_sha256": "3c87f3720be7dd06950d86eb242f32918b3c0f0348a94641f845795c5d512f40",
   "promoted_sha256": "3c87f3720be7dd06950d86eb242f32918b3c0f0348a94641f845795c5d512f40",
-  "promoted_utc": "2026-08-23T07:45:24+00:00",
+  "promoted_utc": "2026-08-23T07:45:27+00:00",
   "costs_included": false,
   "variants_tested": null,
   "metrics_status": "NOT RECORDED",
   "metrics": null,
   "gate_audit_status": "PASS",
   "gate_audit": {
-    "gate1": "PASS",
-    "gate2": "FAIL",
-    "gate3": "PASS",
+    "gate1": "FAIL",
+    "gate2": "PASS",
+    "gate3": "FAIL",
     "gate_regime": "PASS"
   },
   "certification": {
-    "audit_file": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/gate_audit_PL_15m.json",
-    "audit_sha256": "24ea92d363545607934033ad68a83cf2e1dcd8902fa32ac6d4c20d9c5247fe95",
-    "audit_symbol": "PL",
-    "audit_generated_utc": "2026-08-23T07:42:21+00:00",
+    "audit_file": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/gate_audit_CL_1h.json",
+    "audit_sha256": "cd86d333c73384cb4419a00cab2555996fbccfdeb469641a542d1bf80b70b04a",
+    "audit_symbol": "CL",
+    "audit_generated_utc": "2026-08-23T07:35:39+00:00",
     "in_sample": {
       "start": "2013-01-01",
       "end": "2022-12-31"
@@ -55,14 +55,14 @@
       "end_basis": "the present - every bar the lake holds"
     },
     "params": {
-      "fast_window": 30,
+      "fast_window": 21,
       "slow_window": 200,
-      "spread_threshold": 0.025,
-      "sl_atr_mult": 1.0,
+      "spread_threshold": 0.015,
+      "sl_atr_mult": 2.0,
       "tp_atr_mult": 3.0,
       "trailing": false
     },
-    "params_source": "stage 2 winner (best_params_PL_15m.json)",
+    "params_source": "stage 2 winner (best_params_CL_1h.json)",
     "variants_tested": 270,
     "wfo": {
       "train_years": 2,
