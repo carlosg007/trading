@@ -38,26 +38,28 @@ TWO CONFLICTS BETWEEN THIS SCHEMA AND THE REST OF THE REPOSITORY
 Both are resolved here rather than left for a reader to trip over, because both
 are the kind that produce a plausible number rather than an error.
 
-1. **THE QUADRANT NUMBERING IS NOT THIS REPOSITORY'S.** The schema names its
-   regimes `Q1_LOW_VOL_TREND`, `Q2_HIGH_VOL_TREND`, `Q3_LOW_VOL_MEAN_REVERSION`
-   and `Q4_HIGH_VOL_CHOP`. `mdlib/regimes.py` — the single place the quadrant
-   encoding is written down, and the one Stage 1's designation, Gate R and the
-   Discord cards all read — numbers them:
+1. **THE QUADRANT NUMBERING WAS NOT THIS REPOSITORY'S, AND IS NOW.** Schema
+   1.0.0 named its regimes `Q1_LOW_VOL_TREND`, `Q2_HIGH_VOL_TREND`,
+   `Q3_LOW_VOL_MEAN_REVERSION` and `Q4_HIGH_VOL_CHOP`. `mdlib/regimes.py` — the
+   single place the quadrant encoding is written down, and the one Stage 1's
+   designation, Gate R and the Discord cards all read — numbers them:
 
        Q1  High Volatility / Trending          Q3  Low Volatility / Trending
        Q2  High Volatility / Ranging           Q4  Low Volatility / Ranging
 
-   Every one of the four digits disagrees. `Q1` here is the repository's `Q3`;
-   `Q2` here is its `Q1`; `Q3` here is its `Q4`; `Q4` here is its `Q2`. If a
-   live supervisor reads THIS file's `Q1` while Stage 1 designated the
-   repository's `Q1`, the strategy is permitted to trade in the one environment
-   nobody certified it for — and every count in every table still adds up.
+   Every one of the four digits disagreed, and its `Q2` was this repository's
+   High-Volatility RANGING quadrant — the chop the strategy premise says to
+   filter out. A live supervisor reading that file's `Q1` while Stage 1 had
+   designated the repository's `Q1` would have permitted the strategy in the
+   one environment nobody certified it for, with every count in every table
+   still adding up.
 
-   `CANONICAL_QUADRANT` maps the schema's labels onto the repository's ids by
-   what they MEAN (volatility x trend), never by the digit. `canonical_quadrant`
-   is the only supported way to compare a portfolio's declared regimes against
-   a Stage 1 designation, and `tests/test_portfolio_config.py` pins the mapping
-   against `backtest.profiler` so a change to either encoding fails loudly.
+   **Schema 1.1.0 relabels them to agree**, which is the right fix: one
+   encoding, not two spellings and a translator. `CANONICAL_QUADRANT` stays,
+   and `_reconcile_quadrants` now checks it against `backtest.profiler` on
+   every load and REFUSES the config on a disagreement — because an agreement
+   nothing verifies is an agreement that lasts until someone edits one side.
+   `canonical_quadrant` remains the only supported way to resolve a label.
 
 2. **`asset_metadata` DUPLICATES `backtest/specs.py`.** `point_value` here is
    `ContractSpec.multiplier` there, and `tick_size` is `tick_size`. A wrong
@@ -129,18 +131,30 @@ PROP_ACCOUNT_TYPE = "prop_eval"
 ACCOUNT_TYPES = (INCUBATOR_ACCOUNT_TYPE, PROP_ACCOUNT_TYPE)
 
 # The schema's regime labels mapped onto `mdlib.regimes` / `backtest.profiler`
-# ids BY MEANING — see conflict 1 in the module docstring. Every digit
-# disagrees with this repository's, so the mapping is written out in full
-# rather than computed from the label's number, and the test suite pins each
-# target against `backtest.profiler.REGIME_TO_QUADRANT`.
+# ids. FROM SCHEMA VERSION 1.1.0 THE DIGITS AGREE, and this table is what keeps
+# them agreeing rather than a restatement of an agreement.
+#
+# They did not agree at 1.0.0: that schema numbered Q1 as Low-Vol/Trending and
+# Q2 as High-Vol/Trending, so every one of the four digits named a different
+# environment from the one `mdlib/regimes.py` gives it, and its Q2 was this
+# repository's High-Volatility RANGING quadrant — the chop the strategy premise
+# says to avoid. The labels were corrected in 1.1.0 rather than the mapping
+# being left to translate them forever.
+#
+# The table is kept, and `_reconcile_quadrants` checks it against
+# `backtest.profiler` on every load, BECAUSE the digits agree. An agreement
+# nothing verifies is an agreement that lasts until someone edits one side:
+# `canonical_quadrant` stays the only supported way to resolve a label, so a
+# future relabelling is caught here instead of in a live account trading the
+# one environment nobody certified.
 #
 # "MEAN_REVERSION" and "CHOP" both describe a RANGING market; the schema uses
 # two words for one regime and the difference is one of tone, not of state.
 CANONICAL_QUADRANT: dict[str, str] = {
-    "Q1_LOW_VOL_TREND": "Q3",              # Low Volatility / Trending
-    "Q2_HIGH_VOL_TREND": "Q1",             # High Volatility / Trending
-    "Q3_LOW_VOL_MEAN_REVERSION": "Q4",     # Low Volatility / Ranging
-    "Q4_HIGH_VOL_CHOP": "Q2",              # High Volatility / Ranging
+    "Q1_HIGH_VOL_TREND": "Q1",             # High Volatility / Trending
+    "Q2_HIGH_VOL_CHOP": "Q2",              # High Volatility / Ranging
+    "Q3_LOW_VOL_TREND": "Q3",              # Low Volatility / Trending
+    "Q4_LOW_VOL_MEAN_REVERSION": "Q4",     # Low Volatility / Ranging
 }
 
 # The regime NAME each schema label refers to, spelled exactly as
@@ -148,10 +162,10 @@ CANONICAL_QUADRANT: dict[str, str] = {
 # quadrant code with no name beside it is the thing that made the numbering
 # conflict possible in the first place.
 CANONICAL_REGIME: dict[str, str] = {
-    "Q1_LOW_VOL_TREND": "Low Volatility / Trending",
-    "Q2_HIGH_VOL_TREND": "High Volatility / Trending",
-    "Q3_LOW_VOL_MEAN_REVERSION": "Low Volatility / Ranging",
-    "Q4_HIGH_VOL_CHOP": "High Volatility / Ranging",
+    "Q1_HIGH_VOL_TREND": "High Volatility / Trending",
+    "Q2_HIGH_VOL_CHOP": "High Volatility / Ranging",
+    "Q3_LOW_VOL_TREND": "Low Volatility / Trending",
+    "Q4_LOW_VOL_MEAN_REVERSION": "Low Volatility / Ranging",
 }
 
 _CACHE: dict[str, dict] = {}
@@ -400,6 +414,85 @@ def _reconcile_with_specs(metadata: dict, strict: bool) -> list[dict]:
     return rows
 
 
+def _reconcile_quadrants(strict: bool) -> list[dict]:
+    """
+    Check `CANONICAL_QUADRANT` and `CANONICAL_REGIME` against
+    `backtest.profiler`, the repository's own encoding.
+
+    THREE THINGS ARE CHECKED, and the third is the one that matters:
+
+      * every regime NAME this module maps to is one of the four
+        `profiler.REGIMES` spells — a typo here would make a portfolio's
+        declared environment unmatchable against a Stage 1 designation, and it
+        would read as a strategy that simply never traded its own quadrant;
+      * every label resolves to the id `profiler` gives that regime;
+      * the label's own DIGIT matches that id. From schema 1.1.0 the two
+        encodings agree, so this holds — and it is checked precisely because it
+        holds. The whole class of bug here is silent: a relabelled quadrant
+        moves every routing decision between environments and nothing raises,
+        because a quadrant id is a well-formed string whichever regime it names.
+
+    `strict=False` records the disagreement instead of refusing, for a bench
+    with no profiler. It is not for getting past a MISMATCH.
+    """
+    try:
+        from backtest.profiler import REGIMES
+    except Exception as exc:                                    # noqa: BLE001
+        if strict:
+            raise PortfolioConfigError(
+                f"cannot import backtest.profiler to reconcile the regime "
+                f"labels against it: {type(exc).__name__}: {exc}") from exc
+        return [{"label": lab, "status": "NOT CHECKED",
+                 "detail": "backtest.profiler could not be imported"}
+                for lab in sorted(CANONICAL_QUADRANT)]
+
+    # `REGIMES` is a tuple in quadrant order, so `Q{i+1}` IS the id. Derived
+    # from the ordering rather than from a second constant, which is how
+    # `backtest/profiler.py` builds its own inverted map.
+    regime_to_quadrant = {name: f"Q{i + 1}" for i, name in enumerate(REGIMES)}
+
+    rows: list[dict] = []
+    problems: list[str] = []
+    for label in sorted(CANONICAL_QUADRANT):
+        quadrant = CANONICAL_QUADRANT[label]
+        regime = CANONICAL_REGIME.get(label)
+        detail = f"{quadrant} · {regime}"
+        if regime not in regime_to_quadrant:
+            rows.append({"label": label, "status": "UNKNOWN REGIME",
+                         "detail": f"{regime!r} is not one of {list(REGIMES)}"})
+            problems.append(f"{label}: {regime!r} is not a regime this "
+                            f"repository defines")
+            continue
+        expected = regime_to_quadrant[regime]
+        if quadrant != expected:
+            rows.append({"label": label, "status": "MISMATCH",
+                         "detail": f"maps to {quadrant}, {regime} is "
+                                   f"{expected}"})
+            problems.append(f"{label}: maps to {quadrant} but {regime} is "
+                            f"{expected} in backtest.profiler")
+            continue
+        if not label.startswith(expected + "_"):
+            rows.append({"label": label, "status": "DIGIT MISMATCH",
+                         "detail": f"label digit vs {expected}"})
+            problems.append(
+                f"{label}: the label's own digit disagrees with {expected}. "
+                f"Schema 1.1.0 relabelled these to agree with "
+                f"mdlib/regimes.py; a label that drifts back is the bug that "
+                f"moves every routing decision between environments silently.")
+            continue
+        rows.append({"label": label, "status": "OK", "detail": detail})
+
+    if problems and strict:
+        raise PortfolioConfigError(
+            "the portfolio regime labels disagree with backtest.profiler, "
+            "which is this repository's quadrant encoding:\n  "
+            + "\n  ".join(problems)
+            + "\nA quadrant id is a well-formed string whichever regime it "
+              "names, so this cannot be caught downstream. Fix the label or "
+              "the mapping; do not silence the check.")
+    return rows
+
+
 def _assets_without_market_data(symbols: set[str]) -> list[str]:
     """
     Which basket assets the lake holds no bars for.
@@ -566,6 +659,7 @@ def load_portfolio_config(config_path: str = DEFAULT_CONFIG_PATH,
 
     config["reconciliation"] = {
         "specs": _reconcile_with_specs(config["asset_metadata"], strict_specs),
+        "quadrants": _reconcile_quadrants(strict_specs),
         "strict": bool(strict_specs),
     }
     # Reported, never raised — see `_assets_without_market_data`.

@@ -219,11 +219,12 @@ bt-status  # = .venv/bin/python3 ~/src/trading/backtest/status.py
 streamlit run dashboard/app.py
 
 # Tests. No pytest config - each is a script that exits non-zero on failure.
-# Nineteen suites. Everything except test_streaming_lake, test_engine_batching
+# Twenty-eight suites. Everything except test_streaming_lake, test_engine_batching
 # and test_engine_vbt runs without the lake or a network (test_batch_runner's
-# --symbols checks and test_intraday_vol_mr's real-bar section skip, loudly,
-# without it). test_report_gates.py shells out to `node` for the trade
-# inspector's own checks and skips them, loudly, when node is absent.
+# --symbols checks skip, loudly, without it). test_report_gates.py shells out
+# to `node` for the trade inspector's own checks and skips them, loudly, when
+# node is absent. test_temporal_chunking.py has one case that reads the lake
+# and skips loudly without it.
 python tests/test_tier1.py              # intent routing, vault, synthesis errors
 python tests/test_tier2.py              # compliance, robustness, lifecycle
 python tests/test_tier3_workers.py      # worker tools, metrics, RAM ceiling
@@ -234,7 +235,6 @@ python tests/test_streaming_lake.py     # iter_bars and the streaming engine
 python tests/test_engine_batching.py    # chunked == unchunked, trade for trade
 python tests/test_engine_vbt.py         # vectorbt P&L == the legacy loop oracle
 python tests/test_batch_runner.py       # scan == engine, leaderboard, job tracker
-python tests/test_intraday_vol_mr.py    # the band-fade walk, against hand answers
 python tests/test_risk_params.py        # TP/SL/trailing walk, grid, leaderboard
 python tests/test_daily_metrics.py      # the daily-close metric frequency contract
 python tests/test_pipeline_filters.py   # entry filters, DOW attribution, the 5 stages
@@ -243,6 +243,9 @@ python tests/test_profiler_precomputed.py  # the profiler reads the cache, not i
 python tests/test_stage1_charter.py     # the Stage 1 charter + the Discord card
 python tests/test_stage2_charter.py     # the Stage 2 charter: pairs, window, plateau
 python tests/test_stage3_charter.py     # the Stage 3 charter: Gate R, retention, the seal
+python tests/test_temporal_chunking.py  # chunk continuity, warm-up, the trades a boundary cuts
+python tests/test_portfolio_config.py   # the four-account routing table and its guards
+python tests/test_portfolio_manager.py  # ATR sizing, signal netting, account routing
 OMP_NUM_THREADS=1 \
   python tests/test_sma_momentum_crossover.py   # ADX vs TA-Lib, layers, ml_features
 
@@ -1685,6 +1688,48 @@ block — the audit's path, symbol, windows and SHA-256 — or the literal strin
 reads as a field nobody filled in. Certification is **not** required by
 default, so the older `bt-run` workflow keeps working unchanged;
 `--require-certification` turns its absence into a refusal.
+
+**`portfolio/`** — portfolio-to-account routing and position sizing, added
+2026-08-23. Sits ABOVE `backtest/` in the dependency chain and reads from it;
+**nothing in `backtest/` may import from here**, because a research run that
+depended on which live account a strategy would be routed to would be tuned to
+a funding program rather than to a market.
+
+- **`config_loader.py`** reads `config/portfolios.json` — the four-account
+  partition (Incubator-Odd/Even, Prop-Odd/Even), each with a basket, a regime
+  scope and a risk envelope — validates it, derives
+  `allowable_forward_dd_usd` (`max_trailing_drawdown_usd x
+  max_forward_incubation_dd_pct`, a fraction of the TRAILING LIMIT and not of
+  the account), and answers `get_portfolio_by_account`,
+  `get_portfolio_for_strategy` and `get_asset_spec`. Two reconciliations run on
+  every load and REFUSE the config on a disagreement: `asset_metadata` against
+  `backtest/specs.py` (a wrong multiplier silently scales every P&L figure),
+  and the regime labels against `backtest/profiler.py`. Routing has no
+  fallback — an unassigned strategy raises rather than being placed by a rule
+  nobody wrote down. **Schema 1.0.0 numbered its quadrants incompatibly with
+  `mdlib/regimes.py`** — every digit named a different environment — and 1.1.0
+  relabels them to agree; `canonical_quadrant` is the only supported way to
+  resolve a label.
+- **`volatility_sizer.py`** — `contracts = floor(risk_budget / (ATR x
+  stop_atr_mult x point_value))`, clamped. FLOOR rather than round, so the
+  budget is a ceiling on intended risk. The `min_contracts` clamp CAN breach
+  the budget (one MCL at ATR 3.00 risks $300 against $250) and `size_detail`
+  reports `budget_breached` rather than rounding it away. `stop_atr_mult`
+  defaults to 1.0 and must be passed the strategy's own `sl_atr_mult`, or the
+  position is sized for a stop the strategy will not use.
+- **`portfolio_manager.py`** — `aggregate_signals` nets many strategies into
+  one position per (portfolio, symbol); `build_order_plan` sizes each and
+  records every DECLINED one with its reason; `build_order_payloads` reduces
+  that to the wire format. Payloads are built by
+  `live.dispatcher.format_crosstrade_payload`, the only order formatter in this
+  repository. Two decisions the spec left open are written down in the module:
+  conviction SCALES the size (so stacking is observable in the order) with the
+  clamp bounding the breach, and a symbol outside its portfolio's quadrant is
+  STOOD DOWN rather than sized smaller. It never emits `FLATTEN` — it does not
+  know what is open.
+- **No risk management anywhere in this package.** The drawdown figures in the
+  config are a specification handed to CrossTrade NAM, like
+  `compliance_rules/*.json`; nothing here reads an account balance.
 
 **`data_pull/`** — vendor downloaders. The only layer that touches a vendor API.
 

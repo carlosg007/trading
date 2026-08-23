@@ -132,7 +132,7 @@ def test_all_four_target_accounts_exist_and_are_well_formed() -> None:
                                         "Prop-Odd", "Prop-Even"}
     assert set(cfg["portfolios"]) == set(REQUIRED_PORTFOLIOS), (
         sorted(cfg["portfolios"]))
-    assert cfg["version"] == "1.0.0"
+    assert cfg["version"] == "1.1.0"
     assert cfg["base_currency"] == "USD"
 
     for pid in REQUIRED_PORTFOLIOS:
@@ -458,24 +458,27 @@ def test_the_derived_block_tracks_the_inputs_it_was_computed_from() -> None:
 # ==========================================================================
 def test_the_schema_quadrant_digits_are_not_this_repositorys() -> None:
     """
-    THE CONFLICT THIS CONFIG WOULD OTHERWISE CARRY INTO A LIVE ACCOUNT.
+    THE CONFLICT THIS CONFIG CARRIED AT 1.0.0, AND THE GUARD THAT KEEPS IT
+    FIXED.
 
-    The schema labels its regimes `Q1_LOW_VOL_TREND`, `Q2_HIGH_VOL_TREND`,
-    `Q3_LOW_VOL_MEAN_REVERSION`, `Q4_HIGH_VOL_CHOP`. `mdlib/regimes.py` — the
-    single place the encoding is written down, and the one Stage 1's
+    Schema 1.0.0 labelled its regimes `Q1_LOW_VOL_TREND`, `Q2_HIGH_VOL_TREND`,
+    `Q3_LOW_VOL_MEAN_REVERSION`, `Q4_HIGH_VOL_CHOP`, while `mdlib/regimes.py` —
+    the single place the encoding is written down, and the one Stage 1's
     designation and Gate R both read — numbers them High/Trending,
-    High/Ranging, Low/Trending, Low/Ranging. EVERY DIGIT DISAGREES.
+    High/Ranging, Low/Trending, Low/Ranging. EVERY DIGIT DISAGREED, and its
+    `Q2` was this repository's High-Volatility RANGING quadrant, the chop the
+    premise says to avoid.
 
-    If a live supervisor reads this file's `Q1` while Stage 1 designated the
-    repository's `Q1`, the strategy is permitted in the one environment nobody
-    certified it for, and every count in every table still adds up. The mapping
-    is therefore checked against `backtest.profiler` by MEANING.
+    1.1.0 relabels them to agree. This case asserts the agreement AND the
+    digit, because the failure mode is silent either way: a quadrant id is a
+    well-formed string whichever regime it names, so a label that drifts back
+    moves every routing decision between environments with nothing raising.
     """
     expected = {
-        "Q1_LOW_VOL_TREND": "Low Volatility / Trending",
-        "Q2_HIGH_VOL_TREND": "High Volatility / Trending",
-        "Q3_LOW_VOL_MEAN_REVERSION": "Low Volatility / Ranging",
-        "Q4_HIGH_VOL_CHOP": "High Volatility / Ranging",
+        "Q1_HIGH_VOL_TREND": "High Volatility / Trending",
+        "Q2_HIGH_VOL_CHOP": "High Volatility / Ranging",
+        "Q3_LOW_VOL_TREND": "Low Volatility / Trending",
+        "Q4_LOW_VOL_MEAN_REVERSION": "Low Volatility / Ranging",
     }
     assert set(CANONICAL_QUADRANT) == set(expected), sorted(CANONICAL_QUADRANT)
     for label, regime in expected.items():
@@ -486,14 +489,22 @@ def test_the_schema_quadrant_digits_are_not_this_repositorys() -> None:
             f"{label} maps to {canonical_quadrant(label)} but {regime} is "
             f"{REGIME_TO_QUADRANT[regime]} in this repository")
 
-    # The digits genuinely differ — this is the assertion that would fail if
-    # someone "simplified" the mapping to read the number off the label.
+    # From 1.1.0 the digits agree, and the check runs precisely BECAUSE they
+    # do: an agreement nothing verifies lasts until someone edits one side.
     for label in expected:
-        assert canonical_quadrant(label) != f"Q{label[1]}", (
-            f"{label} was mapped to its own digit; the two encodings do not "
-            f"agree and reading the digit is wrong for all four")
-    assert canonical_quadrant("Q2_HIGH_VOL_TREND") == "Q1"
-    assert canonical_quadrant("Q1_LOW_VOL_TREND") == "Q3"
+        assert canonical_quadrant(label) == f"Q{label[1]}", (
+            f"{label} resolves to {canonical_quadrant(label)}, which is not "
+            f"its own digit — the schema and mdlib/regimes.py have drifted "
+            f"apart again")
+    assert canonical_quadrant("Q1_HIGH_VOL_TREND") == "Q1"
+    assert canonical_quadrant("Q3_LOW_VOL_TREND") == "Q3"
+
+    # And the loader refuses a config whose labels disagree with the profiler,
+    # rather than translating them forever.
+    rows = {r["label"]: r["status"]
+            for r in config()["reconciliation"]["quadrants"]}
+    assert set(rows) == set(expected), sorted(rows)
+    assert all(v == "OK" for v in rows.values()), rows
 
     assert "unknown regime label" in raises(canonical_quadrant, "Q5_SIDEWAYS")
     assert "unknown regime label" in raises(canonical_regime, "Q5_SIDEWAYS")
@@ -512,6 +523,10 @@ def test_each_portfolio_carries_its_regimes_in_both_encodings() -> None:
     even = cfg["portfolios"]["Incubator-Even"]["derived"]
     assert odd["canonical_quadrants"] == ["Q3", "Q4"], odd
     assert even["canonical_quadrants"] == ["Q1", "Q2"], even
+    # The declared labels and the canonical ids are the same statement now.
+    assert odd["canonical_quadrants"] == [
+        q[:2] for q in cfg["portfolios"]["Incubator-Odd"]["basket"][
+            "regime_quadrants"]]
     assert odd["canonical_regimes"] == ["Low Volatility / Trending",
                                         "Low Volatility / Ranging"]
     assert even["canonical_regimes"] == ["High Volatility / Trending",
@@ -680,7 +695,7 @@ def test_the_console_summary_names_every_account() -> None:
         assert pid in text, pid
     for symbol in REQUESTED_POINT_VALUES:
         assert symbol in text, symbol
-    assert "Q1_LOW_VOL_TREND" in text and "Q3" in text
+    assert "Q3_LOW_VOL_TREND" in text and "Q3" in text
     assert "$1,000" in text, "the derived forward drawdown is not on the summary"
 
 
