@@ -153,6 +153,9 @@ from backtest.data_loader import (DEFAULT_CHUNK_YEARS,        # noqa: E402
                                   LakeSource, auto_warmup_bars,
                                   iter_temporal_chunks, peak_rss_bytes,
                                   projected_sweep_bytes, suggest_chunk_years)
+from backtest.memory_guard import (DEFAULT_GUARD,             # noqa: E402
+                                   MEMORY_HALT_EXIT_CODE, MemoryGuard,
+                                   MemorySafetyException)
 from backtest.engine import (BacktestConfig, TRADE_COLUMNS,   # noqa: E402
                              _assemble_result, _cost_arrays, _shift_to_fill,
                              apply_flat_by_close, clean_signals_ls,
@@ -1354,7 +1357,8 @@ def scan_symbol_chunked(strategy_path: str | Path,
                         start: Any = None,
                         end: Any = None,
                         tf: str | None = None,
-                        progress: bool = True) -> dict[str, Any]:
+                        progress: bool = True,
+                        guard: MemoryGuard | None = None) -> dict[str, Any]:
     """
     `scan_symbol`, sweeping one temporal chunk at a time instead of holding the
     whole history.
@@ -1400,7 +1404,20 @@ def scan_symbol_chunked(strategy_path: str | Path,
     The result dict is `scan_symbol`'s, with one extra key, `chunking`, that
     records every one of the above so a table produced this way is never read
     as one produced contiguously.
+
+    MEMORY IS GUARDED AT TWO GRANULARITIES, and they catch different things.
+    The chunk boundary is guarded by `iter_temporal_chunks` itself. The GRID
+    CELL is guarded here, because that is where the allocation actually is: the
+    four boolean masks are built one column at a time and `np.column_stack`ed,
+    so a sweep dies part-way through building a list of 432 of them, not at the
+    boundary between chunks. A guard that only fired between chunks would check
+    at every point except the one where the memory goes.
+
+    On a halt the exception carries `partial`: which chunks completed, which
+    combinations bound, and how many trades each column had accumulated. That
+    is what `main` writes to disk before exiting — see MEMORY_HALT_EXIT_CODE.
     """
+    guard = guard or DEFAULT_GUARD
     base_params = dict(base_params or {})
     combos = expand_grid(grid)
     if not combos:
@@ -1437,11 +1454,48 @@ def scan_symbol_chunked(strategy_path: str | Path,
     rss_before = peak_rss_bytes()
     n_bars_total = 0
 
-    for chunk in iter_temporal_chunks(source, chunk_years=chunk_years,
+    def _partial() -> dict:
+        """
+        What the sweep managed before it was stopped.
+
+        Deliberately NOT the trade frames themselves — writing hundreds of
+        megabytes at the moment the machine is out of memory is how a graceful
+        halt becomes an ungraceful one. Counts and spans are what an operator
+        needs to know how far it got and where to resume.
+        """
+        return {
+            "symbol": symbol,
+            "timeframe": tf,
+            "strategy": strat_name,
+            "chunks_completed": list(chunk_rows),
+            "combinations_declared": len(combos),
+            "combinations_evaluated": len(valid),
+            "bars_swept": int(n_bars_total),
+            "trades_by_column": [sum(len(f) for f in parts)
+                                 for parts in per_column],
+            "truncated_trades": int(truncated_total),
+        }
+
+    # Driven by hand rather than with `for`, so a halt raised INSIDE the
+    # generator can be caught here and given this sweep's progress before it
+    # propagates. `iter_temporal_chunks` guards its own chunk boundary and
+    # knows nothing about grid cells or accumulated trades, so a halt from
+    # there would otherwise arrive with `partial=None` and `main` would write a
+    # file recording only that the run stopped.
+    chunk_iter = iter_temporal_chunks(source, chunk_years=chunk_years,
                                       warmup_bars=warmup_bars,
                                       settlement_bars=settlement,
                                       start=start, end=end,
-                                      symbol=symbol, tf=tf):
+                                      symbol=symbol, tf=tf, guard=guard)
+    while True:
+        try:
+            chunk = next(chunk_iter)
+        except StopIteration:
+            break
+        except MemorySafetyException as exc:
+            if exc.partial is None:
+                exc.partial = _partial()
+            raise
         bars = chunk.frame
         n_bars_total += chunk.payload_len
         if progress:
@@ -1455,7 +1509,16 @@ def scan_symbol_chunked(strategy_path: str | Path,
         s_exi_cols: list[np.ndarray] = []
         chunk_valid: list[dict] = []
 
-        for combo in combos:
+        for cell, combo in enumerate(combos, 1):
+            # THE GRID CELL, which is where the memory actually goes: four
+            # boolean masks per combination, accumulated in a list before they
+            # are stacked. `partial=` so a halt here carries what the sweep had
+            # already done rather than only the fact that it stopped.
+            guard.enforce(
+                f"scan.grid_iteration[{symbol} {tf or ''} chunk "
+                f"{chunk.index + 1} cell {cell}/{len(combos)}]".replace(
+                    "  ", " "),
+                partial=_partial())
             try:
                 e, x, se, sx, offered, suppressed = _combo_signals(
                     strategy_path, bars, base_params, combo, cfg,
@@ -1600,6 +1663,10 @@ def scan_symbol_chunked(strategy_path: str | Path,
             "APPROXIMATE - trades are attributed by entry to one chunk and a "
             "trade outliving its settlement tail is dropped and counted. Not "
             "comparable bar-for-bar with a contiguous sweep."),
+        # What the guard did while this ran. A sweep that spent an hour
+        # throttling and finished is a different result from one that never
+        # noticed anything, and only this says which happened.
+        "memory_guard": guard.summary(),
     }
     if progress:
         gib = 2 ** 30
@@ -2777,6 +2844,43 @@ def main(argv: list[str] | None = None) -> int:
                                                      for d in excl]
                                                     if excl else []),
                              "exclude_days_source": excl_source})
+            except MemorySafetyException as e:
+                # BEFORE the broad handler below, and that ordering is the
+                # whole point. `except Exception` would swallow a memory halt
+                # and move on to the NEXT configuration — straight back into
+                # the allocation the halt was raised to prevent, on a machine
+                # that is now no emptier. The run has to stop.
+                #
+                # What is saved is small on purpose: counts and spans, not
+                # trade frames. Writing hundreds of megabytes at the moment the
+                # box is out of memory turns a graceful halt into the ungraceful
+                # one this whole module exists to avoid.
+                partial_path = tf_dir / f"stage2_partial_{sym}_{tf}.json"
+                try:
+                    tf_dir.mkdir(parents=True, exist_ok=True)
+                    partial_path.write_text(json.dumps({
+                        "halted_on": "memory",
+                        "message": str(e),
+                        "reading": e.status,
+                        "context": e.context,
+                        "partial": e.partial,
+                        "completed_configurations": rows,
+                    }, indent=2, default=str), encoding="utf-8")
+                    saved = str(partial_path)
+                except Exception as write_err:            # noqa: BLE001
+                    # A failed flush must not replace the memory diagnosis with
+                    # an I/O one: the operator needs to know WHY the run
+                    # stopped more than they need the partial file.
+                    saved = f"NOT WRITTEN ({type(write_err).__name__}: "\
+                            f"{write_err})"
+
+                print(f"\n[!] MEMORY HALT · {sym} {tf}: {e}", file=sys.stderr)
+                print(f"    partial results: {saved}", file=sys.stderr)
+                print(f"    exiting {MEMORY_HALT_EXIT_CODE} (EX_TEMPFAIL) "
+                      f"rather than 137: this process was NOT killed, it "
+                      f"stopped itself. Retry with a smaller --chunk-years, a "
+                      f"smaller grid, or more RAM.", file=sys.stderr)
+                return MEMORY_HALT_EXIT_CODE
             except Exception as e:                                # noqa: BLE001
                 # Recorded as a ROW of the summary matrix, not as an absence.
                 # Stage 2 prunes nothing, so a configuration that failed to

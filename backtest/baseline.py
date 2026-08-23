@@ -180,6 +180,9 @@ from agents.tier3_workers import load_strategy                     # noqa: E402
 from backtest.event_calendar import (add_filter_args, describe_filters,   # noqa: E402
                                filter_config_kwargs)
 from backtest.engine import BacktestConfig                         # noqa: E402
+from backtest.memory_guard import (DEFAULT_GUARD,                  # noqa: E402
+                                   MEMORY_HALT_EXIT_CODE,
+                                   MemorySafetyException)
 from backtest.pipeline import (BASELINE_REPORT_FILE,               # noqa: E402
                                CHARTER_IS_END, CHARTER_IS_START,
                                SURVIVORS_FILE, leaderboard, next_step,
@@ -1461,10 +1464,38 @@ def main(argv: list[str] | None = None) -> int:
     for i, (sym, tf) in enumerate(pairs, 1):
         tag = f"[{i}/{total}]"
         try:
+            # BEFORE the configuration, not after: a full-lake screen is 27
+            # contracts x 4 timeframes, each reading its own bars and running
+            # two versions, and the peak arrives INSIDE `run_symbol`. Checking
+            # here is the last point at which the run can decline to start one
+            # more of them.
+            #
+            # Stage 1 rewrites `stage1_baseline_report.md` from scratch after
+            # every configuration, so the partial results this halt preserves
+            # are already on disk — a screen stopped at 14 of 108 leaves a
+            # complete report of 14. That is why this site needs no flush of
+            # its own, unlike Stage 2's.
+            DEFAULT_GUARD.enforce(f"baseline.screen{tag} "
+                                  f"{_pair_label(sym, tf)}")
             row = run_symbol(sym, path, tf, params, args, cfg_kwargs, tag,
                              out_dir=out_dir)
             rows.append(row)
             print(_evaluated_line(tag, row), flush=True)
+        except MemorySafetyException as e:
+            # RE-RAISED PAST THE HANDLER BELOW, and the ordering is the point.
+            # `except Exception` records a bad configuration and moves to the
+            # next one, which is right for a missing spec or an empty slice of
+            # the lake and exactly wrong here: the next configuration allocates
+            # as much as this one on a machine that is no emptier. Caught at
+            # the bottom of `main`, where it becomes an exit code.
+            print(f"\n[!] MEMORY HALT {tag} {_pair_label(sym, tf)}: {e}",
+                  file=sys.stderr)
+            print(f"    {len(rows)} of {total} configuration(s) completed and "
+                  f"are already in {report_path}", file=sys.stderr)
+            print(f"    exiting {MEMORY_HALT_EXIT_CODE} (EX_TEMPFAIL) rather "
+                  f"than 137: this process was NOT killed, it stopped itself.",
+                  file=sys.stderr)
+            return MEMORY_HALT_EXIT_CODE
         except Exception as e:                                # noqa: BLE001
             # One bad configuration does not end the screen. Recorded as an
             # ERROR row rather than as one that produced nothing: those read

@@ -219,7 +219,7 @@ bt-status  # = .venv/bin/python3 ~/src/trading/backtest/status.py
 streamlit run dashboard/app.py
 
 # Tests. No pytest config - each is a script that exits non-zero on failure.
-# Twenty-eight suites. Everything except test_streaming_lake, test_engine_batching
+# Thirty suites. Everything except test_streaming_lake, test_engine_batching
 # and test_engine_vbt runs without the lake or a network (test_batch_runner's
 # --symbols checks skip, loudly, without it). test_report_gates.py shells out
 # to `node` for the trade inspector's own checks and skips them, loudly, when
@@ -246,6 +246,15 @@ python tests/test_stage3_charter.py     # the Stage 3 charter: Gate R, retention
 python tests/test_temporal_chunking.py  # chunk continuity, warm-up, the trades a boundary cuts
 python tests/test_portfolio_config.py   # the four-account routing table and its guards
 python tests/test_portfolio_manager.py  # ATR sizing, signal netting, account routing
+python tests/test_memory_guard.py       # the memory tiers, and that a halt is re-raised
+
+# `pytest tests/` is the gate. tests/conftest.py routes the script-style
+# suites (the ones with a `check()` helper, whose results pytest cannot see)
+# to tests/test_suite_runners.py, which runs each as a SUBPROCESS asserting
+# its exit code — own process, own order, as documented above. Roughly 16
+# minutes; run a single suite directly while iterating.
+#
+# BT_MEMORY_GUARD=off disables the memory guard for a run on a loaded box.
 OMP_NUM_THREADS=1 \
   python tests/test_sma_momentum_crossover.py   # ADX vs TA-Lib, layers, ml_features
 
@@ -1067,6 +1076,56 @@ name.
   the roll puts it back on its own date in both EST and EDT.
 - O(n log m) via merged intervals and `searchsorted`. The broadcast form on
   5.6M bars × ~700 events would allocate 4e9 booleans.
+
+**`backtest/memory_guard.py`** — watch system RAM and this process's RSS, and
+stop a long run deliberately rather than letting the kernel stop it. Added
+2026-08-23. `MemoryGuard.enforce(context)` is called at three places:
+`data_loader.iter_temporal_chunks` (every chunk boundary), `scan.py` (every
+GRID CELL, which is where the masks are actually allocated), and `baseline.py`
+(before each configuration).
+
+- **Four tiers, all `>=` so a threshold written as 90 fires AT 90.** OK below
+  75%; WARN collects garbage; THROTTLE collects and sleeps 1s; HALT raises
+  `MemorySafetyException`. HALT is also triggered by process RSS alone, which
+  is the independent trigger for a single runaway sweep on an otherwise idle
+  box.
+- **The halt trigger is SYSTEM-WIDE, so somebody else's process can stop your
+  sweep.** That is the intended trade — the OOM killer is system-wide too, and
+  picks its victim by a score this process does not control — but a halt is NOT
+  evidence the run was the problem. Every message carries `rss_gib` beside
+  `sys_mem_pct` so the two can be told apart.
+- **`max_rss_gib` defaults to 24.0 and is INERT on this VM**, which has 24.9
+  GiB: the 90% system threshold fires near 22.4 GiB used machine-wide, long
+  before this process alone reaches 24. The default is the specification's and
+  is right on a bigger box; `MemoryGuard.for_this_machine()` derives one that
+  binds.
+- **WARN-level `gc.collect()` is paced** (`gc_interval_s`, 2s) because the
+  sweep reaches its guard once per grid cell — 432 a chunk — and a collection
+  on a heap of million-row frames costs O(100ms). THROTTLE and HALT are never
+  paced. The FIRST warn always collects.
+- **It exits 75 (EX_TEMPFAIL), never 137.** 137 is 128 + SIGKILL, what the
+  shell reports when the OOM killer has actually killed a process — the
+  precise outcome this module prevents. Exiting 137 after halting cleanly would
+  tell every log scraper that the thing we avoided is what happened.
+- **Both runners RE-RAISE a halt past their `except Exception` handlers.** That
+  handler is right for a missing spec or an empty slice of the lake — one bad
+  contract must not end a 108-configuration screen — and exactly wrong here:
+  swallowing a halt moves to the next configuration, which allocates as much,
+  on a machine that is no emptier. Stage 2 flushes
+  `stage2_partial_<SYM>_<TF>.json` first (counts and spans, never the trade
+  frames — writing hundreds of megabytes when the box is out of memory is how a
+  graceful halt becomes an ungraceful one); Stage 1 needs no flush because it
+  already rewrites its report after every configuration.
+- **It does NOT throttle worker threads**, though the objective asked for it.
+  The heavy allocation is inside vectorbt / numba / BLAS, whose pools are sized
+  at import; setting `OMP_NUM_THREADS` afterwards does not resize an existing
+  pool, so the call would look like throttling and change nothing. The lever
+  that does exist is `--chunk-years`: fewer bars per chunk is fewer bytes per
+  step.
+- **`BT_MEMORY_GUARD=off`** disables every tier, read once per guard at
+  construction. A loaded workstation must not fail a test suite over its own
+  browser, and an operator running at 95% deliberately should say so in the
+  command they typed.
 
 **`backtest/data_loader.py`** — temporal chunking, added 2026-08-23 for
 `--symbols ALL` sweeps that OOM. `iter_temporal_chunks(source, chunk_years=2,

@@ -149,12 +149,20 @@ from __future__ import annotations
 import gc
 import math
 import resource
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator, Sequence
 
 import numpy as np
 import pandas as pd
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from backtest.memory_guard import (DEFAULT_GUARD,                # noqa: E402
+                                   MemoryGuard, MemorySafetyException)
 
 # The columns a sweep actually reads. Everything else in a lake frame is
 # carried through every slice, every copy and every chunk for nothing.
@@ -1104,6 +1112,7 @@ def iter_temporal_chunks(df_or_path: Any,
                          symbol: str | None = None,
                          tf: str | None = None,
                          min_tail_fraction: float = MIN_TAIL_FRACTION,
+                         guard: MemoryGuard | None = None,
                          ) -> Iterator[TemporalChunk]:
     """
     Yield one contract's bars as chronological blocks of `chunk_years` calendar
@@ -1130,6 +1139,21 @@ def iter_temporal_chunks(df_or_path: Any,
     `warmup_bars` accepts the string `"auto"`, which sizes the window from the
     slowest recursive indicator this module knows how to bound — see
     `auto_warmup_bars`, and read its caveats before trusting it.
+
+    EVERY CHUNK BOUNDARY IS GUARDED. `guard` defaults to
+    `backtest.memory_guard.DEFAULT_GUARD` and is enforced immediately before
+    each chunk is handed out, which is the right moment for two reasons: the
+    frame for THIS chunk has just been read and is the largest single thing
+    this function holds, and the consumer is about to allocate several times
+    that on top of it — `scan_symbol_chunked` stacks four boolean masks over
+    every grid cell. Checking after the read and before the consumer's
+    allocation is the last point where collecting still helps and halting is
+    still clean.
+
+    A halt raises `MemorySafetyException` out of the generator, which
+    propagates through the consumer's `for` loop. Pass `guard=MemoryGuard(
+    enabled=False)` for a caller that must not be interrupted, or set
+    `BT_MEMORY_GUARD=off`.
 
     THE CALLER IS RESPONSIBLE FOR USING ONLY THE PAYLOAD. Every chunk carries
     `payload_slice`, `payload_frame` and `payload_mask` for that, and the
@@ -1216,6 +1240,13 @@ def iter_temporal_chunks(df_or_path: Any,
         # consumer downstream indexes by position.
         frame = frame_raw.iloc[keep_lo:keep_hi]
         frame = frame.set_axis(pd.RangeIndex(len(frame)), axis=0)
+
+        # The chunk boundary. See the note in this function's docstring for why
+        # here rather than at the top of the loop: the read has happened, the
+        # consumer's allocation has not.
+        (guard or DEFAULT_GUARD).enforce(
+            f"data_loader.iter_temporal_chunks[{symbol or 'frame'} "
+            f"chunk {emitted + 1}/{n_planned}]")
 
         yield TemporalChunk(
             frame=frame,
