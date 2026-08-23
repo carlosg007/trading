@@ -219,7 +219,7 @@ bt-status  # = .venv/bin/python3 ~/src/trading/backtest/status.py
 streamlit run dashboard/app.py
 
 # Tests. No pytest config - each is a script that exits non-zero on failure.
-# Thirty-two suites. Everything except test_streaming_lake, test_engine_batching
+# Thirty-three suites. Everything except test_streaming_lake, test_engine_batching
 # and test_engine_vbt runs without the lake or a network (test_batch_runner's
 # --symbols checks skip, loudly, without it). test_report_gates.py shells out
 # to `node` for the trade inspector's own checks and skips them, loudly, when
@@ -228,9 +228,11 @@ streamlit run dashboard/app.py
 # case is the live-vs-cached quadrant agreement check, and is the regression
 # that would catch the live daemon and the pipeline drifting apart.
 #
-# test_regime_daemon.py is ASSERT-based, so pytest collects it case by case
-# rather than routing it to the subprocess runner. Run it directly with
-# `.venv/bin/pytest tests/test_regime_daemon.py -q`, not as a script.
+# test_regime_daemon.py and test_live_dispatcher.py are ASSERT-based, so
+# pytest collects them case by case rather than routing them to the subprocess
+# runner. Run them with `.venv/bin/pytest tests/test_live_dispatcher.py -q`,
+# not as scripts. NOTHING in test_live_dispatcher opens a socket: every case
+# runs dry, or injects a sender that fails the test if it is called.
 python tests/test_tier1.py              # intent routing, vault, synthesis errors
 python tests/test_tier2.py              # compliance, robustness, lifecycle
 python tests/test_tier3_workers.py      # worker tools, metrics, RAM ceiling
@@ -255,6 +257,7 @@ python tests/test_portfolio_manager.py  # ATR sizing, signal netting, account ro
 python tests/test_memory_guard.py       # the memory tiers, and that a halt is re-raised
 python tests/test_incubator_tracker.py  # the promotion criteria and the account move
 python tests/test_regime_daemon.py      # live regimes, the state cache, the ML gate, CrossTrade
+python tests/test_live_dispatcher.py    # the live loop: gates, netting, sizing, dispatch
 
 # `pytest tests/` is the gate. tests/conftest.py routes the script-style
 # suites (the ones with a `check()` helper, whose results pytest cannot see)
@@ -425,6 +428,18 @@ python3 realtime/regime_daemon.py            # what is wired up: anchors, models
 python3 realtime/regime_reader.py            # what is currently published
 python3 realtime/regime_reader.py --symbol NQ
 
+# THE LIVE EXECUTION LOOP. Signals -> regime gate -> ML gate -> netting and
+# ATR sizing -> CrossTrade. Reads the regime state the daemon publishes; it
+# does NOT classify. RUN --dry-run FIRST, and after any config change: it runs
+# every gate and formats every payload but opens no socket.
+python3 master_live.py --dry-run --once            # one cycle, nothing sent
+python3 master_live.py --dry-run --interval-sec 30
+python3 master_live.py --interval-sec 60           # LIVE. SENDS REAL ORDERS.
+#   --config/--state-file  the routing table and the published regime state
+#   --max-regime-age-sec   refuse a regime reading older than this
+#   --no-verify-hash       skip the meta.json SHA-256 check. Do not use this
+#                          to trade an edited module.
+
 # Rebuild the per-symbol coverage reference (writes reference/futures/coverage*.csv)
 python scripts/coverage_summary.py
 
@@ -452,6 +467,8 @@ python backtest/report.py \
 ## Architecture & Code Layout
 
 One-way dependency: `agents` → `strategies` → `backtest` → `mdlib` → lake.
+`portfolio` and `realtime` sit ABOVE `backtest` and read from it; nothing in
+`backtest/` may import from either, and `master_live.py` sits above them all.
 `data_pull` writes the lake and is the **only** place that talks to a vendor API.
 `live/dispatcher.py` is the only place that sends an order anywhere.
 
@@ -1965,6 +1982,83 @@ daemon WRITES, the reader READS, the formatter FORMATS and sends nothing.
   LIMIT defaulted to the market turns a bounded entry into an unbounded one.
   `redact()` exists because a log file outlives the session that wrote it and a
   command copied out of one is directly replayable.
+
+**`master_live.py` and `realtime/live_dispatcher.py`** — the end-to-end live
+execution loop, added 2026-08-23. `LiveExecutionDispatcher` is the pipeline
+(signals → regime gate → ML gate → netting and ATR sizing → CrossTrade);
+`master_live.py` is the CLI, the interval loop and the shutdown handling, so
+the wiring is unit-testable without a clock.
+
+- **THE PIPELINE OPENS POSITIONS AND CANNOT CLOSE THEM.** `PortfolioManager`
+  does not know what is open and never emits FLATTEN, and nothing here invents
+  the position state it would need to. An EXIT signal on the last bar is
+  COUNTED and REPORTED (`exit_signals`) and is not turned into an order, so a
+  loop run without something reconciling positions on the CrossTrade side
+  accumulates entries and never leaves. That is a deliberate stopping point:
+  closing a position this process cannot see would shut positions it never
+  opened, and the failure is silent in the direction that costs money.
+- **Two processes, one direction.** This loop does NOT classify regimes —
+  `realtime/regime_daemon.py` publishes the state file and this reads it. A
+  slow indicator pass can therefore never stall a dispatch, and the loop's view
+  of the market is a file somebody can inspect afterwards rather than a value
+  that existed for one millisecond inside a process that has exited. With no
+  state file every signal is declined, which is correct: an unknown environment
+  is not a permitted one.
+- **The regime is checked twice and the two cannot disagree.** Once per
+  (strategy, symbol) before a signal is emitted — so a decline is recorded
+  against the STRATEGY with its reason rather than disappearing into an empty
+  payload list — and once inside `build_order_plan`, which is the authoritative
+  gate. Both read the same state file through the same reader and compare
+  against the same `derived.canonical_quadrants`; removing the early one would
+  change no order. **A regime decline cannot change the net** (the gate is per
+  portfolio+symbol, so every strategy on that pair gets the same verdict), but
+  **an ML veto CAN**: vetoing one side of an opposing pair turns a position
+  that would have netted flat into a live order. `ml_vetoes` is what makes that
+  visible.
+- **`active_strategies` grants permission; `approved_incubator/` supplies the
+  code.** Being in the directory is explicitly not permission to trade. **The
+  promoted code is SHA-256 checked against its `meta.json` before it is run** —
+  that hash exists so a promoted file provably IS the file the metrics
+  describe, and a live loop that ignored it would trade an edited module under
+  a certified name. The certified `symbols` are checked too, through the same
+  micro/full-size alias: a strategy certified on ZS cannot trade MNQ because a
+  config line put them in one basket.
+- **The bar feed resolves micros to their parent.** The baskets hold
+  MNQ/MES/MCL/MGC and the lake holds only the full-size contracts, so without
+  the alias this loop reads nothing and no-ops forever — looking exactly like a
+  market with no signals. Same price series, same tick size, reconciled against
+  `backtest/specs.py`; the substitution is PRINTED, and the order is still for
+  the micro and sized on the micro's own point value.
+- **The stop multiplier when contributors disagree: the WIDEST wins.**
+  `build_order_plan` takes one `stop_atr_mult` per symbol while `sl_atr_mult`
+  belongs to a strategy, so the plan is built PER PORTFOLIO and within it the
+  widest stop is used — the tightest would over-size relative to the strategy
+  holding the wide one and breach its budget. `stop_atr_mult_source` records
+  the value, whose it was, and everything that was in contention.
+- **Retries are narrow on purpose.** A retried market order is a DUPLICATE
+  POSITION this process cannot undo, so a retry happens only when the error
+  proves nothing reached the broker (refused connection, DNS failure, no route
+  to host). **A timeout is never retried, and neither is a 5xx** — both leave
+  the outcome unknown. An unrecognised error defaults to NOT retrying, so a new
+  upstream failure mode cannot silently become a duplicate order.
+- **`--dry-run` runs every stage except the socket**: strategies loaded and
+  hash-checked, signals computed, both gates applied, positions netted and
+  sized, payloads formatted and validated. Run it first and after any config
+  change. **Live mode refuses to START without a webhook URL** rather than
+  discovering it at the first order — which on a console reads exactly like a
+  quiet market. Credentials come from `.env` (`CROSSTRADE_WEBHOOK_URL`,
+  `CROSSTRADE_API_KEY`) via a fifteen-line reader rather than a new pinned
+  dependency, and are never put into `os.environ`, where every subprocess would
+  inherit them. Only the webhook's HOST is ever printed and every logged
+  command is redacted.
+- **`live/dispatcher.py` is still the only module that sends.** This one calls
+  `send_execution_signal`, retries it under the rule above, and accepts an
+  injected sender only so the tests stay off the network.
+- **SIGINT/SIGTERM set a flag and never interrupt a cycle** — an exception
+  between the send and the print leaves an order on a broker with no line in
+  the log saying so. The cycle finishes, the sleep is skipped, and the last
+  thing on the console is always a complete cycle; a second signal exits at
+  once. No sockets are held between cycles, so there is nothing to drain.
 
 **`data_pull/`** — vendor downloaders. The only layer that touches a vendor API.
 
