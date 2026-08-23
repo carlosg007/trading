@@ -3,7 +3,7 @@
   "version": "A",
   "description": "Promoted Version A (rule-based baseline).",
   "symbols": [
-    "NQ"
+    "SI"
   ],
   "timeframe": "30m",
   "params": {
@@ -28,23 +28,23 @@
   "source": "/home/cgrullon/src/trading/strategies/experimental/ma_anchoring_spread_20260820.py",
   "source_sha256": "3c87f3720be7dd06950d86eb242f32918b3c0f0348a94641f845795c5d512f40",
   "promoted_sha256": "3c87f3720be7dd06950d86eb242f32918b3c0f0348a94641f845795c5d512f40",
-  "promoted_utc": "2026-08-23T07:45:42+00:00",
+  "promoted_utc": "2026-08-23T07:45:45+00:00",
   "costs_included": false,
   "variants_tested": null,
   "metrics_status": "NOT RECORDED",
   "metrics": null,
   "gate_audit_status": "PASS",
   "gate_audit": {
-    "gate1": "FAIL",
+    "gate1": "PASS",
     "gate2": "FAIL",
     "gate3": "PASS",
     "gate_regime": "PASS"
   },
   "certification": {
-    "audit_file": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/gate_audit_NQ_30m.json",
-    "audit_sha256": "40bb5eb99de1561243efd271729c92873dd6fa9e0a08c48ba296f0332ea96575",
-    "audit_symbol": "NQ",
-    "audit_generated_utc": "2026-08-23T07:32:44+00:00",
+    "audit_file": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/gate_audit_SI_30m.json",
+    "audit_sha256": "26e6f5f6e2beb45fc20aaa5dd413297a7cb7da5fc65598a8b8b50c351ba4cc89",
+    "audit_symbol": "SI",
+    "audit_generated_utc": "2026-08-23T07:33:47+00:00",
     "in_sample": {
       "start": "2013-01-01",
       "end": "2022-12-31"
@@ -55,14 +55,14 @@
       "end_basis": "the present - every bar the lake holds"
     },
     "params": {
-      "fast_window": 21,
-      "slow_window": 200,
-      "spread_threshold": 0.01,
-      "sl_atr_mult": 1.5,
+      "fast_window": 30,
+      "slow_window": 100,
+      "spread_threshold": 0.025,
+      "sl_atr_mult": 2.0,
       "tp_atr_mult": 3.0,
       "trailing": true
     },
-    "params_source": "stage 2 winner (best_params_NQ_30m.json)",
+    "params_source": "stage 2 winner (best_params_SI_30m.json)",
     "variants_tested": 270,
     "wfo": {
       "train_years": 2,
