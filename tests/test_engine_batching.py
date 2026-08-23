@@ -68,8 +68,44 @@ def check(name: str, ok: bool, detail: str = "") -> None:
         FAILURES.append(name)
 
 
+# The peak-RSS primitive, and why it is not `ru_maxrss`.
+#
+# `resource.getrusage().ru_maxrss` is a HIGH-WATER MARK FOR THE WHOLE PROCESS
+# THAT NEVER FALLS. `test_memory_actually_drops` tried to work around that by
+# running the chunked pass first "in a clean process", but by the time it runs
+# the earlier cases in this file have already banked a much higher peak — so
+# both of its deltas measured +0.000 GiB and `chunked < whole` could not hold
+# whatever the engine did. The check failed for years against correct code,
+# which is worse than not having it: a check that cannot pass teaches a reader
+# to ignore a red line.
+#
+# Linux exposes the same peak as `VmHWM` in /proc/self/status, and — this is
+# the part that makes the measurement possible — writing "5" to
+# /proc/self/clear_refs RESETS it. So each pass can be measured against a peak
+# that starts at the current footprint instead of at whatever the process has
+# ever touched. Verified on this kernel: a 240 MiB allocation took VmHWM to
+# 0.259 GiB, the reset dropped it to 0.035, and a subsequent 48 MiB allocation
+# took it to 0.080 — tracking the new peak alone.
 def rss_gib() -> float:
+    """Current peak RSS in GiB, from VmHWM where it exists."""
+    try:
+        for line in Path("/proc/self/status").read_text().splitlines():
+            if line.startswith("VmHWM:"):
+                return int(line.split()[1]) / 1024**2
+    except OSError:
+        pass
+    # Not Linux. Falls back to the monotonic counter, which `peak_reset_works`
+    # below reports as unusable rather than letting it produce a silent zero.
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024**2
+
+
+def reset_peak_rss() -> bool:
+    """Reset the kernel's peak-RSS watermark. False where unsupported."""
+    try:
+        Path("/proc/self/clear_refs").write_text("5")
+    except OSError:
+        return False
+    return True
 
 
 def same_trades(a: pd.DataFrame, b: pd.DataFrame, label: str) -> None:
@@ -214,12 +250,26 @@ def test_memory_actually_drops() -> None:
     """
     Batching has to pay for its complexity in RAM.
 
-    Peak RSS is a high-water mark for the whole process, so this runs the
-    chunked pass FIRST in a clean process - if it ran second, the unchunked
-    peak would already be banked and the comparison would be meaningless.
+    Peak RSS is a high-water mark, so each pass is measured against a peak that
+    has been RESET immediately before it — see `rss_gib` and `reset_peak_rss`.
+    Ordering alone was not enough: this file allocates in the cases above, so
+    both deltas read +0.000 GiB and the comparison could not fail or pass on
+    anything the engine did.
+
+    The chunked pass still runs first, which is now belt and braces rather than
+    the mechanism.
+
+    SKIPS LOUDLY where the peak cannot be reset (anything that is not Linux).
+    A measurement that cannot be taken is reported as one that was not taken,
+    never as a pass.
     """
     print("\n[4] peak RSS, chunked vs unchunked (largest single symbol)")
     from mdlib.lake import get_bars
+
+    if not reset_peak_rss():
+        print("    SKIPPED: /proc/self/clear_refs is unavailable, so the peak "
+              "cannot be reset and a delta would measure the whole process")
+        return
 
     bars = get_bars(["GC"], "1m", "2016-01-01", END).reset_index(drop=True)
     n = len(bars)
@@ -229,16 +279,18 @@ def test_memory_actually_drops() -> None:
     entries, exits = clean_signals(entries, exits)
     gc.collect()
 
+    reset_peak_rss()
     base = rss_gib()
     _simulate(bars, entries, exits, "GC", BacktestConfig(chunk_size=100_000))
-    gc.collect()
     chunked_peak = rss_gib() - base
+    gc.collect()
     print(f"    {n:,} bars  |  chunked peak +{chunked_peak:.3f} GiB")
 
+    reset_peak_rss()
     mid = rss_gib()
     _simulate(bars, entries, exits, "GC", BacktestConfig(chunk_size=0))
-    gc.collect()
     whole_peak = rss_gib() - mid
+    gc.collect()
     print(f"    {n:,} bars  |  unchunked peak +{whole_peak:.3f} GiB")
 
     check("chunking reduced peak memory", chunked_peak < whole_peak,
