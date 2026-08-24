@@ -372,8 +372,14 @@ python3 backtest/discord_reporter.py --stage 1 --strat X
 python3 backtest/discord_reporter.py --stage 2 --strat X
 # Stage 3's gate-audit & certification card, read from
 # stage3_audit_summary.json: both windows, the target quadrant, Gate R, the
-# IS/OOS profit factors and the SHA-256 seal.
+# IS/OOS profit factors and the SHA-256 seal. With no flag it takes that
+# summary, and every gate_audit_<SYMBOL>_<TF>.json in the directory when there
+# is none. --audit takes EITHER shape; --summary takes the index alone.
 python3 backtest/discord_reporter.py --stage 3 --strat X
+python3 backtest/discord_reporter.py --stage 3 --strat X \
+    --audit /mnt/backtest/artifacts/pipeline/X/gate_audit_NQ_1h.json
+python3 backtest/discord_reporter.py --stage 3 --strat X \
+    --summary /mnt/backtest/artifacts/pipeline/X/stage3_audit_summary.json
 # Stage 4's full-lifecycle card, read from the dual_metrics_<SYMBOL>.json
 # snapshots in ONE run's artifacts directory: CAGR, net P&L, total trades, the
 # friction share and the top regime's alpha score, per contract. It certifies
@@ -1853,7 +1859,7 @@ Stage 1's regime-firewall leaderboard, read straight out of
 `surviving_assets.json`; `--stage 2` / `--mode scan` is Stage 2's parameter
 optimization summary, read straight out of `stage2_summary.json`; `--stage 3` /
 `--mode audit` is Stage 3's gate audit and certification, read straight out of
-`stage3_audit_summary.json`; `--stage 4` / `--mode verify` is Stage 4's
+`stage3_audit_summary.json` or out of a single `gate_audit_<SYMBOL>_<TF>.json`; `--stage 4` / `--mode verify` is Stage 4's
 full-lifecycle summary, read straight out of the `dual_metrics_<SYMBOL>.json`
 snapshots in one run's artifacts directory.
 
@@ -1976,6 +1982,35 @@ snapshots in one run's artifacts directory.
   on the card and in the success line, so a defaulted choice is never a silent
   one. Stage 4 prints the exact command with `--artifacts` filled in.
 
+- **The Stage 3 card reads EITHER of Stage 3's two on-disk shapes (2026-08-24),
+  and the file named by hand always wins.** `stage3_audit_summary.json` is the
+  campaign INDEX; `gate_audit_<SYMBOL>_<TF>.json` is the AUTHORITATIVE verdict
+  for one pair and the file Stage 3 writes FIRST — the summary is transcribed
+  from it. `--summary` takes the index and REFUSES a pair audit rather than
+  adapting it; `--audit` takes either, discriminated on CONTENT (`results`
+  versus `versions`) and never on the filename, because that is the flag every
+  existing Stage 3 command already spells. With neither, the index is preferred
+  and EVERY suffixed per-pair audit in the directory is the fallback — only the
+  suffixed ones, since the unsuffixed `gate_audit_<SYMBOL>.json` duplicates
+  whichever timeframe ran last, and never just one of them, because picking one
+  announces a single certification while the rest sit on disk unread. Before
+  this the card could only read the index, so a finished
+  `audit_gates.py --strat X --tf 1h` whose summary was missing, stale or
+  flattened by the pre-merge overwrite posted nothing at all. Whatever it
+  resolved to is named on the card and in the success line, and nothing on disk
+  names both files it looked for rather than posting an empty card.
+  `stage3_rows_from_audit` is a pure TRANSCRIPTION into the same row shape,
+  under the same field names, that `audit_gates.write_stage3_summary` writes —
+  deliberately not imported from there, because `backtest.audit_gates` pulls in
+  the engine and `vectorbtpro` and a notifier that cannot post because the
+  simulation stack failed to import is a quiet pipeline.
+  `tests/test_stage3_charter.py` hands both builders the same audit and
+  requires an identical row, field for field, which is what stops the two
+  transcriptions drifting. Windows that DISAGREE across assembled pairs (an
+  explicit `--holdout-end` beside one that defaulted to the present) print
+  `varies by pair` rather than the first file's, and `coverage` says its counts
+  describe the audits READ and not the campaign Stage 3 was asked to certify —
+  a pair whose audit raised wrote no file and cannot appear.
 - **The Stage 3 card carries the whole claim per configuration**: the strategy,
   BOTH windows (in-sample, so a reader knows what the parameters were fitted
   to, and the holdout, which is the verdict — an open end prints as `present`),

@@ -312,14 +312,18 @@ REPO = Path(__file__).resolve().parent.parent
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from backtest.pipeline import (STAGE2_SUMMARY_FILE,               # noqa: E402
-                               STAGE3_SUMMARY_FILE, SURVIVORS_FILE,
+from backtest.pipeline import (GATE_AUDIT_FILE,                    # noqa: E402
+                               STAGE2_SUMMARY_FILE, STAGE3_SUMMARY_FILE,
+                               STAGE_NAMES, SURVIVORS_FILE,
                                pipeline_dir, read_stage)
 # The one place `strategies/approved_incubator/` is spelled out is
 # `backtest/promote.py`, which creates it. A second copy of that path here
 # would be free to point somewhere else after a move, and the symptom is a
 # promotion card that silently resolves nothing.
-from backtest.promote import INCUBATOR                            # noqa: E402
+# `sha256` comes from there too: the pair-audit adapter below records the
+# digest of the audit it transcribed, exactly as Stage 3's own summary does,
+# and a second implementation of a hash is a second thing that can disagree.
+from backtest.promote import INCUBATOR, sha256                    # noqa: E402
 
 # Emerald green. Discord wants a decimal int; 0x2ECC71 == 3066993.
 EMERALD_GREEN = 0x2ECC71
@@ -509,6 +513,14 @@ PROMO_COMMAND_FIELD = "\u25B6 Promote all certified · one command"
 # The tokens Stage 3 records per configuration.
 CERTIFIED = "PASS"
 NOT_AUDITED = "NOT AUDITED"
+# A gate the run never reached. NOT a pass, and deliberately a different token
+# from NOT AUDITED: "the bootstrap was not run" and "the audit raised" are
+# fixed by different work, and one token for both hides which happened.
+NOT_EVALUATED = "NOT EVALUATED"
+# What Gate R is called inside a `gate_audit_<SYMBOL>_<TF>.json`'s `gates`
+# block, and what the summary row that transcribes it is called. One spelling,
+# because the adapter reads the first and writes the second.
+GATE_R_KEY = "gate_regime"
 
 # The Stage 1 handoff, and the two words it records per configuration.
 PROMOTED = "PROMOTED"
@@ -2219,6 +2231,300 @@ def stage3_rows(blob: dict[str, Any]) -> list[dict[str, Any]]:
     return list(blob.get("results") or [])
 
 
+# --------------------------------------------------------------------------
+# Stage 3 has TWO inputs on disk, and they are different shapes.
+#
+# `stage3_audit_summary.json` is the campaign INDEX: one `results` row per
+# (configuration, version) across every timeframe the campaign certified.
+# `gate_audit_<SYMBOL>_<TF>.json` is the AUTHORITATIVE verdict for ONE pair,
+# and it is the file Stage 3 writes first - the summary is transcribed from
+# it. A pair audit therefore holds every value this card prints, and a card
+# that could only read the index announced nothing at all whenever the index
+# was missing, stale, or flattened by the pre-merge overwrite. That is the
+# common case straight after a single `audit_gates.py --strat X --tf 1h` run.
+#
+# Both are read through `pipeline.read_stage`, which refuses another stage's
+# file and another strategy's, and both are TRANSCRIBED - the row builder
+# below re-derives no verdict, exactly as `audit_gates.write_stage3_summary`
+# transcribes the same fields when it writes the index. It is deliberately not
+# imported from there: `backtest.audit_gates` pulls in the engine and
+# vectorbtpro, and a notifier that cannot post a card because the simulation
+# stack failed to import is a quiet pipeline. `tests/test_stage3_charter.py`
+# pins the two builders against each other field for field, which is what
+# stops the transcription drifting.
+# --------------------------------------------------------------------------
+
+def is_pair_audit(blob: dict[str, Any]) -> bool:
+    """
+    True for a `gate_audit_<SYMBOL>_<TF>.json`, False for the summary index.
+
+    Discriminated on CONTENT and never on the filename: an operator naming a
+    file by hand can point `--audit` at either, and a renamed copy of one is
+    still the shape it is. `results` is the summary's rows and `versions` is
+    the pair audit's per-version blocks; neither file carries the other's key.
+    """
+    return "results" not in blob and bool(blob.get("versions"))
+
+
+def _gate_status(gates: dict[str, Any], name: str) -> str:
+    """One gate's recorded status, or `NOT EVALUATED` when it holds none."""
+    return str((gates.get(name) or {}).get("status") or NOT_EVALUATED)
+
+
+def stage3_rows_from_audit(blob: dict[str, Any],
+                           path: str | Path | None = None
+                           ) -> list[dict[str, Any]]:
+    """
+    One pair audit as the summary rows Stage 3 would have written for it.
+
+    A pure transcription, field for field, in the SAME shape and under the
+    same names `audit_gates.write_stage3_summary` uses - so everything
+    downstream of `stage3_rows` (the table, the sort, the promotion block, the
+    counters) reads a pair audit and the index identically, and a card built
+    from one cannot say something different from a card built from the other.
+
+    One row per VERSION, because a pair audit can carry Version A and Version
+    B and they reach separate verdicts; `sorted` so A precedes B whatever
+    order the file stored them in.
+
+    The top-level `status` / `passed` maps are preferred and the per-version
+    `gate_audit` block is the fallback, which is where `certify_symbol` lifted
+    them from in the first place - reading it is the same field one level
+    down, not a second opinion.
+    """
+    path = Path(path) if path else None
+    versions = blob.get("versions") or {}
+    status = blob.get("status") or {}
+    passed = blob.get("passed") or {}
+    incubator = blob.get("incubator") or {}
+    exclude_days = list((blob.get("entry_filters") or {})
+                        .get("exclude_days") or [])
+
+    rows: list[dict[str, Any]] = []
+    for ver in sorted(versions):
+        block = versions[ver] or {}
+        audit = block.get("gate_audit") or {}
+        gates = audit.get("gates") or {}
+        gate_r = gates.get(GATE_R_KEY) or {}
+        measured = gate_r.get("measured") or {}
+        retention = (block.get("retention") or {}).get("metrics") or {}
+        staged = incubator.get(ver) or {}
+        rows.append({
+            "symbol": blob.get("symbol"),
+            "timeframe": blob.get("timeframe"),
+            "version": ver,
+            "status": status.get(ver, audit.get("status", NOT_EVALUATED)),
+            # Gate R's own flag, never re-read off the numbers beside it.
+            "certified": bool(passed.get(ver, audit.get("passed"))),
+            "target_regime": blob.get("target_regime"),
+            "quadrant": blob.get("target_quadrant"),
+            "gate_regime": _gate_status(gates, GATE_R_KEY),
+            # Gate R's quadrant numbers, on the holdout. NOT the blended
+            # sample - the two `profit_factor` fields below say which is which
+            # rather than leaving one name to be read as either.
+            "oos_profit_factor": measured.get("profit_factor"),
+            "oos_trade_count": measured.get("trade_count"),
+            "oos_win_rate": measured.get("win_rate"),
+            "is_profit_factor": (retention.get("profit_factor")
+                                 or {}).get("in_sample"),
+            "holdout_profit_factor": (retention.get("profit_factor")
+                                      or {}).get("holdout"),
+            "retention": {k: (v or {}).get("retention")
+                          for k, v in retention.items()},
+            "gate1": _gate_status(gates, "gate1"),
+            "gate2": _gate_status(gates, "gate2"),
+            "gate3": _gate_status(gates, "gate3"),
+            # Present only when Gate R failed on the TRADE COUNT. `None` says
+            # the quadrant was not starved, which is a different statement
+            # from a pass - `status` above is what says that.
+            "regime_starvation": (gate_r.get("regime_starvation")
+                                  or {}).get("message"),
+            "params": blob.get("params") or {},
+            "params_locked": bool(blob.get("params_locked")),
+            "in_stage1": bool(blob.get("in_stage1", True)),
+            "exclude_days": exclude_days,
+            "audit_file": str(path) if path else None,
+            "audit_sha256": (sha256(path) if path and path.exists()
+                             else "NOT AVAILABLE"),
+            "incubator_dir": (str(staged["dir"]) if staged.get("dir")
+                              else None),
+            "incubator_error": staged.get("error") or "",
+            "seal": staged.get("seal") or None,
+            "error": "",
+        })
+    return rows
+
+
+def _agreed(blocks: list[dict[str, Any]], key: str) -> dict[str, Any]:
+    """
+    One window (`in_sample` / `holdout`) shared by every audit read, or the
+    disagreement stated in the value itself.
+
+    Several pair audits assembled into one card can genuinely disagree here -
+    a run given an explicit `--holdout-end` and one that defaulted to the
+    present record different ends over the same bars. Printing the first
+    file's window above rows measured on another's would misdescribe the
+    verdict; `varies by pair` renders in the same slot and is true.
+    """
+    seen = [b.get(key) or {} for b in blocks]
+    first = seen[0] if seen else {}
+    if all(w == first for w in seen):
+        return first
+    return {"start": "varies by pair", "end": "varies by pair"}
+
+
+def stage3_blob_from_audits(
+        audits: list[tuple[dict[str, Any], Path]]) -> dict[str, Any]:
+    """
+    One or more pair audits assembled into the summary shape the card reads.
+
+    It INDEXES; it does not certify. Every row is transcribed by
+    `stage3_rows_from_audit` and every count below is a count of those rows,
+    so this can never announce a verdict no `gate_audit_<SYMBOL>_<TF>.json`
+    recorded.
+
+    `coverage.targets` is the number of audits READ, which is not the number
+    Stage 3 was asked to certify - a pair whose audit raised wrote no file at
+    all, so it cannot appear here. `coverage.rule` says so on the card rather
+    than leaving a complete-looking count to be read as the campaign's.
+    """
+    blobs = [b for b, _ in audits]
+    rows = [row for blob, path in audits
+            for row in stage3_rows_from_audit(blob, path)]
+    tfs: list[str] = []
+    for row in rows:
+        tf = str(row.get("timeframe") or "")
+        if tf and tf not in tfs:
+            tfs.append(tf)
+    audited = [r for r in rows
+               if str(r.get("status") or "").upper() != NOT_AUDITED]
+    certified = [r for r in rows if r.get("certified")]
+    first = blobs[0] if blobs else {}
+    return {
+        "stage": 3,
+        "stage_name": STAGE_NAMES.get(3, "GATE AUDIT · certification"),
+        "strategy": first.get("strategy"),
+        "generated_utc": first.get("generated_utc"),
+        # Absent on a pair audit. Left absent rather than guessed at: the
+        # promotion command prints a visible placeholder for a missing
+        # `--source`, which fails loudly, where a path this module invented
+        # would promote whatever happens to sit at it.
+        "strategy_source": first.get("strategy_source"),
+        "in_sample": _agreed(blobs, "in_sample"),
+        "holdout": _agreed(blobs, "holdout"),
+        # The thresholds Gate R was held to, from the audits themselves. They
+        # are module constants, so the first file's block describes them all;
+        # the card holds no configuration to a bar its own audit did not use.
+        "certification_rule": first.get("certification_rule") or {},
+        "prop_firm_rules": first.get("prop_firm_rules") or {},
+        "timeframe": tfs[-1] if tfs else None,
+        "timeframes": tfs,
+        "coverage": {
+            "targets": len(rows),
+            "audited": len(audited),
+            "certified": len(certified),
+            "errors": 0,
+            "skipped": 0,
+            "complete": True,
+            "timeframes": tfs,
+            "rule": ("assembled from the per-pair gate audits on disk, which "
+                     "are the authoritative verdicts. A configuration whose "
+                     "audit RAISED wrote no file and cannot appear here, so "
+                     "these counts describe the audits read and not the "
+                     "campaign Stage 3 was asked to certify."),
+        },
+        "audits": [{"path": str(path), "timeframe": blob.get("timeframe"),
+                    "symbol": blob.get("symbol"),
+                    "status": blob.get("status") or {}}
+                   for blob, path in audits],
+        "results": rows,
+        "source_kind": "per-pair gate audit(s)",
+    }
+
+
+def discover_pair_audits(strat: str, out_dir: str | None = None) -> list[Path]:
+    """
+    The `gate_audit_<SYMBOL>_<TF>.json` files in the strategy's pipeline
+    directory, in a stable order.
+
+    **Only the SUFFIXED files.** The unsuffixed `gate_audit_<SYMBOL>.json` is
+    a duplicate of whichever timeframe ran last, and reading both would index
+    one verdict twice under two names - the same rule
+    `audit_gates.rebuild_stage3_summary` reads them by.
+
+    **Every one of them, never the newest.** A campaign leaves one audit per
+    (symbol, timeframe); picking one would announce a single certification
+    while the others sat on disk unread, which is precisely the failure the
+    summary's cross-timeframe merge exists to prevent.
+    """
+    glob = GATE_AUDIT_FILE.format(symbol="*")
+    return sorted(p for p in pipeline_dir(strat, out_dir).glob(glob)
+                  if GATE_AUDIT_NAME.match(p.name))
+
+
+def resolve_stage3_input(strat: str, audit: str | Path | None = None,
+                         summary: str | Path | None = None,
+                         out_dir: str | None = None
+                         ) -> tuple[dict[str, Any], Path, str]:
+    """
+    What the Stage 3 card is built from: `(blob, source, what)`.
+
+    Three routes, and the file named by hand always wins:
+
+    * `--summary` is the campaign index, and only the index. A pair audit
+      handed to it is REFUSED rather than adapted - the flag names one shape
+      and silently accepting the other makes the two words mean nothing.
+    * `--audit` takes EITHER, discriminated on content by `is_pair_audit`,
+      because that is the flag every existing Stage 3 command already spells
+      and an operator pointing it at a single verdict means that verdict.
+    * With neither, the index is preferred (it spans the whole campaign) and
+      the per-pair audits are the fallback (they are the authoritative
+      verdicts, and they exist whenever a Stage 3 run finished at all).
+
+    A path named explicitly and missing RAISES; one this went looking for on
+    its own is reported with what it looked for, because "no certification has
+    run" and "I was pointed at the wrong directory" are fixed by different
+    work.
+    """
+    if audit and summary:
+        raise ValueError(
+            "--audit and --summary name the same input twice. Pass --summary "
+            f"for {STAGE3_SUMMARY_FILE}, or --audit for it or for a single "
+            f"{GATE_AUDIT_FILE.format(symbol='<SYMBOL>_<TF>')}.")
+
+    if summary:
+        path = Path(summary)
+        blob = load_stage3(path, strat)
+        if is_pair_audit(blob):
+            raise ValueError(
+                f"--summary {path.name} is a per-pair gate audit, not "
+                f"{STAGE3_SUMMARY_FILE}. Pass it with --audit.")
+        return blob, path, "campaign summary"
+
+    if audit:
+        path = Path(audit)
+        blob = load_stage3(path, strat)
+        if is_pair_audit(blob):
+            return (stage3_blob_from_audits([(blob, path)]), path,
+                    "one per-pair gate audit")
+        return blob, path, "campaign summary"
+
+    path = default_audit_summary_path(strat, out_dir)
+    if path.exists():
+        return load_stage3(path, strat), path, "campaign summary"
+
+    found = discover_pair_audits(strat, out_dir)
+    if not found:
+        raise FileNotFoundError(
+            f"No Stage 3 handoff under {pipeline_dir(strat, out_dir)}: "
+            f"neither {STAGE3_SUMMARY_FILE} nor any "
+            f"{GATE_AUDIT_FILE.format(symbol='<SYMBOL>_<TF>')}. Run "
+            f"`python3 backtest/audit_gates.py --strat {strat} --tf <TF>` "
+            f"first, or name the file with --audit.")
+    audits = [(load_stage3(p, strat), p) for p in found]
+    return (stage3_blob_from_audits(audits), pipeline_dir(strat, out_dir),
+            f"{len(audits)} per-pair gate audit(s)")
+
 def _seal_prefix(row: dict[str, Any], key: str = "strategy_code") -> str:
     """
     One of a configuration's seals, shortened.
@@ -3420,7 +3726,8 @@ def build_parser() -> argparse.ArgumentParser:
             "                     --report, --audit-file and --metrics)\n"
             "  --stage 1          --strat X [--survivors <surviving_assets.json>]\n"
             "  --stage 2          --strat X [--summary <stage2_summary.json>]\n"
-            "  --stage 3          --strat X [--audit <stage3_audit_summary.json>]\n"
+            "  --stage 3          --strat X [--audit <stage3_audit_summary.json\n"
+            "                     | gate_audit_<SYMBOL>_<TF>.json>]\n"
             "  --stage 4          --strat X [--artifacts <verify_<stamp>/>]"
         ),
     )
@@ -3457,13 +3764,18 @@ def build_parser() -> argparse.ArgumentParser:
                              "(default: <BT_ARTIFACTS>/pipeline/<strat>/"
                              f"{SURVIVORS_FILE})")
     parser.add_argument("--summary", default=None,
-                        help="scan mode: path to stage2_summary.json "
-                             "(default: <BT_ARTIFACTS>/pipeline/<strat>/"
-                             f"{STAGE2_SUMMARY_FILE})")
+                        help=f"scan mode: path to {STAGE2_SUMMARY_FILE}. "
+                             f"audit mode: path to {STAGE3_SUMMARY_FILE} - "
+                             f"the campaign index ONLY; a single per-pair "
+                             f"gate audit is passed with --audit (default: "
+                             f"<BT_ARTIFACTS>/pipeline/<strat>/<that file>)")
     parser.add_argument("--audit", default=None,
-                        help="audit mode: path to stage3_audit_summary.json "
-                             "(default: <BT_ARTIFACTS>/pipeline/<strat>/"
-                             f"{STAGE3_SUMMARY_FILE})")
+                        help=f"audit mode: {STAGE3_SUMMARY_FILE}, or ONE "
+                             f"{GATE_AUDIT_FILE.format(symbol='<SYMBOL>_<TF>')}"
+                             f" - whichever it is told, read as what it is. "
+                             f"Default: {STAGE3_SUMMARY_FILE} under "
+                             f"<BT_ARTIFACTS>/pipeline/<strat>/, else every "
+                             f"per-pair gate audit in that directory")
     parser.add_argument("--artifacts", default=None,
                         help="verify mode: the Stage 4 run's artifacts "
                              "directory, holding its "
@@ -3600,9 +3912,14 @@ def _build_card(args: argparse.Namespace) -> tuple[dict[str, Any], str]:
                        f"({done}/{len(rows)} optimised)")
 
     if mode == "audit":
-        path = Path(args.audit) if args.audit else \
-            default_audit_summary_path(args.strat, args.out_dir)
-        blob = load_stage3(path, args.strat)
+        # EITHER shape, and the file named by hand always wins - see
+        # `resolve_stage3_input`. `--audit` takes the campaign summary or a
+        # single `gate_audit_<SYMBOL>_<TF>.json`; `--summary` takes the
+        # summary alone; with neither, the index is preferred and the per-pair
+        # audits are the fallback. Whatever it resolved to is named on the
+        # card and in the success line, so a defaulted choice is never silent.
+        blob, path, what = resolve_stage3_input(
+            args.strat, args.audit, args.summary, args.out_dir)
         embed = build_stage3_embed(args.strat, blob, source=path,
                                    max_rows=(args.max_rows
                                              if args.max_rows is not None
@@ -3613,7 +3930,7 @@ def _build_card(args: argparse.Namespace) -> tuple[dict[str, Any], str]:
         # free to announce a pass the audit did not record.
         passed = sum(1 for r in rows if r.get("certified"))
         return embed, (f"Stage 3 certification '{args.strat}' "
-                       f"({passed}/{len(rows)} certified)")
+                       f"({passed}/{len(rows)} certified, from {what})")
 
     if mode == "verify":
         # The DIRECTORY is the input here, not a handoff file: Stage 4 writes

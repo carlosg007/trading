@@ -1215,6 +1215,206 @@ def test_promotion_section(blob: dict) -> None:
           not l3 and not p3)
 
 
+# --------------------------------------------------------------------------
+# 14. The card's TWO inputs: the campaign index and a single per-pair audit
+# --------------------------------------------------------------------------
+def _full_pair_audit(d: Path, symbol: str, tf: str, status: str,
+                     pf: float = 1.22, n: int = 387) -> Path:
+    """
+    A `gate_audit_<SYMBOL>_<TF>.json` with everything Stage 3 puts on one:
+    the measured quadrant numbers, the retention block, the entry filters and
+    the incubator seal. `_audit_for` above is deliberately minimal (it exists
+    to be sealed); the reporter's adapter has to survive a full one.
+    """
+    audit = {"status": status, "passed": status == PASS,
+             "gates": {"gate1": {"status": FAIL}, "gate2": {"status": PASS},
+                       "gate3": {"status": PASS},
+                       GATE_R: {"status": status, "quadrant": "Q2",
+                                "target_regime": HV_RANGING,
+                                "regime_starvation": None,
+                                "measured": {"profit_factor": pf,
+                                             "trade_count": n,
+                                             "win_rate": 53.75,
+                                             "net_pnl": 96912.54}}}}
+    return write_stage(d / GATE_AUDIT_FILE.format(symbol=f"{symbol}_{tf}"),
+                       3, "demo", {
+        "symbol": symbol, "timeframe": tf,
+        "params": {"t3_period": 5, "sl_atr_mult": 2.0, "tp_atr_mult": None},
+        "params_locked": True, "variants_tested": 162,
+        "target_regime": HV_RANGING, "target_quadrant": "Q2",
+        "in_sample": {"start": CHARTER_IS_START, "end": CHARTER_IS_END},
+        "holdout": {"start": HOLDOUT_START, "end": "2026-01-01"},
+        "entry_filters": {"news_filter": False, "exclude_days": [0]},
+        "certification_rule": {"verdict_gate": GATE_R,
+                               "min_profit_factor": MIN_REGIME_PROFIT_FACTOR,
+                               "min_trades": MIN_REGIME_TRADES,
+                               "aggregate_gates_are_advisory": True},
+        "prop_firm_rules": {"applied": False},
+        "versions": {"A": {
+            "gate_audit": audit,
+            "retention": retention_scores(
+                {"profit_factor": 1.06, "sharpe": 0.40,
+                 "max_drawdown_pct": -49.6, "win_rate": 52.0},
+                {"profit_factor": 1.13, "sharpe": 0.90,
+                 "max_drawdown_pct": -29.0, "win_rate": 53.8}),
+        }},
+        "status": {"A": status}, "passed": {"A": status == PASS},
+        "incubator": {"A": {"promoted": status == PASS,
+                            "dir": str(d / "inc" / "demo"),
+                            "seal": {"strategy_code": {"sha256": "a" * 64},
+                                     "winning_parameters":
+                                         {"sha256": "b" * 64}},
+                            "error": ""}},
+    })
+
+
+def test_pair_audit_ingestion(tmp: Path) -> None:
+    print("\n14. A single gate_audit_<SYMBOL>_<TF>.json builds the same card "
+          "as the summary")
+
+    d = tmp / "pair"
+    d.mkdir(parents=True, exist_ok=True)
+    path = _full_pair_audit(d, "NQ", "1h", PASS)
+    blob = json.loads(path.read_text())
+
+    check("a per-pair audit is recognised as one, on CONTENT and not on the "
+          "filename - an operator can point --audit at either shape",
+          dr.is_pair_audit(blob) is True)
+
+    # ------------------------------------------------------------------
+    # THE DRIFT PIN. Both builders are handed the SAME file and must produce
+    # the same row: `audit_gates.write_stage3_summary` writes the index and
+    # `discord_reporter.stage3_rows_from_audit` reads a pair audit directly,
+    # and the reporter cannot import the first (it pulls in the engine and
+    # vectorbtpro, and a notifier that dies on the simulation stack is a quiet
+    # pipeline). Two transcriptions of one file are two things that can
+    # disagree, and a card that disagreed with the index would announce a
+    # verdict Stage 3 never wrote.
+    # ------------------------------------------------------------------
+    summary = json.loads(write_stage3_summary(
+        "demo", d, [audit_to_result(blob, path)], [], [], _Args(),
+        [{"symbol": "NQ", "timeframe": "1h"}], "test").read_text())
+    want = summary["results"][0]
+    got = dr.stage3_rows_from_audit(blob, path)[0]
+    diff = {k: (want.get(k), got.get(k)) for k in set(want) | set(got)
+            if want.get(k) != got.get(k)}
+    check("the reporter's adapter and Stage 3's own summary writer produce "
+          "an IDENTICAL row from one audit - field for field, same names",
+          not diff and set(want) == set(got), str(diff)[:300])
+
+    rows = dr.stage3_rows_from_audit(blob, path)
+    check("one row per VERSION, since A and B reach separate verdicts",
+          len(rows) == 1 and rows[0]["version"] == "A")
+    check("Gate R's quadrant numbers are transcribed, not re-derived",
+          rows[0]["oos_profit_factor"] == 1.22
+          and rows[0]["oos_trade_count"] == 387
+          and rows[0]["gate_regime"] == PASS)
+    check("...and the certification flag is the audit's own `passed`",
+          rows[0]["certified"] is True)
+    check("the audit is hashed into the row, so a card cannot drift from the "
+          "verdict it points at", len(rows[0]["audit_sha256"]) == 64)
+
+    # The card itself.
+    assembled = dr.stage3_blob_from_audits([(blob, path)])
+    embed = dr.build_stage3_embed("demo", assembled, source=path)
+    fields = {f["name"]: f["value"] for f in embed["fields"]}
+    table = embed["description"].split("```")[1]
+    row = [ln for ln in table.splitlines() if ln.startswith("NQ")]
+    check("the card renders the ONE configuration as a one-row leaderboard",
+          len(row) == 1, table)
+    cells = row[0].split() if row else []
+    check("...carrying SYM TF QD GATE R PF N STATUS",
+          cells == ["NQ", "1h", "Q2", "PASS", "1.22", "387", "CERTIFIED"],
+          str(cells))
+    check("Audited counts the audit that was read", fields["Audited"] == "1/1",
+          fields["Audited"])
+    check("Certified -> Incubator is Gate R's own flag",
+          fields["Certified \u2192 Incubator"] == "1")
+    check("Configurations is 1, not a campaign's count",
+          fields["Configurations"] == "1")
+    check("the timeframe is the audit's, never the module's declaration",
+          fields["Timeframe"] == "`1h`", fields["Timeframe"])
+    check("both windows come off the audit itself",
+          f"{CHARTER_IS_START}" in embed["description"]
+          and "2026-01-01" in embed["description"])
+    check("coverage says what these counts DESCRIBE - the audits read, not "
+          "the campaign Stage 3 was asked to certify",
+          "cannot appear here" in assembled["coverage"]["rule"])
+
+    # A FAILED pair audit is still a card, and it certifies nothing.
+    bad = _full_pair_audit(d, "ES", "1h", FAIL, pf=0.81, n=120)
+    fail_blob = json.loads(bad.read_text())
+    fail_rows = dr.stage3_rows_from_audit(fail_blob, bad)
+    check("a Gate R FAIL is transcribed as one and certifies nothing",
+          fail_rows[0]["gate_regime"] == FAIL
+          and fail_rows[0]["certified"] is False)
+    fail_embed = dr.build_stage3_embed(
+        "demo", dr.stage3_blob_from_audits([(fail_blob, bad)]), source=bad)
+    check("...and its card carries the no-rows note rather than a table of "
+          "one uncertified row, which is what the filter is for",
+          dr.STAGE3_NO_ROWS_NOTE in fail_embed["description"])
+
+
+def test_stage3_input_resolution(tmp: Path) -> None:
+    print("\n15. Which file the Stage 3 card is built from")
+
+    d = tmp / "resolve"
+    d.mkdir(parents=True, exist_ok=True)
+    pair = _full_pair_audit(d, "NQ", "1h", PASS)
+    _full_pair_audit(d, "NQ", "30m", PASS, pf=1.09, n=1077)
+    # The unsuffixed duplicate of whichever timeframe ran last. It must never
+    # be indexed beside the suffixed file it copies - one verdict under two
+    # names is a campaign that reads as twice the size it was.
+    (d / GATE_AUDIT_FILE.format(symbol="NQ")).write_text(pair.read_text())
+
+    blob, src, what = dr.resolve_stage3_input("demo", audit=pair, out_dir=d)
+    check("--audit on a pair file resolves to that ONE verdict",
+          len(dr.stage3_rows(blob)) == 1 and Path(src) == pair, what)
+
+    found = dr.discover_pair_audits("demo", d)
+    check("discovery reads the SUFFIXED audits only - the unsuffixed file is "
+          "a duplicate of the last timeframe, and indexing both counts one "
+          "verdict twice", len(found) == 2, str([p.name for p in found]))
+
+    blob, src, what = dr.resolve_stage3_input("demo", out_dir=d)
+    check("with no summary on disk and no flag, EVERY per-pair audit is "
+          "indexed - picking one would announce a single certification while "
+          "the rest sat on disk unread",
+          len(dr.stage3_rows(blob)) == 2, what)
+    check("...and the card spans both timeframes",
+          dr.stage3_timeframes(blob) == ["1h", "30m"],
+          str(dr.stage3_timeframes(blob)))
+
+    summary = write_stage3_summary(
+        "demo", d, [audit_to_result(json.loads(pair.read_text()), pair)],
+        [], [], _Args(), [{"symbol": "NQ", "timeframe": "1h"}], "test")
+    blob, src, what = dr.resolve_stage3_input("demo", out_dir=d)
+    check("once the summary exists it is PREFERRED, since it spans the whole "
+          "campaign rather than the pairs that happen to be on disk",
+          Path(src) == summary, what)
+    blob, src, _ = dr.resolve_stage3_input("demo", summary=summary, out_dir=d)
+    check("--summary reads the index", Path(src) == summary)
+
+    ok, msg = raises(lambda: dr.resolve_stage3_input(
+        "demo", summary=pair, out_dir=d), ValueError)
+    check("--summary REFUSES a per-pair audit rather than adapting it - a "
+          "flag that accepts either shape makes the two words mean nothing",
+          ok and "--audit" in msg, msg[:120])
+    ok, msg = raises(lambda: dr.resolve_stage3_input(
+        "demo", audit=pair, summary=summary, out_dir=d), ValueError)
+    check("both flags at once is refused rather than one silently winning",
+          ok, msg[:120])
+
+    empty = tmp / "empty"
+    empty.mkdir(parents=True, exist_ok=True)
+    ok, msg = raises(lambda: dr.resolve_stage3_input("demo", out_dir=empty),
+                     FileNotFoundError)
+    check("nothing on disk names BOTH files it looked for and the command "
+          "that writes them, rather than posting an empty card",
+          ok and STAGE3_SUMMARY_FILE in msg and "audit_gates.py" in msg,
+          msg[:160])
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="stage3charter_") as td:
         tmp = Path(td)
@@ -1232,6 +1432,8 @@ def main() -> int:
         test_cli(tmp, blob)
         multi = test_multi_timeframe_summary(tmp)
         test_promotion_section(multi)
+        test_pair_audit_ingestion(tmp)
+        test_stage3_input_resolution(tmp)
 
     print("\n" + "=" * 60)
     if _failures:
