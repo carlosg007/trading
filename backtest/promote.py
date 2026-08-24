@@ -74,7 +74,7 @@ if str(PROJECT_ROOT) not in sys.path:
     # `python3 backtest/x.py` puts backtest/ on sys.path, not the repository
     # root, so mdlib is not importable until this runs.
     sys.path.insert(0, str(PROJECT_ROOT))
-from mdlib.env import load_env                                     # noqa: E402
+from mdlib.env import discord_webhook, load_env                    # noqa: E402
 
 load_env()
 # ---------------------------------------------------------------------------
@@ -84,6 +84,7 @@ import argparse
 import ast
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -377,6 +378,15 @@ def load_gate_certification(path: Path | None,
         "audit_file": path.as_posix(),
         "audit_sha256": sha256(path),
         "audit_symbol": blob.get("symbol"),
+        # The certified PAIR and the quadrant it was certified inside, carried
+        # so a later reader does not have to dig the timeframe out of the
+        # audit's filename or re-derive Gate R's target. A promotion is one
+        # contract at one timeframe in one quadrant, and the module's own
+        # SYMBOLS/TIMEFRAME are its declarations rather than that pair - see
+        # `certified_scope`.
+        "audit_timeframe": blob.get("timeframe"),
+        "target_quadrant": blob.get("target_quadrant"),
+        "target_regime": blob.get("target_regime"),
         "audit_generated_utc": blob.get("generated_utc"),
         "in_sample": blob.get("in_sample"),
         "holdout": blob.get("holdout"),
@@ -657,6 +667,513 @@ def _gate_summary(gate_audit: dict | None) -> dict | None:
 
 
 # --------------------------------------------------------------------------
+# Portfolio registration
+# --------------------------------------------------------------------------
+# `config/portfolios.json` is read and written here as PLAIN JSON, never
+# through `portfolio.config_loader`. The dependency runs one way - `portfolio/`
+# sits above `backtest/` and reads from it, and nothing in `backtest/` may
+# import from there - and `backtest/discord_reporter.py` reads the same file
+# the same way, for the same reason. The cost is that this module cannot run
+# the loader's validation; what it CAN do is refuse to write anything it could
+# not first parse, and re-parse what it wrote before it replaces the real file.
+# See `_write_portfolio_config`.
+PORTFOLIO_CONFIG = REPO_ROOT / "config" / "portfolios.json"
+
+# Promotion registers onto the INCUBATOR track and only ever onto it.
+# `approved_incubator/<strat>/` is a record that a version was chosen, and the
+# incubator account is where a chosen version is evaluated on forward paper
+# trades. Graduating Incubator -> Prop is a different decision, made on those
+# forward trades rather than on a backtest, and it belongs to
+# `portfolio/promotion_daemon.py` and `scripts/incubator_tracker.py`. A
+# `--portfolio Prop-Odd` here would put a strategy on an evaluation account on
+# the strength of a certification alone, which is the one step the forward
+# incubation exists to sit between.
+INCUBATOR_ACCOUNT_TYPE = "incubator_sim"
+
+# The status stamped on a freshly registered allocation.
+# `portfolio/promotion_daemon.py` is what moves it on, and it stamps
+# `GRADUATED_PROP` on the ledger when it does.
+ALLOCATION_STATUS = "incubating"
+
+# One contract. A promoted strategy has never traded forward, so the opening
+# allocation is the smallest position the account can hold; `--allocation`
+# raises it deliberately. This is a DECLARATION, like everything else in that
+# file - `portfolio/volatility_sizer.py` sizes from ATR against the portfolio's
+# own risk budget and clamps, and nothing reads this number to place an order
+# yet. It is recorded because the intended allocation is part of what was
+# decided at promotion, and reconstructing it afterwards from a clamp shared by
+# every strategy on the account is guessing.
+DEFAULT_ALLOCATION = 1
+
+# WHERE THE RICH RECORD GOES, AND WHY IT IS NOT IN `active_strategies`.
+#
+# `active_strategies` is a flat list of strategy-id STRINGS, and three separate
+# consumers already read it that way:
+#
+#   portfolio.config_loader.get_portfolio_for_strategy  `id in active_strategies`
+#   realtime.live_dispatcher._load_active_strategies    builds
+#                                                       approved_incubator/<id>/
+#                                                       out of each element
+#   backtest.discord_reporter.portfolio_membership      lowercases each element
+#                                                       and compares
+#
+# Putting a dict in that list breaks all three, and it breaks them QUIETLY:
+# the router reports the strategy as unassigned and raises, the live loop looks
+# for a directory named after a stringified dict, and the Stage 5 card prints
+# the staging token for a strategy that is live on an account. None of those
+# says "the schema changed".
+#
+# So the PERMISSION stays exactly where those three already look for it, and
+# the PAYLOAD goes in a sibling object keyed by the same id. The two halves can
+# drift apart, which is the one real cost of the split - so they are written
+# together, here, by one function, and reconciled at load time by
+# `portfolio.config_loader` (`allocation_reconciliation` on the loaded config).
+ALLOCATIONS_KEY = "strategy_allocations"
+
+# A field no artifact carried. Written rather than omitted, for the reason
+# meta.json writes `NOT CERTIFIED`: an absent key reads as a field nobody
+# filled in, and this one is the difference between a scope that was resolved
+# and one that was never available.
+NOT_RESOLVED = "NOT RESOLVED"
+
+
+def _normalise_pid(name: Any) -> str:
+    """
+    A portfolio id reduced to what two spellings of it have in common.
+
+    `--portfolio incubator-odd`, `Incubator-Odd` and `INCUBATOR_ODD` are the
+    same account. Matching them exactly would refuse the spelling an operator
+    actually types, and refusing on case is how somebody ends up editing the
+    routing table by hand - which is the thing this function exists to stop
+    being necessary.
+    """
+    return "".join(ch for ch in str(name or "").lower() if ch.isalnum())
+
+
+def incubator_portfolios(portfolios: dict) -> list[str]:
+    """The incubator-track portfolio ids, in a stable order."""
+    return sorted(pid for pid, p in portfolios.items()
+                  if isinstance(p, dict)
+                  and p.get("account_type") == INCUBATOR_ACCOUNT_TYPE)
+
+
+def resolve_portfolio(portfolios: dict,
+                      requested: str | None = None) -> tuple[str, str]:
+    """
+    Which incubator portfolio this promotion is registered onto, and why.
+
+    Returns `(portfolio_id, basis)`. The basis is recorded on the allocation
+    and printed, because "which account is this strategy on" answered by a rule
+    nobody wrote down is exactly what `portfolio.config_loader` refuses to do
+    when it declines to infer a portfolio from a strategy's name.
+
+    An explicit `--portfolio` wins outright and is matched case- and
+    punctuation-insensitively. Without one the target is the incubator
+    portfolio holding the FEWER active strategies, ties broken alphabetically -
+    which is round-robin across successive promotions, because the portfolio
+    that just took one is the one with more next time. It is a deterministic
+    rule and that is the point: two operators promoting the same strategy get
+    the same account, and a promotion that is re-run does not land somewhere
+    else.
+
+    THE REGIME SCOPE IS NOT PART OF THIS CHOICE. A portfolio's
+    `basket.regime_quadrants` is a permission held by the ACCOUNT, shared by
+    every strategy on it; routing a promotion to whichever account happened to
+    declare the certified quadrant would make the account a property of one
+    strategy's Stage 1 designation. The certified quadrant is recorded on the
+    allocation as `regime_filter` and reconciled against the account's declared
+    quadrants at load time - see `register_portfolio`.
+    """
+    candidates = incubator_portfolios(portfolios)
+    if not candidates:
+        raise ValueError(
+            f"{PORTFOLIO_CONFIG.name} declares no portfolio with "
+            f"account_type {INCUBATOR_ACCOUNT_TYPE!r}, so there is no "
+            f"incubator account to register onto.")
+
+    if requested:
+        wanted = _normalise_pid(requested)
+        matches = [pid for pid in sorted(portfolios)
+                   if _normalise_pid(pid) == wanted
+                   or _normalise_pid((portfolios[pid] or {}).get("portfolio_id")
+                                     if isinstance(portfolios[pid], dict)
+                                     else None) == wanted]
+        if not matches:
+            raise ValueError(
+                f"no portfolio named {requested!r}. Known: "
+                f"{sorted(portfolios)} (matched ignoring case and "
+                f"punctuation).")
+        if len(matches) > 1:
+            raise ValueError(
+                f"{requested!r} matches more than one portfolio "
+                f"({matches}); name it exactly.")
+        pid = matches[0]
+        if pid not in candidates:
+            account = (portfolios[pid] or {}).get("account_type")
+            raise ValueError(
+                f"{pid} is an {account!r} account, not "
+                f"{INCUBATOR_ACCOUNT_TYPE!r}. A promotion registers onto the "
+                f"incubator track only - graduating to the prop track is "
+                f"decided on FORWARD paper trades by "
+                f"scripts/incubator_tracker.py --auto-promote, not on a "
+                f"certification.")
+        return pid, f"--portfolio {requested}"
+
+    counts = {pid: len([s for s in (portfolios[pid].get("active_strategies")
+                                    or [])])
+              for pid in candidates}
+    pid = sorted(candidates, key=lambda p: (counts[p], p))[0]
+    tally = ", ".join(f"{p}={counts[p]}" for p in candidates)
+    return pid, (f"fewest active strategies ({tally}), ties alphabetical")
+
+
+def certified_scope(certification: Any,
+                    meta: dict | None = None,
+                    audit_path: Path | None = None) -> dict[str, Any]:
+    """
+    The contract, timeframe and regime quadrant this promotion was CERTIFIED
+    on, each with the file it came from.
+
+    A promotion is ONE contract at ONE timeframe, and a strategy module's
+    `SYMBOLS`/`TIMEFRAME` are its declarations - every contract it targets, at
+    the timeframe it prefers. `t3_braid_scalp_20260823` declares `NQ,ES,CL,GC`
+    at 5m and was certified on NQ at 1h; taking the pair from the module would
+    register NQ at 5m, an allocation for a run nobody made, with both halves
+    individually true. This is the same trap `backtest/discord_reporter.py`
+    documents for the Stage 5 card, resolved the same way: the certification
+    supplies the pair, and the module's declarations are used only where they
+    name exactly one symbol and nothing better is available.
+
+    The timeframe falls back to the audit's FILENAME
+    (`gate_audit_<SYMBOL>_<TF>.json`) when the audit body records none, because
+    Stage 3 writes the pair into the name whether or not it writes it into the
+    file.
+
+    `regime_filter` is Gate R's certification target - the ONE quadrant Stage 1
+    designated and Stage 3 measured the holdout inside. It is transcribed, not
+    re-derived: naming a quadrant here from anything but the audit would be a
+    second best-of-four pick, which is the selection Gate R exists to prevent.
+    The `Q1`..`Q4` code comes from `backtest.profiler.REGIME_TO_QUADRANT`, so
+    no spelling of a regime name lives in this module.
+    """
+    meta = meta or {}
+    cert = certification if isinstance(certification, dict) else {}
+
+    # A certification block written before this module recorded the pair and
+    # the quadrant names the audit FILE but not its contents. Every promotion
+    # made before that change is in exactly that state, so the fields are read
+    # back out of the file the block already cites rather than reported as
+    # absent - the certification says where the answer is, and the answer has
+    # not moved. Recorded in `resolved_from` as the audit rather than as the
+    # certification, because they are two different reads and only one of them
+    # was verified against the SHA-256 in meta.json.
+    from_audit: dict[str, Any] = {}
+    audit_on_disk = Path(cert.get("audit_file") or (audit_path or ""))
+    if audit_on_disk.name and audit_on_disk.exists():
+        try:
+            from_audit = json.loads(audit_on_disk.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            from_audit = {}
+    for key in ("audit_timeframe", "target_quadrant", "target_regime"):
+        if not cert.get(key):
+            value = from_audit.get(
+                "timeframe" if key == "audit_timeframe" else key)
+            if value:
+                cert = dict(cert)
+                cert[key] = value
+                cert.setdefault("_from_audit", []).append(key)
+
+    out: dict[str, Any] = {"symbol": NOT_RESOLVED,
+                           "timeframe": NOT_RESOLVED,
+                           "regime_filter": NOT_RESOLVED,
+                           "regime": NOT_RESOLVED,
+                           "resolved_from": {}}
+    src = out["resolved_from"]
+    name = Path(cert.get("audit_file") or (audit_path or "")).name
+
+    symbol = cert.get("audit_symbol")
+    if symbol:
+        out["symbol"] = str(symbol)
+        src["symbol"] = f"{name} (certification)" if name else "certification"
+    else:
+        symbols = [s for s in (meta.get("symbols") or []) if s]
+        if len(symbols) == 1:
+            out["symbol"] = str(symbols[0])
+            src["symbol"] = ("meta.json symbols - the module declares exactly "
+                             "one contract")
+        else:
+            src["symbol"] = (f"no certification symbol, and the module "
+                             f"declares {len(symbols)} contracts")
+
+    recovered = cert.get("_from_audit") or []
+    tf = cert.get("audit_timeframe")
+    if tf:
+        out["timeframe"] = str(tf)
+        src["timeframe"] = (
+            f"{name} (the audit itself)" if "audit_timeframe" in recovered
+            else (f"{name} (certification)" if name else "certification"))
+    else:
+        # gate_audit_<SYMBOL>_<TF>.json -> the last underscore-separated part.
+        parts = Path(name).stem.split("_") if name else []
+        if len(parts) >= 4 and parts[0] == "gate" and parts[1] == "audit":
+            out["timeframe"] = parts[-1]
+            src["timeframe"] = f"{name} (the audit's filename)"
+        elif meta.get("timeframe"):
+            out["timeframe"] = str(meta["timeframe"])
+            src["timeframe"] = ("meta.json timeframe - the MODULE's declared "
+                                "preference, not a certified pair")
+        else:
+            src["timeframe"] = "no certification and no module declaration"
+
+    quadrant = cert.get("target_quadrant")
+    regime = cert.get("target_regime")
+    if not quadrant and regime:
+        try:
+            from backtest.profiler import REGIME_TO_QUADRANT
+            quadrant = REGIME_TO_QUADRANT.get(str(regime))
+        except Exception:                                       # noqa: BLE001
+            quadrant = None
+    if quadrant:
+        out["regime_filter"] = str(quadrant)
+        out["regime"] = str(regime or NOT_RESOLVED)
+        src["regime_filter"] = (
+            f"{name} (Gate R's certification target"
+            + (", read from the audit itself)"
+               if ("target_quadrant" in recovered
+                   or "target_regime" in recovered) else ")")
+            if name else "certification")
+    else:
+        src["regime_filter"] = ("the certification records no target quadrant "
+                                "- Gate R was NOT EVALUATED, or the audit "
+                                "predates the charter")
+    return out
+
+
+def _write_portfolio_config(path: Path, blob: dict) -> None:
+    """
+    Replace the routing table atomically, and never with something unreadable.
+
+    Temp file, then `os.replace`, the way `portfolio/promotion_daemon.py` and
+    `backtest/status.py` write theirs: a reader - including a live dispatcher
+    mid-cycle - sees the previous complete document or the new one, never half
+    of either.
+
+    The temp file is PARSED BACK before it is moved into place. This module
+    cannot call `portfolio.config_loader.load_portfolio_config` to validate
+    what it wrote (the dependency runs one way), so the one guarantee it can
+    still make is that the bytes it is about to install are valid JSON
+    describing the same four portfolios. A routing table that will not parse
+    takes down the live loop, the incubator tracker and the Stage 5 card
+    together, and it would do it on the next run rather than on this one.
+    """
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(blob, indent=2) + "\n", encoding="utf-8")
+    try:
+        check = json.loads(tmp.read_text(encoding="utf-8"))
+        if set(check.get("portfolios") or {}) != set(blob.get("portfolios") or {}):
+            raise ValueError("the written portfolios do not round-trip")
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+    os.replace(tmp, path)
+
+
+def register_portfolio(strat: str,
+                       *,
+                       version: str,
+                       scope: dict,
+                       allocation: int = DEFAULT_ALLOCATION,
+                       portfolio: str | None = None,
+                       status: str = ALLOCATION_STATUS,
+                       config_path: Path = PORTFOLIO_CONFIG,
+                       incubator: Path = INCUBATOR) -> dict[str, Any]:
+    """
+    Register a promoted strategy onto an incubator portfolio.
+
+    Writes BOTH halves together, which is the whole contract of this function:
+
+        active_strategies      the id, as a string. This is the PERMISSION,
+                               and it is the only thing
+                               `get_portfolio_for_strategy`, the live
+                               dispatcher and the Stage 5 card read.
+        strategy_allocations   the record: strat, symbol, timeframe, version,
+                               allocation, regime_filter, status, path.
+
+    Idempotent. Registering the same strategy twice updates the record in
+    place; it never appends the id a second time, which would size one signal
+    twice on one account.
+
+    A strategy already named on the OTHER incubator portfolio is MOVED, not
+    added - `portfolio.config_loader` refuses a config naming one strategy on
+    two portfolios of one track, because both would size the same signal
+    independently and the net position would be double what either risk
+    profile describes. The move is returned as `moved_from` and printed.
+
+    THE REGIME SCOPE IS RECORDED, NEVER APPLIED. `regime_filter` is this
+    strategy's certified quadrant; `basket.regime_quadrants` is the ACCOUNT's
+    permission and is shared by every strategy on it, so widening it to admit
+    this one would hand every other strategy on that account a quadrant nobody
+    certified it for - silently, and in the direction that trades. This
+    function therefore never edits the basket. When the two disagree the
+    conflict is returned in `notes`, printed at promotion, and recorded on the
+    loaded config by `portfolio.config_loader` as
+    `allocation_reconciliation` - which is where the authoritative comparison
+    lives, because that is where the schema-label -> `Q1`..`Q4` mapping lives.
+    """
+    path = Path(config_path)
+    blob = json.loads(path.read_text(encoding="utf-8"))
+    portfolios = blob.get("portfolios")
+    if not isinstance(portfolios, dict) or not portfolios:
+        raise ValueError(f"{path} carries no `portfolios` object")
+
+    pid, basis = resolve_portfolio(portfolios, portfolio)
+    target = portfolios[pid]
+    active = target.get("active_strategies")
+    if not isinstance(active, list):
+        raise ValueError(
+            f"{pid}: active_strategies is {type(active).__name__}, not a list. "
+            f"Refusing to write into a routing table this module does not "
+            f"recognise.")
+
+    allocation = int(allocation)
+    if allocation < 1:
+        raise ValueError(f"--allocation must be at least 1 contract, got "
+                         f"{allocation}")
+
+    wanted = _normalise_pid(strat)
+    notes: list[str] = []
+
+    # Remove the id and any stale allocation record from every OTHER portfolio
+    # on this track. Leaving one behind is the double-sizing config the loader
+    # refuses, and it would be refused on the next load rather than here.
+    moved_from: list[str] = []
+    for other in incubator_portfolios(portfolios):
+        if other == pid:
+            continue
+        block = portfolios[other]
+        names = block.get("active_strategies")
+        if isinstance(names, list):
+            kept = [n for n in names if _normalise_pid(n) != wanted]
+            if len(kept) != len(names):
+                block["active_strategies"] = kept
+                moved_from.append(other)
+        allocs = block.get(ALLOCATIONS_KEY)
+        if isinstance(allocs, dict):
+            for key in [k for k in allocs if _normalise_pid(k) == wanted]:
+                allocs.pop(key)
+
+    already = [n for n in active if _normalise_pid(n) == wanted]
+    if already:
+        # Keep the spelling already in the file rather than overwriting it with
+        # this invocation's. The id is a directory name under
+        # approved_incubator/ and the file's copy is the one the live loop has
+        # been resolving; silently re-casing it here would move which directory
+        # is loaded without saying so.
+        strat_id = str(already[0])
+        if len(already) > 1:
+            active[:] = [n for n in active if _normalise_pid(n) != wanted]
+            active.append(strat_id)
+            notes.append(f"{pid} named {strat} {len(already)} times; collapsed "
+                         f"to one entry")
+    else:
+        strat_id = str(strat)
+        active.append(strat_id)
+
+    record = {
+        "strat": strat_id,
+        "symbol": scope.get("symbol", NOT_RESOLVED),
+        "timeframe": scope.get("timeframe", NOT_RESOLVED),
+        "version": str(version).upper(),
+        "allocation": allocation,
+        "regime_filter": scope.get("regime_filter", NOT_RESOLVED),
+        "status": status,
+        "path": (Path(incubator) / strat_id / "strat.py")
+                 .relative_to(REPO_ROOT).as_posix()
+                 if Path(incubator).is_absolute()
+                 and str(Path(incubator)).startswith(str(REPO_ROOT))
+                 else (Path(incubator) / strat_id / "strat.py").as_posix(),
+        "registered_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "registered_by": "backtest/promote.py",
+        "routing_basis": basis,
+        "resolved_from": dict(scope.get("resolved_from") or {}),
+    }
+
+    allocs = target.get(ALLOCATIONS_KEY)
+    if not isinstance(allocs, dict):
+        allocs = {}
+        target[ALLOCATIONS_KEY] = allocs
+    for key in [k for k in allocs if _normalise_pid(k) == wanted]:
+        allocs.pop(key)
+    allocs[strat_id] = record
+
+    declared = list((target.get("basket") or {}).get("regime_quadrants") or [])
+    quadrant = record["regime_filter"]
+    if quadrant == NOT_RESOLVED:
+        notes.append(
+            "no certified quadrant was resolved, so `regime_filter` is "
+            "NOT RESOLVED. The live regime gate reads the ACCOUNT's "
+            "basket.regime_quadrants, not this field, so nothing is widened "
+            "or narrowed by it - but a promotion whose Gate R target cannot "
+            "be stated was certified by an audit that predates the charter, "
+            "or by one where Gate R was NOT EVALUATED.")
+    elif declared and not any(str(q).startswith(quadrant + "_")
+                              for q in declared):
+        notes.append(
+            f"{strat_id} is certified in {quadrant}, and {pid} declares "
+            f"{declared}. The basket was NOT widened: regime_quadrants is the "
+            f"ACCOUNT's permission and every strategy on it inherits any "
+            f"quadrant added here. Until they agree the live gate "
+            f"(realtime/live_dispatcher.py) stands this strategy down in the "
+            f"one quadrant it was certified for, so it will never trade. Fix "
+            f"it by routing to the incubator portfolio that already declares "
+            f"{quadrant}, or by editing basket.regime_quadrants deliberately.")
+
+    if record["symbol"] == NOT_RESOLVED or record["timeframe"] == NOT_RESOLVED:
+        notes.append(
+            "the certified contract or timeframe could not be resolved, so "
+            "the allocation records NOT RESOLVED rather than the module's "
+            "declarations. Pass --audit-file from stage 3, or --symbol / "
+            "--timeframe to state the pair by hand.")
+
+    _write_portfolio_config(path, blob)
+    return {"portfolio_id": pid, "basis": basis, "record": record,
+            "config_path": path, "moved_from": moved_from,
+            "declared_quadrants": declared, "notes": notes,
+            "was_registered": bool(already)}
+
+
+def post_stage5_card(strat: str, *, dry_run: bool = False,
+                     python: str | None = None) -> dict[str, Any]:
+    """
+    Run `discord_reporter.py --stage 5` for this strategy.
+
+    A SUBPROCESS rather than an import, for two reasons. The card resolves
+    every value it prints from what the promotion just wrote - meta.json, the
+    snapshot beside it, the gate audit those cite and now the routing table -
+    so running it as its own process reads the files as they are ON DISK,
+    which is the state a human re-running the same command by hand would see.
+    And a card that fails cannot take a completed promotion with it.
+
+    Failures are RETURNED, never raised, the same way `git_commit` reports
+    one: the strategy is promoted and registered either way, and the exact
+    command to re-run is printed.
+    """
+    reporter = REPO_ROOT / "backtest" / "discord_reporter.py"
+    cmd = [python or sys.executable, str(reporter), "--stage", "5",
+           "--strat", strat]
+    if dry_run:
+        cmd.append("--dry-run")
+    if not reporter.exists():
+        return {"posted": False, "cmd": cmd, "returncode": None,
+                "output": f"{reporter} does not exist"}
+    proc = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True,
+                          check=False)
+    return {"posted": proc.returncode == 0, "cmd": cmd,
+            "returncode": proc.returncode,
+            "output": (proc.stdout or "").strip() or (proc.stderr or "").strip()}
+
+
+# --------------------------------------------------------------------------
 # Git
 # --------------------------------------------------------------------------
 def git_commit(dest: Path, strat: str, version: str,
@@ -737,6 +1254,36 @@ def main(argv: list[str] | None = None) -> int:
                         "Recorded in meta.json.")
     p.add_argument("--no-commit", action="store_true",
                    help="Write the files but do not touch git")
+    p.add_argument("--portfolio", default=None,
+                   help="Incubator portfolio to register onto (e.g. "
+                        "incubator-odd). Matched ignoring case and "
+                        "punctuation. Without it the target is whichever "
+                        "incubator portfolio holds FEWER active strategies, "
+                        "ties broken alphabetically — round-robin across "
+                        "successive promotions. The prop track is refused: "
+                        "graduating there is decided on forward paper trades "
+                        "by scripts/incubator_tracker.py --auto-promote.")
+    p.add_argument("--allocation", type=int, default=DEFAULT_ALLOCATION,
+                   help=f"Contracts recorded on the allocation (default "
+                        f"{DEFAULT_ALLOCATION}). A DECLARATION: "
+                        f"portfolio/volatility_sizer.py sizes from ATR "
+                        f"against the portfolio's own budget and clamps, and "
+                        f"nothing places an order off this number yet.")
+    p.add_argument("--portfolios", default=None,
+                   help=f"The routing table to register into (default: "
+                        f"{PORTFOLIO_CONFIG})")
+    p.add_argument("--no-register", action="store_true",
+                   help="Promote without touching config/portfolios.json. "
+                        "The strategy is staged and committed and stays "
+                        "unallocated, which is what approved_incubator/ meant "
+                        "before this flag's default became registration.")
+    p.add_argument("--no-discord", action="store_true",
+                   help="Never post the stage 5 card. Without it the card is "
+                        "posted when a webhook is configured (see "
+                        "mdlib/env.py) and skipped, quietly, when none is.")
+    p.add_argument("--discord-dry-run", action="store_true",
+                   help="Run the stage 5 card with --dry-run: it prints the "
+                        "payload and sends nothing.")
     args = p.parse_args(argv)
 
     params = json.loads(args.params) if args.params else None
@@ -799,6 +1346,89 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(f"\nNot committed: {out['commit_output'] or 'skipped (--no-commit)'}")
         print(f"  git add {out['dir'].relative_to(REPO_ROOT)} && git commit")
+
+    # ---- register onto an incubator portfolio ---------------------------
+    # AFTER the directory is written and committed, never before. The record
+    # points at `approved_incubator/<strat>/strat.py` and grants a live loop
+    # permission to load it; writing that permission first would name a file
+    # that does not exist yet, and the window is exactly as long as a promotion
+    # that then fails.
+    registration = None
+    if args.no_register:
+        print("\n  registration    SKIPPED (--no-register). "
+              "config/portfolios.json is unchanged, so this strategy is "
+              "staged and\n                  unallocated — "
+              "approved_incubator/ is a record that a version was chosen, "
+              "not\n                  permission to trade it.")
+    else:
+        cfg = Path(args.portfolios) if args.portfolios else PORTFOLIO_CONFIG
+        scope = certified_scope(meta.get("certification"), meta,
+                                Path(args.audit_file) if args.audit_file
+                                else None)
+        # An explicit --symbol/--timeframe outranks the certification, the
+        # same way --params does: an operator correcting the record on
+        # purpose beats a file. It is recorded as the source so the override
+        # is never silent.
+        if args.symbol:
+            scope["symbol"] = args.symbol
+            scope["resolved_from"]["symbol"] = "--symbol"
+        if args.timeframe:
+            scope["timeframe"] = args.timeframe
+            scope["resolved_from"]["timeframe"] = "--timeframe"
+        try:
+            registration = register_portfolio(
+                args.strat, version=meta["version"], scope=scope,
+                allocation=args.allocation, portfolio=args.portfolio,
+                config_path=cfg)
+        except (OSError, ValueError) as exc:
+            # Reported, not raised, for git_commit's reason: the promotion is
+            # written and committed, and it is not undone because the routing
+            # table could not be updated. The operator is told what to run.
+            print(f"\n  ! Portfolio registration FAILED: {exc}")
+            print(f"    The promotion stands. Re-run registration with:\n"
+                  f"      python3 backtest/promote.py --strat {args.strat} "
+                  f"--version {meta['version']} \\\n"
+                  f"          --source {args.source} --portfolio "
+                  f"<incubator-odd|incubator-even>")
+        else:
+            rec = registration["record"]
+            print(f"\n  registered      {registration['portfolio_id']}  "
+                  f"({registration['basis']})")
+            print(f"                  {rec['symbol']} {rec['timeframe']} "
+                  f"version {rec['version']} · {rec['allocation']} contract"
+                  f"{'s' if rec['allocation'] != 1 else ''} · regime "
+                  f"{rec['regime_filter']}")
+            print(f"                  status {rec['status']} · "
+                  f"{registration['config_path'].name} "
+                  f"(active_strategies + {ALLOCATIONS_KEY})")
+            for field, where in sorted(rec["resolved_from"].items()):
+                print(f"                    {field:<12} {where}")
+            if registration["moved_from"]:
+                print(f"                  MOVED from "
+                      f"{', '.join(registration['moved_from'])} — one "
+                      f"strategy on two portfolios of one track would size "
+                      f"the same signal twice")
+            for note in registration["notes"]:
+                print(f"\n  ! {note}")
+
+    # ---- the stage 5 card ------------------------------------------------
+    if args.no_discord:
+        pass
+    elif discord_webhook() is None:
+        print("\n  stage 5 card    not posted: no webhook configured "
+              "(BT_DISCORD_WEBHOOK / DISCORD_WEBHOOK_URL / DISCORD_WEBHOOK)")
+    else:
+        card = post_stage5_card(args.strat, dry_run=args.discord_dry_run)
+        if card["posted"]:
+            print(f"\n  stage 5 card    "
+                  f"{'rendered (--dry-run, nothing sent)' if args.discord_dry_run else 'posted'}")
+        else:
+            print(f"\n  ! The stage 5 card did not post "
+                  f"(exit {card['returncode']}). The promotion stands.")
+            if card["output"]:
+                for line in card["output"].splitlines()[-6:]:
+                    print(f"      {line}")
+            print("    Re-run: " + " ".join(card["cmd"]))
 
     print("\nIn approved_incubator/ means under evaluation, not cleared to "
           "trade.\nDeployment needs the gates in docs/STRATEGY_DEVELOPMENT.md "
