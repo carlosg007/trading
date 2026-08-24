@@ -112,6 +112,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from portfolio.config_loader import (  # noqa: E402
+    ALLOCATIONS_KEY,
     DEFAULT_CONFIG_PATH,
     PortfolioConfigError,
     clear_cache,
@@ -745,16 +746,47 @@ def promote_strategy(strategy_id: str,
             f"anywhere — which is not a move, it is a second live assignment "
             f"of the same strategy.")
 
+    # One timestamp for both records. Two `now()` calls would put the ledger
+    # and the routing table a few microseconds apart, and "which of these two
+    # graduations is the same graduation" is then a judgement call.
+    stamped_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
     source_list.remove(strategy_id)
     if strategy_id not in target_list:
         target_list.append(strategy_id)
     source["active_strategies"] = source_list
     target["active_strategies"] = target_list
 
+    # The allocation record travels with the permission.
+    #
+    # `backtest/promote.py` writes a strategy into TWO places on a portfolio:
+    # `active_strategies` grants the permission, and `strategy_allocations`
+    # records the certified contract, timeframe, quadrant and contract count
+    # behind it. Moving only the first would leave the record sitting on the
+    # incubator account after the strategy graduated off it - a described
+    # allocation on an account that no longer holds the strategy, beside a prop
+    # account holding it with nothing describing it. Neither half routes an
+    # order, so nothing would raise; `load_portfolio_config` would report the
+    # drift and every reader after that would see two accounts each telling
+    # half the truth.
+    #
+    # `status` is restamped rather than carried: the record said `incubating`
+    # because it was, and this function is the moment that stopped being true.
+    src_allocs = source.get(ALLOCATIONS_KEY)
+    if isinstance(src_allocs, dict) and strategy_id in src_allocs:
+        moved = copy.deepcopy(src_allocs.pop(strategy_id))
+        moved["status"] = STATUS_GRADUATED
+        moved["graduated_at"] = stamped_at
+        moved["source_portfolio"] = source_portfolio
+        tgt_allocs = target.get(ALLOCATIONS_KEY)
+        if not isinstance(tgt_allocs, dict):
+            tgt_allocs = {}
+            target[ALLOCATIONS_KEY] = tgt_allocs
+        tgt_allocs[strategy_id] = moved
+
     stamped = copy.deepcopy(entry)
     stamped["status"] = STATUS_GRADUATED
-    stamped["graduated_at"] = datetime.now(timezone.utc).isoformat(
-        timespec="seconds")
+    stamped["graduated_at"] = stamped_at
     stamped["target_portfolio"] = target_portfolio
     # What it was promoted FROM, kept beside where it went. Without it the
     # ledger records a graduation with no way to say which incubator account
