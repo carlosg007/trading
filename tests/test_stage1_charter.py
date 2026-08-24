@@ -358,6 +358,8 @@ def test_handoff(tmp: Path) -> None:
             "end": CHARTER_IS_END, "ml_evaluated": True,
             "criterion": "optimal_regime_PF >= 1.00 AND "
                          "optimal_regime_trade_count >= 30",
+            "min_profit_factor": 1.0, "min_trades": 30,
+            "min_trade_fraction": 0.1,
             "surviving_pairs": pairs, "dropped": drops,
             "screen_results": results}
     dest = write_stage(tmp / SURVIVORS_FILE, 1, "demo", blob)
@@ -411,30 +413,49 @@ def test_stage1_card(blob: dict) -> None:
     check("it counts what was evaluated, promoted and dropped",
           (fields["Evaluated"], fields["Promoted → Stage 2"],
            fields["Dropped"]) == ("3", "2", "1"), str(fields))
-    check("the asset/timeframe pairs evaluated are all on the card",
-          all(s in text for s in ("NQ", "GC", "CL"))
+    check("the SURVIVING asset/timeframe pairs are on the card...",
+          "NQ" in text and "GC" in text
           and "15m" in text and "30m" in text)
+    check("...and the DROPPED one is off the table entirely - the card is "
+          "read to answer 'what goes to Stage 2', and a drop is not that",
+          "CL" not in text and "DROPPED" not in text, text)
+    check("...with the exclusion STATED, so a short table can never read as "
+          "a short screen", "SURVIVING configurations only" in text, text)
+    check("...while the counts beside it still cover the whole screen",
+          (fields["Evaluated"], fields["Dropped"]) == ("3", "1"), str(fields))
     check("...with the timeframes screened named as a field",
           "`15m`" in fields["Timeframes"] and "`30m`" in fields["Timeframes"])
     check("the discovered optimal regime appears as its quadrant id...",
           "Q1" in text and "Q3" in text, text)
-    check("...with a legend built FROM the rows, so no second spelling of a "
-          "regime name lives in the notifier",
+    check("...spelled out in full on the row, transcribed from the handoff, "
+          "so no second spelling of a regime name lives in the notifier",
           REGIMES[0] in text and REGIMES[2] in text)
     check("the quadrant PF is on the card", "1.28" in text and "1.61" in text)
-    check("...and the trade count N beside it", "120" in text and "60" in text)
+    check("...and the trade count beside it", "120" in text and "60" in text)
+    check("...beside BOTH versions' blended factors, which answer a "
+          "different question from the quadrant they were promoted on",
+          "PF (A)" in text and "PF (B)" in text, text)
     check("the version that carried each pair is shown",
           "VA" in text and "VB" in text)
-    check("PROMOTED and DROPPED are both printed as words",
-          "PROMOTED" in text and "DROPPED" in text)
     check("the in-sample window is on the card - a leaderboard whose bars "
           "nobody can name is a table of unlabelled figures",
           CHARTER_IS_START in text and CHARTER_IS_END in text)
-    check("...as is the screening rule the numbers were judged against",
-          "1.00" in text and "30" in text)
-    check("the dropped row shows -- for the quadrant it does not have, never "
-          "0.00, which would read as a quadrant measured and found worthless",
-          "--" in text.split("CL")[1].split("\n")[0], text)
+    check("...as is the screening rule, as the two bars a row is checked "
+          "against and not as the full designation mathematics",
+          "Regime PF `>= 1.00`" in text
+          and "Regime Trades `>= max(30, 10% placed)`" in text
+          and blob["criterion"] not in text, text)
+    check("...with both bars TRANSCRIBED from the thresholds the screen "
+          "recorded, so a raised bar is not reported as the default",
+          "max(50, 25% placed)" in dr.build_stage1_embed(
+              "demo", {**blob, "min_trades": 50,
+                       "min_trade_fraction": 0.25})["description"])
+    check("...and a handoff recording neither says so, rather than printing "
+          "a bar of zero nobody set",
+          "Regime Trades `>= not recorded`" in dr.build_stage1_embed(
+              "demo", {k: v for k, v in blob.items()
+                       if k not in ("min_trades", "min_trade_fraction")}
+              )["description"])
     check("Version B is reported as evaluated, not merely absent",
           fields["Version B"] == "evaluated", fields["Version B"])
     check("the handoff path is rendered as code, not as a dead link",
@@ -453,6 +474,10 @@ def test_stage1_card(blob: dict) -> None:
     check("a screen where nothing survived is AMBER, not green - an empty "
           "screen is a result, and nothing on it is an approval",
           empty["color"] == dr.AMBER and embed["color"] == dr.SLATE_BLUE)
+    check("...and its block states the RESULT rather than rendering an empty "
+          "table that reads as a card which failed to draw",
+          dr.STAGE1_NO_ROWS_NOTE in empty["description"],
+          empty["description"])
 
 
 def test_stage1_card_edges() -> None:
@@ -477,16 +502,20 @@ def test_stage1_card_edges() -> None:
         "surviving_pairs": [{"symbol": "NQ", "tf": "15m",
                              "optimal_regime": REGIMES[0], "regime_pf": 1.28,
                              "kill_switch_regimes": list(REGIMES[1:])}],
-        "dropped": [{"symbol": "CL", "timeframe": "15m", "reason": "..."}]})
+        "dropped": [{"symbol": "CL", "timeframe": "30m", "reason": "..."}]})
+    fields = {f["name"]: f["value"] for f in old["fields"]}
     check("a handoff written before screen_results existed is reassembled "
           "from surviving_pairs + dropped",
-          "NQ" in old["description"] and "CL" in old["description"])
-    check("...and its missing version/quadrant render as -- rather than being "
-          "back-filled with a plausible value",
+          "NQ" in old["description"] and fields["Evaluated"] == "2"
+          and fields["Dropped"] == "1", str(fields))
+    check("...and the dropped entry it reassembled is counted but not "
+          "tabled, reading its timeframe from either key the two lists use",
+          "CL" not in old["description"]
+          and old["description"].count("30m") == 0, old["description"])
+    check("...while the survivor's missing version and quadrant render as -- "
+          "rather than being back-filled with a plausible value",
           "1.28" in old["description"]
           and old["description"].count("--") >= 2, old["description"])
-    check("...reading the timeframe from either key the two lists use",
-          old["description"].count("15m") == 2, old["description"])
 
     ml_off = dr.build_stage1_embed("x", {"screen_results": [],
                                          "ml_evaluated": False})
@@ -501,13 +530,15 @@ def test_stage1_card_edges() -> None:
         {"symbol": "NQ", "tf": "15m", "status": "DROPPED", "version": "A",
          "optimal_regime": REGIMES[0], "quadrant": "Q1", "regime_pf": 9.99,
          "regime_trade_count": 5_000}]})
-    check("the card prints the STATUS the stage recorded and never re-derives "
-          "it - a notifier that re-applied the hurdle could promote a "
-          "configuration Stage 1 dropped",
-          "DROPPED" in card["description"]
-          and "PROMOTED" not in card["description"]
+    check("the card filters on the STATUS the stage recorded and never "
+          "re-derives it - a notifier that re-applied the hurdle would table "
+          "this 9.99-over-5,000-trades row Stage 1 dropped",
+          "NQ" not in card["description"]
+          and "9.99" not in card["description"]
+          and dr.STAGE1_NO_ROWS_NOTE in card["description"]
           and {f["name"]: f["value"]
-               for f in card["fields"]}["Promoted → Stage 2"] == "0")
+               for f in card["fields"]}["Promoted → Stage 2"] == "0",
+          card["description"])
 
 
 def test_cli(tmp: Path, blob: dict) -> None:

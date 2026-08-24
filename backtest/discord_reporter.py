@@ -72,10 +72,23 @@ Five cards, one transport
   rule - the same refusal `portfolio.config_loader` makes, since an allocation
   inferred that way is a live account chosen by a rule nobody wrote down.
 - **`--mode baseline`** (equivalently `--stage 1`): Stage 1's REGIME FIREWALL
-  leaderboard, read straight out of `surviving_assets.json` - every
-  (symbol, timeframe) configuration screened, the quadrant it cleared, that
-  quadrant's profit factor and trade count, and whether it was PROMOTED to
-  Stage 2 or DROPPED.
+  leaderboard, read straight out of `surviving_assets.json` - per SURVIVING
+  (symbol, timeframe) configuration both versions' blended profit factors, the
+  quadrant it cleared, that quadrant's name, profit factor and trade count, and
+  the version that carried it. **The table lists survivors only**
+  (`STAGE1_SURVIVORS_ONLY`) - the card is read to answer "what goes to Stage
+  2", and that is the only row anybody acts on. The exclusion is STATED on the
+  card and the counts beside it are not filtered, so a shorter table can never
+  read as a shorter screen; every drop keeps its row and the reason it fell
+  short in the handoff and in `stage1_baseline_report.md`.
+
+  The header carries the screen as the two bars a row is checked against -
+  `Regime PF >= 1.00 · Regime Trades >= max(50, 10% placed)`, both
+  TRANSCRIBED from the thresholds the run recorded, so a `--min-profit-factor`
+  screen says what it actually applied. Stage 1's full `criterion` string (the
+  net-P&L clause, the alpha score, the tie-break) stays on the handoff, which
+  is where it is checked: 200 characters of mathematics above a two-number
+  table is read by nobody, and what it displaces is the in-sample window.
 - **`--mode scan`** (equivalently `--stage 2`): Stage 2's PARAMETER
   OPTIMIZATION summary, read straight out of `stage2_summary.json` - the
   in-sample window, and per configuration the symbol, timeframe, target regime
@@ -329,6 +342,22 @@ MAX_EMBED_DESCRIPTION = 4096
 # legend and the truncation note. A full screen is 108 configurations; what is
 # left off is COUNTED on the card and the handoff path is printed beside it.
 STAGE1_MAX_ROWS = 40
+
+# The Stage 1 table lists SURVIVING configurations ONLY (2026-08-24), the same
+# rule the Stage 3 card already applies to its certifications. The card is read
+# to answer "what goes to Stage 2", and a survivor is the only row anybody acts
+# on; three dropped ES rows above a promoted one is a reader scanning a STATUS
+# column on a phone for the rows that matter. What is excluded is NOT hidden:
+# `Evaluated`, `Promoted -> Stage 2` and `Dropped` still count the whole screen,
+# the description says the table is filtered, and every dropped configuration
+# keeps its row - with the reason it fell short - in `surviving_assets.json`
+# and in `stage1_baseline_report.md`, which are authoritative either way.
+STAGE1_SURVIVORS_ONLY = True
+
+# What the code block says when nothing survived. A header over an empty block
+# reads as a table that failed to render; the line states the RESULT, which is
+# what a screen that promoted nothing is.
+STAGE1_NO_ROWS_NOTE = "No surviving configurations found."
 
 # The Stage 2 card carries a parameter set per row, which is far wider than a
 # Stage 1 row, so fewer of them fit the 4096-character description. Whatever
@@ -1468,28 +1497,81 @@ def _sort_key(row: dict[str, Any]) -> tuple:
             str(row.get("symbol") or ""), str(row.get("tf") or ""))
 
 
+def _stage1_trade_floor(blob: dict[str, Any]) -> str:
+    """
+    The trade bar as the screen recorded it: `max(50, 10% placed)`.
+
+    Both halves are READ from the handoff (`min_trades`, `min_trade_fraction`)
+    rather than spelled out as literals, because both move: `--min-trades` and
+    `--min-trade-fraction` raise them per run, and a header that kept printing
+    the defaults would describe a screen nobody ran while every row under it
+    stayed correct. A handoff carrying only one half prints that half alone,
+    and one carrying neither says so - `not recorded` is a fact about the file,
+    which is a different statement from a bar of zero.
+    """
+    floor = blob.get("min_trades")
+    fraction = blob.get("min_trade_fraction")
+    parts: list[str] = []
+    try:
+        parts.append(f"{int(floor):,}")
+    except (TypeError, ValueError):
+        pass
+    try:
+        parts.append(f"{float(fraction) * 100:g}% placed")
+    except (TypeError, ValueError):
+        pass
+    if not parts:
+        return "not recorded"
+    return parts[0] if len(parts) == 1 else f"max({parts[0]}, {parts[1]})"
+
+
 def format_stage1_table(rows: list[dict[str, Any]],
                         max_rows: int = STAGE1_MAX_ROWS
                         ) -> tuple[str, int, dict[str, str]]:
     """
-    The leaderboard as one fixed-width block, plus the quadrant legend.
+    The survivors leaderboard as one fixed-width block, plus the quadrant
+    legend.
 
-    Returns `(text, hidden, legend)`. `hidden` is how many rows did not fit and
-    is printed on the card by the caller - a leaderboard truncated in silence
-    reads as the whole screen.
+    Returns `(text, hidden, legend)`. `hidden` is how many SURVIVING rows did
+    not fit `max_rows` and is printed on the card by the caller - a leaderboard
+    truncated in silence reads as the whole screen.
 
-    The QUAD column carries the `Q1`..`Q4` id Stage 1 recorded and the legend
-    underneath maps only the ids that actually appear, built FROM the rows. No
-    short-name table lives in this module: a second spelling of "High
-    Volatility / Trending" here would be free to disagree with the one
-    `mdlib.regimes` numbers, and a card naming the wrong environment is the
-    kind of error that is only ever caught in live trading.
+    **Only SURVIVING configurations are listed** (`STAGE1_SURVIVORS_ONLY`).
+    DROPPED rows are off the table entirely: the card is read to answer "what
+    goes to Stage 2", and that is the only row anybody acts on. The exclusion
+    is stated on the card and the counts beside it still describe the WHOLE
+    screen - `Evaluated`, `Promoted -> Stage 2` and `Dropped` are unfiltered -
+    so a shorter table can never read as a shorter screen. Every dropped
+    configuration keeps its row, and the reason it fell short, in
+    `surviving_assets.json` and in `stage1_baseline_report.md`. Filtered on the
+    STATUS the handoff RECORDED, never on a hurdle re-applied here: a notifier
+    that re-derived survival would be free to promote a configuration Stage 1
+    dropped.
+
+    The row carries both versions' BLENDED profit factors beside the quadrant
+    numbers the screen actually decided on, because they answer different
+    questions and are read together: `PF (A)` / `PF (B)` say what the
+    configuration did across every market state, and `REGIME PF` / `TRD` say
+    what it did inside the one quadrant it is being promoted for. A survivor
+    whose blend is 0.83 and whose quadrant is 1.10 is the ordinary shape of a
+    regime-gated edge, and printing only one of the two hides which.
+
+    `OPTIMAL REGIME` spells the designated quadrant's name in full, so the
+    `QUAD` id beside it needs no legend under the table. The name is
+    TRANSCRIBED from the handoff, never abbreviated here: a second spelling of
+    "High Volatility / Trending" in this module would be free to disagree with
+    the one `mdlib.regimes` numbers, and a card naming the wrong environment is
+    the kind of error that is only ever caught in live trading.
     """
-    header = ["SYMBOL", "TF", "VER", "QUAD", "REGIME PF", "N", "STATUS"]
+    header = ["SYM", "TF", "PF (A)", "PF (B)", "QUAD", "OPTIMAL REGIME",
+              "REGIME PF", "TRD", "VER"]
     body: list[list[str]] = []
     legend: dict[str, str] = {}
 
-    ordered = sorted(rows, key=_sort_key)
+    ordered = sorted((r for r in rows
+                      if not STAGE1_SURVIVORS_ONLY
+                      or str(r.get("status") or "").upper() == PROMOTED),
+                     key=_sort_key)
     shown = ordered[: max(0, int(max_rows))]
     for row in shown:
         quad = row.get("quadrant")
@@ -1499,26 +1581,36 @@ def format_stage1_table(rows: list[dict[str, Any]],
         body.append([
             str(row.get("symbol") or "?"),
             str(row.get("tf") or "?"),
+            # The BLENDED factors, as the screen recorded them. `--` where the
+            # handoff carries none - an older one carries neither, and a 0.00
+            # there would read as a version that ran and made nothing.
+            _fmt_metric(row.get("profit_factor_a")),
+            _fmt_metric(row.get("profit_factor_b")),
+            str(quad) if quad else "--",
+            str(regime) if regime else "--",
+            _fmt_metric(row.get("regime_pf")),
+            _fmt_count(row.get("regime_trade_count")),
             # `V` + the version letter, or `--`. A blank cell here would read
             # as Version A, which is a claim about which twin carried the
             # configuration.
             f"V{row['version']}" if row.get("version") else "--",
-            str(quad) if quad else "--",
-            _fmt_metric(row.get("regime_pf")),
-            _fmt_count(row.get("regime_trade_count")),
-            str(row.get("status") or "?").upper(),
         ])
 
     widths = [max(len(header[i]), *(len(r[i]) for r in body)) if body
               else len(header[i]) for i in range(len(header))]
-    align = ["<", "<", "<", "<", ">", ">", "<"]
+    align = ["<", "<", ">", ">", "<", "<", ">", ">", "<"]
 
     def line(cells: list[str]) -> str:
         return "  ".join(format(c, f"{align[i]}{widths[i]}")
                          for i, c in enumerate(cells)).rstrip()
 
     out = [line(header), line(["-" * w for w in widths])]
-    out.extend(line(r) for r in body)
+    # Nothing surviving is a RESULT, not an empty render. The header stays
+    # above it so the block is recognisable as the same table.
+    if body:
+        out.extend(line(r) for r in body)
+    else:
+        out.append(STAGE1_NO_ROWS_NOTE)
     return "\n".join(out), len(ordered) - len(shown), legend
 
 
@@ -1532,30 +1624,47 @@ def build_stage1_embed(strat: str, blob: dict[str, Any],
     rows = stage1_rows(blob)
     promoted = [r for r in rows
                 if str(r.get("status") or "").upper() == PROMOTED]
-    table, hidden, legend = format_stage1_table(rows, max_rows)
+    # The legend is not rendered: `OPTIMAL REGIME` spells the
+    # designated quadrant out in full on every row, so a legend under
+    # the table would restate it.
+    table, hidden, _legend = format_stage1_table(rows, max_rows)
 
     window = blob.get("in_sample_window") or {}
     start = window.get("start") or blob.get("start") or "lake start"
     end = window.get("end") or blob.get("end") or "lake end"
     timeframes = blob.get("timeframes") or (
         [blob["timeframe"]] if blob.get("timeframe") else [])
-    criterion = blob.get("criterion") or "not recorded"
     ml = blob.get("ml_evaluated")
 
     description = [
         f"**In-sample window** `{start} → {end}`",
-        f"**Screen** {criterion}",
+        # The screen in the two bars a reader checks a row against, and
+        # nothing else. Stage 1's own `criterion` string is the full
+        # designation rule - the net-P&L clause, the alpha score, the
+        # tie-break - which is 200 characters of mathematics above a table
+        # whose columns are a profit factor and a trade count, and the
+        # reliable effect of printing it is that the window above it stops
+        # being read. The full rule stays on the handoff, which is where it is
+        # checked. Both numbers are TRANSCRIBED from the thresholds the screen
+        # recorded, never restated as literals here: a card that hardcoded
+        # 1.00 would keep saying 1.00 after a `--min-profit-factor` run.
+        f"**Screen** Regime PF `>= "
+        f"{_fmt_metric(blob.get('min_profit_factor'))}` · Regime Trades "
+        f"`>= {_stage1_trade_floor(blob)}`",
         "```text",
-        table if table.strip() else "no configuration was evaluated",
+        table if table.strip() else STAGE1_NO_ROWS_NOTE,
         "```",
+        # The table is filtered and says so. The counts in the fields below
+        # are NOT: they describe every configuration the screen evaluated, so
+        # a short table can never read as a short screen.
+        "_The table lists SURVIVING configurations only — the counts "
+        "below cover every configuration screened, and each drop keeps its "
+        "reason in the handoff and in stage1_baseline_report.md._",
     ]
-    if legend:
-        description.append("**Quadrants** " + " · ".join(
-            f"`{q}` {legend[q]}" for q in sorted(legend)))
     if hidden:
         description.append(
-            f"_{hidden} further configuration(s) are not shown — the full "
-            f"screen is in the handoff._")
+            f"_{hidden} further SURVIVING configuration(s) are not shown "
+            f"— the full screen is in the handoff._")
 
     text = "\n".join(description)
     if len(text) > MAX_EMBED_DESCRIPTION:
