@@ -43,6 +43,7 @@ What it checks
 from __future__ import annotations
 
 import math
+import os
 import resource
 import sys
 import tempfile
@@ -54,7 +55,8 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agents.tier3_workers import (  # noqa: E402
-    GeneratedCodeError, StrategyLoadError, generate_strategy_boilerplate,
+    GeneratedCodeError, StrategyLoadError, apply_ml_signal_filter,
+    generate_strategy_boilerplate,
     load_strategy, run_monte_carlo_simulation, run_parameter_sensitivity,
     run_strategy_backtest, run_walk_forward_analysis, _fold_windows,
     trade_returns_from_result, write_and_validate_strategy,
@@ -449,6 +451,187 @@ def test_memory(tmp: Path) -> None:
           f"{peak:.2f} GiB")
 
 
+# --------------------------------------------------------------------------
+def _ml_fixture(n: int = 1200, seed: int = 7):
+    """
+    Bars with enough alternating entries to make the refit cadence bite.
+
+    Synthetic and small on purpose: the property under test is how OFTEN the
+    classifier is refitted, which does not need a lake.
+    """
+    rng = np.random.default_rng(seed)
+    close = 100 + np.cumsum(rng.normal(0, 0.5, n))
+    bars = pd.DataFrame({
+        "ts": pd.date_range("2020-01-01", periods=n, freq="15min", tz="UTC"),
+        "open": close, "high": close + 0.5, "low": close - 0.5,
+        "close": close, "volume": 1000.0,
+    })
+    entries = pd.Series(np.zeros(n, dtype=bool))
+    exits = pd.Series(np.zeros(n, dtype=bool))
+    entries.iloc[2::6] = True          # one trade every six bars
+    exits.iloc[5::6] = True
+    return bars, entries, exits
+
+
+def _legacy_filter(bars, entries, exits, threshold=0.5):
+    """
+    The refit-on-every-completed-trade loop as it stood before the cadence,
+    as an ORACLE. Kept here rather than referenced, because the point is to
+    detect the day the real one silently stops agreeing with it.
+    """
+    from sklearn.ensemble import HistGradientBoostingClassifier
+    from agents.tier3_workers import (MIN_TRAIN_TRADES, _feature_matrix,
+                                      _label_baseline_trades)
+    entries = pd.Series(entries).fillna(False).astype(bool)
+    exits = pd.Series(exits).fillna(False).astype(bool)
+    trades = _label_baseline_trades(bars, entries, exits, None, None,
+                                    direction="long")
+    kept = entries.to_numpy(dtype=bool).copy()
+    signal_bars = np.flatnonzero(kept)
+    matrix = _feature_matrix(None, bars)
+    train_rows = matrix[trades["signal_idx"]]
+    labels, exit_idx = trades["label"], trades["exit_idx"]
+    model, fitted_n, fits = None, -1, 0
+    for s in signal_bars:
+        n = int(np.searchsorted(exit_idx, s, side="left"))
+        if n < MIN_TRAIN_TRADES:
+            continue
+        y = labels[:n]
+        if np.unique(y).size < 2:
+            continue
+        if n != fitted_n:
+            model = HistGradientBoostingClassifier(
+                max_iter=100, max_depth=3, learning_rate=0.1,
+                min_samples_leaf=5, early_stopping=False, random_state=0)
+            model.fit(train_rows[:n], y)
+            fitted_n, fits = n, fits + 1
+        if float(model.predict_proba(matrix[s:s + 1])[0, 1]) < threshold:
+            kept[s] = False
+    return pd.Series(kept, index=entries.index), fits
+
+
+def test_refit_step() -> None:
+    print("\nrefit cadence arithmetic")
+    from agents.tier3_workers import _refit_step
+    # 0.0 IS the original rule: refit whenever the pool grew at all.
+    check("growth 0.0 steps by 1", _refit_step(500, 0.0) == 1)
+    check("never below 1", _refit_step(3, 0.10) == 1, str(_refit_step(3, 0.10)))
+    check("scales with the pool", _refit_step(500, 0.10) == 50)
+    check("unfitted refits at once", _refit_step(0, 0.10) == 1)
+    # A negative or absurd growth must not stall the loop forever.
+    check("negative growth still progresses", _refit_step(500, -1.0) == 1)
+
+
+def test_refit_growth_zero_is_the_old_rule() -> None:
+    print("\nrefit_growth=0.0 reproduces the pre-cadence filter")
+    bars, e, x = _ml_fixture()
+    oracle, oracle_fits = _legacy_filter(bars, e, x)
+    stats: dict = {}
+    got, _ = apply_ml_signal_filter(bars, e, x, threshold=0.5,
+                                    refit_growth=0.0, stats=stats)
+    check("identical entry mask",
+          bool((got.to_numpy() == oracle.to_numpy()).all()),
+          f"{int((got.to_numpy() != oracle.to_numpy()).sum())} differ")
+    check("same number of fits", stats["fits"] == oracle_fits,
+          f"{stats['fits']} vs oracle {oracle_fits}")
+    check("something was actually suppressed",
+          int((~got.to_numpy() & e.to_numpy()).sum()) > 0)
+
+
+def test_refit_cadence_cuts_fits() -> None:
+    print("\nthe cadence is what makes the screen finish")
+    bars, e, x = _ml_fixture()
+    exact: dict = {}
+    apply_ml_signal_filter(bars, e, x, threshold=0.5, refit_growth=0.0,
+                           stats=exact)
+    paced: dict = {}
+    apply_ml_signal_filter(bars, e, x, threshold=0.5, refit_growth=0.10,
+                           stats=paced)
+    check("far fewer fits", paced["fits"] < exact["fits"] / 3,
+          f"{paced['fits']} vs {exact['fits']}")
+    check("candidates unchanged", paced["candidates"] == exact["candidates"])
+    check("cadence is recorded", paced["refit_growth"] == 0.10)
+    check("elapsed is recorded", paced["elapsed_s"] >= 0.0)
+
+
+def test_cadence_never_sees_the_future() -> None:
+    """
+    The property the cadence must not break. A stale model is fitted on FEWER,
+    OLDER closed trades - so a decision can only ever know less than the exact
+    rule, never anything from at or after the signal bar. Asserted on the
+    training window the loop would use, because a lookahead here is invisible
+    in the equity curve: it just makes Version B look brilliant.
+    """
+    print("\ncadence staleness is backwards-only")
+    from agents.tier3_workers import (MIN_TRAIN_TRADES, _label_baseline_trades,
+                                      _refit_step)
+    bars, e, x = _ml_fixture()
+    trades = _label_baseline_trades(bars, e, x, None, None, direction="long")
+    exit_idx = trades["exit_idx"]
+    fitted_n, worst_ratio, violations = -1, 1.0, 0
+    for s in np.flatnonzero(e.to_numpy()):
+        n = int(np.searchsorted(exit_idx, s, side="left"))
+        if n < MIN_TRAIN_TRADES:
+            continue
+        if fitted_n < 0 or (n - fitted_n) >= _refit_step(fitted_n, 0.10):
+            fitted_n = n
+        # Every trade in the fitted window closed strictly before this bar.
+        if fitted_n and exit_idx[fitted_n - 1] >= s:
+            violations += 1
+        worst_ratio = min(worst_ratio, fitted_n / n)
+    check("no trade in the window closed at or after the signal bar",
+          violations == 0, f"{violations} violations")
+    check("the model is never fitted on MORE than is available",
+          worst_ratio <= 1.0)
+    check("staleness stays bounded", worst_ratio > 0.80,
+          f"worst {worst_ratio:.3f} of available trades")
+
+
+def test_train_row_cap() -> None:
+    print("\nthe training cap keeps the MOST RECENT trades")
+    bars, e, x = _ml_fixture()
+    capped: dict = {}
+    got, _ = apply_ml_signal_filter(bars, e, x, threshold=0.5,
+                                    refit_growth=0.0, max_train_rows=40,
+                                    stats=capped)
+    check("no fit exceeded the cap", capped["train_rows_max"] <= 40,
+          str(capped["train_rows_max"]))
+    check("the cap did not change which entries were judged",
+          int(np.asarray(e).sum()) == capped["candidates"])
+    uncapped: dict = {}
+    apply_ml_signal_filter(bars, e, x, threshold=0.5, refit_growth=0.0,
+                           stats=uncapped)
+    check("the default cap does not bind on this sample",
+          uncapped["train_rows_max"] < 50_000,
+          f"{uncapped['train_rows_max']} rows")
+
+
+def test_ml_thread_count() -> None:
+    """
+    Bounded parallelism, and the only form this estimator has:
+    `HistGradientBoostingClassifier` takes no `n_jobs`, so the knob is the
+    OpenMP thread count.
+    """
+    print("\nML thread bound")
+    import inspect as _inspect
+    from sklearn.ensemble import HistGradientBoostingClassifier
+    from agents.tier3_workers import ML_THREADS_ENV, ml_thread_count
+    check("the estimator really has no n_jobs",
+          "n_jobs" not in _inspect.signature(
+              HistGradientBoostingClassifier.__init__).parameters)
+    before = os.environ.get(ML_THREADS_ENV)
+    try:
+        os.environ[ML_THREADS_ENV] = "4"
+        check("BT_ML_THREADS is read", ml_thread_count() == 4)
+        os.environ[ML_THREADS_ENV] = "nonsense"
+        check("a bad value falls back to 1", ml_thread_count() == 1)
+    finally:
+        if before is None:
+            os.environ.pop(ML_THREADS_ENV, None)
+        else:
+            os.environ[ML_THREADS_ENV] = before
+
+
 if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as d:
         tmp = Path(d)
@@ -461,6 +644,12 @@ if __name__ == "__main__":
         test_sensitivity(tmp)
         test_walk_forward(tmp)
         test_ruin_is_flagged(tmp)
+        test_refit_step()
+        test_refit_growth_zero_is_the_old_rule()
+        test_refit_cadence_cuts_fits()
+        test_cadence_never_sees_the_future()
+        test_train_row_cap()
+        test_ml_thread_count()
         test_memory(tmp)
 
     print("\n" + "=" * 60)

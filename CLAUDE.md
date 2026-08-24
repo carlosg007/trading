@@ -286,8 +286,9 @@ python3 backtest/run.py --strat sma_crossover --symbols NQ --ml   # also Version
 
 #   --symbols  one (NQ), a list (NQ,ES,CL), or ALL for all 27 lake symbols
 #   --scan     sweep the module's PARAM_GRID per symbol (see the scanner below)
-#   --ml       also run Version B. OFF by default: the classifier refits once
-#              per completed trade, and 27 symbols of that is hours. A skipped
+#   --ml       also run Version B. OFF by default: the classifier refits as
+#              the closed-trade pool grows (see the refit cadence below), and
+#              27 symbols of that is still long. A skipped
 #              Version B reports as NOT RUN everywhere, never as a zero.
 #   --bg       detach and run as a background daemon; follow it with bt-status
 
@@ -357,6 +358,9 @@ python3 backtest/baseline.py --strat X --symbols ALL --tf 15m \
 # by DEFAULT, because survival is decided on either version. --no-ml declines
 # it. Every other stage and bt-run are unchanged: --ml stays opt-in there.
 python3 backtest/baseline.py --strat X --symbols ALL --tf 15m --no-ml
+# HOW OFTEN VERSION B REFITS. Default 0.10; 0.0 is the pre-2026-08-24
+# refit-on-every-completed-trade rule, bit for bit, and is ~60x slower.
+python3 backtest/baseline.py --strat X --symbols NQ --tf 15m --ml-refit-growth 0.0
 
 # Post Stage 1's leaderboard to $BT_DISCORD_WEBHOOK. Reads the handoff and
 # recomputes nothing; --dry-run prints the payload and sends nothing.
@@ -498,6 +502,58 @@ an empty result is how a pipeline starts reporting numbers nobody generated.
   `run_parameter_sensitivity`, `run_monte_carlo_simulation`,
   `generate_strategy_boilerplate`, `load_strategy`. Still scaffold:
   `run_variant`, `run_dual_version`, `generate_ml_filter`, `main`.
+- **THE VERSION B REFIT CADENCE, from 2026-08-24.** `apply_ml_signal_filter`
+  refits when the closed-trade pool has grown by `ML_REFIT_GROWTH` (0.10) of
+  what it was last fitted on, not on every completed trade.
+  - **A fit costs 17-40 ms whatever the sample size** — the 100 boosting
+    iterations dominate, not the rows — so the old rule cost one fixed fit per
+    CANDIDATE ENTRY. `t3_braid_scalp_20260823` on NQ 15m over the charter
+    window signals 6,506 longs and 6,211 shorts: ~12,700 fits, **269.6 s for
+    the long side alone**, ~9 minutes for one (symbol, timeframe) and ~50
+    across a 4-symbol 2-timeframe screen — with nothing printed between the
+    RUNNING line and the row. It read as a hang and was a silent loop.
+  - **Staleness is safe; lookahead is not.** Between refits the model is one
+    fitted on FEWER, STRICTLY OLDER closed trades, so a decision can only ever
+    know less than the exact rule — never anything from at or after the signal
+    bar, which is the one property this function exists to guarantee. At 0.10
+    every decision uses a model trained on at least ~91% of the trades that had
+    closed before it.
+  - **It is an APPROXIMATION and it moves Version B's numbers.** On that NQ run
+    14.83% of long candidates are decided differently from the exact rule. That
+    number is mostly a fact about the FILTER, not about the cadence: halving the
+    cadence to 0.05 doubles the fits and only moves it to 13.82%, because these
+    probabilities sit near the 0.50 threshold and flip on any change of training
+    window. Read it as evidence about how stable Version B's vetoes are.
+  - **Measured end to end on that configuration**: 418.7 s at `0.0` against
+    9.2 s at the 0.10 default, a 45x wall-clock difference — and BOTH runs
+    report Version A 0.96 PF, Version B 0.95 PF and the same SURVIVES verdict.
+    The 14.83% of individually flipped vetoes did not move the screening
+    decision here. That is one configuration, not a guarantee: it is evidence
+    that the aggregate is far more stable than the per-candidate probabilities,
+    which is what would be expected if those probabilities sit near 0.50.
+  - **`--ml-refit-growth 0.0` restores the old rule bit for bit** —
+    `max(1, floor(n * 0.0))` is 1, which is the original `n_available !=
+    fitted_n`. `tests/test_tier3_workers.py` pins that equality against an
+    inline oracle of the pre-cadence loop. Which cadence ran is recorded per
+    side on `metrics["meta"]["ml_refit"]`, because two Version Bs fitted on
+    different cadences are not comparable and that has to travel with the
+    numbers.
+  - **Predictions are BATCHED and that changes nothing.** The refit schedule
+    reads only the trade count, never a prediction, so it is resolved before any
+    fit and each model then scores its whole segment in one call. A single-row
+    `predict_proba` is ~0.75 ms of call overhead around ~2 us of work: 6,500 of
+    them cost 4.8 s against 9 ms batched, a 507x overhead saving with identical
+    probabilities.
+  - **`ML_MAX_TRAIN_ROWS` (50,000) caps one fit's training trades**, MOST
+    RECENT kept — dropping the oldest preserves causality. It does not bind on
+    this repository's workloads (the largest slice measured is ~6,500) and so
+    changes no existing number.
+  - **`HistGradientBoostingClassifier` takes no `n_jobs`.** It parallelises
+    through OpenMP, so the bound is a thread count read when the native library
+    loads — `BT_ML_THREADS`, default 1, and the runners already pin 1 at their
+    process boundary. **More threads is SLOWER here**, measured: 50 fits of
+    1,000x5 take 1.52 s at 1 thread and 2.00 s at 4, because the fits are small
+    and numerous and each pays pool overhead exceeding the work it distributes.
 - `system_monitor.py`: circuit breaker tracking RAM and runaway execution loops.
 
 **`mdlib/lake.py`** — The single reader. Two entry points over the same bars,
@@ -885,7 +941,7 @@ runs.
 - **One bad contract does not end the batch.** A missing spec, an empty slice
   of the lake or a strategy that raises on one symbol's data is recorded as an
   `ERROR` row and the loop moves on. The process exits 1 if anything failed.
-- **`--ml` is opt-in.** Version B refits its classifier once per completed
+- **`--ml` is opt-in.** Version B refits its classifier as the pool of completed
   trade; across many symbols that is hours. A skipped Version B is reported as
   NOT RUN in the scorecard, the snapshot and the leaderboard — never as a
   Version B that scored nothing, because a comparison that was not made is not
@@ -1327,7 +1383,10 @@ one environment they cleared.
   lines of NOT EVALUATED under a heading teaches a reader to skip the gate
   table — the one thing they must not do at Stage 3.
 - **The console is a progress line per configuration and a table of the
-  winners.** Two lines each — `RUNNING` with the bar count, then `EVALUATED`
+  winners.** Three lines each — `RUNNING` with the bar count, `TIMING` with the
+  seconds in load / simulation / profiling and the classifier's fits per side
+  (a slow stage and a hung one are otherwise indistinguishable, which is
+  exactly how the refit cadence bug read), then `EVALUATED`
   with both profit factors and the verdict — because 27 contracts × 4
   timeframes is 108 scorecards, and printed in full the only reliable effect is
   that nobody reads the last one.

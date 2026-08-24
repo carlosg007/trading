@@ -59,8 +59,10 @@ import ast
 import importlib.util
 import inspect
 import math
+import os
 import re
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Protocol
@@ -1050,6 +1052,77 @@ ML_FEATURES = ["atr_norm", "volume_z", "rsi_14", "hour", "minute",
 # by removing trades it never actually judged.
 MIN_TRAIN_TRADES = 30
 
+# HOW OFTEN THE CLASSIFIER IS REFITTED, as a fraction of the pool it was last
+# fitted on. Refit when the closed-trade pool has grown by at least
+# `max(1, floor(fitted_n * ML_REFIT_GROWTH))` trades since the last fit.
+#
+# WHY THIS EXISTS. A fit costs 17-40 ms whatever the sample size - the 100
+# boosting iterations dominate, not the rows - so refitting on every completed
+# trade makes the filter cost one fixed fit per candidate entry. On NQ 15m over
+# the charter window `t3_braid_scalp_20260823` signals 6,506 longs and 6,211
+# shorts: ~12,700 fits, ~6.5 MINUTES for one (symbol, timeframe), ~50 minutes
+# across a 4-symbol 2-timeframe screen, with nothing printed in between. That
+# is the "hang" - a silent loop, not a deadlock.
+#
+# WHY IT IS SAFE. Between refits the model is one fitted on FEWER, STRICTLY
+# OLDER closed trades. Staleness only ever removes information from a decision;
+# it can never add information from after the signal bar, which is the property
+# `apply_ml_signal_filter` exists to guarantee. At 0.10 every decision uses a
+# model trained on at least ~91% of the trades that had closed before it.
+#
+# IT IS AN APPROXIMATION AND IT CHANGES VERSION B'S NUMBERS. `0.0` restores
+# refit-on-every-trade exactly - `max(1, floor(n * 0.0))` is 1, which is the
+# original `n_available != fitted_n` - so a run that must be bit-for-bit
+# comparable with one taken before this existed can ask for it. Whichever ran
+# is recorded on the result, because two Version Bs fitted on different
+# cadences are not comparable and that fact has to travel with the numbers.
+ML_REFIT_GROWTH = 0.10
+
+# Cap on the training rows handed to one fit, counted in COMPLETED TRADES. The
+# MOST RECENT rows are kept: dropping the oldest preserves causality (every
+# remaining row still closed before the signal bar), while keeping the oldest
+# would train the live end of a run on its own ancient history.
+#
+# It does NOT bind on this repository's workloads - the largest training slice
+# measured is ~6,500 trades - so it changes no existing number. It is a ceiling
+# for a strategy that trades two orders of magnitude more often, where the fit
+# cost would stop being dominated by the fixed 100 iterations.
+ML_MAX_TRAIN_ROWS = 50_000
+
+# BOUNDED PARALLELISM, and the only form of it this estimator has.
+# `HistGradientBoostingClassifier` takes NO `n_jobs` - it parallelises through
+# OpenMP, so the thread count is an environment variable read when the native
+# library loads, not an estimator argument. Passing `n_jobs=4` raises
+# TypeError.
+#
+# MORE THREADS IS SLOWER HERE, measured: 50 fits of 1,000x5 take 1.52 s at
+# OMP_NUM_THREADS=1 and 2.00 s at 4 (+32%). The fits are small and numerous, so
+# each one pays pool overhead that costs more than the work it distributes. The
+# runners already pin 1 at their process boundary; `BT_ML_THREADS` is the knob
+# for a workload whose fits are genuinely large.
+ML_THREADS_ENV = "BT_ML_THREADS"
+
+
+def ml_thread_count() -> int:
+    """The OpenMP thread count for classifier fits. See `ML_THREADS_ENV`."""
+    raw = os.environ.get(ML_THREADS_ENV) or os.environ.get("OMP_NUM_THREADS")
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _refit_step(fitted_n: int, growth: float) -> int:
+    """
+    Trades the pool must grow by before the next refit.
+
+    Never below 1, so the loop always makes progress and `growth=0.0` is
+    exactly the refit-on-every-trade rule this replaced.
+    """
+    if fitted_n <= 0 or growth <= 0.0:
+        return 1
+    return max(1, int(fitted_n * growth))
+
 
 def _bar_timestamps(bars: pd.DataFrame) -> pd.DatetimeIndex:
     """
@@ -1262,7 +1335,10 @@ def apply_ml_signal_filter(bars: pd.DataFrame,
                            min_train_trades: int = MIN_TRAIN_TRADES,
                            random_state: int = 0,
                            direction: str = "long",
-                           features: Any = None) -> tuple[pd.Series, pd.Series]:
+                           features: Any = None,
+                           refit_growth: float = ML_REFIT_GROWTH,
+                           max_train_rows: int = ML_MAX_TRAIN_ROWS,
+                           stats: dict | None = None) -> tuple[pd.Series, pd.Series]:
     """
     Version B of the Dual-Version Mandate: suppress the baseline's entries the
     classifier expects to lose.
@@ -1287,9 +1363,28 @@ def apply_ml_signal_filter(bars: pd.DataFrame,
     the equity curve - it just makes Version B look brilliant - which is why it
     is enforced here rather than left to the caller.
 
-    The classifier is refitted whenever the pool of completed trades grows, so
-    every decision uses the largest strictly-historical sample available. Fits
-    cost one per completed trade, not one per bar.
+    The classifier is refitted as the pool of completed trades grows, so every
+    decision uses a strictly-historical sample. How OFTEN is `refit_growth`:
+    the pool must grow by `max(1, floor(fitted_n * refit_growth))` trades
+    before the next fit.
+
+    THAT CADENCE IS THE DIFFERENCE BETWEEN A SCREEN THAT RUNS AND ONE THAT
+    LOOKS HUNG. A fit costs 17-40 ms whatever the sample size, so refitting on
+    every completed trade costs one fixed fit per candidate entry - ~12,700 of
+    them, ~6.5 minutes, for one (symbol, timeframe) of a scalping strategy over
+    the charter window. At the 0.10 default the same run takes ~60 fits a side.
+
+    Staleness is SAFE and lookahead is not, which is why this is the knob that
+    was added: between refits the model is one fitted on fewer, strictly older
+    closed trades, so it can only ever know LESS than the exact rule - never
+    anything from at or after the signal bar. At 0.10 every decision uses a
+    model trained on at least ~91% of the trades that had closed before it.
+
+    It is still an APPROXIMATION and it moves Version B's numbers. Pass 0.0 for
+    the original refit-on-every-completed-trade rule, bit for bit. `stats`
+    records which ran, and the callers that write metrics carry it onto the
+    result, because two Version Bs fitted on different cadences are not
+    comparable to each other.
 
     Warm-up
     -------
@@ -1307,6 +1402,18 @@ def apply_ml_signal_filter(bars: pd.DataFrame,
         that lose money after costs.
     threshold
         Keep the entry when P(win) >= this. 0.50 is "more likely than not".
+    refit_growth
+        Fractional growth in the closed-trade pool that triggers a refit.
+        0.0 refits on every completed trade (the exact original rule).
+    max_train_rows
+        Ceiling on the completed trades one fit is given, MOST RECENT kept.
+        Dropping the oldest preserves causality; it does not bind below
+        50,000 trades and so changes no existing result.
+    stats
+        Optional dict, filled in place with `fits`, `candidates`,
+        `elapsed_s`, `refit_growth`, `max_train_rows`, `threads` and
+        `train_rows_max`. The function PRINTS NOTHING - this module is a
+        library and several callers parse a child process's stdout as data.
     features
         The matrix to fit on: a DataFrame of one row per bar, a callable
         `f(bars) -> DataFrame`, or None for the shared `causal_features`.
@@ -1378,29 +1485,85 @@ def apply_ml_signal_filter(bars: pd.DataFrame,
     # count of completed trades before bar s is a searchsorted, not a scan.
     exit_idx = trades["exit_idx"]
 
-    model = None
+    started = time.perf_counter()
+
+    # ---- pass 1: which model judges which candidate ----------------------
+    # The refit rule reads only `n_available`, never a prediction, so the whole
+    # schedule is known before a single fit. Deciding it up front is what lets
+    # the predictions be BATCHED below; it changes no decision, because every
+    # bar is still judged by exactly the model the one-at-a-time loop would
+    # have had fitted when it reached that bar.
+    #
+    # `labels` is 0/1, so "both classes present in labels[:n]" is a comparison
+    # against the first index at which each class has appeared - not a
+    # `np.unique` per candidate, which sorts a slice that grows to the full
+    # trade list and costs O(n log n) on every one of thousands of candidates.
+    ones = np.flatnonzero(labels == 1)
+    zeros = np.flatnonzero(labels == 0)
+    if ones.size == 0 or zeros.size == 0:
+        both_classes_from = labels.size + 1     # one class ever: never fit
+    else:
+        both_classes_from = int(max(ones[0], zeros[0])) + 1
+
+    segments: list[tuple[int, list[int]]] = []      # (fitted_n, candidate bars)
     fitted_n = -1
     for s in signal_bars:
         n_available = int(np.searchsorted(exit_idx, s, side="left"))
         if n_available < min_train_trades:
             continue                       # warm-up: pass through unfiltered
-
-        y = labels[:n_available]
-        if np.unique(y).size < 2:
+        if n_available < both_classes_from:
             continue                       # one class so far; nothing to learn
 
-        if n_available != fitted_n:
-            model = HistGradientBoostingClassifier(
-                max_iter=100, max_depth=3, learning_rate=0.1,
-                min_samples_leaf=5, early_stopping=False,
-                random_state=random_state)
-            model.fit(train_rows[:n_available], y)
+        # Refit only once the pool has grown enough to be worth the fixed cost
+        # of a fit. `_refit_step` never returns below 1, so `refit_growth=0.0`
+        # is `n_available != fitted_n` - the original rule, exactly.
+        if fitted_n < 0 or (n_available - fitted_n) >= _refit_step(fitted_n,
+                                                                  refit_growth):
             fitted_n = n_available
+            segments.append((n_available, []))
+        segments[-1][1].append(int(s))
 
-        p_win = float(model.predict_proba(matrix[s:s + 1])[0, 1])
-        if p_win < threshold:
-            kept[s] = False
+    # ---- pass 2: one fit and ONE batched prediction per segment -----------
+    # A single-row `predict_proba` is ~0.75 ms of call overhead around ~2 us of
+    # work: 6,500 of them cost 4.8 s, while one call over all 6,500 rows costs
+    # 9 ms. Same model, same rows, same probabilities - 500x less overhead.
+    fits = 0
+    train_rows_max = 0
+    for n_available, bars_in_segment in segments:
+        # MOST RECENT rows within the cap. Every row still closed before every
+        # bar in the segment, so the window is causal however far back it
+        # starts.
+        lo = max(0, n_available - int(max_train_rows))
+        fit_X = train_rows[lo:n_available]
+        fit_y = labels[lo:n_available]
+        if lo and np.unique(fit_y).size < 2:
+            # The cap made the window single-class. Widen back to the full
+            # history rather than skipping the candidates: a cap is a cost
+            # control and must not change which entries get judged.
+            fit_X, fit_y = train_rows[:n_available], labels[:n_available]
+        model = HistGradientBoostingClassifier(
+            max_iter=100, max_depth=3, learning_rate=0.1,
+            min_samples_leaf=5, early_stopping=False,
+            random_state=random_state)
+        model.fit(fit_X, fit_y)
+        fits += 1
+        train_rows_max = max(train_rows_max, int(fit_X.shape[0]))
 
+        idx = np.asarray(bars_in_segment, dtype=np.intp)
+        p_win = model.predict_proba(matrix[idx])[:, 1]
+        kept[idx[p_win < threshold]] = False
+
+    if stats is not None:
+        stats.update({
+            "direction": direction,
+            "candidates": int(signal_bars.size),
+            "fits": fits,
+            "train_rows_max": train_rows_max,
+            "refit_growth": float(refit_growth),
+            "max_train_rows": int(max_train_rows),
+            "threads": ml_thread_count(),
+            "elapsed_s": round(time.perf_counter() - started, 3),
+        })
     return pd.Series(kept, index=entries.index), exits
 
 

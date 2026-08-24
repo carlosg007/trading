@@ -1025,7 +1025,9 @@ def run_symbol(symbol: str, path: Path, tf: str, params: dict,
     """
     t0 = time.time()
 
+    t_load = time.time()
     bars = load_bars(symbol, tf, args.start, args.end)
+    t_load = time.time() - t_load
     if "symbol" in bars.columns and bars["symbol"].nunique() > 1:
         raise ValueError(f"{symbol}: the lake returned an interleaved frame "
                          f"({bars['symbol'].nunique()} symbols)")
@@ -1039,21 +1041,37 @@ def run_symbol(symbol: str, path: Path, tf: str, params: dict,
         slippage_ticks=args.slippage_ticks, flat_by_close=args.flat_by_close,
         notes=f"stage 1 baseline {symbol} {tf}", **cfg_kwargs)
 
+    t_sim = time.time()
     out = run_dual_version_backtest(
         str(path), bars, freq=tf, symbol=symbol, cfg=cfg, params=params,
         threshold=args.threshold, ml=args.ml, emit_reports=False,
-        strat_name=path.stem)
+        strat_name=path.stem,
+        ml_refit_growth=getattr(args, "ml_refit_growth", None))
+    t_sim = time.time() - t_sim
 
     a, b = out["version_a"], out["version_b"]
     metrics_a = a["metrics"]
     metrics_b = b["metrics"] if b else None
 
     strat_name = path.parent.name if path.stem == "strat" else path.stem
+    t_profile = time.time()
     profiles = profile_versions(
         bars, out, symbol, tf, strat_name, out_dir,
         min_profit_factor=args.min_profit_factor,
         min_trades=args.min_trades,
         min_trade_fraction=args.min_trade_fraction)
+    t_profile = time.time() - t_profile
+
+    # WHERE THE TIME WENT, per configuration. A screen is 8 to 108 of these and
+    # the only thing printed between the RUNNING line and this one is nothing,
+    # so a slow stage is indistinguishable from a hung one without it. The ML
+    # line carries the FIT COUNT beside the seconds because that is the number
+    # that explains the seconds: fits cost ~17-40 ms each whatever the sample
+    # size, so cost tracks how often the classifier was refitted and not how
+    # much data it saw.
+    print(f"{tag} TIMING    {_pair_label(symbol, tf)} | "
+          f"load {t_load:.1f}s | sim {t_sim:.1f}s | profile {t_profile:.1f}s"
+          f"{_ml_timing(out)}", flush=True)
     survived, reason, best = screen(profiles, args.min_profit_factor,
                                     args.min_trades, args.min_trade_fraction)
 
@@ -1110,6 +1128,29 @@ def survivors_leaderboard(rows: list[dict]) -> str:
          "REGIME PF", "REGIME TRADES", "VER"],
         body, align=["<", "<", ">", ">", "<", "<", ">", ">", "<"],
         empty="no configuration cleared the regime firewall")
+
+
+def _ml_timing(out: dict) -> str:
+    """
+    The classifier's own share of a configuration, per side.
+
+    Empty string when Version B did not run - a `ml 0.0s` under a `--no-ml`
+    run reads as a filter that ran and cost nothing.
+    """
+    meta = ((out.get("version_a") or {}).get("metrics") or {}).get("meta") or {}
+    refit = meta.get("ml_refit")
+    if not refit:
+        return ""
+    parts = []
+    for side in ("long", "short"):
+        st = refit.get(side) or {}
+        if not st:
+            continue
+        parts.append(f"{side[0]}: {st['elapsed_s']:.1f}s/{st['fits']} fits")
+    if not parts:
+        return ""
+    growth = (refit.get("long") or refit.get("short") or {}).get("refit_growth")
+    return f" | ml {' '.join(parts)} (refit_growth={growth})"
 
 
 def _evaluated_line(tag: str, row: dict) -> str:
@@ -1203,6 +1244,19 @@ def build_parser() -> argparse.ArgumentParser:
                         f"{STAGE1_MIN_TRADE_FRACTION * 100:.0f}%%). 0 reduces "
                         f"the floor to the flat --min-trades count, which is "
                         f"the pre-2026-08-21 behaviour.")
+    p.add_argument("--ml-refit-growth", type=float, default=None,
+                   help="How often Version B refits: the closed-trade pool "
+                        "must grow by this FRACTION before the next fit "
+                        "(default 0.10). A fit costs 17-40ms whatever the "
+                        "sample size, so refitting on every completed trade "
+                        "costs one fit per candidate entry - ~12,700 of them, "
+                        "~6.5 minutes, for one 15m contract over the charter "
+                        "window. 0.0 restores that exact rule, bit for bit, "
+                        "for a run that must be comparable with one taken "
+                        "before the cadence existed. Between refits the model "
+                        "is fitted on FEWER, OLDER closed trades, so it can "
+                        "only ever know less - never anything from at or "
+                        "after the signal bar.")
     p.add_argument("--out-dir", default=None,
                    help="Override <BT_ARTIFACTS>/pipeline/<strategy>/")
     add_filter_args(p)

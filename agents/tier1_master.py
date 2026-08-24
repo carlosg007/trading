@@ -723,7 +723,9 @@ def run_dual_version_backtest(strategy_code: str,
                               emit_reports: bool = True,
                               report_dir: Any = None,
                               artifacts_root: str = "/mnt/backtest/artifacts",
-                              strat_name: str | None = None) -> dict[str, Any]:
+                              strat_name: str | None = None,
+                              ml_refit_growth: float | None = None,
+                              ) -> dict[str, Any]:
     """
     Run a strategy as Version A (rule-based) and Version B (ML-filtered) over
     the same bars, under identical costs.
@@ -794,10 +796,15 @@ def run_dual_version_backtest(strategy_code: str,
 
     from backtest.engine import (BacktestConfig, _assemble_result, _simulate,
                                  clean_signals_ls, unpack_signals)
-    from agents.tier3_workers import (ML_FEATURES, apply_ml_signal_filter,
+    from agents.tier3_workers import (ML_FEATURES, ML_REFIT_GROWTH,
+                                     apply_ml_signal_filter,
                                      summarize_result)
 
     config = cfg or BacktestConfig()
+    # None means "the module's default cadence". Resolved here rather than in
+    # the signature because the constant is imported inside this function.
+    if ml_refit_growth is None:
+        ml_refit_growth = ML_REFIT_GROWTH
 
     if df is None or len(df) == 0:
         raise ValueError("df is empty - nothing to simulate")
@@ -884,6 +891,8 @@ def run_dual_version_backtest(strategy_code: str,
     metrics_b = None
     entries_b = None
     ml_feature_names = None
+    ml_stats_long = {}
+    ml_stats_short = {}
     if ml:
         # The strategy's own feature matrix when it declares an `ml_features`
         # hook, None otherwise - and None is what makes the shared
@@ -902,9 +911,16 @@ def run_dual_version_backtest(strategy_code: str,
         if ml_features is not None:
             ml_feature_names = [str(c) for c in
                                 getattr(ml_features, "columns", [])]
+        # One stats dict per side, filled in place by the filter. The refit
+        # CADENCE lands on the result through these: two Version Bs fitted on
+        # different cadences are not comparable, and a reader must not have to
+        # infer which one ran from how long the run took.
+        ml_stats_long: dict = {}
+        ml_stats_short: dict = {}
         filtered, exits_b = apply_ml_signal_filter(
             bars, entries_a, exits_a, symbol=symbol, cfg=config,
-            threshold=threshold, direction="long", features=ml_features)
+            threshold=threshold, direction="long", features=ml_features,
+            refit_growth=ml_refit_growth, stats=ml_stats_long)
         # The short side gets its own classifier, trained on its own completed
         # trades with the short P&L sign. Reusing the long filter here would
         # score every short against a model whose training set is entirely
@@ -912,7 +928,8 @@ def run_dual_version_backtest(strategy_code: str,
         # "ML-filtered" while half its trades never met the classifier.
         s_filtered, s_exits_b = apply_ml_signal_filter(
             bars, s_entries_a, s_exits_a, symbol=symbol, cfg=config,
-            threshold=threshold, direction="short", features=ml_features)
+            threshold=threshold, direction="short", features=ml_features,
+            refit_growth=ml_refit_growth, stats=ml_stats_short)
         entries_b, exits_b, s_entries_b, s_exits_b = clean_signals_ls(
             filtered, exits_b, s_filtered, s_exits_b)
 
@@ -949,6 +966,14 @@ def run_dual_version_backtest(strategy_code: str,
         # rather than being recoverable only by reading the module.
         "ml_features": (None if not ml
                         else ml_feature_names or list(ML_FEATURES)),
+        # HOW THE CLASSIFIER WAS REFITTED, per side: the cadence, the number of
+        # fits it produced, the largest training slice and the seconds spent.
+        # `refit_growth` above 0.0 means Version B is an APPROXIMATION of the
+        # refit-on-every-completed-trade rule - safe (a stale model knows less,
+        # never more) but not bit-for-bit comparable with a run taken at 0.0.
+        # None when Version B did not run, never an empty dict.
+        "ml_refit": (None if not ml
+                     else {"long": ml_stats_long, "short": ml_stats_short}),
         # Plain-English sentences the module declares about itself, with the
         # bound parameters filled in. Presentation only - the tear sheet's
         # strategy card reads these, and nothing else does.
