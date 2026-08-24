@@ -513,21 +513,29 @@ def test_the_schema_quadrant_digits_are_not_this_repositorys() -> None:
 def test_each_portfolio_carries_its_regimes_in_both_encodings() -> None:
     """
     Both spellings travel on the loaded config so a consumer never has to
-    choose which one a bare `Q1` meant. The Odd basket is the two LOW-volatility
-    quadrants and the Even basket the two HIGH-volatility ones — which is the
-    regime diversification the partition claims, and it is only visible once
-    the labels are translated.
+    choose which one a bare `Q1` meant.
+
+    The Even basket is the two HIGH-volatility quadrants. The Odd basket was
+    the two LOW-volatility ones and declares ALL FOUR from 2026-08-24: the
+    partition split assets and quadrants on the same axis, so MNQ - which sits
+    only in the Odd basket - could never be traded by a strategy certified in a
+    high-volatility quadrant, and three promotions of
+    `t3_braid_scalp_20260823` were routable to no account at all. The regime
+    diversification the partition claims is therefore now one-sided, and the
+    live gate reads this list and nothing else.
     """
     cfg = config()
     odd = cfg["portfolios"]["Incubator-Odd"]["derived"]
     even = cfg["portfolios"]["Incubator-Even"]["derived"]
-    assert odd["canonical_quadrants"] == ["Q3", "Q4"], odd
+    assert odd["canonical_quadrants"] == ["Q1", "Q2", "Q3", "Q4"], odd
     assert even["canonical_quadrants"] == ["Q1", "Q2"], even
     # The declared labels and the canonical ids are the same statement now.
     assert odd["canonical_quadrants"] == [
         q[:2] for q in cfg["portfolios"]["Incubator-Odd"]["basket"][
             "regime_quadrants"]]
-    assert odd["canonical_regimes"] == ["Low Volatility / Trending",
+    assert odd["canonical_regimes"] == ["High Volatility / Trending",
+                                        "High Volatility / Ranging",
+                                        "Low Volatility / Trending",
                                         "Low Volatility / Ranging"]
     assert even["canonical_regimes"] == ["High Volatility / Trending",
                                          "High Volatility / Ranging"]
@@ -535,7 +543,11 @@ def test_each_portfolio_carries_its_regimes_in_both_encodings() -> None:
         p = cfg["portfolios"][pid]
         assert len(p["derived"]["canonical_quadrants"]) == \
             len(p["basket"]["regime_quadrants"])
-        assert len(set(p["derived"]["canonical_quadrants"])) == 2
+        # No duplicates, and never empty. The COUNT is deliberately not pinned:
+        # the Odd track declares all four since 2026-08-24 and the Even track
+        # two, so a fixed number here would be asserting the deadlock back.
+        canon = p["derived"]["canonical_quadrants"]
+        assert canon and len(set(canon)) == len(canon), pid
 
     def unknown(raw):
         raw["portfolios"]["Prop-Odd"]["basket"]["regime_quadrants"] = [

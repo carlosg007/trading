@@ -412,16 +412,23 @@ def test_a_quadrant_the_account_does_not_trade_is_flagged_not_widened() -> None:
     strategy on it. Widening it to admit this promotion would hand every other
     strategy on that account a quadrant nobody certified it for.
 
-    Incubator-Odd trades Q3/Q4. A Q2 certification registered there must be
+    Incubator-Even trades Q1/Q2. A Q3 certification registered there must be
     reported and must leave the basket alone.
+
+    Measured on the EVEN track: Incubator-Odd declares all four quadrants
+    since 2026-08-24, so there is no quadrant it does not trade and nothing to
+    flag. That widening is exactly what this case guards against happening
+    again by accident - the basket is the ACCOUNT's permission, and every
+    strategy on it inherits anything added there.
     """
     path = temp_config()
-    out = register_portfolio(STRAT, version="A", scope=scope(quadrant="Q2"),
-                             portfolio="incubator-odd", config_path=path)
-    basket = read(path)["portfolios"]["Incubator-Odd"]["basket"]
-    assert basket["regime_quadrants"] == ["Q3_LOW_VOL_TREND",
-                                          "Q4_LOW_VOL_MEAN_REVERSION"], basket
-    assert any("Q2" in n and "never trade" in n for n in out["notes"]), out["notes"]
+    out = register_portfolio(STRAT, version="A",
+                             scope=scope(symbol="ES", quadrant="Q3"),
+                             portfolio="incubator-even", config_path=path)
+    basket = read(path)["portfolios"]["Incubator-Even"]["basket"]
+    assert basket["regime_quadrants"] == ["Q1_HIGH_VOL_TREND",
+                                          "Q2_HIGH_VOL_CHOP"], basket
+    assert any("Q3" in n and "never trade" in n for n in out["notes"]), out["notes"]
 
 
 def test_a_matching_quadrant_raises_no_note() -> None:
@@ -449,15 +456,16 @@ def test_the_loader_reports_the_conflict_too() -> None:
     from portfolio.config_loader import clear_cache, load_portfolio_config
 
     path = temp_config()
-    register_portfolio(STRAT, version="A", scope=scope(quadrant="Q2"),
-                       portfolio="incubator-odd", config_path=path)
+    register_portfolio(STRAT, version="A",
+                       scope=scope(symbol="ES", quadrant="Q3"),
+                       portfolio="incubator-even", config_path=path)
     clear_cache()
     cfg = load_portfolio_config(str(path))
     conflicts = cfg["allocation_reconciliation"]["regime_conflicts"]
     assert len(conflicts) == 1, conflicts
     assert conflicts[0]["strategy_id"] == STRAT
-    assert conflicts[0]["regime_filter"] == "Q2"
-    assert conflicts[0]["portfolio_quadrants"] == ["Q3", "Q4"]
+    assert conflicts[0]["regime_filter"] == "Q3"
+    assert conflicts[0]["portfolio_quadrants"] == ["Q1", "Q2"]
 
 
 def test_an_orphan_record_is_reported_and_does_not_refuse_the_config() -> None:

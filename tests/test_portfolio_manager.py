@@ -77,7 +77,7 @@ POINT_VALUE = {"MNQ": 2.0, "MES": 5.0, "MCL": 100.0, "MGC": 10.0}
 ODD_ASSETS = ("MNQ", "MCL")
 EVEN_ASSETS = ("MES", "MGC")
 # The quadrants each basket is configured to trade, as this repository's ids.
-ODD_QUADRANTS = ("Q3", "Q4")        # the two LOW-volatility quadrants
+ODD_QUADRANTS = ("Q1", "Q2", "Q3", "Q4")   # ALL FOUR since 2026-08-24
 EVEN_QUADRANTS = ("Q1", "Q2")       # the two HIGH-volatility quadrants
 
 
@@ -519,10 +519,18 @@ def test_conviction_scales_the_order_and_the_clamp_bounds_it() -> None:
 # ==========================================================================
 def test_a_basket_outside_its_quadrant_stands_down() -> None:
     """
-    Each portfolio declares the quadrants it trades — Odd the two LOW-volatility
-    ones, Even the two HIGH-volatility ones. Outside them the basket is a
-    strategy in the environment nobody certified it for, so it produces NO
-    order rather than a smaller one.
+    Each portfolio declares the quadrants it trades, and outside them the
+    basket is a strategy in the environment nobody certified it for - so it
+    produces NO order rather than a smaller one.
+
+    Measured on the EVEN track, which still declares two quadrants. The Odd
+    track was widened to all four on 2026-08-24 to let a Nasdaq strategy
+    certified in a HIGH-volatility quadrant route at all (MNQ sits in the Odd
+    basket, and the partition split assets and quadrants on the same axis), so
+    there is no forbidden quadrant left on that account to stand anything down
+    in. That widening is exactly why this case has to keep being tested
+    somewhere: the live gate reads `basket.regime_quadrants` and nothing else,
+    so an account declaring all four permits every strategy on it everywhere.
     """
     pm = manager()
     assert tuple(pm.portfolios["Incubator-Odd"]["derived"][
@@ -530,19 +538,19 @@ def test_a_basket_outside_its_quadrant_stands_down() -> None:
     assert tuple(pm.portfolios["Prop-Even"]["derived"][
         "canonical_quadrants"]) == EVEN_QUADRANTS
 
-    net = pm.aggregate_signals([signal("MNQ", LONG, "Incubator-Odd")])
-    # Q1 is a HIGH-volatility quadrant; the Odd basket trades Q3 and Q4.
+    net = pm.aggregate_signals([signal("MES", LONG, "Prop-Even")])
+    # Q3 is a LOW-volatility quadrant; the Even basket trades Q1 and Q2.
     blocked = pm.build_order_plan(net, regimes(
-        MNQ={"atr_14": 50.0, "quadrant": "Q1"}))
+        MES={"atr_14": 50.0, "quadrant": "Q3"}))
     assert blocked[0]["payload"] is None
-    assert "Q1" in blocked[0]["skipped_reason"]
+    assert "Q3" in blocked[0]["skipped_reason"]
     assert "certified" in blocked[0]["skipped_reason"]
     assert pm.build_order_payloads(net, regimes(
-        MNQ={"atr_14": 50.0, "quadrant": "Q1"})) == []
+        MES={"atr_14": 50.0, "quadrant": "Q3"})) == []
 
     # And it trades in a quadrant it does permit.
     allowed = pm.build_order_plan(net, regimes(
-        MNQ={"atr_14": 50.0, "quadrant": "Q4"}))
+        MES={"atr_14": 50.0, "quadrant": "Q2"}))
     assert allowed[0]["payload"] is not None
 
 
@@ -611,14 +619,17 @@ def test_the_plan_records_what_the_payload_list_cannot() -> None:
     included.
     """
     pm = manager()
+    # The regime-blocked leg is on the EVEN track: the Odd basket declares all
+    # four quadrants since 2026-08-24, so nothing routed there can be stood
+    # down on regime any more.
     net = pm.aggregate_signals([
         signal("MNQ", LONG, "Incubator-Odd"),     # trades
-        signal("MCL", LONG, "Incubator-Odd"),     # blocked by regime
-        signal("MES", LONG, "Prop-Even"),         # trades
+        signal("MCL", LONG, "Incubator-Odd"),     # trades
+        signal("MES", LONG, "Prop-Even"),         # blocked by regime
         signal("MGC", LONG, "Prop-Even"),         # netted flat
         signal("MGC", SHORT, "Prop-Even"),
     ])
-    reading = regimes(MCL={"atr_14": 1.0, "quadrant": "Q2"})
+    reading = regimes(MES={"atr_14": 1.0, "quadrant": "Q3"})
     plan = pm.build_order_plan(net, reading)
     payloads = pm.build_order_payloads(net, reading)
 
@@ -628,8 +639,8 @@ def test_the_plan_records_what_the_payload_list_cannot() -> None:
 
     by_symbol = {r["symbol"]: r for r in plan}
     assert by_symbol["MNQ"]["payload"] is not None
-    assert by_symbol["MES"]["payload"] is not None
-    assert "Q2" in by_symbol["MCL"]["skipped_reason"]
+    assert by_symbol["MCL"]["payload"] is not None
+    assert "Q3" in by_symbol["MES"]["skipped_reason"]
     assert "netted flat" in by_symbol["MGC"]["skipped_reason"]
 
     text = pm.describe_plan(plan)

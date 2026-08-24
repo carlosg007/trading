@@ -23,6 +23,8 @@
         ],
         "correlation_group": "Index_Energy_Uncorrelated",
         "regime_quadrants": [
+          "Q1_HIGH_VOL_TREND",
+          "Q2_HIGH_VOL_CHOP",
           "Q3_LOW_VOL_TREND",
           "Q4_LOW_VOL_MEAN_REVERSION"
         ],
@@ -32,9 +34,7 @@
         ]
       },
       "active_strategies": [
-        "t3_braid_scalp_20260823_NQ_1h",
-        "t3_braid_scalp_20260823_NQ_30m",
-        "t3_braid_scalp_20260823_NQ_15m"
+        "t3_braid_scalp_20260823_NQ_1h"
       ],
       "strategy_allocations": {
         "t3_braid_scalp_20260823_NQ_1h": {
@@ -71,82 +71,6 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_NQ_1h.json (Gate R's certification target)"
-              }
-            }
-          ]
-        },
-        "t3_braid_scalp_20260823_NQ_30m": {
-          "strat": "t3_braid_scalp_20260823_NQ_30m",
-          "symbol": "NQ",
-          "timeframe": "30m",
-          "version": "A",
-          "allocation": 1,
-          "regime_filter": "Q2",
-          "status": "incubating",
-          "path": "strategies/approved_incubator/t3_braid_scalp_20260823_NQ_30m/strat.py",
-          "registered_utc": "2026-08-24T20:39:42+00:00",
-          "registered_by": "backtest/promote.py",
-          "routing_basis": "routed by CERTIFIED CONTRACT: Incubator-Odd is the incubator account whose basket carries MNQ",
-          "resolved_from": {
-            "symbol": "--symbol",
-            "timeframe": "--timeframe",
-            "regime_filter": "gate_audit_NQ_30m.json (Gate R's certification target)"
-          },
-          "configurations": [
-            {
-              "strat": "t3_braid_scalp_20260823_NQ_30m",
-              "symbol": "NQ",
-              "timeframe": "30m",
-              "version": "A",
-              "allocation": 1,
-              "regime_filter": "Q2",
-              "status": "incubating",
-              "path": "strategies/approved_incubator/t3_braid_scalp_20260823_NQ_30m/strat.py",
-              "registered_utc": "2026-08-24T20:39:42+00:00",
-              "registered_by": "backtest/promote.py",
-              "routing_basis": "routed by CERTIFIED CONTRACT: Incubator-Odd is the incubator account whose basket carries MNQ",
-              "resolved_from": {
-                "symbol": "--symbol",
-                "timeframe": "--timeframe",
-                "regime_filter": "gate_audit_NQ_30m.json (Gate R's certification target)"
-              }
-            }
-          ]
-        },
-        "t3_braid_scalp_20260823_NQ_15m": {
-          "strat": "t3_braid_scalp_20260823_NQ_15m",
-          "symbol": "NQ",
-          "timeframe": "15m",
-          "version": "A",
-          "allocation": 1,
-          "regime_filter": "Q1",
-          "status": "incubating",
-          "path": "strategies/approved_incubator/t3_braid_scalp_20260823_NQ_15m/strat.py",
-          "registered_utc": "2026-08-24T20:39:46+00:00",
-          "registered_by": "backtest/promote.py",
-          "routing_basis": "routed by CERTIFIED CONTRACT: Incubator-Odd is the incubator account whose basket carries MNQ",
-          "resolved_from": {
-            "symbol": "--symbol",
-            "timeframe": "--timeframe",
-            "regime_filter": "gate_audit_NQ_15m.json (Gate R's certification target)"
-          },
-          "configurations": [
-            {
-              "strat": "t3_braid_scalp_20260823_NQ_15m",
-              "symbol": "NQ",
-              "timeframe": "15m",
-              "version": "A",
-              "allocation": 1,
-              "regime_filter": "Q1",
-              "status": "incubating",
-              "path": "strategies/approved_incubator/t3_braid_scalp_20260823_NQ_15m/strat.py",
-              "registered_utc": "2026-08-24T20:39:46+00:00",
-              "registered_by": "backtest/promote.py",
-              "routing_basis": "routed by CERTIFIED CONTRACT: Incubator-Odd is the incubator account whose basket carries MNQ",
-              "resolved_from": {
-                "symbol": "--symbol",
-                "timeframe": "--timeframe",
-                "regime_filter": "gate_audit_NQ_15m.json (Gate R's certification target)"
               }
             }
           ]
@@ -206,6 +130,8 @@
         ],
         "correlation_group": "Index_Energy_Uncorrelated",
         "regime_quadrants": [
+          "Q1_HIGH_VOL_TREND",
+          "Q2_HIGH_VOL_CHOP",
           "Q3_LOW_VOL_TREND",
           "Q4_LOW_VOL_MEAN_REVERSION"
         ],

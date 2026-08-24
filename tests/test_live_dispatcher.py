@@ -56,11 +56,25 @@ from realtime.live_dispatcher import (                              # noqa: E402
 
 REAL_CONFIG = REPO_ROOT / "config" / "portfolios.json"
 
-# Incubator-Odd holds MNQ/MCL and trades Q3/Q4 (see config/portfolios.json).
+# Incubator-Odd holds MNQ/MCL and declares ALL FOUR quadrants since
+# 2026-08-24, so nothing routed there can be stood down on regime any more -
+# the partition split assets and quadrants on one axis, and MNQ lives only in
+# that basket, so a strategy certified in a HIGH-volatility quadrant was
+# routable to no account at all.
 PERMITTED_QUADRANT = "Q4"
 PERMITTED_LABEL = "Q4_LOW_VOL_MEAN_REVERSION"
-FORBIDDEN_QUADRANT = "Q1"
-FORBIDDEN_LABEL = "Q1_HIGH_VOL_TREND"
+
+# The stand-down cases therefore run on the EVEN track, which still declares
+# two. MGC rather than MES because the sizing constants above are MNQ's and
+# these cases assert a DECLINE - no contract count is reached at all.
+GATED_PORTFOLIO = "Incubator-Even"
+GATED_SYMBOL = "MGC"
+# ...and the fixture has to be CERTIFIED on that contract, or it is declined by
+# the symbol gate before the regime gate is ever reached and the case silently
+# stops testing what it is named for.
+GATED_CERTIFIED = ("GC",)
+FORBIDDEN_QUADRANT = "Q3"
+FORBIDDEN_LABEL = "Q3_LOW_VOL_TREND"
 
 # MNQ point_value is 2.0. ATR 25.0 x stop 1.5 x 2.0 = $75 per contract, and a
 # $250 budget buys floor(250/75) = 3 - inside the 1..5 clamp, so the number
@@ -246,24 +260,25 @@ def _isolate_config_cache():
 # --------------------------------------------------------------------------
 def test_a_signal_outside_its_quadrant_is_declined_with_a_reason(tmp_path):
     """
-    Incubator-Odd trades Q3/Q4. With MNQ in Q1 the strategy must produce no
+    Incubator-Even trades Q1/Q2. With MGC in Q3 the strategy must produce no
     order AND a decline naming the quadrant - an empty payload list cannot tell
     a basket standing down from a day with no signals.
     """
     d = build(tmp_path,
-              assignments={"Incubator-Odd": ["fixture_long"]},
-              state={"MNQ": {"quadrant": FORBIDDEN_QUADRANT}},
-              strategies={"fixture_long": dict(side="long")})
-    report = d.process_bar_cycle({"MNQ": make_bars()})
+              assignments={GATED_PORTFOLIO: ["fixture_long"]},
+              state={GATED_SYMBOL: {"quadrant": FORBIDDEN_QUADRANT}},
+              strategies={"fixture_long": dict(side="long",
+                                               symbols=GATED_CERTIFIED)})
+    report = d.process_bar_cycle({GATED_SYMBOL: make_bars()})
 
     assert report["payloads"] == []
     assert report["signals"] == []
     assert report["dispatches"] == []
-    declines = [x for x in report["declines"] if x["symbol"] == "MNQ"]
+    declines = [x for x in report["declines"] if x["symbol"] == GATED_SYMBOL]
     assert len(declines) == 1
     reason = declines[0]["reason"]
     assert FORBIDDEN_QUADRANT in reason
-    assert "Q3" in reason and "Q4" in reason        # what it DOES trade
+    assert "Q1" in reason and "Q2" in reason        # what it DOES trade
     assert declines[0]["strategy_id"] == "fixture_long"
 
 
@@ -399,10 +414,11 @@ def test_a_declined_signal_is_evaluated_but_not_approved(tmp_path):
     """A cycle that gated everything away must still report that it looked -
     an evaluated count of zero reads as a feed that delivered nothing."""
     d = build(tmp_path,
-              assignments={"Incubator-Odd": ["fixture_long"]},
-              state={"MNQ": {"quadrant": FORBIDDEN_QUADRANT}},
-              strategies={"fixture_long": dict(side="long")})
-    report = d.process_bar_cycle({"MNQ": make_bars()})
+              assignments={GATED_PORTFOLIO: ["fixture_long"]},
+              state={GATED_SYMBOL: {"quadrant": FORBIDDEN_QUADRANT}},
+              strategies={"fixture_long": dict(side="long",
+                                               symbols=GATED_CERTIFIED)})
+    report = d.process_bar_cycle({GATED_SYMBOL: make_bars()})
 
     assert report["evaluated_signals"] == 1
     assert report["approved_signals"] == 0
