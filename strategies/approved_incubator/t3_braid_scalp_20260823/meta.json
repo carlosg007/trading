@@ -5,7 +5,7 @@
   "symbols": [
     "NQ"
   ],
-  "timeframe": "1h",
+  "timeframe": "30m",
   "params": {
     "t3_period": 5,
     "t3_vfactor": 0.7,
@@ -30,7 +30,7 @@
   "source": "/home/cgrullon/src/trading/strategies/experimental/t3_braid_scalp_20260823.py",
   "source_sha256": "d184de94fa3bba9d828dc17247b820abd1d7ae5bd86fb89393458401a166e929",
   "promoted_sha256": "d184de94fa3bba9d828dc17247b820abd1d7ae5bd86fb89393458401a166e929",
-  "promoted_utc": "2026-08-24T19:02:22+00:00",
+  "promoted_utc": "2026-08-24T19:02:25+00:00",
   "costs_included": false,
   "variants_tested": null,
   "metrics_status": "NOT RECORDED",
@@ -38,35 +38,35 @@
   "gate_audit_status": "PASS",
   "gate_audit": {
     "gate1": "FAIL",
-    "gate2": "PASS",
+    "gate2": "FAIL",
     "gate3": "PASS",
     "gate_regime": "PASS"
   },
   "certification": {
-    "audit_file": "/mnt/backtest/artifacts/pipeline/t3_braid_scalp_20260823/gate_audit_NQ_1h.json",
-    "audit_sha256": "35e640747b05ef9967cc7fc1e1eb7781685945571919db5242dc2a9f13bd869b",
+    "audit_file": "/mnt/backtest/artifacts/pipeline/t3_braid_scalp_20260823/gate_audit_NQ_30m.json",
+    "audit_sha256": "8f9acae9035641a2dfb9bafa907e03abd2e546bfed9f51e6d1fe570cc279437e",
     "audit_symbol": "NQ",
-    "audit_timeframe": "1h",
+    "audit_timeframe": "30m",
     "target_quadrant": "Q2",
     "target_regime": "High Volatility / Ranging",
-    "audit_generated_utc": "2026-08-24T18:23:26+00:00",
+    "audit_generated_utc": "2026-08-24T15:06:12+00:00",
     "in_sample": {
       "start": "2013-01-01",
       "end": "2022-12-31"
     },
     "holdout": {
       "start": "2023-01-01",
-      "end": "2026-01-01",
-      "end_basis": "explicit --holdout-end"
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
     },
     "params": {
       "t3_period": 5,
-      "stiffness_threshold": 45.0,
+      "stiffness_threshold": 25.0,
       "sl_atr_mult": 2.0,
-      "tp_atr_mult": 2.0,
+      "tp_atr_mult": 1.5,
       "trailing": false
     },
-    "params_source": "stage 2 winner (best_params_NQ_1h.json)",
+    "params_source": "stage 2 winner (best_params_NQ_30m.json)",
     "variants_tested": 162,
     "wfo": {
       "train_years": 2,
