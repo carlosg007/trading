@@ -358,7 +358,8 @@ def _validate_allocations(pid: str, allocations: Any) -> None:
 
 def _reconcile_allocations(portfolios: dict) -> dict[str, list]:
     """
-    Where the permission and the record disagree. REPORTED, NEVER RAISED.
+    Where the permission and the record disagree. Three of the four findings
+    are REPORTED, NEVER RAISED; `symbol_conflicts` is raised by the caller.
 
     Three findings, kept apart because they are fixed by completely different
     work:
@@ -383,20 +384,39 @@ def _reconcile_allocations(portfolios: dict) -> dict[str, list]:
                           announce itself: every count in every table still
                           adds up, and the symptom is silence.
 
-    None of the three is raised. An allocation record cannot route an order,
+    `symbol_conflicts`    a record whose certified `symbol` is not in the
+                          ACCOUNT's basket, under the micro/full-size alias.
+                          `realtime/live_dispatcher.trades_symbol` refuses a
+                          strategy on any asset its certification does not
+                          cover, so this strategy is refused on EVERY asset it
+                          is routed to and can never place an order. Three
+                          promotions of `t3_braid_scalp_20260823` reached
+                          `Incubator-Even` this way: certified on NQ, routed to
+                          a basket of MES and MGC, correct on quadrant and dead
+                          on arrival.
+
+    The first three are not raised. An allocation record cannot route an order,
     size one, or grant a permission, so refusing to load the config over one
     would take the live loop down for a descriptive field - and the config the
     loader must keep loading is precisely the one somebody is midway through
     fixing.
+
+    `symbol_conflicts` IS raised, by `load_portfolio_config`. It is not a
+    descriptive disagreement: it is a routing decision that cannot produce a
+    trade, and unlike a regime conflict there is no market state in which it
+    starts working. Reported quietly it looks exactly like a quiet market.
     """
     out: dict[str, list] = {"orphan_records": [], "unallocated": [],
-                            "regime_conflicts": []}
+                            "regime_conflicts": [], "symbol_conflicts": []}
+    alias = _micro_alias()
     for pid in sorted(portfolios):
         portfolio = portfolios[pid]
         active = [str(s) for s in (portfolio.get("active_strategies") or [])]
         records = portfolio.get(ALLOCATIONS_KEY) or {}
         permitted = list(portfolio.get("derived", {})
                          .get("canonical_quadrants") or [])
+        assets = [str(a).upper()
+                  for a in ((portfolio.get("basket") or {}).get("assets") or [])]
         for name in active:
             if name not in records:
                 out["unallocated"].append({"portfolio_id": pid,
@@ -419,7 +439,67 @@ def _reconcile_allocations(portfolios: dict) -> dict[str, list]:
                              f"the portfolio's quadrants, so this strategy is "
                              f"stood down in the one quadrant it was "
                              f"certified for and will never trade.")})
+
+            symbol = str((record or {}).get("symbol") or "").strip().upper()
+            if symbol and assets:
+                if not _basket_covers(symbol, assets, alias):
+                    out["symbol_conflicts"].append({
+                        "portfolio_id": pid, "strategy_id": name,
+                        "certified_symbol": symbol,
+                        "permitted_instruments": assets,
+                        "note": (f"{name} is certified on {symbol} and {pid} "
+                                 f"trades {assets}. The live loop checks the "
+                                 f"certified symbol against the basket, so "
+                                 f"this strategy is refused on every asset it "
+                                 f"is routed to and can never place an "
+                                 f"order.")})
     return out
+
+
+def _micro_alias() -> dict[str, str]:
+    """
+    The micro -> full-size parent map, IMPORTED rather than restated.
+
+    `realtime/regime_daemon.py` owns it and reconciles its tick sizes against
+    `backtest/specs.py` on every construction. A second copy here would be free
+    to disagree, and the disagreement would route a live order: a config that
+    believed MNQ and NQ were unrelated would refuse every correctly-routed
+    strategy, and one that believed MES was a Nasdaq micro would permit a
+    wrong one.
+
+    Imported lazily because that module pulls in pandas and numpy, and this
+    loader is read by tooling that has no reason to pay for them -
+    `master_live.py` imports the same table the same way for the same reason.
+    An import failure RAISES rather than falling back to a local table, for
+    the reason above.
+    """
+    try:
+        from realtime.regime_daemon import THETA_ANCHOR_ALIAS
+    except Exception as exc:                                      # noqa: BLE001
+        raise PortfolioConfigError(
+            f"cannot import the micro/full-size alias from "
+            f"realtime.regime_daemon ({exc}). Symbol routing cannot be "
+            f"reconciled without it, and a local copy would be free to "
+            f"disagree with the table the live loop actually uses.") from exc
+    return {str(k).upper(): str(v).upper()
+            for k, v in THETA_ANCHOR_ALIAS.items()}
+
+
+def _basket_covers(symbol: str, assets: list[str],
+                   alias: dict[str, str]) -> bool:
+    """
+    Can a strategy certified on `symbol` trade anything in `assets`?
+
+    The same rule `realtime.live_dispatcher.trades_symbol` applies, in the same
+    direction: a certification on the full-size contract covers its micro and
+    vice versa, because they are the same price series at the same tick size.
+    Anything else is not covered - a strategy certified on soybeans has no
+    evidence about a Nasdaq micro, and the only thing that put them together is
+    a line in a config file.
+    """
+    sym = str(symbol).upper()
+    parent = alias.get(sym, sym)
+    return any(a == sym or alias.get(a, a) == parent for a in assets)
 
 
 def _validate_portfolio(pid: str, portfolio: Any,
@@ -794,6 +874,24 @@ def load_portfolio_config(config_path: str = DEFAULT_CONFIG_PATH,
     # which is wrong for all four values at schema 1.0.0.
     config["allocation_reconciliation"] = _reconcile_allocations(portfolios)
     config["config_path"] = str(path)
+
+    # RAISED, not reported. A strategy routed to a basket that cannot carry its
+    # certified symbol is refused on every asset it reaches, so it runs forever
+    # and places nothing - and the console for that is indistinguishable from a
+    # market with no signals. See `_reconcile_allocations`.
+    conflicts = config["allocation_reconciliation"]["symbol_conflicts"]
+    if conflicts:
+        lines = "; ".join(
+            f"{c['strategy_id']} is certified on {c['certified_symbol']} but "
+            f"{c['portfolio_id']} trades {c['permitted_instruments']}"
+            for c in conflicts)
+        raise PortfolioConfigError(
+            f"{len(conflicts)} strategy/basket symbol conflict(s) in {path}: "
+            f"{lines}. Route the strategy to a portfolio whose basket carries "
+            f"its contract, or add the contract to this portfolio's "
+            f"basket.assets. A strategy the live loop refuses on every asset "
+            f"it is routed to can never place an order, and reports nothing "
+            f"while doing it.")
 
     if use_cache:
         _CACHE[key] = copy.deepcopy(config)

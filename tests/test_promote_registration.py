@@ -213,7 +213,11 @@ def test_default_routing_takes_the_emptier_incubator_and_alternates() -> None:
     `test_the_certified_quadrant_routes_to_an_account_that_permits_it`.
     """
     path = temp_config()
-    unrouted = dict(scope(), regime_filter=NOT_RESOLVED)
+    # NEITHER axis may route, or the rule under test is not the one deciding.
+    # The certified SYMBOL filters before the quadrant from 2026-08-24, and NQ
+    # is carried by exactly one incubator basket - so a scope naming it pins
+    # every promotion to that account and there is no alternation to observe.
+    unrouted = dict(scope(), regime_filter=NOT_RESOLVED, symbol=NOT_RESOLVED)
     first = register_portfolio("strat_one", version="A", scope=unrouted,
                                config_path=path)
     second = register_portfolio("strat_two", version="A", scope=unrouted,
@@ -313,9 +317,12 @@ def test_a_moved_strategy_still_routes_through_the_loader() -> None:
     from portfolio.config_loader import clear_cache, get_portfolio_for_strategy
 
     path = temp_config()
-    register_portfolio(STRAT, version="A", scope=scope(),
+    # ES, which Incubator-Even's basket carries - the move has to leave a
+    # config the loader ACCEPTS, and from 2026-08-24 it refuses one routing a
+    # strategy to a basket that cannot trade its certified contract.
+    register_portfolio(STRAT, version="A", scope=scope(symbol="ES"),
                        portfolio="incubator-odd", config_path=path)
-    register_portfolio(STRAT, version="A", scope=scope(),
+    register_portfolio(STRAT, version="A", scope=scope(symbol="ES"),
                        portfolio="incubator-even", config_path=path)
     clear_cache()
     assert get_portfolio_for_strategy(STRAT, config_path=str(path)) \
@@ -418,9 +425,16 @@ def test_a_quadrant_the_account_does_not_trade_is_flagged_not_widened() -> None:
 
 
 def test_a_matching_quadrant_raises_no_note() -> None:
-    """Incubator-Even trades Q1/Q2, so a Q2 certification is silent."""
+    """
+    Incubator-Even trades Q1/Q2, so a Q2 certification is silent.
+
+    On ES, because Incubator-Even's basket is MES/MGC: a NQ certification here
+    would be silent on the QUADRANT and raise a note about the SYMBOL, which
+    is a different subject and is covered by its own case.
+    """
     path = temp_config()
-    out = register_portfolio(STRAT, version="A", scope=scope(quadrant="Q2"),
+    out = register_portfolio(STRAT, version="A",
+                             scope=scope(symbol="ES", quadrant="Q2"),
                              portfolio="incubator-even", config_path=path)
     assert not out["notes"], out["notes"]
 
@@ -706,15 +720,18 @@ def test_a_record_written_before_configurations_existed_is_not_lost() -> None:
         block = blob["portfolios"]["Incubator-Even"]
         block["active_strategies"] = [STRAT]
         block[ALLOCATIONS_KEY] = {STRAT: {
-            "strat": STRAT, "symbol": "NQ", "timeframe": "5m",
+            "strat": STRAT, "symbol": "ES", "timeframe": "5m",
             "version": "A", "allocation": 1, "regime_filter": "Q1",
             "status": "incubating"}}
     path = temp_config(seed)
-    register_portfolio(STRAT, version="A", scope=scope(timeframe="1h"),
+    # Seeded on Incubator-Even, so the contract is ES - that basket is MES/MGC
+    # and a NQ record there is the routing conflict a different case covers.
+    register_portfolio(STRAT, version="A",
+                       scope=scope(symbol="ES", timeframe="1h"),
                        config_path=path)
     record = read(path)["portfolios"]["Incubator-Even"][ALLOCATIONS_KEY][STRAT]
     pairs = [(c["symbol"], c["timeframe"]) for c in record["configurations"]]
-    assert pairs == [("NQ", "5m"), ("NQ", "1h")], pairs
+    assert pairs == [("ES", "5m"), ("ES", "1h")], pairs
 
 
 def test_a_re_promotion_does_not_move_the_account() -> None:
@@ -1048,7 +1065,76 @@ def test_an_unroutable_quadrant_falls_back_to_the_headcount_rule() -> None:
     portfolios = read(temp_config())["portfolios"]
     pid, basis = resolve_portfolio(portfolios, None, None, "Q9")
     assert pid in incubator_portfolios(portfolios)
-    assert "no incubator account declares Q9" in basis
+    assert "declares Q9" in basis and "could not narrow" in basis, basis
+
+
+def test_the_certified_symbol_routes_before_the_quadrant() -> None:
+    """
+    The certified CONTRACT filters the candidate accounts, and it filters
+    before the quadrant does.
+
+    The two failures are not equally recoverable. A quadrant mismatch stands
+    the strategy down in its own environment and widening
+    `basket.regime_quadrants` fixes it in place. A SYMBOL mismatch is terminal:
+    `realtime.live_dispatcher.trades_symbol` refuses a strategy on any asset
+    its certification does not cover, so an account holding none of its
+    contract refuses it on everything it reaches, forever.
+
+    Ranking the quadrant first is what sent three NQ promotions of
+    `t3_braid_scalp_20260823` to Incubator-Even - which declares their Q1/Q2
+    and trades MES and MGC - correct on quadrant and unable to place an order.
+    """
+    portfolios = read(temp_config())["portfolios"]
+
+    # Q1 is Incubator-Even's, and NQ is Incubator-Odd's. The contract wins.
+    pid, basis = resolve_portfolio(portfolios, None, None, "Q1", "NQ")
+    assert pid == "Incubator-Odd", pid
+    assert "trades NQ" in basis, basis
+
+    # ...and with no contention the quadrant still narrows within that pool.
+    pid, _ = resolve_portfolio(portfolios, None, None, "Q1", "ES")
+    assert pid == "Incubator-Even", pid
+
+    # A micro is the same price series as its parent, so either spelling routes.
+    assert resolve_portfolio(portfolios, None, None, None, "MNQ")[0] \
+        == "Incubator-Odd"
+
+
+def test_an_unroutable_symbol_falls_back_rather_than_guessing() -> None:
+    """
+    A contract NO incubator basket carries is REPORTED in the basis and left
+    to the headcount rule, not resolved by widening a basket here. The refusal
+    belongs to `register_portfolio`, which knows the account it would write to.
+    """
+    portfolios = read(temp_config())["portfolios"]
+    pid, basis = resolve_portfolio(portfolios, None, None, None, "ZS")
+    assert pid in incubator_portfolios(portfolios)
+    assert "no incubator account trades ZS" in basis, basis
+
+
+def test_an_automatic_route_into_a_basket_that_cannot_trade_it_is_refused() -> None:
+    """
+    The blocker itself: a promotion routed AUTOMATICALLY onto an account whose
+    basket cannot carry the certified contract is refused, rather than written
+    and discovered as silence on a live console.
+    """
+    path = temp_config()
+    try:
+        register_portfolio(STRAT, version="A", scope=scope(symbol="NQ"),
+                           portfolio="incubator-even", config_path=path)
+    except ValueError as exc:                       # explicit: a NOTE, not a refusal
+        raise AssertionError(f"an explicit --portfolio must stand: {exc}")
+
+    # Explicit stands, and says so loudly.
+    out = register_portfolio(STRAT, version="A", scope=scope(symbol="NQ"),
+                             portfolio="incubator-even", config_path=temp_config())
+    assert any("certified on NQ" in n for n in out["notes"]), out["notes"]
+
+    # Automatic routing lands on the account that CAN trade it.
+    auto = register_portfolio("auto_nq_strategy", version="A",
+                              scope=scope(symbol="NQ"),
+                              config_path=temp_config())
+    assert auto["portfolio_id"] == "Incubator-Odd", auto["portfolio_id"]
 
 
 def test_an_explicit_portfolio_still_beats_the_quadrant() -> None:

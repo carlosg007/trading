@@ -1081,10 +1081,31 @@ def incubator_portfolios(portfolios: dict) -> list[str]:
                   and p.get("account_type") == INCUBATOR_ACCOUNT_TYPE)
 
 
+def _basket_covers(symbol: str, assets: list[str]) -> bool:
+    """
+    Can a strategy certified on `symbol` trade anything in `assets`?
+
+    Delegates to `portfolio.config_loader`, which delegates in turn to the
+    micro/full-size table `realtime/regime_daemon.py` owns and reconciles
+    against `backtest/specs.py`. Three modules now ask this question - the
+    loader, the live dispatcher and this one - and a second copy of the rule
+    here would be free to disagree with the one that actually gates the order.
+
+    `backtest/` may not import `portfolio/`, so this is a LAZY import inside
+    the one function that needs it. That rule exists so a research number can
+    never depend on live account state; this is a promotion writing a routing
+    table, which is the account side of the line and the only place in this
+    module that touches it.
+    """
+    from portfolio.config_loader import _basket_covers as _covers, _micro_alias
+    return _covers(symbol, [str(a).upper() for a in assets], _micro_alias())
+
+
 def resolve_portfolio(portfolios: dict,
                       requested: str | None = None,
                       strat: str | None = None,
-                      quadrant: str | None = None) -> tuple[str, str]:
+                      quadrant: str | None = None,
+                      symbol: str | None = None) -> tuple[str, str]:
     """
     Which incubator portfolio this promotion is registered onto, and why.
 
@@ -1180,19 +1201,50 @@ def resolve_portfolio(portfolios: dict,
                 return pid, (f"already registered on {pid}; a re-promotion "
                              f"does not move an account")
 
+    # THE CERTIFIED SYMBOL FILTERS FIRST, and it filters harder than the
+    # quadrant, because the two failures are not equally recoverable.
+    #
+    # A quadrant mismatch stands the strategy down in its own environment: the
+    # account still carries it, and widening `basket.regime_quadrants` fixes it
+    # in place. A SYMBOL mismatch is terminal -
+    # `realtime.live_dispatcher.trades_symbol` refuses a strategy on any asset
+    # its certification does not cover, so an account holding none of its
+    # contract refuses it on everything it reaches, forever. Ranking the
+    # quadrant first sent three NQ promotions of `t3_braid_scalp_20260823` to
+    # Incubator-Even - which declares their Q1/Q2 and trades MES and MGC -
+    # where they were correct on quadrant and could never place an order.
+    #
+    # An empty result is NOT resolved here. It means no incubator account
+    # trades this contract at all, which is a partition that cannot carry the
+    # strategy rather than a routing choice, and `register_portfolio` refuses
+    # it with the contract and the basket named.
     pool, scope_note = candidates, ""
+    symbol = str(symbol or "").strip().upper()
+    if symbol and symbol != NOT_RESOLVED:
+        carrying = [pid for pid in candidates
+                    if _basket_covers(symbol,
+                                      (portfolios[pid].get("basket") or {})
+                                      .get("assets") or [])]
+        if carrying:
+            pool = carrying
+            scope_note = f"trades {symbol}; "
+        else:
+            scope_note = (f"no incubator account trades {symbol}, so the "
+                          f"certified contract could not route this; ")
+
     quadrant = str(quadrant or "").strip()
     if quadrant and quadrant != NOT_RESOLVED:
-        permitting = [pid for pid in candidates
+        permitting = [pid for pid in pool
                       if any(str(q).startswith(quadrant + "_")
                              for q in ((portfolios[pid].get("basket") or {})
                                        .get("regime_quadrants") or []))]
         if permitting:
             pool = permitting
-            scope_note = f"declares {quadrant}; "
+            scope_note += f"declares {quadrant}; "
         else:
-            scope_note = (f"no incubator account declares {quadrant}, so the "
-                          f"certified quadrant could not route this; ")
+            scope_note += (f"no account in that pool declares {quadrant}, so "
+                           f"the certified quadrant could not narrow it "
+                           f"further; ")
 
     counts = {pid: len([s for s in (portfolios[pid].get("active_strategies")
                                     or [])])
@@ -1407,7 +1459,8 @@ def register_portfolio(strat: str,
         raise ValueError(f"{path} carries no `portfolios` object")
 
     pid, basis = resolve_portfolio(portfolios, portfolio, strat,
-                                   scope.get("regime_filter"))
+                                   scope.get("regime_filter"),
+                                   scope.get("symbol"))
     target = portfolios[pid]
     active = target.get("active_strategies")
     if not isinstance(active, list):
@@ -1609,6 +1662,52 @@ def register_portfolio(strat: str,
             f"one quadrant it was certified for, so it will never trade. Fix "
             f"it by routing to the incubator portfolio that already declares "
             f"{quadrant}, or by editing basket.regime_quadrants deliberately.")
+
+    # THE SYMBOL CHECK IS A REFUSAL, where the quadrant check above is a note.
+    #
+    # The difference is whether the strategy can EVER trade. A quadrant
+    # mismatch stands it down in its own environment, which is wrong and
+    # recoverable - the account still carries it and widening the basket's
+    # quadrants fixes it in place. A symbol mismatch is terminal:
+    # `realtime.live_dispatcher.trades_symbol` refuses a strategy on any asset
+    # its certification does not cover, so a strategy routed to a basket
+    # holding none of its contract is refused on every asset it reaches and
+    # can never place an order. There is no market state in which it starts
+    # working, and the console for it is indistinguishable from a quiet market.
+    #
+    # This is what put three promotions of `t3_braid_scalp_20260823` on
+    # `Incubator-Even`: certified on NQ, routed to a basket of MES and MGC,
+    # correct on quadrant and dead on arrival, with `active_strategies` naming
+    # them and every table adding up.
+    #
+    # AN EXPLICIT `--portfolio` IS STILL HONOURED, with a loud note. The three
+    # bad promotions were routed AUTOMATICALLY; an operator naming an account
+    # is a decision, and this module's rule everywhere else is that an explicit
+    # instruction outranks a file. Refusing it outright would also make the
+    # account unnameable while the basket is being fixed.
+    assets = [str(a).upper()
+              for a in ((target.get("basket") or {}).get("assets") or [])]
+    symbol = str(record.get("symbol") or "").upper()
+    covered = (not symbol or symbol == NOT_RESOLVED or not assets
+               or _basket_covers(symbol, assets))
+    explicit = str(basis or "").startswith("--portfolio")
+    if not covered and explicit:
+        notes.append(
+            f"{strat_id} is certified on {symbol} and {pid} trades {assets}. "
+            f"The basket was NOT widened. You named this account explicitly, "
+            f"so the registration stands - but the live loop checks the "
+            f"certified symbol against the basket, so this strategy is "
+            f"refused on every asset it is routed to and will never place an "
+            f"order until {pid}'s basket carries {symbol} or its micro.")
+    elif not covered:
+        raise ValueError(
+            f"{strat_id} is certified on {symbol} and {pid} trades {assets}. "
+            f"The live loop checks the certified symbol against the basket, "
+            f"so this strategy would be refused on every asset it is routed "
+            f"to and could never place an order. Route it to an incubator "
+            f"portfolio whose basket carries {symbol} (or its micro), or add "
+            f"the contract to {pid}'s basket.assets deliberately - widening a "
+            f"basket grants every strategy on that account the new contract.")
 
     if record["symbol"] == NOT_RESOLVED or record["timeframe"] == NOT_RESOLVED:
         notes.append(
