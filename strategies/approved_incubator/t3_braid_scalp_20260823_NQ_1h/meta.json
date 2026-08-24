@@ -1,0 +1,122 @@
+{
+  "name": "t3_braid_scalp_20260823_NQ_1h",
+  "strategy": "t3_braid_scalp_20260823",
+  "symbol": "NQ",
+  "version": "A",
+  "description": "Promoted Version A (rule-based baseline).",
+  "symbols": [
+    "NQ"
+  ],
+  "timeframe": "1h",
+  "params": {
+    "t3_period": 5,
+    "t3_vfactor": 0.7,
+    "braid_fast": 3,
+    "braid_slow": 7,
+    "stiffness_period": 20,
+    "stiffness_threshold": 45.0,
+    "use_t3_filter": true,
+    "use_braid_filter": true,
+    "use_stiffness_filter": true,
+    "use_news_filter": false,
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": 2.0,
+    "trailing": false
+  },
+  "params_source": "locked from dual_metrics_NQ.json",
+  "params_conflict": [],
+  "risk": {
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": 2.0,
+    "trailing": false
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/t3_braid_scalp_20260823.py",
+  "source_sha256": "d184de94fa3bba9d828dc17247b820abd1d7ae5bd86fb89393458401a166e929",
+  "promoted_sha256": "d184de94fa3bba9d828dc17247b820abd1d7ae5bd86fb89393458401a166e929",
+  "promoted_utc": "2026-08-24T20:06:45+00:00",
+  "costs_included": true,
+  "variants_tested": null,
+  "metrics_status": "RECORDED \u00b7 locked from dual_metrics_NQ.json",
+  "metrics": {
+    "sharpe": 0.4809482371959492,
+    "sortino": 0.7358045286077398,
+    "calmar": 0.1482323645026475,
+    "profit_factor": 1.0919833579716176,
+    "win_rate": 0.5089974293059126,
+    "max_drawdown_pct": -46.391016845076024,
+    "total_return_pct": 257.66218000000254,
+    "annualized_return_pct": 6.8766501186277695,
+    "trade_count": 4279,
+    "total_pnl": 257662.17999999982,
+    "total_costs": 62387.82000000012,
+    "final_equity": 357662.1800000025,
+    "n_days": 4829,
+    "start": "2010-06-07 00:00:00+00:00",
+    "end": "2025-12-31 21:00:00+00:00",
+    "bars": 80798,
+    "initial_capital": 100000.0
+  },
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "FAIL",
+    "gate2": "PASS",
+    "gate3": "PASS",
+    "gate_regime": "PASS"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/t3_braid_scalp_20260823/gate_audit_NQ_1h.json",
+    "audit_sha256": "35e640747b05ef9967cc7fc1e1eb7781685945571919db5242dc2a9f13bd869b",
+    "audit_symbol": "NQ",
+    "audit_timeframe": "1h",
+    "target_quadrant": "Q2",
+    "target_regime": "High Volatility / Ranging",
+    "audit_generated_utc": "2026-08-24T18:23:26+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": "2026-01-01",
+      "end_basis": "explicit --holdout-end"
+    },
+    "params": {
+      "t3_period": 5,
+      "stiffness_threshold": 45.0,
+      "sl_atr_mult": 2.0,
+      "tp_atr_mult": 2.0,
+      "trailing": false
+    },
+    "params_source": "stage 2 winner (best_params_NQ_1h.json)",
+    "variants_tested": 162,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "FAIL",
+    "agrees_with_snapshot": false
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [
+    "import from 'backtest.event_calendar' is not allowed"
+  ],
+  "notes": ""
+}
