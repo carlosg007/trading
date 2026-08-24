@@ -66,7 +66,8 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
 import backtest.discord_reporter as dr                            # noqa: E402
-from backtest.audit_gates import (GATE_R, PROP_FIRM_FIELDS,       # noqa: E402
+from backtest.audit_gates import (GATE_RUIN, RUIN_CHECK_FAILED,  # noqa: E402
+                                  GATE_R, PROP_FIRM_FIELDS,       # noqa: E402
                                   UnknownRegimeError,
                                   WindowOverlapError,
                                   _assert_no_prop_firm_rules,
@@ -484,30 +485,107 @@ def test_no_aggregate_pruning() -> None:
                           "gate3": {"name": "g3", "status": g3,
                                     "checks": []}}}
 
+    # A SURVIVING account. From 2026-08-24 the ruin guard is a hard bar, so
+    # every case below has to say the account lived - otherwise these would be
+    # testing the ruin guard rather than the clause they are named for.
+    ALIVE = {"ruined": False, "final_equity": 138_400.0,
+             "max_drawdown_pct": -17.5}
+
     # The clause, at its sharpest. Before 2026-08-21 this combination was
     # NOT CERTIFIED on the strength of the Gate 1 FAIL.
     a = charter_audit(_aggregate(FAIL, PASS, NOT_EVALUATED, FAIL),
-                      passing_r, ret)
+                      passing_r, ret, in_sample_metrics=ALIVE)
     check("a FAILING Gate 1 and an unrun Gate 2 still CERTIFY when Gate R "
           "passes", a["status"] == PASS and a["passed"] is True, a["status"])
     check("...and the pre-charter roll-up survives as aggregate_status, so "
           "the verdict reads as MOVED rather than quietly dropped",
           a["aggregate_status"] == FAIL and a["aggregate_passed"] is False
           and a["aggregate_is_advisory"] is True)
-    check("...and all four gates are still on the file in full",
-          set(a["gates"]) == {"gate1", "gate2", "gate3", GATE_R})
+    check("...and all five gates are still on the file in full",
+          set(a["gates"]) == {"gate1", "gate2", "gate3", GATE_R, GATE_RUIN},
+          str(sorted(a["gates"])))
     check("the file says IN WORDS which gate the verdict came from",
           a["verdict_gate"] == GATE_R and "clause 3" in a["verdict_basis"])
 
-    b = charter_audit(_aggregate(PASS, PASS, PASS, PASS), failing_r, ret)
+    b = charter_audit(_aggregate(PASS, PASS, PASS, PASS), failing_r, ret,
+                      in_sample_metrics=ALIVE)
     check("three PASSING aggregate gates do NOT certify a failed Gate R - "
           "the blend cannot vouch for the quadrant either",
           b["status"] == FAIL and b["passed"] is False, b["status"])
 
     c = charter_audit(_aggregate(PASS, PASS, PASS, PASS),
-                      regime_gate(_profile(), None), ret)
+                      regime_gate(_profile(), None), ret,
+                      in_sample_metrics=ALIVE)
     check("no designated quadrant is NOT CERTIFIED however the gates read",
           c["status"] == NOT_EVALUATED and c["passed"] is False)
+
+
+def test_ruin_guard() -> None:
+    """
+    The ONE blended-sample bar that can refuse a certification.
+
+    Gates 1-3 grade edge quality on a sample a regime-gated strategy never
+    trades, which is why the charter made them advisory. Ruin is not a grade:
+    it says the account the trades were placed in reached zero, and there is no
+    quadrant restriction that makes a blown account survivable.
+
+    Three configurations of `t3_braid_scalp_20260823` reached the incubator
+    with `ruined: true` in sample - NQ 15m ended the charter window at -$78,868
+    and NQ 30m at -$104,159 - because Gate R binds profit factor and trade
+    count and nothing else. Both are pinned here as fixtures.
+    """
+    print("\n4b. Ruin is the one hard bar (2026-08-24)")
+
+    passing_r = regime_gate(_profile(**{TRENDING: _q(1.42, 88)}), TRENDING)
+    ret = retention_scores({"profit_factor": 2.4}, {"profit_factor": 1.1})
+    agg = {"version": "A", "status": PASS, "passed": True,
+           "gates": {"gate1": {"name": "g1", "status": PASS, "checks": []}}}
+
+    def _audit(metrics):
+        return charter_audit(agg, passing_r, ret, in_sample_metrics=metrics)
+
+    alive = _audit({"ruined": False, "final_equity": 207_890.0,
+                    "max_drawdown_pct": -49.56})
+    check("a surviving account certifies exactly as before",
+          alive["status"] == PASS and alive["passed"] is True, alive["status"])
+    check("...and the guard is recorded on the file even when it passes",
+          alive["gates"][GATE_RUIN]["status"] == PASS
+          and alive["ruin_guard"]["status"] == PASS)
+
+    # The two real promotions this gate exists to have refused.
+    for label, metrics in (
+            ("NQ 15m", {"ruined": True, "final_equity": -78_868.0,
+                        "max_drawdown_pct": -194.27}),
+            ("NQ 30m", {"ruined": True, "final_equity": -104_159.0,
+                        "max_drawdown_pct": -205.94})):
+        a = _audit(metrics)
+        check(f"{label}: a PASSING Gate R does NOT certify a blown account",
+              a["status"] == RUIN_CHECK_FAILED and a["passed"] is False,
+              a["status"])
+        check(f"{label}: Gate R's own PASS is left untouched on the file",
+              a["gates"][GATE_R]["status"] == PASS)
+
+    dd_only = _audit({"ruined": False, "final_equity": 5_000.0,
+                      "max_drawdown_pct": -119.36})
+    check("a drawdown past -100% refuses on its own - an account cannot lose "
+          "more than it holds",
+          dd_only["status"] == RUIN_CHECK_FAILED and dd_only["passed"] is False)
+
+    equity_only = _audit({"final_equity": -1.0})
+    check("a negative final equity refuses without the engine's flag - a "
+          "metrics dict written before `ruined` existed still fails",
+          equity_only["status"] == RUIN_CHECK_FAILED)
+
+    silent = _audit({"profit_factor": 1.4})
+    check("metrics that say NOTHING about survival are NOT EVALUATED, and "
+          "NOT EVALUATED is not a pass - absent evidence of survival is not "
+          "evidence of survival",
+          silent["gates"][GATE_RUIN]["status"] == NOT_EVALUATED
+          and silent["passed"] is False)
+
+    check("the refusal token names the bar that was missed, so a blown "
+          "account and a dead edge are never the same word",
+          RUIN_CHECK_FAILED != FAIL and "RUIN" in RUIN_CHECK_FAILED)
 
 
 def test_no_prop_firm_rules() -> None:
@@ -1427,6 +1505,7 @@ def main() -> int:
         test_gate_r()
         test_regime_starvation()
         test_no_aggregate_pruning()
+        test_ruin_guard()
         test_no_prop_firm_rules()
         test_retention()
         test_seal_and_incubator(tmp)

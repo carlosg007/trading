@@ -893,7 +893,126 @@ def retention_scores(is_metrics: dict | None,
     }
 
 
-def charter_audit(audit: dict, gate_r: dict, retention: dict) -> dict:
+GATE_RUIN = "gate_ruin"
+RUIN_CHECK_FAILED = "FAILED_RUIN_CHECK"
+
+# An account cannot lose more than it holds. The engine's equity is
+# `initial_capital + cumsum(net P&L)` with NO ruin barrier, so a strategy whose
+# cumulative losses exceed the starting capital produces a negative equity, and
+# `equity / peak - 1` then reports a drawdown past -100% - which is not a
+# deeper loss but arithmetic that has stopped describing an account. It is the
+# same reading the Monte Carlo sanitation clips to -1.00 and calls ruin.
+RUIN_MIN_DRAWDOWN_PCT = -100.0
+
+
+def ruin_guard(metrics: dict | None) -> dict:
+    """
+    Did the account survive the IN-SAMPLE window? Charter clause 3, hard bar.
+
+    **This is the one blended-sample check that CAN refuse a certification**,
+    and it is deliberately not one of Gates 1-3. Those score edge quality -
+    profit factor, Sharpe retention, a drawdown budget - and the charter's
+    reasoning for demoting them is sound: a regime-gated strategy never trades
+    the blended sample they measure, so pruning on it prunes on a result nobody
+    will realise.
+
+    Ruin is a different kind of statement. It is not "this edge is weaker than
+    we would like across states the supervisor will stand it down in" - it is
+    "on the bars this strategy WAS run on, the account reached zero." A
+    supervisor cannot stand a strategy down out of an account that no longer
+    exists, and there is no quadrant restriction that makes a blown account
+    into a survivable one, because the equity path that blew it is the path the
+    certified quadrant's trades are embedded in.
+
+    Three readings of the same event, checked together because a result can
+    show any one of them:
+
+    - `ruined` - the engine's own flag, `final_equity <= 0`;
+    - `final_equity` at or below zero, checked directly for a metrics dict
+      written before that flag existed;
+    - `max_drawdown_pct` at or past -100%, which is ruin recorded on the
+      drawdown rather than on the balance - a path can touch zero and recover
+      on paper, and the recovery is fictional.
+
+    A metrics dict carrying NONE of the three is NOT EVALUATED rather than a
+    pass. Absent evidence of survival is not evidence of survival, and this
+    gate exists precisely because the failure it catches was invisible.
+    """
+    name = "Gate Ruin · In-Sample Account Survival (HARD)"
+    if not metrics:
+        return {"name": name, "status": NOT_EVALUATED, "checks": [],
+                "ruined": None,
+                "note": ("no in-sample metrics were supplied, so account "
+                         "survival could not be checked. NOT EVALUATED is not "
+                         "a pass.")}
+
+    ruined_flag = metrics.get("ruined")
+    equity = _num(metrics.get("final_equity"))
+    dd = _num(metrics.get("max_drawdown_pct"))
+
+    checks, verdicts = [], []
+
+    if ruined_flag is None:
+        checks.append({"label": "Engine ruin flag", "value": None,
+                       "threshold": "false", "status": NOT_EVALUATED,
+                       "note": "the metrics dict carries no `ruined` field"})
+    else:
+        ok = not bool(ruined_flag)
+        verdicts.append(ok)
+        checks.append({"label": "Engine ruin flag", "value": bool(ruined_flag),
+                       "threshold": "false", "status": PASS if ok else FAIL,
+                       "note": "" if ok else
+                               "the engine recorded the account as ruined"})
+
+    if equity is None:
+        checks.append({"label": "Final equity", "value": None,
+                       "threshold": "> 0", "status": NOT_EVALUATED,
+                       "note": "no final equity recorded"})
+    else:
+        ok = equity > 0.0
+        verdicts.append(ok)
+        checks.append({"label": "Final equity", "value": equity,
+                       "threshold": "> 0", "status": PASS if ok else FAIL,
+                       "note": "" if ok else
+                               f"the account ended at {equity:,.2f}"})
+
+    if dd is None:
+        checks.append({"label": "Max drawdown", "value": None,
+                       "threshold": f"> {RUIN_MIN_DRAWDOWN_PCT:.0f}%",
+                       "status": NOT_EVALUATED,
+                       "note": "no drawdown recorded"})
+    else:
+        ok = dd > RUIN_MIN_DRAWDOWN_PCT
+        verdicts.append(ok)
+        checks.append({"label": "Max drawdown", "value": dd,
+                       "threshold": f"> {RUIN_MIN_DRAWDOWN_PCT:.0f}%",
+                       "status": PASS if ok else FAIL,
+                       "note": "" if ok else
+                               (f"{dd:,.2f}% is past total loss - an account "
+                                f"cannot lose more than it holds")})
+
+    if not verdicts:
+        status = NOT_EVALUATED
+        note = ("nothing on the metrics dict states whether the account "
+                "survived. NOT EVALUATED is not a pass.")
+    elif all(verdicts):
+        status = PASS
+        note = "the account survived the in-sample window"
+    else:
+        status = FAIL
+        note = ("the account did NOT survive the in-sample window. No "
+                "quadrant restriction makes a blown account survivable: the "
+                "equity path that blew it is the path the certified "
+                "quadrant's trades are embedded in.")
+
+    return {"name": name, "status": status, "checks": checks,
+            "ruined": (None if not verdicts else status != PASS),
+            "final_equity": equity, "max_drawdown_pct": dd,
+            "note": note}
+
+
+def charter_audit(audit: dict, gate_r: dict, retention: dict,
+                  in_sample_metrics: dict | None = None) -> dict:
     """
     Fold Gate R into the audit and make it the verdict. Charter clause 3.
 
@@ -915,14 +1034,44 @@ def charter_audit(audit: dict, gate_r: dict, retention: dict) -> dict:
     A configuration can therefore be CERTIFIED with a failing Gate 1. That is
     the intended effect: a strategy whose supervisor stands it down outside its
     quadrant never trades the blended sample the gate measured.
+
+    **THE ONE EXCEPTION IS RUIN, added 2026-08-24.** `ruin_guard` is a HARD
+    bar and it can refuse a certification that Gate R passed. Three
+    configurations of `t3_braid_scalp_20260823` reached the incubator with
+    `ruined: true` in sample - NQ 15m ended the charter window at -$78,868 and
+    NQ 30m at -$104,159, on $100,000 of starting capital, drawing -194% and
+    -206% - because Gate R binds profit factor and trade count inside one
+    quadrant and has no drawdown or survival bar at all. Gate 1's 12% drawdown
+    limit would have caught both, and clause 3 had removed its authority.
+
+    The distinction that keeps this consistent with the charter: Gates 1-3
+    grade EDGE QUALITY on a blended sample a regime-gated strategy never
+    trades, which is why they are advisory. Ruin is not a grade. It is a
+    statement that the account the trades were placed in reached zero, and a
+    supervisor cannot stand a strategy down out of an account that no longer
+    exists.
+
+    When it fails, `status` is `FAILED_RUIN_CHECK` rather than `FAIL`. Every
+    consumer refuses a non-PASS status, so the token cannot leak a promotion
+    through, and it says on sight which bar was missed - "Gate R failed" and
+    "the account was blown" send an operator to completely different work.
     """
     out = dict(audit)
     gates = dict(out.get("gates") or {})
     aggregate = out.get("status", NOT_EVALUATED)
     gates[GATE_R] = gate_r
+    ruin = ruin_guard(in_sample_metrics)
+    gates[GATE_RUIN] = ruin
     out["gates"] = gates
-    out["status"] = gate_r["status"]
-    out["passed"] = gate_r["status"] == PASS
+    if ruin["status"] == PASS:
+        out["status"] = gate_r["status"]
+    else:
+        # A NOT EVALUATED ruin guard is not a pass either: it means nothing on
+        # the metrics dict states the account survived, and this gate exists
+        # because that failure was invisible.
+        out["status"] = RUIN_CHECK_FAILED
+    out["passed"] = (gate_r["status"] == PASS and ruin["status"] == PASS)
+    out["ruin_guard"] = ruin
     out["verdict_gate"] = GATE_R
     out["verdict_basis"] = (
         "Regime-Switching Incubator Charter clause 3: the certification is "
@@ -930,7 +1079,10 @@ def charter_audit(audit: dict, gate_r: dict, retention: dict) -> dict:
         "quadrant Stage 1 designated. Gates 1, 2 and 3 are computed and "
         "reported as EVIDENCE and cannot fail a certification; they score the "
         "blended sample across every market state, which a regime-gated "
-        "strategy does not trade.")
+        "strategy does not trade. The ONE hard exception is the ruin guard: "
+        "an in-sample account that reached zero refuses certification whatever "
+        "Gate R measured, because no quadrant restriction makes a blown "
+        "account survivable.")
     # The pre-charter verdict, kept rather than overwritten.
     out["aggregate_status"] = aggregate
     out["aggregate_passed"] = aggregate == PASS
@@ -1114,6 +1266,26 @@ def gate2_evidence(path: Path, symbol: str, tf: str, params: dict,
     out["wfo"]["n_folds"] = len(wfo.get("folds") or [])
     out["wfo_optimized"] = bool(param_grid)
 
+    # `trade_returns_from_result` ALREADY divides by the starting capital - it
+    # returns "per-trade returns as fractions of starting equity". Passing
+    # `returns_are_dollars=True` made `run_monte_carlo_simulation` divide by
+    # `initial_capital` a SECOND time, so every bootstrapped return reaching
+    # the drawdown distribution was 100,000x too small.
+    #
+    # This is the same failure the 2026-08-24 sanitation exists to prevent,
+    # arriving through a different door: it did not corrupt the array, it
+    # SHRANK it, and a shrunk array bootstraps to a drawdown of roughly zero.
+    # Every audit in the repository reported `max_drawdown_pct_at_confidence`
+    # of -0.00% beside `prob_max_loss_breach: 0.0` - the strongest possible
+    # safety reading, produced for every strategy regardless of its equity
+    # path, while the runs behind those numbers included accounts that ended
+    # BELOW ZERO. Measured on a series matched to a real NQ 15m run: -0.0029%
+    # and a 0.0 breach probability as it was called, against -95.29% and a 1.0
+    # breach probability correct.
+    #
+    # The guard is the docstring of the function that produces the array, not
+    # a magnitude test here: a caller cannot tell a fraction from a dollar
+    # figure by looking at it, which is exactly why the flag exists.
     returns = trade_returns_from_result(result)
     if returns is None or len(returns) == 0:
         out["monte_carlo"] = {"ok": False,
@@ -1121,7 +1293,7 @@ def gate2_evidence(path: Path, symbol: str, tf: str, params: dict,
     else:
         out["monte_carlo"] = run_monte_carlo_simulation(
             returns, n_iterations=args.mc_iterations,
-            initial_capital=cfg.initial_capital, returns_are_dollars=True,
+            initial_capital=cfg.initial_capital, returns_are_dollars=False,
             seed=args.mc_seed)
     return out
 
@@ -1229,8 +1401,13 @@ def certify_symbol(symbol: str, path: Path, tf: str, args: argparse.Namespace,
             "metrics_in_sample": _scalars(block["metrics"]),
             "metrics_holdout": _scalars(ho_block.get("metrics")),
             "robustness": _scalars_deep(rb),
-            "gate_audit": _scalars_deep(charter_audit(audit, gate_r,
-                                                      retention)),
+            # The IN-SAMPLE metrics feed the ruin guard. They are the window
+            # the strategy was actually run over to select these parameters,
+            # so an account that died there died on the bars the certification
+            # rests on.
+            "gate_audit": _scalars_deep(charter_audit(audit, gate_r, retention,
+                                                      in_sample_metrics=block
+                                                      .get("metrics"))),
             # The WHOLE holdout breakdown, not only the certified quadrant.
             # Gate R scores one row of it; the other three are what a live
             # supervisor is being told to stand the strategy down in, and a

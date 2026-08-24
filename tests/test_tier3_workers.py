@@ -259,6 +259,87 @@ def test_monte_carlo_sanitation() -> None:
           and r["n_clipped_to_total_loss"] == 0)
 
 
+def test_monte_carlo_scale_regression() -> None:
+    """
+    The bootstrap must be fed FRACTIONS once, not twice.
+
+    `trade_returns_from_result` already divides per-trade dollar P&L by the
+    starting capital - its docstring says "per-trade returns as fractions of
+    starting equity". Stage 3 then passed `returns_are_dollars=True`, which
+    divided by `initial_capital` a SECOND time, so every return reaching the
+    drawdown distribution was `initial_capital` times too small.
+
+    This is not the NaN corruption the sanitation above guards. Nothing is
+    non-finite, nothing is clipped, and `ok` is True: the array is merely
+    SHRUNK, and a shrunk array bootstraps to a drawdown of roughly zero. The
+    signature is a `max_drawdown_pct_at_confidence` of -0.00% beside a
+    `prob_max_loss_breach` of 0.0 - the strongest possible safety reading -
+    produced for every strategy whatever its equity path, including runs whose
+    accounts ended below zero.
+
+    Both readings are pinned here. Asserting only the correct one would let a
+    future caller reintroduce the double division and still pass, because a
+    near-zero drawdown is a perfectly well-formed number.
+    """
+    print("\nmonte carlo · return scale")
+    capital = 100_000.0
+    rng = np.random.default_rng(11)
+
+    # A ruinous series: 13,089 trades averaging a loss, netting roughly
+    # -1.79x the starting capital, which is the shape of a real losing run.
+    pnl = rng.normal(-13.66, 500.0, 13_089)
+    pnl -= pnl.mean() - (-178_868.0 / 13_089)
+    result = {"trades": pd.DataFrame({"pnl": pnl}),
+              "meta": {"initial_capital": capital}}
+
+    fractions = trade_returns_from_result(result, capital)
+    check("trade_returns_from_result returns FRACTIONS, not dollars",
+          bool(np.isclose(fractions, pnl / capital).all()),
+          f"mean {float(fractions.mean()):.3e}")
+
+    correct = run_monte_carlo_simulation(
+        fractions, n_iterations=300, initial_capital=capital,
+        returns_are_dollars=False, seed=42)
+    check("the bootstrap ran cleanly", correct["ok"] is True)
+    check("nothing was dropped or clipped - this is a SCALE bug, not a NaN one",
+          correct["n_dropped_nonfinite"] == 0
+          and correct["n_clipped_to_total_loss"] == 0)
+    dd = correct["max_drawdown_pct_at_confidence"]
+    check("a ruinous series bootstraps to a drawdown deeper than 50%",
+          dd < -50.0, f"dd@95% = {dd:.4f}%")
+    check("a ruinous series breaches the loss limit with probability 1.0",
+          correct["prob_max_loss_breach"] == 1.0,
+          f"breach_prob = {correct['prob_max_loss_breach']}")
+
+    # The bug's own signature, pinned so it cannot come back unnoticed.
+    doubled = run_monte_carlo_simulation(
+        fractions, n_iterations=300, initial_capital=capital,
+        returns_are_dollars=True, seed=42)
+    check("dividing a fraction by the capital again reports near-zero risk",
+          abs(doubled["max_drawdown_pct_at_confidence"]) < 0.1
+          and doubled["prob_max_loss_breach"] == 0.0,
+          f"dd@95% = {doubled['max_drawdown_pct_at_confidence']:.6f}%, "
+          f"breach = {doubled['prob_max_loss_breach']}")
+    check("the two readings differ by orders of magnitude",
+          abs(dd) > 100 * abs(doubled["max_drawdown_pct_at_confidence"]),
+          f"{dd:.4f}% vs {doubled['max_drawdown_pct_at_confidence']:.6f}%")
+
+    # And the caller that matters. A unit test on the function cannot stop
+    # Stage 3 from passing the wrong flag, and Stage 3's audit is what a
+    # promotion rests on - so the call site is asserted directly.
+    # Comments are stripped first: this file's own prose explains the bug and
+    # names the wrong flag, and so does the call site's. Matching raw text
+    # would fail on the explanation rather than on the code.
+    src = (Path(__file__).resolve().parent.parent
+           / "backtest" / "audit_gates.py").read_text(encoding="utf-8")
+    code = "\n".join(line.split("#", 1)[0] for line in src.splitlines())
+    check("audit_gates does NOT tell the bootstrap its fractions are dollars",
+          "returns_are_dollars=True" not in code,
+          "backtest/audit_gates.py passes returns_are_dollars=True")
+    check("audit_gates passes returns_are_dollars=False explicitly",
+          "returns_are_dollars=False" in code)
+
+
 def test_integer_perturbation() -> None:
     print("\nparameter perturbation arithmetic")
 
@@ -717,6 +798,7 @@ if __name__ == "__main__":
         test_metrics_are_arithmetic(tmp)
         test_monte_carlo_matches_reference()
         test_monte_carlo_sanitation()
+        test_monte_carlo_scale_regression()
         test_integer_perturbation()
         test_sensitivity(tmp)
         test_walk_forward(tmp)
