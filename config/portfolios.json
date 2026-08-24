@@ -70,20 +70,76 @@
         "t3_braid_scalp_20260823": {
           "strat": "t3_braid_scalp_20260823",
           "symbol": "NQ",
-          "timeframe": "1h",
+          "timeframe": "15m",
           "version": "A",
           "allocation": 1,
-          "regime_filter": "Q2",
+          "regime_filter": "Q1",
           "status": "incubating",
           "path": "strategies/approved_incubator/t3_braid_scalp_20260823/strat.py",
-          "registered_utc": "2026-08-24T14:52:34+00:00",
+          "registered_utc": "2026-08-24T19:02:31+00:00",
           "registered_by": "backtest/promote.py",
-          "routing_basis": "--portfolio incubator-even",
+          "routing_basis": "already registered on Incubator-Even; a re-promotion does not move an account",
           "resolved_from": {
-            "symbol": "gate_audit_NQ_1h.json (certification)",
-            "timeframe": "gate_audit_NQ_1h.json (the audit itself)",
-            "regime_filter": "gate_audit_NQ_1h.json (Gate R's certification target, read from the audit itself)"
-          }
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_NQ_15m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "t3_braid_scalp_20260823",
+              "symbol": "NQ",
+              "timeframe": "15m",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q1",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/t3_braid_scalp_20260823/strat.py",
+              "registered_utc": "2026-08-24T19:02:31+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "already registered on Incubator-Even; a re-promotion does not move an account",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_NQ_15m.json (Gate R's certification target)"
+              }
+            },
+            {
+              "strat": "t3_braid_scalp_20260823",
+              "symbol": "NQ",
+              "timeframe": "1h",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q2",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/t3_braid_scalp_20260823/strat.py",
+              "registered_utc": "2026-08-24T19:02:24+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "already registered on Incubator-Even; a re-promotion does not move an account",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_NQ_1h.json (Gate R's certification target)"
+              }
+            },
+            {
+              "strat": "t3_braid_scalp_20260823",
+              "symbol": "NQ",
+              "timeframe": "30m",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q2",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/t3_braid_scalp_20260823/strat.py",
+              "registered_utc": "2026-08-24T19:02:28+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "already registered on Incubator-Even; a re-promotion does not move an account",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_NQ_30m.json (Gate R's certification target)"
+              }
+            }
+          ]
         }
       }
     },
