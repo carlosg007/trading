@@ -39,13 +39,38 @@ Five cards, one transport
   exactly ONE symbol and there is nothing to pick between.
 
   **Nothing is invented and every resolved value names its file.** An
-  `Auto-resolved` field lists what came from where and over which window; a
-  card whose values were all typed does not carry it and is byte-identical to
-  what it was before any of this existed. A `--symbol` that disagrees with the
-  certification is honoured and FLAGGED. A file named explicitly and missing
-  RAISES; one this went looking for on its own is a note. Another strategy's
-  meta.json, snapshot or audit is refused outright, the way
-  `pipeline.read_stage` refuses another strategy's handoff.
+  `Auto-resolved` field lists what came from where and over which window. A
+  `--symbol` that disagrees with the certification is honoured and FLAGGED. A
+  file named explicitly and missing RAISES; one this went looking for on its
+  own is a note. Another strategy's meta.json, snapshot or audit is refused
+  outright, the way `pipeline.read_stage` refuses another strategy's handoff.
+
+  Two more fields sit beside those numbers, and neither is decoration:
+
+  **The WIN RATE comes from the same sample as the profit factor above it** -
+  Gate R's own quadrant, on the holdout - and falls back to the blended
+  holdout and then to the run snapshot, saying on the card which of the three
+  it read. 1.22 earned from a 53% hit rate and 1.22 earned from a 20% one are
+  different strategies to sit in front of, and the ratio alone does not
+  separate them. Unlike the profit factor a snapshot value is not DECLINED
+  here: the field is headed `Win Rate` and claims no window of its own, while
+  `Out-of-Sample PF` claims one. The unit is stated by the SOURCE, never
+  sniffed from the magnitude - the profiler writes a percentage (53.75) and
+  `summarize_result` writes a fraction (0.5233), and 0.52 and 52.0 are both
+  plausible win rates, so a magnitude test cannot tell the two apart, it can
+  only usually guess right.
+
+  **PORTFOLIO MEMBERSHIP is read from `config/portfolios.json` and is never
+  typed.** Being in `approved_incubator/` is a record that a version was
+  CHOSEN and explicitly not permission to trade it; `active_strategies` on a
+  portfolio is what grants that. So a promotion named by no portfolio reads
+  `Incubator Staging (Evaluation / Shadow)` and one that is allocated reads
+  `Active <portfolio> (Allocated)`, and the two are never the same green embed.
+  A registry that cannot be READ reports `NOT RESOLVED` rather than the staging
+  token, because "no portfolio names this strategy" is a claim about a file
+  nobody managed to open. There is no fallback to a name, an asset or a parity
+  rule - the same refusal `portfolio.config_loader` makes, since an allocation
+  inferred that way is a live account chosen by a rule nobody wrote down.
 - **`--mode baseline`** (equivalently `--stage 1`): Stage 1's REGIME FIREWALL
   leaderboard, read straight out of `surviving_assets.json` - every
   (symbol, timeframe) configuration screened, the quadrant it cleared, that
@@ -608,10 +633,29 @@ PROMOTION_FIELD_LABELS = {
     "symbol": "Asset",
     "tf": "Timeframe",
     "pf": "Out-of-Sample PF",
+    "win": "Win Rate",
     "dd": "Max Drawdown",
     "regime": "Certified Regime Firewall",
+    "membership": "Portfolio Membership",
     "report": "Artifacts / Report",
 }
+
+# The scalar fields, in the order the card carries them. `resolve_promotion_
+# fields` walks this rather than a literal repeated at each of the three places
+# it needs one, because a field added to the resolver and forgotten in the
+# `missing` list is a value that silently stops being reported as absent.
+PROMOTION_SCALARS = ("pf", "win", "dd", "regime", "report")
+
+# A win rate is stored two ways in this repository and the difference is a
+# factor of 100 that no reader would catch on a card: `backtest.profiler`
+# writes a PERCENTAGE (53.75) into every regime breakdown and therefore into
+# Gate R's `measured` block, while `backtest.report.summarize_result` writes a
+# FRACTION (0.5233) into every metrics dict. Each source below states its own
+# unit rather than the value being sniffed at from its magnitude - 0.52 and
+# 52.0 are both perfectly plausible win rates, so a magnitude test cannot tell
+# a fraction from a percentage, it can only usually guess right.
+WIN_RATE_IS_PCT = "the profiler writes win_rate as a percentage"
+WIN_RATE_IS_FRACTION = "summarize_result writes win_rate as a fraction"
 
 # The one number on this card that may ONLY come from a Stage 3 gate audit.
 # `dual_metrics.json` and the `metrics` block in `meta.json` both carry a
@@ -770,6 +814,17 @@ def audit_promotion_values(blob: dict[str, Any],
             out["pf"] = f"{pf:.2f}"
             out["pf_basis"] = f"Gate R · holdout{f' · {where}' if where else ''}{count}"
 
+    # The win rate from the SAME sample as the profit factor above it: Gate R's
+    # own quadrant, on the holdout. `measured` is written by the profiler and
+    # is already a percentage (`WIN_RATE_IS_PCT`). It survives the 999 sentinel
+    # branch deliberately - a quadrant with no losing trade has no measurable
+    # profit factor and still has a perfectly real win rate.
+    win = _as_float(measured.get("win_rate"))
+    if win is not None:
+        count = f" · {int(trades):,} trades" if _as_float(trades) is not None else ""
+        out["win"] = f"{win:.2f}"
+        out["win_basis"] = f"Gate R · holdout{f' · {where}' if where else ''}{count}"
+
     if where:
         out["regime"] = where
         out["regime_basis"] = "Stage 3's certification target"
@@ -777,10 +832,20 @@ def audit_promotion_values(blob: dict[str, Any],
     # The drawdown from the SAME window as the profit factor above it. Pairing
     # Gate R's holdout factor with a full-run drawdown would put two windows on
     # one card with nothing saying so.
-    dd = _as_float((block.get("metrics_holdout") or {}).get("max_drawdown_pct"))
+    holdout = block.get("metrics_holdout") or {}
+    dd = _as_float(holdout.get("max_drawdown_pct"))
     if dd is not None:
         out["dd"] = f"{abs(dd):.2f}"
         out["dd_basis"] = "holdout · blended across quadrants"
+
+    # Only where Gate R recorded none. Still the holdout, so it is out of
+    # sample - but blended across all four quadrants rather than scored in the
+    # one that was certified, and the basis says which of the two a reader is
+    # looking at. A fraction here (`WIN_RATE_IS_FRACTION`), unlike Gate R's.
+    win = _as_float(holdout.get("win_rate"))
+    if "win" not in out and win is not None:
+        out["win"] = f"{win * 100:.2f}"
+        out["win_basis"] = "holdout · blended across quadrants"
     return out
 
 
@@ -819,6 +884,16 @@ def metrics_promotion_values(blob: dict[str, Any],
         out["dd"] = f"{abs(dd):.2f}"
         out["dd_basis"] = (f"whole run {window} · NOT the holdout" if window
                            else "whole run · NOT the holdout")
+
+    # A fraction (`WIN_RATE_IS_FRACTION`), over the whole run. Unlike the
+    # profit factor this is not DECLINED here: the card's field is headed
+    # `Win Rate` and claims no window of its own, and the basis beside it says
+    # which window produced it. A profit factor's field does claim one.
+    win = _as_float((block.get("metrics") or {}).get("win_rate"))
+    if win is not None:
+        out["win"] = f"{win * 100:.2f}"
+        out["win_basis"] = (f"whole run {window} · NOT the holdout" if window
+                            else "whole run · NOT the holdout")
 
     report = (blob.get("reports") or {}).get(key)
     if report:
@@ -862,6 +937,11 @@ def meta_promotion_values(blob: dict[str, Any]) -> dict[str, Any]:
         out["dd"] = f"{abs(dd):.2f}"
         out["dd_basis"] = "meta.json metrics snapshot · NOT the holdout"
 
+    win = _as_float((blob.get("metrics") or {}).get("win_rate"))
+    if win is not None:                          # a fraction, like the snapshot
+        out["win"] = f"{win * 100:.2f}"
+        out["win_basis"] = "meta.json metrics snapshot · NOT the holdout"
+
     declared = blob.get("symbols")
     declared = [str(s).strip() for s in declared] if isinstance(declared, list) else []
     tf = str(blob.get("timeframe") or "").strip()
@@ -871,18 +951,140 @@ def meta_promotion_values(blob: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+# --------------------------------------------------------------------------
+# Stage 5 · where the strategy actually sits
+# --------------------------------------------------------------------------
+
+# The live routing table. Read here as plain JSON rather than through
+# `portfolio.config_loader`, for two reasons that are both about this staying a
+# NOTIFIER. The dependency runs one way - `portfolio/` sits above `backtest/`
+# and reads from it, and nothing in `backtest/` may import from there - and
+# `get_portfolio_for_strategy` RAISES for a strategy no portfolio names, which
+# is the ordinary state of a freshly staged promotion and the exact state this
+# field exists to report. Loading the config through it would also reconcile
+# every asset against `backtest/specs.py`, so an unrelated multiplier
+# disagreement would stop a promotion card from being posted at all.
+PORTFOLIO_CONFIG_FILE = PROJECT_ROOT / "config" / "portfolios.json"
+
+# Staged under `approved_incubator/` and named by no portfolio.
+# `approved_incubator/<strat>/` is a record that a version was CHOSEN and is
+# explicitly not permission to trade it; `active_strategies` in the routing
+# table is what grants that. The two states have to read differently on a card
+# somebody acts on, because "certified and waiting" and "live on an account"
+# are the same green embed otherwise.
+INCUBATOR_STAGING = "Incubator Staging (Evaluation / Shadow)"
+ALLOCATED_TEMPLATE = "Active {names} (Allocated)"
+
+# Named by no portfolio and with no promotion on disk either. Distinct from
+# the staging token: one says the promotion is waiting for an allocation, the
+# other says there is no promotion here at all, and they are fixed by
+# completely different work.
+NOT_STAGED = "NOT STAGED"
+
+# The registry could not be read. Deliberately NOT the staging token: "no
+# portfolio names this strategy" is a fact about the config, and printing it
+# when the config could not be opened is an allocation claim nobody checked.
+MEMBERSHIP_UNRESOLVED = "NOT RESOLVED"
+
+
+def portfolio_membership(strat: str, *, staged: bool = False,
+                         config_path: str | Path | None = None
+                         ) -> dict[str, Any]:
+    """
+    Where this strategy sits: allocated to a portfolio, or staged and waiting.
+
+    Allocation is `active_strategies` on a portfolio in `config/portfolios.json`
+    and nothing else. There is no fallback to the strategy's name, its assets
+    or a parity rule - the same refusal `portfolio.config_loader` makes, for
+    the same reason: an allocation inferred from a name is a live account
+    chosen by a rule nobody wrote down.
+
+    A strategy named on an incubator AND a prop portfolio is normal - that is
+    what the two tracks are for - and both are named. Two portfolios of the
+    SAME track is the config `portfolio.config_loader` refuses to load, and it
+    is flagged as a note rather than resolved to one of them here.
+    """
+    path = Path(config_path) if config_path else PORTFOLIO_CONFIG_FILE
+    out: dict[str, Any] = {"membership": MEMBERSHIP_UNRESOLVED, "basis": "",
+                           "source": path.name, "notes": []}
+    try:
+        blob = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        out["basis"] = f"{path.name} could not be read"
+        out["notes"].append(f"the routing table {path} is not readable ({exc}) "
+                            f"- the allocation was left unresolved rather than "
+                            f"reported as none")
+        return out
+    except ValueError as exc:
+        out["basis"] = f"{path.name} is not valid JSON"
+        out["notes"].append(f"the routing table {path} is not valid JSON "
+                            f"({exc}) - the allocation was left unresolved")
+        return out
+
+    portfolios = blob.get("portfolios")
+    if not isinstance(portfolios, dict):
+        out["basis"] = f"{path.name} carries no portfolios object"
+        out["notes"].append(f"{path.name} carries no `portfolios` object - the "
+                            f"allocation was left unresolved")
+        return out
+
+    # Matched case-insensitively on the stripped id: a strategy id differing
+    # from the promoted directory's only in case is the same strategy, and
+    # missing it would print the staging token for a strategy that is live.
+    wanted = str(strat or "").strip().lower()
+    holders: list[tuple[str, str]] = []
+    for pid, portfolio in sorted(portfolios.items()):
+        if not isinstance(portfolio, dict):
+            continue
+        active = portfolio.get("active_strategies")
+        active = active if isinstance(active, list) else []
+        if any(str(name).strip().lower() == wanted for name in active):
+            holders.append((str(portfolio.get("portfolio_id") or pid),
+                            str(portfolio.get("account_type") or "")))
+
+    if holders:
+        out["membership"] = ALLOCATED_TEMPLATE.format(
+            names=" + ".join(pid for pid, _ in holders))
+        out["basis"] = (f"named in active_strategies on "
+                        f"{len(holders)} portfolio(s) in {path.name}")
+        tracks: dict[str, list[str]] = {}
+        for pid, account_type in holders:
+            tracks.setdefault(account_type, []).append(pid)
+        for account_type, pids in sorted(tracks.items()):
+            if len(pids) > 1:
+                out["notes"].append(
+                    f"{strat} is named on {len(pids)} {account_type or 'same-track'} "
+                    f"portfolios ({', '.join(pids)}); portfolio.config_loader "
+                    f"refuses that config - both would size the same signal "
+                    f"independently and the net position would be double")
+        return out
+
+    if staged:
+        out["membership"] = INCUBATOR_STAGING
+        out["basis"] = (f"staged under approved_incubator/ and named by no "
+                        f"portfolio in {path.name}")
+        return out
+
+    out["membership"] = NOT_STAGED
+    out["basis"] = (f"no promotion under approved_incubator/ and no portfolio "
+                    f"in {path.name} names it")
+    return out
+
+
 def resolve_promotion_fields(
         strat: str,
         *,
         symbol: str = "",
         tf: str = "",
         pf: str = "",
+        win: str = "",
         dd: str = "",
         regime: str = "",
         report: str = "",
         audit_file: str | Path | None = None,
         metrics_file: str | Path | None = None,
-        incubator: str | Path | None = None) -> dict[str, Any]:
+        incubator: str | Path | None = None,
+        portfolio_config: str | Path | None = None) -> dict[str, Any]:
     """
     Fill the promotion card from what Stage 3 and Stage 5 already wrote.
 
@@ -909,7 +1111,7 @@ def resolve_promotion_fields(
     named explicitly and missing RAISES; one this went looking for on its own
     is a note.
     """
-    given = {"symbol": symbol, "tf": tf, "pf": pf, "dd": dd,
+    given = {"symbol": symbol, "tf": tf, "pf": pf, "win": win, "dd": dd,
              "regime": regime, "report": report}
     values = {k: str(v).strip() for k, v in given.items() if str(v or "").strip()}
     sources = {k: "--" + ("tf" if k == "tf" else k) for k in values}
@@ -971,7 +1173,7 @@ def resolve_promotion_fields(
 
     # --- the scalar fields -------------------------------------------------
     for name, cand in candidates:
-        for field in ("pf", "dd", "regime", "report"):
+        for field in PROMOTION_SCALARS:
             if field in values or not cand.get(field):
                 continue
             values[field] = str(cand[field])
@@ -1009,15 +1211,30 @@ def resolve_promotion_fields(
         notes.append(PF_IS_GATE_R_ONLY)
 
     missing = [PROMOTION_FIELD_LABELS[f]
-               for f in ("pf", "dd", "regime", "report") if f not in values]
+               for f in PROMOTION_SCALARS if f not in values]
+
+    # Where the strategy sits. Resolved from the routing table and NEVER from
+    # the command line: every other field on this card is a measurement an
+    # operator may correct, while this one is a statement about which live
+    # account holds the strategy right now, and a card is not the place that
+    # gets decided.
+    member = portfolio_membership(strat, staged=meta is not None,
+                                  config_path=portfolio_config)
+    sources["membership"] = member["source"]
+    inspected.append(member["source"])
+    resolved.append((PROMOTION_FIELD_LABELS["membership"],
+                     member["basis"], member["source"]))
+    notes.extend(member["notes"])
 
     return {
         "symbol": values.get("symbol", ""),
         "tf": values.get("tf", ""),
         "pf": values.get("pf", ""),
+        "win": values.get("win", ""),
         "dd": values.get("dd", ""),
         "regime": values.get("regime", ""),
         "report": values.get("report", ""),
+        "membership": member["membership"],
         "version": version,
         "sources": sources,
         "resolved": resolved,
@@ -1060,6 +1277,8 @@ def build_embed(
     regime: str,
     report: str,
     resolution: dict[str, Any] | None = None,
+    win: str = "",
+    membership: str = "",
 ) -> dict[str, Any]:
     """
     Build the Discord embed dict. Pure - sends nothing, reads nothing.
@@ -1069,7 +1288,14 @@ def build_embed(
     naming the file and the window behind each auto-resolved value, and is
     omitted entirely when every value came from the command line - a card an
     operator typed in full is unchanged, to the byte, by this parameter
-    existing.
+    existing. (Through the CLI the provenance field is now always present,
+    because `Portfolio Membership` can only ever come from the routing table.)
+
+    `win` and `membership` are keyword arguments AFTER `resolution` rather than
+    beside the metrics they are printed with: every existing caller passes the
+    first seven positionally, and inserting a parameter in the middle would
+    silently shift a drawdown into the profit factor's slot on any call this
+    module does not own.
     """
     embed = {
         "title": f"\U0001F680 Incubation Promotion: {strat}",
@@ -1085,10 +1311,30 @@ def build_embed(
                 "value": _fmt_number(pf),
                 "inline": True,
             },
+            # A fourth inline field wraps onto its own row in Discord, which
+            # renders three per row. That is the intended layout: the win rate
+            # belongs with the two numbers it qualifies, and a profit factor
+            # read without one is a ratio with no sense of how it was earned -
+            # 1.22 from a 53% hit rate and 1.22 from a 20% one are different
+            # strategies to sit in front of.
+            {
+                "name": "Win Rate",
+                "value": _fmt_number(win, suffix=" %"),
+                "inline": True,
+            },
             {
                 "name": "Max Drawdown",
                 "value": _fmt_number(dd, suffix=" %"),
                 "inline": True,
+            },
+            # Above the certified quadrant on purpose: the quadrant is where
+            # the strategy is PERMITTED to trade, and this is whether anything
+            # is routing it there yet. Read the other way round, a certified
+            # firewall reads as a live one.
+            {
+                "name": "Portfolio Membership",
+                "value": (membership or "").strip() or MEMBERSHIP_UNRESOLVED,
+                "inline": False,
             },
             {
                 "name": "Certified Regime Firewall",
@@ -3061,8 +3307,8 @@ def build_parser() -> argparse.ArgumentParser:
             "\n"
             "  --stage 5          --strat X   (everything else auto-resolved\n"
             "                     from approved_incubator/X/, overridable with\n"
-            "                     --symbol --tf --pf --dd --regime --report,\n"
-            "                     --audit-file and --metrics)\n"
+            "                     --symbol --tf --pf --win --dd --regime\n"
+            "                     --report, --audit-file and --metrics)\n"
             "  --stage 1          --strat X [--survivors <surviving_assets.json>]\n"
             "  --stage 2          --strat X [--summary <stage2_summary.json>]\n"
             "  --stage 3          --strat X [--audit <stage3_audit_summary.json>]\n"
@@ -3131,6 +3377,11 @@ def build_parser() -> argparse.ArgumentParser:
                              f"not fit is COUNTED on the card, never dropped "
                              f"in silence.")
     parser.add_argument("--pf", default="", help="out-of-sample profit factor, or a token like 'NOT EVALUATED'")
+    parser.add_argument("--win", default="",
+                        help="win rate in PERCENT (52.0), or a token like "
+                             "'NOT EVALUATED'. Default: Gate R's own quadrant "
+                             "on the holdout, then the blended holdout, then "
+                             "the metrics snapshot - the card names which")
     parser.add_argument("--dd", default="", help="max drawdown in percent, or a token like 'NOT EVALUATED'")
     parser.add_argument("--regime", default="", help="certified regime, e.g. 'High-Vol/Trending'")
     parser.add_argument("--report", default="", help="artifact URL or path to the tear sheet")
@@ -3157,6 +3408,11 @@ def build_parser() -> argparse.ArgumentParser:
                              f"{PROMOTED_META_FILE} and "
                              f"{PROMOTED_METRICS_FILE} are looked up under "
                              "(default: strategies/approved_incubator/<strat>/)")
+    parser.add_argument("--portfolios", default=None,
+                        help="promotion mode: the routing table the portfolio "
+                             "membership is read from (default: "
+                             f"{PORTFOLIO_CONFIG_FILE}). Read only - this "
+                             "never allocates anything")
     parser.add_argument("--dry-run", action="store_true",
                         help="print the payload and send nothing")
     return parser
@@ -3185,7 +3441,8 @@ def resolve_mode(mode: str | None, stage: str | None) -> str:
 # the shape of every silently-inert flag this repository has had to fix.
 PROMOTION_ONLY_FLAGS = (("--audit-file", "audit_file"),
                         ("--metrics", "metrics"),
-                        ("--incubator", "incubator"))
+                        ("--incubator", "incubator"),
+                        ("--portfolios", "portfolios"))
 
 
 def _build_card(args: argparse.Namespace) -> tuple[dict[str, Any], str]:
@@ -3272,10 +3529,10 @@ def _build_card(args: argparse.Namespace) -> tuple[dict[str, Any], str]:
     # around: an operator who typed a path meant that path.
     res = resolve_promotion_fields(
         args.strat,
-        symbol=args.symbol, tf=args.tf, pf=args.pf, dd=args.dd,
+        symbol=args.symbol, tf=args.tf, pf=args.pf, win=args.win, dd=args.dd,
         regime=args.regime, report=args.report,
         audit_file=args.audit_file, metrics_file=args.metrics,
-        incubator=args.incubator)
+        incubator=args.incubator, portfolio_config=args.portfolios)
 
     # The card names ONE contract, so these two are still required - but only
     # after the resolution has had its turn. Checked rather than defaulted: a
@@ -3296,9 +3553,11 @@ def _build_card(args: argparse.Namespace) -> tuple[dict[str, Any], str]:
         symbol=res["symbol"],
         tf=res["tf"],
         pf=res["pf"],
+        win=res["win"],
         dd=res["dd"],
         regime=res["regime"],
         report=res["report"],
+        membership=res["membership"],
         resolution=res,
     )
     auto = len(res["resolved"])

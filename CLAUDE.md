@@ -1791,13 +1791,42 @@ snapshots in one run's artifacts directory.
   `strategies/approved_incubator/<strat>/meta.json`, the `dual_metrics.json`
   beside it, and the Stage 3 `gate_audit_<SYMBOL>_<TF>.json` the first cites,
   and fills the contract, the timeframe, Gate R's out-of-sample profit factor,
-  the max drawdown, the certified quadrant and the tear sheet path.
+  its win rate, the max drawdown, the certified quadrant and the tear sheet
+  path — plus the portfolio membership, read from `config/portfolios.json`.
   `--audit-file` and `--metrics` name those two files directly and are spelled
   the way `backtest/promote.py` spells them, so a Stage 5 command already in an
   operator's shell history runs here instead of dying on an unrecognised
   argument — which is what sends somebody back to retyping four numbers by
-  hand. `--symbol`, `--tf`, `--pf`, `--dd`, `--regime` and `--report` still
-  override anything, and `--incubator` moves the directory it all comes from.
+  hand. `--symbol`, `--tf`, `--pf`, `--win`, `--dd`, `--regime` and `--report`
+  still override anything, `--incubator` moves the directory it all comes from
+  and `--portfolios` moves the routing table.
+  - **The WIN RATE is measured on the same sample as the profit factor beside
+    it** — Gate R's own quadrant, on the holdout — and falls back to the
+    blended holdout and then to the run snapshot, naming which of the three it
+    read. A profit factor read without one is a ratio with no sense of how it
+    was earned: 1.22 from a 53% hit rate and 1.22 from a 20% one are different
+    strategies to sit in front of. Unlike the profit factor a snapshot value is
+    NOT declined here, because the field is headed `Win Rate` and claims no
+    window of its own. **The unit comes from the SOURCE, never from the
+    magnitude**: `backtest/profiler.py` writes a percentage (53.75) and
+    `report.summarize_result` a fraction (0.5233), and 0.52 and 52.0 are both
+    plausible win rates — a magnitude test cannot tell them apart, it can only
+    usually guess right.
+  - **PORTFOLIO MEMBERSHIP comes from `active_strategies` in
+    `config/portfolios.json` and is never typed.** Being in
+    `approved_incubator/` is a record that a version was CHOSEN and explicitly
+    not permission to trade it, so a promotion no portfolio names reads
+    `Incubator Staging (Evaluation / Shadow)` and an allocated one reads
+    `Active <portfolio> (Allocated)` — the same green embed otherwise. A
+    strategy on an incubator AND a prop portfolio names both, which is what the
+    two tracks are for; two portfolios of ONE track is the config
+    `portfolio.config_loader` refuses to load and is flagged rather than
+    resolved to one of them. A registry that cannot be READ reports
+    `NOT RESOLVED` rather than the staging token, because "no portfolio names
+    this" is a claim about a file nobody managed to open. The table is read as
+    plain JSON rather than through `portfolio.config_loader`: nothing in
+    `backtest/` may import from `portfolio/`, and that loader RAISES for an
+    unassigned strategy — the ordinary state this field exists to report.
   - **The out-of-sample profit factor is Gate R's or nothing.**
     `dual_metrics.json` and meta.json's snapshot both carry a profit factor and
     both measured it over a window that CONTAINS the holdout. The field is
