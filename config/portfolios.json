@@ -31,7 +31,8 @@
           "MEAN_REVERSION_SCALP"
         ]
       },
-      "active_strategies": []
+      "active_strategies": [],
+      "strategy_allocations": {}
     },
     "Incubator-Even": {
       "portfolio_id": "Incubator-Even",
@@ -62,7 +63,29 @@
           "VOLATILITY_PULLBACK"
         ]
       },
-      "active_strategies": []
+      "active_strategies": [
+        "t3_braid_scalp_20260823"
+      ],
+      "strategy_allocations": {
+        "t3_braid_scalp_20260823": {
+          "strat": "t3_braid_scalp_20260823",
+          "symbol": "NQ",
+          "timeframe": "1h",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q2",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/t3_braid_scalp_20260823/strat.py",
+          "registered_utc": "2026-08-24T14:52:34+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "--portfolio incubator-even",
+          "resolved_from": {
+            "symbol": "gate_audit_NQ_1h.json (certification)",
+            "timeframe": "gate_audit_NQ_1h.json (the audit itself)",
+            "regime_filter": "gate_audit_NQ_1h.json (Gate R's certification target, read from the audit itself)"
+          }
+        }
+      }
     },
     "Prop-Odd": {
       "portfolio_id": "Prop-Odd",
