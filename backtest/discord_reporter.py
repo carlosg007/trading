@@ -124,8 +124,14 @@ The webhook URL is a credential
 -------------------------------
 It is never printed, never echoed into a log line, and never included in the
 failure message - only its host is. Anyone holding the full URL can post to the
-channel. `$BT_DISCORD_WEBHOOK` supplies it when `--webhook` is omitted, so it
-does not have to sit in shell history.
+channel. It does not have to sit in shell history: with `--webhook` omitted it
+comes from the first of `$BT_DISCORD_WEBHOOK`, `$DISCORD_WEBHOOK_URL` and
+`$DISCORD_WEBHOOK` that carries a value, loaded from `~/src/trading/.env` if it
+is not already in the environment. That chain is `mdlib.env.discord_webhook`
+and is shared with `scripts/incubator_tracker.py`, because two resolvers would
+be free to disagree about which variable configures Discord - and the symptom
+of a disagreement is a card that is simply never posted, which is
+indistinguishable from a quiet pipeline.
 
 Discord specifics that are easy to get wrong
 --------------------------------------------
@@ -155,19 +161,28 @@ from __future__ import annotations
 # BT_* variables while being imported (backtest.run's ARTIFACTS_ROOT) - loading
 # the file inside main() would be too late for those and would work here, which
 # is the kind of difference nobody notices until one runner silently uses the
-# default path. Existing environment variables WIN: load_dotenv does not
-# override them, so an explicit `BT_ARTIFACTS=... bt-run` still beats the file.
+# default path. The rules - the repository root derived from __file__ rather
+# than the working directory, existing variables winning over the file, the
+# CrossTrade credentials withheld from os.environ - live in ONE module rather
+# than in a block copied into every runner: see mdlib/env.py.
+import sys                                                         # noqa: E402
 from pathlib import Path                                           # noqa: E402
-from dotenv import load_dotenv                                     # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-load_dotenv(PROJECT_ROOT / ".env")
+if str(PROJECT_ROOT) not in sys.path:
+    # `python3 backtest/x.py` puts backtest/ on sys.path, not the repository
+    # root, so mdlib is not importable until this runs.
+    sys.path.insert(0, str(PROJECT_ROOT))
+from mdlib.env import (                                            # noqa: E402
+    DISCORD_WEBHOOK_VARS, WEBHOOK_HINT, describe_webhook, load_env,
+)
+
+load_env()
 # ---------------------------------------------------------------------------
 
 
 import argparse
 import json
-import os
 import re
 import sys
 from pathlib import Path
@@ -367,7 +382,11 @@ SUCCESS_STATUS = frozenset({200, 204})
 
 POST_TIMEOUT_SECONDS = 10.0
 
-ENV_WEBHOOK = "BT_DISCORD_WEBHOOK"
+# The webhook variable names, their precedence and the hint printed when none
+# is set live in `mdlib/env.py` (DISCORD_WEBHOOK_VARS / WEBHOOK_HINT). The
+# single name this module used to hardcode is gone rather than kept as an
+# alias: a second spelling of the chain here would be free to fall out of step
+# with the one `scripts/incubator_tracker.py` resolves on.
 
 
 # --------------------------------------------------------------------------
@@ -1961,7 +1980,9 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Values are printed as supplied - nothing here recomputes a metric.\n"
-            f"--webhook may be omitted when ${ENV_WEBHOOK} is set.\n"
+            "--webhook may be omitted when any of "
+            + ", ".join("$" + name for name in DISCORD_WEBHOOK_VARS)
+            + " is set, in the environment or in .env.\n"
             "\n"
             "  --mode promotion   --strat X --symbol NQ --tf 15m --pf 1.42 ...\n"
             "  --stage 1          --strat X [--survivors <surviving_assets.json>]\n"
@@ -1969,8 +1990,15 @@ def build_parser() -> argparse.ArgumentParser:
             "  --stage 3          --strat X [--audit <stage3_audit_summary.json>]"
         ),
     )
-    parser.add_argument("--webhook", default=os.environ.get(ENV_WEBHOOK),
-                        help=f"Discord webhook URL (default: ${ENV_WEBHOOK})")
+    # Resolved in main() rather than defaulted here, so the NAME that supplied
+    # it can be reported. A default computed at parse time cannot say whether
+    # the URL came from the flag, from the environment or from .env, and
+    # "which variable is this posting with" is the question an operator with
+    # two channels configured actually has.
+    parser.add_argument("--webhook", default=None,
+                        help="Discord webhook URL (default: the first of "
+                             + ", ".join("$" + n for n in DISCORD_WEBHOOK_VARS)
+                             + " that is set)")
     # `--mode` and `--stage` are two spellings of one choice, and they share a
     # dest so they cannot disagree. A card labelled Stage 1 that was built by
     # the promotion path would announce a screen as a promotion.
@@ -2133,15 +2161,19 @@ def main(argv: list[str] | None = None) -> int:
         print("DRY RUN  nothing was sent.")
         return 0
 
-    if not args.webhook or not args.webhook.strip():
-        print(f"FAILED  no webhook: pass --webhook or set ${ENV_WEBHOOK}.", file=sys.stderr)
+    webhook, webhook_source = describe_webhook(args.webhook)
+    if not webhook:
+        print(f"FAILED  no webhook: {WEBHOOK_HINT}.", file=sys.stderr)
         return 1
 
-    result = post_embed(args.webhook.strip(), payload)
+    result = post_embed(webhook, payload)
 
     if result["ok"]:
+        # The SOURCE is a variable name and is safe to print; the URL is a
+        # credential and is not. Naming it is what tells an operator with a
+        # test channel and a live one which of the two just received the card.
         print(f"SUCCESS  posted {summary} to Discord "
-              f"[HTTP {result['http_status']}]")
+              f"[HTTP {result['http_status']}] via {webhook_source}")
         return 0
 
     status = result["http_status"]

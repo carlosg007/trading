@@ -258,6 +258,7 @@ python tests/test_memory_guard.py       # the memory tiers, and that a halt is r
 python tests/test_incubator_tracker.py  # the promotion criteria and the account move
 python tests/test_regime_daemon.py      # live regimes, the state cache, the ML gate, CrossTrade
 python tests/test_live_dispatcher.py    # the live loop: gates, netting, sizing, dispatch
+python tests/test_env_bootstrap.py      # .env loading and the ONE webhook alias chain
 
 # `pytest tests/` is the gate. tests/conftest.py routes the script-style
 # suites (the ones with a `check()` helper, whose results pytest cannot see)
@@ -555,6 +556,57 @@ an empty result is how a pipeline starts reporting numbers nobody generated.
     1,000x5 take 1.52 s at 1 thread and 2.00 s at 4, because the fits are small
     and numerous and each pays pool overhead exceeding the work it distributes.
 - `system_monitor.py`: circuit breaker tracking RAM and runaway execution loops.
+
+**`mdlib/env.py`** — the ONE place `.env` is loaded and the ONE place the
+Discord webhook is resolved, added 2026-08-24. It lives at the BOTTOM of the
+dependency chain so `backtest/`, `scripts/`, `portfolio/`, `realtime/`,
+`data_pull/` and `master_live.py` can all import it, and it pulls in `os`,
+`pathlib` and `dotenv` and nothing else — it runs at the top of every
+entrypoint, above the thread-count variables `backtest/run.py` sets before
+numpy is imported.
+
+- **Every operator entrypoint calls `load_env()` at import time**, so a script
+  run from a fresh terminal never needs `source .env` first. Twelve runners
+  used to carry a byte-identical fourteen-line bootstrap block and the rest
+  carried none; the block is now three lines and a call, and
+  `tests/test_env_bootstrap.py` fails if a new `__main__` script reads
+  `os.environ` without it. A missing file is a fact (`exists: False`), not an
+  error — `.env` is optional and every consumer has a default.
+- **The repository root comes from `__file__`, never from the working
+  directory.** `find_dotenv()` walks up from the CALLER's cwd, and the runs
+  that matter start from `/mnt/backtest`, from a `--bg` daemon and from cron;
+  from any of those it finds nothing, silently, and the script then uses every
+  default path as though the file did not exist. `$BT_ENV_FILE` overrides the
+  derived path for a second checkout.
+- **An existing environment variable WINS**, so `BT_ARTIFACTS=/tmp/x bt-run`
+  still beats the file. The file is parsed ONCE per path: twelve importers
+  reach it on a single `bt-run`, and re-reading per import would let two of
+  them disagree if the file changed mid-run.
+- **`NO_EXPORT` (the CrossTrade credentials) is read from the file and NOT put
+  into `os.environ`.** `realtime/live_dispatcher.load_env_file` reads them
+  directly and documents why: everything in `os.environ` is inherited by every
+  subprocess, which is how a broker key reaches an unrelated tool's debug
+  output. A blanket `load_dotenv()` in `master_live.py` would have undone that
+  silently. Withholding them costs nothing — `resolve_credentials` reads the
+  file before it reads the environment — and a credential the operator
+  exported themselves is untouched, because this module never removes a name.
+- **`DISCORD_WEBHOOK_VARS` is the one alias chain**, highest precedence first:
+  `--webhook`, then `$BT_DISCORD_WEBHOOK`, `$DISCORD_WEBHOOK_URL`,
+  `$DISCORD_WEBHOOK`. Before this `backtest/discord_reporter.py` read
+  `$BT_DISCORD_WEBHOOK` alone while `scripts/incubator_tracker.py` tried
+  `$DISCORD_WEBHOOK_URL` first — so one `.env` configured one card and not the
+  other, and the symptom is a report that is simply never posted, which is
+  indistinguishable from a quiet pipeline. Neither module spells the chain out
+  any more.
+- **An empty or whitespace value is UNSET, at every step.** `DISCORD_WEBHOOK=`
+  left in a file is a name somebody meant to fill in, and treating it as set
+  shadows the alias carrying the URL and fails with the one message ("no
+  webhook") that sends the operator to look at the wrong variable.
+- **`describe_webhook` returns the VARIABLE NAME beside the URL**, and that
+  name is what the success line prints — a webhook in a log outlives the
+  session that wrote it and is directly replayable, so the URL is never
+  printed. With two channels configured, the name is what says which one
+  received the card.
 
 **`mdlib/lake.py`** — The single reader. Two entry points over the same bars,
 both returning **long format** (`ts, symbol, open, high, low, close, volume`,
@@ -1837,7 +1889,11 @@ optimization summary, read straight out of `stage2_summary.json`; `--stage 3` /
   module: a second one would be free to disagree with `mdlib.regimes`, and a
   card naming the wrong environment is caught only in live trading.
 - **The webhook URL is a credential** — never printed, never echoed into a
-  failure message, only its host. `$BT_DISCORD_WEBHOOK` supplies it.
+  failure message, only its host. With `--webhook` omitted it comes from
+  `mdlib.env.discord_webhook`: the first of `$BT_DISCORD_WEBHOOK`,
+  `$DISCORD_WEBHOOK_URL` and `$DISCORD_WEBHOOK` that carries a value, loaded
+  from `.env` if it is not already exported. The success line names the
+  VARIABLE that supplied it, never the URL.
 
 **`backtest/promote.py`** — **Stage 5**. Promotes one version into
 `strategies/approved_incubator/<strat>/` and commits it. See the workflow below.

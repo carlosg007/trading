@@ -44,6 +44,25 @@ Usage
 
 from __future__ import annotations
 
+# --- .env bootstrap --------------------------------------------------------
+# Load ~/src/trading/.env before ANYTHING reads os.environ, so an operator
+# opening a fresh terminal never has to `source .env` first. It runs at import
+# time, above the imports below, because modules resolve their BT_* variables
+# while being imported and loading the file inside main() would be too late for
+# those - and would work here, which is the kind of difference nobody notices
+# until one runner silently uses the default path. The rules live in ONE
+# module: see mdlib/env.py.
+import sys                                                         # noqa: E402
+from pathlib import Path                                           # noqa: E402
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+from mdlib.env import load_env                                     # noqa: E402
+
+load_env()
+# ---------------------------------------------------------------------------
+
 import argparse
 
 import sys

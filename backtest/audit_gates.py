@@ -127,13 +127,21 @@ from __future__ import annotations
 # BT_* variables while being imported (backtest.run's ARTIFACTS_ROOT) - loading
 # the file inside main() would be too late for those and would work here, which
 # is the kind of difference nobody notices until one runner silently uses the
-# default path. Existing environment variables WIN: load_dotenv does not
-# override them, so an explicit `BT_ARTIFACTS=... bt-run` still beats the file.
+# default path. The rules - the repository root derived from __file__ rather
+# than the working directory, existing variables winning over the file, the
+# CrossTrade credentials withheld from os.environ - live in ONE module rather
+# than in a block copied into every runner: see mdlib/env.py.
+import sys                                                         # noqa: E402
 from pathlib import Path                                           # noqa: E402
-from dotenv import load_dotenv                                     # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-load_dotenv(PROJECT_ROOT / ".env")
+if str(PROJECT_ROOT) not in sys.path:
+    # `python3 backtest/x.py` puts backtest/ on sys.path, not the repository
+    # root, so mdlib is not importable until this runs.
+    sys.path.insert(0, str(PROJECT_ROOT))
+from mdlib.env import load_env                                     # noqa: E402
+
+load_env()
 # ---------------------------------------------------------------------------
 
 

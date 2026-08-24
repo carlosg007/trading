@@ -69,7 +69,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -79,16 +78,18 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-# Load ~/src/trading/.env explicitly, the same line every runner in `backtest/`
+# Load ~/src/trading/.env explicitly, the same call every runner in `backtest/`
 # carries. It is NOT redundant: without it this script still ends up with the
 # file's variables, because something down the import chain loads them — which
 # means the webhook this script posts to would be supplied by an import side
 # effect rather than by anything written here, and would silently stop being
-# supplied the day that import moved. Existing environment variables WIN;
-# load_dotenv does not override them.
-from dotenv import load_dotenv                                     # noqa: E402
+# supplied the day that import moved. Existing environment variables WIN; the
+# rules live in mdlib/env.py.
+from mdlib.env import (                                            # noqa: E402
+    WEBHOOK_HINT, discord_webhook, load_env,
+)
 
-load_dotenv(REPO_ROOT / ".env")
+load_env()
 
 from portfolio.config_loader import (  # noqa: E402
     DEFAULT_CONFIG_PATH,
@@ -107,10 +108,14 @@ from portfolio.promotion_daemon import (  # noqa: E402
     promote_strategy,
 )
 
-# `$DISCORD_WEBHOOK_URL` is the name the objective specifies; `$BT_DISCORD_WEBHOOK`
-# is the one the four pipeline cards already read. Both are honoured, in that
-# order, so this script works with the environment an operator already has.
-ENV_WEBHOOK = ("DISCORD_WEBHOOK_URL", "BT_DISCORD_WEBHOOK")
+# `$DISCORD_WEBHOOK_URL` is the name the objective specifies and
+# `$BT_DISCORD_WEBHOOK` is the one the four pipeline cards read; both are
+# honoured, along with `$DISCORD_WEBHOOK`, so this script works with the
+# environment an operator already has. The chain and its PRECEDENCE come from
+# `mdlib.env` rather than being spelled out here - this module used to try
+# `$DISCORD_WEBHOOK_URL` first while `backtest/discord_reporter.py` read
+# `$BT_DISCORD_WEBHOOK` alone, so an operator with both set had two cards
+# posting to two different channels with nothing saying so.
 
 EMBED_COLOR_PROMOTED = 0x2ECC71
 EMBED_COLOR_QUIET = 0x5865F2
@@ -383,12 +388,8 @@ def run_promotions(rows: list[dict[str, Any]], config_path: str,
 # --------------------------------------------------------------------------
 
 def webhook_from_env(env: dict[str, str] | None = None) -> str | None:
-    env = os.environ if env is None else env
-    for name in ENV_WEBHOOK:
-        value = (env.get(name) or "").strip()
-        if value:
-            return value
-    return None
+    """The shared resolver. An empty value is UNSET, not a webhook."""
+    return discord_webhook(env=env)
 
 
 def build_embed(rows: list[dict[str, Any]], acted: bool) -> dict[str, Any]:
@@ -462,7 +463,7 @@ def post_summary(rows: list[dict[str, Any]], acted: bool,
     """Post the embed, or say why not. Never raises: see the module docstring."""
     if not webhook:
         return {"ok": False, "skipped": True,
-                "error": f"no webhook configured (${ENV_WEBHOOK[0]})"}
+                "error": f"no webhook configured: {WEBHOOK_HINT}"}
     try:
         from backtest.discord_reporter import build_payload, post_embed
     except ImportError as exc:
