@@ -46,6 +46,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from backtest.pipeline import (                                   # noqa: E402
+    base_strategy,
+    split_strategy_id,
+    strategy_id,
+)
 from backtest.promote import (                                    # noqa: E402
     ALLOCATIONS_KEY,
     DEFAULT_ALLOCATION,
@@ -200,13 +205,20 @@ def test_default_routing_takes_the_emptier_incubator_and_alternates() -> None:
     Fewest active strategies wins, ties alphabetically — which is round-robin
     across successive promotions, because the account that just took one has
     more next time.
+
+    Scoped to promotions the CERTIFIED QUADRANT cannot route, which since
+    2026-08-24 is what leaves the headcount rule deciding alone. A quadrant
+    only one account declares pins every such promotion to that account, and
+    correctly so — see
+    `test_the_certified_quadrant_routes_to_an_account_that_permits_it`.
     """
     path = temp_config()
-    first = register_portfolio("strat_one", version="A", scope=scope(),
+    unrouted = dict(scope(), regime_filter=NOT_RESOLVED)
+    first = register_portfolio("strat_one", version="A", scope=unrouted,
                                config_path=path)
-    second = register_portfolio("strat_two", version="A", scope=scope(),
+    second = register_portfolio("strat_two", version="A", scope=unrouted,
                                 config_path=path)
-    third = register_portfolio("strat_three", version="A", scope=scope(),
+    third = register_portfolio("strat_three", version="A", scope=unrouted,
                                config_path=path)
     assert first["portfolio_id"] == "Incubator-Even", first["portfolio_id"]
     assert second["portfolio_id"] == "Incubator-Odd", second["portfolio_id"]
@@ -900,6 +912,149 @@ def test_an_uncertified_pair_reports_why_rather_than_raising() -> None:
     path, basis = resolve_audit_file("s", "NQ", "1h", out_dir=str(directory))
     assert path is None
     assert "has not certified" in basis
+
+
+# ==========================================================================
+# 8. one strategy id per certified pair
+# ==========================================================================
+def test_a_strategy_id_names_the_pair_and_splits_back_apart() -> None:
+    """
+    The id is the directory under `approved_incubator/`, the id in
+    `active_strategies` and `meta.json`'s `name` - one spelling in three
+    places, because the live dispatcher builds the second from the first.
+    """
+    sid = strategy_id("t3_braid_scalp_20260823", "nq", "1H")
+    assert sid == "t3_braid_scalp_20260823_NQ_1h"
+    assert split_strategy_id(sid) == ("t3_braid_scalp_20260823", "NQ", "1h")
+
+
+def test_the_split_is_anchored_on_the_timeframe_not_the_underscores() -> None:
+    """
+    Strategy names here carry underscores AND a date suffix. Counting a fixed
+    number of segments from the right turns `ma_anchoring_spread_20260820`
+    into a symbol of `spread` at a timeframe of `20260820`.
+    """
+    assert split_strategy_id("ma_anchoring_spread_20260820") == (
+        "ma_anchoring_spread_20260820", None, None)
+    assert base_strategy("ma_anchoring_spread_20260820") == \
+        "ma_anchoring_spread_20260820"
+    # A name that merely contains an underscore is returned whole, so it can
+    # never pass as the base of an unrelated strategy.
+    assert split_strategy_id("foo_bar") == ("foo_bar", None, None)
+
+
+def test_a_pair_without_both_halves_stays_a_bare_id() -> None:
+    """
+    Half an id would split back to a timeframe of None and read as a pair
+    whose timeframe nobody recorded. The bare name is the `bt-run` workflow's
+    id and is left exactly as it was.
+    """
+    assert strategy_id("s", "NQ", None) == "s"
+    assert strategy_id("s", None, "1h") == "s"
+    assert strategy_id("s") == "s"
+
+
+def test_each_certified_pair_registers_under_its_own_isolated_id() -> None:
+    """
+    THE BUG THIS EXISTS FOR. Three certified timeframes shared one directory
+    and one `active_strategies` entry, so the live loop would have traded
+    whichever pair was promoted LAST for all three.
+    """
+    path = temp_config()
+    ids = []
+    for tf, quad in (("1h", "Q2"), ("30m", "Q2"), ("15m", "Q1")):
+        sid = strategy_id(STRAT, "NQ", tf)
+        ids.append(sid)
+        register_portfolio(sid, version="A",
+                           scope=scope(timeframe=tf, quadrant=quad),
+                           config_path=path)
+    blob = read(path)["portfolios"]
+    holders = {pid: block["active_strategies"]
+               for pid, block in blob.items()
+               if any(i in (block.get("active_strategies") or []) for i in ids)}
+    assert len(holders) == 1, holders
+    pid, active = next(iter(holders.items()))
+    assert sorted(active) == sorted(ids), active
+    records = blob[pid][ALLOCATIONS_KEY]
+    # Each id carries ITS OWN pair and quadrant, and its own module path.
+    assert records[ids[0]]["timeframe"] == "1h"
+    assert records[ids[2]]["timeframe"] == "15m"
+    assert records[ids[2]]["regime_filter"] == "Q1"
+    assert records[ids[0]]["regime_filter"] == "Q2"
+    for sid in ids:
+        assert records[sid]["path"].endswith(f"{sid}/strat.py"), records[sid]
+
+
+def test_the_bare_registration_is_retired_by_the_first_pair_id() -> None:
+    """
+    The bare entry grants permission to `approved_incubator/<strategy>/`,
+    whose meta.json describes ONE of the pairs. Left beside the isolated ids
+    it arms a fourth allocation nobody certified and double-sizes that pair.
+    """
+    def seed(blob):
+        block = blob["portfolios"]["Incubator-Even"]
+        block["active_strategies"] = [STRAT]
+        block[ALLOCATIONS_KEY] = {STRAT: {"strat": STRAT, "symbol": "NQ",
+                                          "timeframe": "15m"}}
+    path = temp_config(seed)
+    sid = strategy_id(STRAT, "NQ", "1h")
+    out = register_portfolio(sid, version="A", scope=scope(), config_path=path)
+    block = read(path)["portfolios"][out["portfolio_id"]]
+    assert STRAT not in block["active_strategies"]
+    assert sid in block["active_strategies"]
+    assert STRAT not in block[ALLOCATIONS_KEY]
+    assert out["retired"] == [STRAT], out["retired"]
+
+
+def test_retiring_the_bare_id_does_not_swallow_the_new_one() -> None:
+    """
+    The retirement loop used to REBIND `active_strategies` to a fresh list,
+    while `active` still aliased the old object - so the id being registered
+    was appended to a list nothing read. The promotion printed a successful
+    registration and the routing table granted NOTHING, which is the one
+    failure mode where the console and the config disagree.
+    """
+    def seed(blob):
+        blob["portfolios"]["Incubator-Even"]["active_strategies"] = [STRAT]
+    path = temp_config(seed)
+    sid = strategy_id(STRAT, "NQ", "1h")
+    out = register_portfolio(sid, version="A", scope=scope(), config_path=path)
+    active = read(path)["portfolios"][out["portfolio_id"]]["active_strategies"]
+    assert active == [sid], active
+
+
+def test_the_certified_quadrant_routes_to_an_account_that_permits_it() -> None:
+    """
+    An id is now ONE pair with ONE quadrant, and the two incubator accounts
+    hold DISJOINT permissions. Balancing purely by headcount sends about half
+    of every campaign to an account that forbids the quadrant it was certified
+    in, and the live gate stands those down forever - every count still adding
+    up, the symptom being silence.
+    """
+    path = temp_config()
+    portfolios = read(path)["portfolios"]
+    for quad, expected in (("Q1", "Incubator-Even"), ("Q3", "Incubator-Odd")):
+        pid, basis = resolve_portfolio(portfolios, None, None, quad)
+        assert pid == expected, f"{quad} -> {pid} ({basis})"
+        assert f"declares {quad}" in basis
+
+
+def test_an_unroutable_quadrant_falls_back_to_the_headcount_rule() -> None:
+    """
+    No account declaring the quadrant is reported, not resolved by widening a
+    basket: `regime_quadrants` is the ACCOUNT's permission and every strategy
+    on it inherits anything added there.
+    """
+    portfolios = read(temp_config())["portfolios"]
+    pid, basis = resolve_portfolio(portfolios, None, None, "Q9")
+    assert pid in incubator_portfolios(portfolios)
+    assert "no incubator account declares Q9" in basis
+
+
+def test_an_explicit_portfolio_still_beats_the_quadrant() -> None:
+    portfolios = read(temp_config())["portfolios"]
+    pid, basis = resolve_portfolio(portfolios, "incubator-odd", None, "Q1")
+    assert pid == "Incubator-Odd" and basis == "--portfolio incubator-odd"
 
 
 # ==========================================================================

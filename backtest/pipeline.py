@@ -125,6 +125,114 @@ STAGE3_SUMMARY_FILE = "stage3_audit_summary.json"
 VERIFY_FILE = "verify_{symbol}.json"
 
 
+# --------------------------------------------------------------------------
+# The strategy id: one certified (strategy, symbol, timeframe), named
+# --------------------------------------------------------------------------
+# A promotion is ONE contract at ONE timeframe, and a campaign certifies
+# several - `t3_braid_scalp_20260823` cleared Gate R on NQ at 15m, 30m AND 1h,
+# each with its own winning parameter plateau and its own certified quadrant
+# (Q1 at 15m, Q2 at the other two). Promoted into `approved_incubator/<strat>/`
+# they shared one directory, so each promotion overwrote the last: one
+# `strat.py`, one `meta.json`, describing whichever ran last. The routing table
+# then granted one permission, and `realtime/live_dispatcher.py` would have
+# traded 15m's parameters for all three pairs - every log line reading
+# correctly, because the module IS the same module and only the bound
+# parameters and the permitted quadrant differ.
+#
+# So the unit that gets promoted, registered and traded is the PAIR, and it is
+# named: `<strategy>_<SYMBOL>_<TIMEFRAME>`. That name is the directory under
+# `approved_incubator/`, the id in a portfolio's `active_strategies`, and the
+# `name` in the promoted `meta.json` - one spelling in three places, because
+# the live dispatcher builds the second from the first and the Stage 5 card
+# reads the third.
+#
+# It is spelled HERE, in the module that already owns what one stage hands the
+# next, rather than in `backtest/promote.py` - `backtest/discord_reporter.py`
+# has to split an id back apart to check that a snapshot belongs to the
+# promotion citing it, and it deliberately imports no module that pulls in the
+# engine.
+
+# The timeframe tokens an id may end with. `mdlib.lake` owns the real
+# vocabulary (1m and 1d are stored, the rest derived), and this is a
+# deliberately separate, frozen copy: `split_strategy_id` runs inside a
+# Discord card and a routing-table read, and neither may import the lake
+# reader to parse a directory name. A token missing from here does not break a
+# promotion - it makes the id unsplittable, so the base strategy is reported
+# as the whole id and a snapshot check falls back to demanding an exact match.
+TIMEFRAME_TOKENS = ("1m", "2m", "3m", "5m", "10m", "15m", "30m",
+                    "1h", "2h", "3h", "4h", "6h", "8h", "12h",
+                    "1d", "1w")
+
+
+def strategy_id(strategy: str, symbol: str | None = None,
+                timeframe: str | None = None) -> str:
+    """
+    The id for one certified pair: `<strategy>_<SYMBOL>_<TF>`.
+
+    With no symbol or no timeframe the BARE strategy name is returned
+    unchanged, and that is not a fallback to be tidied away - it is the id the
+    documented `bt-run` workflow promotes under, where a dual-version run is
+    not scoped to a certified pair and there is nothing to name. Half an id
+    (`<strategy>_NQ`) is never produced: it would split back to a timeframe of
+    None and read as a pair whose timeframe nobody recorded.
+
+    The symbol is upper-cased and the timeframe lower-cased, so `nq`/`NQ` and
+    `1H`/`1h` cannot produce two directories for one pair.
+    """
+    strategy = str(strategy or "").strip()
+    sym = str(symbol or "").strip().upper()
+    tf = str(timeframe or "").strip().lower()
+    if not strategy:
+        raise ValueError("a strategy id needs a strategy name")
+    if not sym or not tf:
+        return strategy
+    return f"{strategy}_{sym}_{tf}"
+
+
+def split_strategy_id(sid: str) -> tuple[str, str | None, str | None]:
+    """
+    `<strategy>_<SYMBOL>_<TF>` back into its three parts.
+
+    Returns `(strategy, symbol, timeframe)`; the last two are None for a bare
+    id. The split is anchored on the TIMEFRAME, not on the underscore count:
+    strategy names in this repository carry underscores and a date suffix
+    (`t3_braid_scalp_20260823`), so counting from the left splits them apart
+    and counting a fixed number from the right would turn
+    `ma_anchoring_spread_20260820` into a symbol of `spread` at a timeframe of
+    `20260820`.
+
+    An id is only split when its LAST segment is a known timeframe token and
+    the segment before it is non-empty. Anything else is a strategy whose name
+    happens to contain underscores, and is returned whole - which is the safe
+    direction: the callers use the base name to decide whether an artifact
+    belongs to a promotion, and reporting the whole id there demands an exact
+    match instead of accepting a looser one.
+    """
+    text = str(sid or "").strip()
+    if "_" not in text:
+        return text, None, None
+    head, _, tf = text.rpartition("_")
+    if tf.lower() not in TIMEFRAME_TOKENS:
+        return text, None, None
+    strategy, _, symbol = head.rpartition("_")
+    if not strategy or not symbol:
+        return text, None, None
+    return strategy, symbol, tf.lower()
+
+
+def base_strategy(sid: str) -> str:
+    """
+    The strategy a promotion id belongs to - `t3_braid_scalp_20260823` for
+    `t3_braid_scalp_20260823_NQ_1h`, and the id itself for a bare one.
+
+    This is what an artifact-ownership check compares against. A
+    `dual_metrics_NQ.json` records the MODULE's name and a promotion is
+    registered under the pair's id, so the two differ by construction; without
+    this the Stage 5 card would refuse the very snapshot the promotion cites.
+    """
+    return split_strategy_id(sid)[0]
+
+
 def artifacts_root() -> Path:
     """
     Read at call time, never at import.

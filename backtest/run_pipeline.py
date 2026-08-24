@@ -129,6 +129,7 @@ from backtest.pipeline import (  # noqa: E402
     STAGE2_SUMMARY_FILE,
     STAGE3_SUMMARY_FILE,
     leaderboard,
+    artifacts_root,
     pipeline_dir,
     read_stage,
     write_stage,
@@ -295,18 +296,28 @@ def discord_cmd(strat: str, stage: int, dry_run: bool = False,
 
 def promote_cmd(strat: str, version: str, source: str | Path,
                 audit_file: str | Path, symbol: str,
-                timeframe: str) -> list[str]:
+                timeframe: str,
+                metrics: str | Path | None = None) -> list[str]:
     """
     Stage 5 for ONE certified configuration.
 
     `--require-certification` is always passed and `--force` never is: this
     path may only ratify a verdict Stage 3 already reached. A promotion that
     could override a gate is a decision, and decisions are the operator's.
+
+    `--metrics` is passed when `resolve_metrics` found this PAIR's Stage 4
+    snapshot, and omitted when it did not. Omitted, `promote.py` records
+    `metrics_status: "NOT RECORDED"`, which is the honest reading - the
+    alternative is another timeframe's lifecycle numbers locked into this
+    pair's meta.json under its certification.
     """
-    return _py() + [str(PROMOTE_SCRIPT), "--strat", strat,
-                    "--version", version, "--source", str(source),
-                    "--audit-file", str(audit_file), "--symbol", symbol,
-                    "--timeframe", timeframe, "--require-certification"]
+    cmd = _py() + [str(PROMOTE_SCRIPT), "--strat", strat,
+                   "--version", version, "--source", str(source),
+                   "--audit-file", str(audit_file), "--symbol", symbol,
+                   "--timeframe", timeframe, "--require-certification"]
+    if metrics:
+        cmd += ["--metrics", str(metrics)]
+    return cmd
 
 
 # ---------------------------------------------------------------------------
@@ -333,6 +344,99 @@ def stage2_timeframes(summary: dict[str, Any] | None) -> list[str]:
         if tf and tf not in tfs:
             tfs.append(str(tf))
     return tfs
+
+
+def _snapshot_timeframe(path: Path) -> str | None:
+    """The timeframe a `dual_metrics_<SYMBOL>.json` was produced at, or None."""
+    try:
+        blob = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    meta = blob.get("meta") if isinstance(blob, dict) else None
+    tf = (meta or {}).get("timeframe")
+    return str(tf).strip().lower() if tf else None
+
+
+def resolve_metrics(strat: str, symbol: str, timeframe: str,
+                    out_dir: str | None = None) -> tuple[Path | None, str]:
+    """
+    The Stage 4 lifecycle snapshot for ONE certified pair, and where it is.
+
+    Returns `(path, basis)`; `path` is None when no snapshot for this pair
+    could be found, which `promote.py` already reports as
+    `metrics_status: "NOT RECORDED"` rather than inventing one.
+
+    **The timeframe must MATCH, and this is the whole reason the function
+    exists rather than a glob.** Stage 4 writes one `verify_<stamp>/` per
+    invocation and a campaign runs it once per timeframe, so the directory
+    names are stamps and carry no timeframe at all: on this repository the
+    NEWEST `verify_*` for `t3_braid_scalp_20260823` is a 1h run, while 15m and
+    30m sit in older ones. Taking "the latest" would hand the 15m promotion a
+    1h lifecycle snapshot - and since `promote.snapshot_params` layers that
+    snapshot's parameters over the module's defaults, meta.json would then
+    record 1h's stop and target for a 15m promotion, beside 1h's Sharpe, under
+    the 15m certification. Every field individually true, the whole thing
+    describing a run nobody made.
+
+    So the timeframe is read out of each candidate's own `meta.timeframe` and
+    the first NEWEST match wins. A snapshot that records no timeframe is
+    accepted only when nothing else matched, and says so - it cannot be
+    checked, which is a weaker claim than a checked match and a stronger one
+    than nothing.
+
+    Three places are searched, narrowing outward:
+
+      1. `<pipeline>/verify_<stamp>/dual_metrics_<SYM>.json` - Stage 4's own
+         output, newest stamp first. Sorted by NAME rather than mtime, the way
+         the Stage 4 card resolves its default directory: mtime moves when a
+         directory is copied off the NFS mount.
+      2. `<pipeline>/dual_metrics_<SYM>.json` - the artifact root fallback.
+      3. `<BT_ARTIFACTS>/<strat>_<stamp>/dual_metrics_<SYM>.json` - a `bt-run`
+         batch, newest stamp first. It is last because a batch run is not a
+         stage: its window is whatever was typed.
+    """
+    tf = str(timeframe).strip().lower()
+    home = pipeline_dir(strat, out_dir)
+    name = f"dual_metrics_{symbol}.json"
+
+    candidates: list[tuple[str, Path]] = []
+    for directory in sorted(home.glob("verify_*"), reverse=True):
+        if (directory / name).is_file():
+            candidates.append((f"{directory.name}/{name}", directory / name))
+    if (home / name).is_file():
+        candidates.append((name, home / name))
+    try:
+        root = artifacts_root()
+    except Exception:                                             # noqa: BLE001
+        root = None
+    if root is not None:
+        for directory in sorted(root.glob(f"{strat}_*"), reverse=True):
+            if (directory / name).is_file():
+                candidates.append((f"{directory.name}/{name}",
+                                   directory / name))
+
+    if not candidates:
+        return None, f"no {name} for {strat} under {home}"
+
+    unchecked: tuple[str, Path] | None = None
+    seen: list[str] = []
+    for label, path in candidates:
+        found = _snapshot_timeframe(path)
+        if found == tf:
+            return path, f"{label} · meta.timeframe {found}"
+        if found is None and unchecked is None:
+            unchecked = (label, path)
+        elif found:
+            seen.append(found)
+
+    if unchecked is not None:
+        label, path = unchecked
+        return path, (f"{label} · records NO timeframe, so it could not be "
+                      f"checked against {tf}")
+    return None, (f"no {name} at {tf} - the {len(candidates)} on disk are "
+                  f"{', '.join(sorted(set(seen))) or 'unreadable'}. A snapshot "
+                  f"from another timeframe is NOT used: it would lock that "
+                  f"run's metrics and parameters into this pair's meta.json.")
 
 
 def certified_rows(summary: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -848,8 +952,15 @@ def auto_promote(strat: str, *, out_dir: str | None = None,
             promotions.append(record)
             failures += 1
             continue
+        metrics, metrics_basis = resolve_metrics(
+            strat, record["symbol"], record["timeframe"], out_dir)
+        record["metrics_file"] = str(metrics) if metrics else None
+        record["metrics_basis"] = metrics_basis
+        print(f"  METRICS  {record['symbol']} {record['timeframe']}: "
+              + (f"{metrics_basis}" if metrics
+                 else f"NOT RECORDED · {metrics_basis}"))
         cmd = promote_cmd(strat, record["version"], source, audit,
-                          record["symbol"], record["timeframe"])
+                          record["symbol"], record["timeframe"], metrics)
         rc = run_step(cmd, f"PROMOTE {record['symbol']} {record['timeframe']} "
                            f"version {record['version']}", check=False)
         if rc:

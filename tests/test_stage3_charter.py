@@ -617,8 +617,12 @@ def test_seal_and_incubator(tmp: Path) -> None:
     out = seal_and_promote("demo", "A", src, "NQ", "15m",
                            {"fast": 5, "slow": 50}, prov, good,
                            metrics_file=None, threshold=0.5, incubator=inc)
-    check("a Gate R PASS is staged into the incubator",
-          out["promoted"] is True and Path(out["dir"]) == inc / "demo",
+    # `<strategy>_<SYMBOL>_<TF>`, not `<strategy>`. Stage 3 stages one
+    # certified PAIR, and a campaign certifies several: sharing one directory
+    # meant each staging overwrote the last, leaving one strat.py and one
+    # meta.json describing whichever timeframe ran last.
+    check("a Gate R PASS is staged into the incubator under its PAIR id",
+          out["promoted"] is True and Path(out["dir"]) == inc / "demo_NQ_15m",
           out.get("error") or str(out.get("dir")))
 
     dest = Path(out["dir"])

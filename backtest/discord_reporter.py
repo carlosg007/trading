@@ -315,7 +315,7 @@ if str(REPO) not in sys.path:
 from backtest.pipeline import (GATE_AUDIT_FILE,                    # noqa: E402
                                STAGE2_SUMMARY_FILE, STAGE3_SUMMARY_FILE,
                                STAGE_NAMES, SURVIVORS_FILE,
-                               pipeline_dir, read_stage)
+                               base_strategy, pipeline_dir, read_stage)
 # The one place `strategies/approved_incubator/` is spelled out is
 # `backtest/promote.py`, which creates it. A second copy of that path here
 # would be free to point somewhere else after a move, and the symptom is a
@@ -731,6 +731,32 @@ def _read_promotion_json(path: Path, label: str) -> dict[str, Any]:
     return blob
 
 
+def _owns(recorded: str, wanted: str) -> bool:
+    """
+    Whether an artifact recording `recorded` belongs to the promotion `wanted`.
+
+    Three spellings are accepted, and each one exists because two names for the
+    same thing differ by construction here:
+
+      * the same name.
+      * the literal `strat` - a promoted module is
+        `approved_incubator/<id>/strat.py`, so it records itself as `strat`.
+      * the BASE strategy of a per-pair id. `--strat` now names one certified
+        pair (`t3_braid_scalp_20260823_NQ_1h`) while the `dual_metrics_NQ.json`
+        and the `gate_audit_NQ_1h.json` that promotion cites were written by
+        the pipeline under the MODULE's name. Without this the Stage 5 card
+        would refuse the very snapshot the promotion it is announcing points
+        at.
+
+    `base_strategy` splits only on a trailing known timeframe token, so
+    `foo_bar` does not pass as the base of an unrelated `foo`.
+    """
+    recorded, wanted = str(recorded).strip(), str(wanted).strip()
+    if recorded.lower() in (wanted.lower(), "strat"):
+        return True
+    return base_strategy(wanted).lower() == recorded.lower()
+
+
 def _refuse_other_strategy(recorded: str, strat: str | None, path: Path,
                            what: str) -> None:
     """
@@ -748,7 +774,7 @@ def _refuse_other_strategy(recorded: str, strat: str | None, path: Path,
     wanted = str(strat or "").strip()
     if not recorded or not wanted:
         return
-    if recorded.lower() in (wanted.lower(), "strat"):
+    if _owns(recorded, wanted):
         return
     raise ValueError(
         f"{path.name} is {what} strategy {recorded!r}, not {wanted!r}. "
@@ -3374,7 +3400,7 @@ def _check_strategy(blob: dict[str, Any], path: Path,
     wanted = str(strat or "").strip()
     if not wanted or not recorded:
         return
-    if recorded.lower() in (wanted.lower(), "strat"):
+    if _owns(recorded, wanted):
         return
     raise ValueError(
         f"{path.name} was written for strategy {recorded!r}, not {wanted!r}. "

@@ -75,6 +75,7 @@ if str(PROJECT_ROOT) not in sys.path:
     # root, so mdlib is not importable until this runs.
     sys.path.insert(0, str(PROJECT_ROOT))
 from mdlib.env import discord_webhook, load_env                    # noqa: E402
+from backtest.pipeline import base_strategy, strategy_id            # noqa: E402
 
 load_env()
 # ---------------------------------------------------------------------------
@@ -309,6 +310,12 @@ def load_metrics(path: Path | None, version: str) -> tuple[dict | None, dict | N
     in meta.json. A missing file yields (None, None, "NOT RECORDED") rather
     than an invented number - meta.json says the metrics were never captured,
     which is a fact somebody can act on.
+
+    A snapshot that WAS read reads `RECORDED · locked from <file>`. The leading
+    token is what a reader scans for and the filename is what makes the record
+    checkable - a bare `RECORDED` cannot be reconciled against the run it came
+    from, and there are six `verify_<stamp>/` directories for this strategy
+    alone.
     """
     if path is None:
         return None, None, "NOT RECORDED"
@@ -319,9 +326,10 @@ def load_metrics(path: Path | None, version: str) -> tuple[dict | None, dict | N
     key = "version_a" if version.upper() == "A" else "version_b"
     block = blob.get(key)
     if isinstance(block, dict) and "metrics" in block:
-        return block.get("metrics"), block.get("gate_audit"), f"locked from {path.name}"
+        return (block.get("metrics"), block.get("gate_audit"),
+                f"RECORDED · locked from {path.name}")
     if "sharpe" in blob:
-        return blob, blob.get("gate_audit"), f"locked from {path.name}"
+        return blob, blob.get("gate_audit"), f"RECORDED · locked from {path.name}"
     raise ValueError(
         f"{path} carries no `{key}` block and is not a metrics dict — cannot "
         f"tell which numbers belong to Version {version.upper()}")
@@ -424,6 +432,44 @@ def snapshot_params(metrics: dict | None) -> dict:
     return dict(params) if isinstance(params, dict) else {}
 
 
+def certified_params(gate_audit: dict | None) -> dict:
+    """
+    The parameter set Stage 3 LOCKED and certified, out of the gate audit.
+
+    Stage 3 takes Stage 2's winning cell, locks it, and runs it once over the
+    holdout; `params` on the audit is that set. It is a stronger claim about
+    what should be promoted than anything a lifecycle snapshot carries -
+    Stage 4's window CONTAINS the holdout and reports `is_certification:
+    false`, so its parameters describe a run, not a verdict.
+
+    It is a PARTIAL set: only what Stage 2 swept is in it, so it layers over
+    the module's defaults rather than replacing them. An audit that records
+    none returns `{}` and the caller falls back to the snapshot - the
+    pre-certification behaviour, unchanged.
+    """
+    params = (gate_audit or {}).get("params")
+    return dict(params) if isinstance(params, dict) else {}
+
+
+def _same_param(a: Any, b: Any) -> bool:
+    """
+    Two bound parameter values that mean the same thing.
+
+    `1.5` and `1.5` arrive as int and float from JSON round-trips, and `None`
+    is a legitimate value meaning "no take-profit modelled" - `scan.py` makes
+    the same distinction with `_same_value` and for the same reason. Compared
+    with `==` alone, `0` and `False` would also collapse, so bools are held
+    apart from numbers explicitly.
+    """
+    if a is None or b is None:
+        return a is None and b is None
+    if isinstance(a, bool) or isinstance(b, bool):
+        return isinstance(a, bool) and isinstance(b, bool) and a == b
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return float(a) == float(b)
+    return a == b
+
+
 def risk_settings(params: dict) -> dict[str, Any]:
     """
     The stop / target / trailing settings, called out of the parameter set.
@@ -523,28 +569,60 @@ def promote(strat: str,
             f"  or --force to promote an uncertified strategy — the override "
             f"is recorded in meta.json.")
 
-    dest = Path(incubator) / strat
+    # The pair this promotion is for, resolved before the directory is named.
+    # The certification's own symbol and timeframe are preferred over the
+    # module's declarations for the reason `certified_scope` documents: a
+    # module declares every contract it targets at the timeframe it prefers,
+    # and a promotion is one contract at one timeframe.
+    scope_symbol = symbol or (cert_audit or {}).get("symbol")
+    scope_tf = timeframe or (cert_audit or {}).get("timeframe")
+    symbols = ([scope_symbol] if scope_symbol
+               else list(info["symbols"] or []))
+    tf = scope_tf or info["timeframe"]
+
+    # ONE DIRECTORY PER CERTIFIED PAIR. `strategy_id` returns the bare
+    # strategy name when the pair is not known, which is the `bt-run`
+    # workflow's id and is left exactly as it was - a dual-version run is not
+    # scoped to a certified pair and there is nothing to name.
+    promoted_id = strategy_id(strat, scope_symbol, scope_tf)
+    dest = Path(incubator) / promoted_id
     dest.mkdir(parents=True, exist_ok=True)
 
-    symbols = ([symbol] if symbol else list(info["symbols"] or []))
-    tf = timeframe or info["timeframe"]
-
-    # Three layers, weakest first. The middle one is the important addition:
-    # under `--scan` the run's parameters are the winning grid cell, not the
-    # module's DEFAULT_PARAMS, and promoting the defaults beside that run's
-    # metrics would record a strategy nobody backtested. `--params` still wins,
-    # because an operator correcting the record on purpose outranks a file.
+    # FOUR layers, weakest first, and the third is the one a certification
+    # rests on. Under `--scan` the run's parameters are the winning grid cell
+    # rather than the module's DEFAULT_PARAMS, so promoting the defaults beside
+    # that run's metrics would record a strategy nobody backtested; and the
+    # LOCKED set on the gate audit is the one Stage 3 certified, which is a
+    # stronger claim than the one a lifecycle snapshot happens to carry - Stage
+    # 4's window contains the holdout and its snapshot is not a certification.
+    # `--params` still wins outright, because an operator correcting the record
+    # on purpose outranks a file.
     from_snapshot = snapshot_params(metrics)
+    from_audit = certified_params(cert_audit)
     merged_params = dict(info["params"] or {})
     merged_params.update(from_snapshot)
+    merged_params.update(from_audit)
     merged_params.update(params or {})
 
+    # A snapshot and a certification that disagree about a shared parameter
+    # describe two different strategies, and the metrics locked into meta.json
+    # would then be measurements of the one that was NOT certified. Recorded
+    # and printed rather than resolved silently - the certification wins, and
+    # the fact that it had to is the finding.
+    params_conflict = sorted(
+        k for k in from_audit
+        if k in from_snapshot and not _same_param(from_snapshot[k],
+                                                  from_audit[k]))
+
+    sources: list[str] = []
     if from_snapshot:
-        params_source = f"locked from {metrics_path.name}"
-    elif params:
-        params_source = "--params"
-    else:
-        params_source = f"{source.name} DEFAULT_PARAMS"
+        sources.append(f"locked from {metrics_path.name}")
+    if from_audit:
+        sources.append(f"certified by {Path(audit_path).name}"
+                       if audit_path else "certified by the gate audit")
+    if params:
+        sources.append("--params")
+    params_source = " -> ".join(sources) or f"{source.name} DEFAULT_PARAMS"
 
     stamp = datetime.now(timezone.utc)
     written: list[Path] = []
@@ -578,7 +656,13 @@ def promote(strat: str,
     warnings = audit_notes(source)
 
     meta = {
-        "name": strat,
+        # The PAIR's id: the directory name, the id in `active_strategies`,
+        # and what `--strat` names on the Stage 5 card. `strategy` beside it is
+        # the module this pair belongs to, and the two are equal for a bare
+        # `bt-run` promotion.
+        "name": promoted_id,
+        "strategy": strat,
+        "symbol": scope_symbol or (symbols[0] if len(symbols) == 1 else None),
         "version": version,
         "description": (f"Promoted Version {version} "
                         f"({'rule-based baseline' if version == 'A' else 'baseline + causal ML filter'})."),
@@ -586,6 +670,10 @@ def promote(strat: str,
         "timeframe": tf,
         "params": merged_params,
         "params_source": params_source,
+        # Where the locked metrics and the certification disagree about a
+        # parameter. An empty list is written rather than omitted: "checked,
+        # and they agree" is a different statement from "nobody looked".
+        "params_conflict": params_conflict,
         # The stop, the target and the trailing flag the promoted numbers were
         # earned under, repeated where they can be found without knowing what
         # this strategy called its periods. `NOT DECLARED` means the strategy
@@ -626,10 +714,11 @@ def promote(strat: str,
     written.append(meta_p)
 
     out = {"dir": dest, "files": written, "meta": meta,
+           "strategy_id": promoted_id, "symbol": scope_symbol, "timeframe": tf,
            "warnings": warnings, "committed": False, "commit_output": ""}
 
     if commit:
-        out.update(git_commit(dest, strat, version, gate_status))
+        out.update(git_commit(dest, promoted_id, version, gate_status))
     return out
 
 
@@ -994,7 +1083,8 @@ def incubator_portfolios(portfolios: dict) -> list[str]:
 
 def resolve_portfolio(portfolios: dict,
                       requested: str | None = None,
-                      strat: str | None = None) -> tuple[str, str]:
+                      strat: str | None = None,
+                      quadrant: str | None = None) -> tuple[str, str]:
     """
     Which incubator portfolio this promotion is registered onto, and why.
 
@@ -1024,13 +1114,28 @@ def resolve_portfolio(portfolios: dict,
     and re-promoting a second timeframe of it is not a reason to re-open the
     question of where it lives.
 
-    THE REGIME SCOPE IS NOT PART OF THIS CHOICE. A portfolio's
-    `basket.regime_quadrants` is a permission held by the ACCOUNT, shared by
-    every strategy on it; routing a promotion to whichever account happened to
-    declare the certified quadrant would make the account a property of one
-    strategy's Stage 1 designation. The certified quadrant is recorded on the
-    allocation as `regime_filter` and reconciled against the account's declared
-    quadrants at load time - see `register_portfolio`.
+    THE CERTIFIED QUADRANT NOW ROUTES, and this reverses what this function
+    used to do. The old rule ignored it deliberately: a strategy id covered a
+    whole module, its `regime_filter` was one of several certified quadrants,
+    and letting one of them pick the account would have made the ACCOUNT a
+    property of one Stage 1 designation.
+
+    That argument died with the per-pair strategy id. An id is now ONE
+    certified pair with ONE quadrant, and the two incubator accounts hold
+    disjoint quadrant permissions - Odd trades Q3/Q4, Even trades Q1/Q2.
+    Balancing purely by headcount therefore sends about half of every campaign
+    to an account that forbids the one quadrant the pair was certified in, and
+    `realtime/live_dispatcher.py` stands those down forever. Every count on
+    every table still adds up and the symptom is silence, which is the failure
+    `register_portfolio` already warns about and could not prevent.
+
+    So: the incubator accounts DECLARING the certified quadrant are the
+    candidates, and the headcount rule then balances among them. When none
+    declares it - or no quadrant was resolved - every incubator account is a
+    candidate and the headcount rule decides alone, exactly as before; the
+    mismatch is still reported by `register_portfolio` rather than resolved by
+    widening a basket, because `regime_quadrants` is the account's permission
+    and every strategy on it inherits anything added there.
     """
     candidates = incubator_portfolios(portfolios)
     if not candidates:
@@ -1075,12 +1180,27 @@ def resolve_portfolio(portfolios: dict,
                 return pid, (f"already registered on {pid}; a re-promotion "
                              f"does not move an account")
 
+    pool, scope_note = candidates, ""
+    quadrant = str(quadrant or "").strip()
+    if quadrant and quadrant != NOT_RESOLVED:
+        permitting = [pid for pid in candidates
+                      if any(str(q).startswith(quadrant + "_")
+                             for q in ((portfolios[pid].get("basket") or {})
+                                       .get("regime_quadrants") or []))]
+        if permitting:
+            pool = permitting
+            scope_note = f"declares {quadrant}; "
+        else:
+            scope_note = (f"no incubator account declares {quadrant}, so the "
+                          f"certified quadrant could not route this; ")
+
     counts = {pid: len([s for s in (portfolios[pid].get("active_strategies")
                                     or [])])
-              for pid in candidates}
-    pid = sorted(candidates, key=lambda p: (counts[p], p))[0]
-    tally = ", ".join(f"{p}={counts[p]}" for p in candidates)
-    return pid, (f"fewest active strategies ({tally}), ties alphabetical")
+              for pid in pool}
+    pid = sorted(pool, key=lambda p: (counts[p], p))[0]
+    tally = ", ".join(f"{p}={counts[p]}" for p in pool)
+    return pid, (f"{scope_note}fewest active strategies ({tally}), ties "
+                 f"alphabetical")
 
 
 def certified_scope(certification: Any,
@@ -1286,7 +1406,8 @@ def register_portfolio(strat: str,
     if not isinstance(portfolios, dict) or not portfolios:
         raise ValueError(f"{path} carries no `portfolios` object")
 
-    pid, basis = resolve_portfolio(portfolios, portfolio, strat)
+    pid, basis = resolve_portfolio(portfolios, portfolio, strat,
+                                   scope.get("regime_filter"))
     target = portfolios[pid]
     active = target.get("active_strategies")
     if not isinstance(active, list):
@@ -1302,6 +1423,21 @@ def register_portfolio(strat: str,
 
     wanted = _normalise_pid(strat)
     notes: list[str] = list(bootstrap_notes)
+
+    # A BARE registration this pair's id supersedes.
+    #
+    # Before the per-pair id, a campaign that certified NQ at 15m, 30m and 1h
+    # registered all three under one id - `t3_braid_scalp_20260823` - each
+    # promotion replacing the last. That entry grants permission to
+    # `approved_incubator/<strategy>/`, a directory whose meta.json describes
+    # exactly one of the pairs, so leaving it beside the three isolated ids
+    # would arm a fourth allocation nobody certified and would double-size
+    # whichever pair happened to be in it. It is removed, and the removal is
+    # announced - a permission withdrawn silently is as bad as one granted
+    # silently.
+    base = base_strategy(strat)
+    superseded = (_normalise_pid(base)
+                  if base and _normalise_pid(base) != wanted else None)
 
     # Every per-pair configuration already on the record, from wherever the
     # record currently is. Collected BEFORE the move below pops it off the
@@ -1332,6 +1468,38 @@ def register_portfolio(strat: str,
     # Remove the id and any stale allocation record from every OTHER portfolio
     # on this track. Leaving one behind is the double-sizing config the loader
     # refuses, and it would be refused on the next load rather than here.
+    retired: list[str] = []
+    if superseded:
+        for block in portfolios.values():
+            if not isinstance(block, dict):
+                continue
+            names = block.get("active_strategies")
+            if isinstance(names, list):
+                gone = [n for n in names if _normalise_pid(n) == superseded]
+                if gone:
+                    # IN PLACE. `active` below is a reference to the TARGET
+                    # portfolio's list, taken before this runs; rebinding the
+                    # key to a fresh list here leaves `active` aliasing the old
+                    # object, so the id this function then appends never
+                    # reaches the file. The promotion reports a registration
+                    # and the routing table grants nothing - the one failure
+                    # mode where the console and the config disagree.
+                    names[:] = [n for n in names
+                                if _normalise_pid(n) != superseded]
+                    retired.extend(str(g) for g in gone)
+            allocs = block.get(ALLOCATIONS_KEY)
+            if isinstance(allocs, dict):
+                for key in [k for k in allocs
+                            if _normalise_pid(k) == superseded]:
+                    allocs.pop(key)
+    if retired:
+        notes.append(
+            f"retired the bare registration {', '.join(sorted(set(retired)))} "
+            f"- it is superseded by the per-pair ids. That entry granted "
+            f"permission to approved_incubator/{base}/, whose meta.json "
+            f"describes ONE of the certified pairs, so leaving it beside them "
+            f"would arm a fourth allocation nobody certified.")
+
     moved_from: list[str] = []
     for other in incubator_portfolios(portfolios):
         if other == pid:
@@ -1341,7 +1509,7 @@ def register_portfolio(strat: str,
         if isinstance(names, list):
             kept = [n for n in names if _normalise_pid(n) != wanted]
             if len(kept) != len(names):
-                block["active_strategies"] = kept
+                names[:] = kept                 # in place - see the note above
                 moved_from.append(other)
         allocs = block.get(ALLOCATIONS_KEY)
         if isinstance(allocs, dict):
@@ -1452,6 +1620,7 @@ def register_portfolio(strat: str,
     _write_portfolio_config(path, blob)
     return {"portfolio_id": pid, "basis": basis, "record": record,
             "config_path": path, "moved_from": moved_from,
+            "retired": sorted(set(retired)),
             "declared_quadrants": declared, "notes": notes,
             "was_registered": bool(already)}
 
@@ -1878,13 +2047,23 @@ def main(argv: list[str] | None = None) -> int:
         commit=not args.no_commit)
 
     meta = out["meta"]
-    print(f"Promoted {args.strat} Version {meta['version']} → {out['dir']}")
+    promoted_id = out["strategy_id"]
+    print(f"Promoted {promoted_id} Version {meta['version']} → {out['dir']}")
+    if promoted_id != args.strat:
+        print(f"  strategy id    {promoted_id}  (one certified pair: "
+              f"{out['symbol']} {out['timeframe']})")
     for f in out["files"]:
         print(f"  wrote {f.relative_to(REPO_ROOT)}")
     print(f"  symbols        {meta['symbols'] or 'NOT RECORDED'}")
     print(f"  timeframe      {meta['timeframe'] or 'NOT RECORDED'}")
     print(f"  params         {meta['params'] or '{}'}")
     print(f"                 ({meta['params_source']})")
+    if meta["params_conflict"]:
+        print(f"\n  ! The metrics snapshot and the certification disagree on "
+              f"{', '.join(meta['params_conflict'])}.\n"
+              f"    The CERTIFIED values are recorded; the locked metrics were "
+              f"measured on the\n    others, so they describe a run of "
+              f"different parameters than the ones promoted.")
     risk = meta["risk"]
     print("  risk           "
           + ", ".join(f"{k}={'no take-profit modelled' if k == 'tp_atr_mult' and v is None else v}"
@@ -1954,7 +2133,7 @@ def main(argv: list[str] | None = None) -> int:
             scope["resolved_from"]["timeframe"] = "--timeframe"
         try:
             registration = register_portfolio(
-                args.strat, version=meta["version"], scope=scope,
+                promoted_id, version=meta["version"], scope=scope,
                 allocation=args.allocation, portfolio=args.portfolio,
                 config_path=cfg)
         except (OSError, ValueError) as exc:
@@ -1963,7 +2142,7 @@ def main(argv: list[str] | None = None) -> int:
             # table could not be updated. The operator is told what to run.
             print(f"\n  ! Portfolio registration FAILED: {exc}")
             print(f"    The promotion stands. Re-run registration with:\n"
-                  f"      python3 backtest/promote.py --strat {args.strat} "
+                  f"      python3 backtest/promote.py --strat {args.strat} "  # noqa: E501
                   f"--version {meta['version']} \\\n"
                   f"          --source {source} --portfolio "
                   f"<incubator-odd|incubator-even>")
@@ -1980,6 +2159,9 @@ def main(argv: list[str] | None = None) -> int:
                   f"(active_strategies + {ALLOCATIONS_KEY})")
             for field, where in sorted(rec["resolved_from"].items()):
                 print(f"                    {field:<12} {where}")
+            for gone in registration["retired"]:
+                print(f"                  RETIRED {gone} — the bare "
+                      f"registration this pair's id supersedes")
             if registration["moved_from"]:
                 print(f"                  MOVED from "
                       f"{', '.join(registration['moved_from'])} — one "
@@ -1995,7 +2177,7 @@ def main(argv: list[str] | None = None) -> int:
         print("\n  stage 5 card    not posted: no webhook configured "
               "(BT_DISCORD_WEBHOOK / DISCORD_WEBHOOK_URL / DISCORD_WEBHOOK)")
     else:
-        card = post_stage5_card(args.strat, dry_run=args.discord_dry_run)
+        card = post_stage5_card(promoted_id, dry_run=args.discord_dry_run)
         if card["posted"]:
             print(f"\n  stage 5 card    "
                   f"{'rendered (--dry-run, nothing sent)' if args.discord_dry_run else 'posted'}")
