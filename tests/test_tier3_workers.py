@@ -183,6 +183,82 @@ def test_monte_carlo_matches_reference() -> None:
             check(f"rejects bad {bad}", True)
 
 
+def test_monte_carlo_sanitation() -> None:
+    """
+    The bootstrap must never report a NaN tail beside a 0.0 breach
+    probability. That pairing is what an unsanitised array produced, and it is
+    the one corruption here that reads as SAFETY: the breach test is
+    `mean(max_dds <= -limit)`, `NaN <= -8.0` is False, so an array holding an
+    infinite loss reported a ZERO percent chance of breaching the loss limit.
+    """
+    print("\nmonte carlo sanitation")
+
+    # An inf return used to make the whole path inf, then inf/inf -> NaN.
+    r = run_monte_carlo_simulation([float("inf"), 0.01, -0.02],
+                                   n_iterations=300, seed=1)
+    check("inf is dropped, not propagated to a NaN tail",
+          r["ok"] and math.isfinite(r["max_drawdown_pct_at_confidence"])
+          and r["n_dropped_nonfinite"] == 1,
+          f"tail={r.get('max_drawdown_pct_at_confidence')} "
+          f"dropped={r.get('n_dropped_nonfinite')}")
+
+    # A total loss: equity hits 0, the running peak is 0 on the first trade of
+    # some paths, and the unguarded divide was 0/0.
+    r = run_monte_carlo_simulation([-1.0, 0.02, 0.03, -0.01],
+                                   n_iterations=500, seed=1)
+    check("a -1.00 return gives a finite -100% floor, not NaN",
+          r["ok"] and math.isfinite(r["max_drawdown_pct_at_confidence"])
+          and math.isfinite(r["worst_max_drawdown_pct"])
+          and abs(r["worst_max_drawdown_pct"] + 100.0) < 1e-9,
+          f"worst={r.get('worst_max_drawdown_pct')}")
+    check("ruin is reported as a BREACH, not as 0.0 probability",
+          r["prob_max_loss_breach"] > 0.0,
+          f"breach={r.get('prob_max_loss_breach')}")
+
+    # Below -1.00 the equity factor goes negative and cumprod flips the sign of
+    # the rest of the path: it reported -142% on an account that cannot lose
+    # more than it holds.
+    r = run_monte_carlo_simulation([-1.4, 0.05, 0.02], n_iterations=400, seed=1)
+    check("a return below -1.00 is clipped, never a >100% drawdown",
+          r["ok"] and r["n_clipped_to_total_loss"] == 1
+          and r["worst_max_drawdown_pct"] >= -100.0 - 1e-9,
+          f"worst={r.get('worst_max_drawdown_pct')} "
+          f"clipped={r.get('n_clipped_to_total_loss')}")
+
+    r = run_monte_carlo_simulation([float("nan")] * 4)
+    check("an all-non-finite array is refused, not resampled",
+          r["ok"] is False and r["n_dropped_nonfinite"] == 4)
+
+    # No result may ever carry a non-finite headline number.
+    bad = []
+    for arr in ([-1.0, 0.01], [-2.0, 0.5], [float("inf"), 0.01],
+                [0.01, -0.02, 0.03]):
+        r = run_monte_carlo_simulation(arr, n_iterations=200, seed=3)
+        if not r["ok"]:
+            continue
+        for k in ("max_drawdown_pct_at_confidence", "prob_max_loss_breach",
+                  "median_max_drawdown_pct", "worst_max_drawdown_pct",
+                  "median_final_return_pct", "prob_profit"):
+            if not math.isfinite(r[k]):
+                bad.append((arr, k))
+    check("no headline metric is ever non-finite", not bad, str(bad))
+
+    # The clean path must not have moved: sanitation only removes or clips what
+    # was already corrupting the result.
+    rng = np.random.default_rng(7)
+    arr = rng.normal(0.001, 0.02, 400)
+    r = run_monte_carlo_simulation(arr, n_iterations=300, seed=3)
+    ref_rng = np.random.default_rng(3)
+    s = ref_rng.choice(arr, size=(300, arr.size), replace=True)
+    eq = np.cumprod(1.0 + s, axis=1)
+    mdd = ((eq / np.maximum.accumulate(eq, axis=1)) - 1.0).min(axis=1) * 100.0
+    check("a clean array is bit-identical to the unguarded arithmetic",
+          abs(r["max_drawdown_pct_at_confidence"]
+              - float(np.percentile(mdd, 5.0))) < 1e-12
+          and r["n_dropped_nonfinite"] == 0
+          and r["n_clipped_to_total_loss"] == 0)
+
+
 def test_integer_perturbation() -> None:
     print("\nparameter perturbation arithmetic")
 
@@ -640,6 +716,7 @@ if __name__ == "__main__":
         test_load_errors(tmp)
         test_metrics_are_arithmetic(tmp)
         test_monte_carlo_matches_reference()
+        test_monte_carlo_sanitation()
         test_integer_perturbation()
         test_sensitivity(tmp)
         test_walk_forward(tmp)

@@ -525,6 +525,38 @@ an empty result is how a pipeline starts reporting numbers nobody generated.
   `run_parameter_sensitivity`, `run_monte_carlo_simulation`,
   `generate_strategy_boilerplate`, `load_strategy`. Still scaffold:
   `run_variant`, `run_dual_version`, `generate_ml_filter`, `main`.
+- **THE MONTE CARLO SANITATION, from 2026-08-24.** A NaN reaching the drawdown
+  distribution is the one corruption in `run_monte_carlo_simulation` that reads
+  as SAFETY rather than as an error, and three routes to one are now closed —
+  each RECORDED on the result rather than fixed quietly.
+  - **Non-finite inputs are dropped** (`n_dropped_nonfinite`). `.dropna()`
+    removed NaN and left ±inf standing; an inf return makes the whole
+    cumulative path inf, and inf/inf is NaN in the drawdown division.
+  - **Returns at or below -1.00 are clipped to -1.00**
+    (`n_clipped_to_total_loss`). Below -1.00 the equity factor `1 + r` goes
+    negative and `cumprod` FLIPS THE SIGN of the rest of the path — not a
+    deeper drawdown but arithmetic that has stopped describing an account. It
+    reported a **-142% drawdown on an account that cannot lose more than it
+    holds**. Clipped, the account is ruined: equity 0, and 0 thereafter, which
+    is a 100% drawdown and the true reading.
+  - **A zero running peak no longer divides.** A path whose FIRST resampled
+    trade is a total loss had a peak of 0 and computed 0/0; those cells are
+    guarded with `where=` and set to a -100% drawdown. Every later cell was
+    always safe — the peak is monotone non-decreasing, so once positive it
+    stays positive.
+  - **What all three produced was `max_drawdown_pct_at_confidence: NaN` beside
+    `prob_max_loss_breach: 0.0`**, because the breach test is
+    `mean(max_dds <= -limit)` and `NaN <= -8.0` is False. A bootstrap over an
+    array containing an infinite loss reported a ZERO percent chance of
+    breaching the loss limit — the strongest possible safety reading, from the
+    most corrupt possible input — Gate 2 scored the NaN tail NOT EVALUATED, and
+    nothing on the console named the array as the reason. A non-finite path
+    surviving all three guards now returns `ok: False` rather than a tail
+    computed over it, which puts Gate 2 into NOT EVALUATED, and NOT EVALUATED
+    is not a pass.
+  - **The clean path is bit-identical**, verified against the pre-fix function
+    on the same seed: sanitation only ever removes or clips values that were
+    already corrupting the result.
 - **THE VERSION B REFIT CADENCE, from 2026-08-24.** `apply_ml_signal_filter`
   refits when the closed-trade pool has grown by `ML_REFIT_GROWTH` (0.10) of
   what it was last fitted on, not on every completed trade.
@@ -1761,6 +1793,45 @@ gross profit for costs to be a share of. The stage ends by printing the
 `discord_reporter.py --stage 4` command with `--artifacts` naming THIS run's
 directory: the snapshots that card reads live in a timestamped directory, and
 one built from the wrong one would describe a different run.
+
+- **NET FRICTION PER REGIME QUADRANT, from 2026-08-24.** `friction_by_regime`
+  breaks trades, gross, costs and net P&L out by the quadrant of each trade's
+  ENTRY bar, prints the four-row table beside the cost drag, and writes it into
+  `dual_metrics_<SYMBOL>.json` as `friction_by_regime` — into the snapshot
+  itself, because that is the file a promotion cites and the Stage 4 card
+  reads, and a friction figure living anywhere else is one nobody has beside
+  the metrics it qualifies. The blended cost share answers "did this pay too
+  much"; a regime-gated strategy trades ONE quadrant, so the certified quadrant
+  can hand 80% of its gross to the broker while the blend reads 35% on the
+  strength of three quadrants no supervisor will permit. **The labels are READ
+  from the frame `RegimeProfiler` classified for this same run**, never
+  re-derived — a second pass would be free to disagree with the
+  `regime_profile_<SYMBOL>_<TF>.json` written beside it, the same trade counted
+  in Q1 by one artifact and Q2 by the other with both tables still summing to
+  the same totals. All four quadrants are always rows, including untraded ones,
+  and warm-up trades in NO quadrant are counted and named rather than left to a
+  table that quietly sums to less than the trade list. `cost_share_pct` follows
+  `cost_drag`'s rule exactly: `None`, never `0.0`, where gross was not
+  positive.
+- **`--slippage-atr-mult`, from 2026-08-24, and OFF by default.** The engine's
+  slippage was never a static dollar assumption — `_cost_arrays` charges
+  `ticks × that bar's tick size / price`, per symbol and per bar, and picks up
+  a contract whose tick changed mid-history. What a constant tick count misses
+  is that the spread is not constant through TIME, which flatters exactly the
+  high-volatility quadrants this pipeline certifies into. The flag charges
+  `M × ATR(N)` per side instead, converted to a per-bar tick count at each
+  bar's own tick size and floored at one tick — ATR is NaN through its own
+  warm-up, and a NaN reaching the engine makes the fill price NaN and drops the
+  trade from the P&L with nothing raising. **It is opt-in because turning it on
+  changes every P&L figure**: an ATR-scaled run is not comparable with a
+  constant-tick one, and every existing certification here was measured on the
+  constant. Which model ran travels on the snapshot as `slippage_model`.
+  Implemented as a per-bar `slippage_ticks` COLUMN on the bars, read by
+  `_cost_arrays` — on the bars rather than on the config because `_simulate`
+  hands that function `bars.iloc[lo:hi]`, so a config array would have to be
+  sliced in step with every chunk boundary and a drifted slice would charge
+  each bar another bar's slippage, wrong in every trade and invisible in a
+  total. A non-finite or negative value in that column RAISES.
 
 **`backtest/status.py`** — the job tracker, both halves. `JobTracker` is what
 the runner writes (atomically: temp file, then `os.replace`); `main()` is what

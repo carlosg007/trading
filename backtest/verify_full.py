@@ -44,6 +44,45 @@ combined figure is reported, rather than printing an impossible column.
 Per-year rows sit under the total. A strategy whose cost share climbs steadily
 is one whose average trade is shrinking - the signal is decaying while the
 headline Sharpe holds up on the early years.
+
+Net friction per regime quadrant (2026-08-24)
+---------------------------------------------
+Beside the per-year rows, and written into `dual_metrics_<SYMBOL>.json` as
+`friction_by_regime`. The blended cost share answers "did this strategy pay too
+much"; a regime-gated strategy is traded in ONE quadrant, so the question it
+actually poses is what friction took out of THAT one. Averaged across four
+quadrants the answer is invisible - the certified quadrant can hand 80% of its
+gross to the broker while the blended figure reads 35% on the strength of three
+quadrants no supervisor will ever permit.
+
+Trades are attributed by the quadrant of their ENTRY bar, and the labels are
+READ from the frame `RegimeProfiler` classified for this same run rather than
+re-derived. A second classification pass would be free to disagree with the
+`regime_profile_<SYMBOL>_<TF>.json` written beside it - the same trade counted
+in Q1 by one artifact and Q2 by the other, with both tables still summing to
+the same totals. All four quadrants are always rows, including ones that never
+traded, and trades in NO quadrant (inside the 14-bar ADX/ATR warm-up) are
+counted and named rather than left to a table that quietly sums to less than
+the trade list.
+
+The slippage model (2026-08-24)
+-------------------------------
+The engine's slippage was NEVER a static dollar assumption: `_cost_arrays`
+charges `ticks x that bar's tick size / price`, per symbol and per bar, and
+picks up a contract whose tick changed mid-history. What a constant tick count
+misses is that the spread is not constant through TIME - one tick is a fair
+fill in a quiet 2013 range and a fantasy in a 2020 gap, which flatters exactly
+the high-volatility quadrants this pipeline certifies into.
+
+`--slippage-atr-mult M` charges `M x ATR(N)` per side instead, converted to a
+per-bar tick count at each bar's own tick size and floored at one tick (ATR is
+NaN through its own warm-up, and a NaN reaching the engine makes the fill price
+NaN and drops the trade from the P&L without raising). It is OFF by default and
+the default path is bit-identical to the pre-2026-08-24 engine, because turning
+it on CHANGES EVERY P&L FIGURE: a run charged ATR-scaled slippage is not
+comparable with a constant-tick run, and every existing certification in this
+repository was measured on the constant. Which model ran is recorded on the
+snapshot as `slippage_model` for that reason.
 """
 
 from __future__ import annotations
@@ -84,6 +123,7 @@ import traceback                                                  # noqa: E402
 from datetime import datetime, timezone                           # noqa: E402
 from pathlib import Path                                          # noqa: E402
 
+import numpy as np                                               # noqa: E402
 import pandas as pd                                               # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
@@ -100,7 +140,8 @@ from backtest.event_calendar import (add_filter_args,              # noqa: E402
 from backtest.pipeline import (BEST_PARAMS_FILE, VERIFY_FILE,      # noqa: E402
                                next_step, pipeline_dir, read_stage,
                                stage_banner, write_stage)
-from backtest.profiler import RegimeProfiler                       # noqa: E402
+from backtest.profiler import (REGIME_TO_QUADRANT, REGIMES,        # noqa: E402
+                               RegimeProfiler)
 from backtest.report import (day_of_week_breakdown,                # noqa: E402
                              format_day_of_week, print_dual_scorecard)
 from backtest.report_html import _cost_split, write_dual_reports   # noqa: E402
@@ -108,6 +149,190 @@ from backtest.audit_gates import discover_symbols                  # noqa: E402
 from backtest.run import (load_bars, parse_param, parse_symbols,    # noqa: E402
                           resolve_strategy)
 from backtest.specs import get_spec                                # noqa: E402
+
+
+def attach_atr_slippage(bars: pd.DataFrame, symbol: str, mult: float,
+                        period: int = 14, floor_ticks: float = 1.0) -> dict:
+    """
+    Charge slippage as a multiple of ATR instead of a constant tick count, by
+    attaching a per-bar `slippage_ticks` column the engine reads.
+
+    **The engine's slippage was never a static dollar assumption** - it is
+    already `ticks x tick_size / price`, per SYMBOL and per BAR, and it even
+    picks up a contract whose tick changed mid-history. What a constant tick
+    count does miss is that the spread you actually pay is not constant
+    through time: one tick is a fair fill in a quiet 2013 range and a fantasy
+    in a 2020 gap, and a strategy whose edge lives in high-volatility
+    quadrants is exactly the one that constant flatters.
+
+    So the tick COUNT becomes volatility-scaled while the tick-to-dollars
+    conversion stays where it was:
+
+        ticks_per_bar = max(floor_ticks, mult x ATR(period) / tick_size)
+
+    Dividing ATR by TICK SIZE rather than tick VALUE is the same rule
+    `_cost_arrays` documents: tick_value carries the contract multiplier, and
+    the multiplier already enters through `size`. Letting it in twice would
+    scale the fill by 50x on ES.
+
+    `floor_ticks` defaults to one tick because a fill better than the spread
+    is not a fill anybody gets, and ATR during its own warm-up is NaN - which
+    would otherwise reach the engine, make the fill price NaN, and drop the
+    trade from the P&L without raising. The warm-up bars take the floor.
+
+    Returns the record that travels with the numbers. Two runs charged
+    different slippage are not comparable, and that has to be legible from the
+    snapshot rather than from whoever remembers which flags were typed.
+    """
+    spec = get_spec(symbol)
+    high = bars["high"].astype(float)
+    low = bars["low"].astype(float)
+    close = bars["close"].astype(float)
+    prev = close.shift(1)
+    tr = pd.concat([high - low, (high - prev).abs(), (low - prev).abs()],
+                   axis=1).max(axis=1)
+    # Wilder's smoothing, the same recursion mdlib/regimes.py uses for the
+    # ATR its quadrant boundary is drawn on - so the volatility this charges
+    # against is the volatility the regime labels were assigned from.
+    atr = tr.ewm(alpha=1.0 / float(period), adjust=False,
+                 min_periods=int(period)).mean()
+
+    tick_size = spec.tick_size_array(pd.to_datetime(bars["ts"], utc=True))
+    ticks = (float(mult) * atr.to_numpy(dtype=float)) / tick_size
+    ticks = np.where(np.isfinite(ticks), ticks, float(floor_ticks))
+    ticks = np.maximum(ticks, float(floor_ticks))
+
+    bars["slippage_ticks"] = ticks
+    return {
+        "model": "atr_scaled",
+        "atr_mult": float(mult),
+        "atr_period": int(period),
+        "floor_ticks": float(floor_ticks),
+        "ticks_mean": float(np.mean(ticks)),
+        "ticks_median": float(np.median(ticks)),
+        "ticks_min": float(np.min(ticks)),
+        "ticks_max": float(np.max(ticks)),
+        "bars_at_floor": int(np.sum(ticks <= float(floor_ticks))),
+        "note": ("slippage is M x ATR per side, converted to ticks at each "
+                 "bar's own tick size and floored. NOT comparable with a "
+                 "constant-tick run."),
+    }
+
+
+def friction_by_regime(trades: pd.DataFrame,
+                       labelled_bars: pd.DataFrame | None) -> dict:
+    """
+    Costs, gross and NET P&L per regime quadrant - what friction took out of
+    each of the four environments, rather than out of the blended run.
+
+    The blended `cost_drag` above answers "did this strategy pay too much".
+    This answers the question a regime-gated strategy actually poses: a
+    supervisor trades it in ONE quadrant, so a cost share that is tolerable
+    across the whole sample can still be the thing that kills the only
+    environment the strategy is certified for. Averaged over four quadrants
+    that fact is invisible - the certified quadrant can hand 80% of its gross
+    to the broker while the blended figure reads 35% on the strength of three
+    quadrants nobody will ever trade.
+
+    Attribution is by the ENTRY bar's quadrant, which is the rule
+    `RegimeProfiler` uses for its own breakdown, and the labels are READ from
+    the frame that profiler already classified rather than re-derived here. A
+    second classification pass would be free to disagree with the regime
+    profile written beside this file - a trade counted in Q1 by one artifact
+    and Q2 by the other, with both tables still summing to the same totals.
+
+    All four quadrants are always present, including ones that never traded.
+    An absent row reads as missing data when it means "this strategy never
+    entered a low-volatility range", and those are different findings.
+
+    `cost_share_pct` follows `cost_drag`'s rule exactly: None, never 0.0, when
+    gross P&L is not positive - a quadrant that lost money gross has no profit
+    for its costs to be a share of.
+    """
+    def _row(regime, n, gross, costs, net):
+        return {"regime": regime, "quadrant": REGIME_TO_QUADRANT[regime],
+                "trades": int(n), "gross_pnl": float(gross),
+                "costs": float(costs), "net_pnl": float(net),
+                "cost_per_trade": (float(costs) / n) if n else None,
+                "cost_share_pct": (100.0 * float(costs) / float(gross))
+                                  if gross > 0 else None}
+
+    empty = {"available": False,
+             "reason": "no trades, or the bars carry no regime labels",
+             "attributed_trades": 0, "unplaced_trades": 0,
+             "by_regime": [_row(r, 0, 0.0, 0.0, 0.0) for r in REGIMES]}
+
+    if trades is None or len(trades) == 0 or "costs" not in trades.columns:
+        return empty
+    if labelled_bars is None or "Regime" not in getattr(
+            labelled_bars, "columns", []):
+        return empty
+
+    entry_col = next((c for c in ("entry_time", "entry_ts", "entry")
+                      if c in trades.columns), None)
+    if entry_col is None:
+        return {**empty, "reason": "the trade log carries no entry timestamp, "
+                                   "so trades cannot be placed on a quadrant"}
+
+    # Both sides of the lookup are normalised to UTC the way the profiler
+    # normalises them. A naive index against a UTC-aware one matches NOTHING,
+    # and every trade would fall out as unplaced - a breakdown of four empty
+    # rows that reads as a strategy which never traded.
+    idx = pd.DatetimeIndex(pd.to_datetime(labelled_bars.index, utc=True))
+    regime_at = pd.Series(labelled_bars["Regime"].to_numpy(), index=idx)
+    regime_at = regime_at[~regime_at.index.duplicated(keep="first")]
+    entered = pd.DatetimeIndex(pd.to_datetime(trades[entry_col], utc=True))
+    label = pd.Series(entered.map(regime_at), index=trades.index)
+
+    costs = trades["costs"].astype(float)
+    gross = trades["gross_pnl"].astype(float)
+    net = trades["pnl"].astype(float)
+
+    rows, attributed = [], 0
+    for regime in REGIMES:
+        m = (label == regime).to_numpy()
+        attributed += int(m.sum())
+        rows.append(_row(regime, int(m.sum()), gross[m].sum(),
+                         costs[m].sum(), net[m].sum()))
+
+    # Counted and named rather than left to a table that quietly sums to less
+    # than the trade list: an entry inside the 14-bar indicator warm-up is in
+    # no quadrant, and the rows below are read as the whole run.
+    unplaced = int(len(trades) - attributed)
+    return {"available": True,
+            "attribution": "the quadrant of the trade's ENTRY bar",
+            "regime_source": "the labels RegimeProfiler classified for this run",
+            "attributed_trades": attributed,
+            "unplaced_trades": unplaced,
+            "unplaced_note": ("entries outside this frame, or inside the "
+                              "14-bar ADX/ATR warm-up, are in no quadrant "
+                              "and are excluded from every row")
+                             if unplaced else None,
+            "by_regime": rows}
+
+
+def format_friction_by_regime(fbr: dict, indent: str = "  ") -> str:
+    """The four-quadrant friction table, for the console."""
+    if not fbr.get("available"):
+        return f"{indent}(not available — {fbr.get('reason', 'unknown')})"
+    L = [f"{indent}{'QUADRANT':<34} | {'TRD':>6} | {'GROSS':>13} | "
+         f"{'COSTS':>12} | {'NET':>13} | {'FRIC':>7}",
+         f"{indent}{'-' * 34}-+-{'-' * 6}-+-{'-' * 13}-+-{'-' * 12}-+-"
+         f"{'-' * 13}-+-{'-' * 7}"]
+    for r in fbr["by_regime"]:
+        share = ("--" if r["cost_share_pct"] is None
+                 else f"{r['cost_share_pct']:.1f}%")
+        L.append(f"{indent}{r['quadrant']} · {r['regime']:<29} | "
+                 f"{r['trades']:>6,} | {r['gross_pnl']:>13,.2f} | "
+                 f"{r['costs']:>12,.2f} | {r['net_pnl']:>13,.2f} | "
+                 f"{share:>7}")
+    if fbr.get("unplaced_trades"):
+        L.append(f"{indent}{fbr['unplaced_trades']:,} trade(s) are in no "
+                 f"quadrant and are in no row above ({fbr['unplaced_note']}).")
+    L.append(f"{indent}FRIC is costs as a share of GROSS profit, and is `--` "
+             f"where gross P&L was not\n{indent}positive — a quadrant that "
+             f"lost money gross has no profit for costs to be a share of.")
+    return "\n".join(L)
 
 
 def cost_drag(trades: pd.DataFrame, result, symbol: str,
@@ -236,6 +461,27 @@ def verify_symbol(symbol: str, path: Path, tf: str, params: dict,
     print(f"  bars       : {len(bars):,}  "
           f"{bars['ts'].iloc[0]} → {bars['ts'].iloc[-1]}")
 
+    # The cost model, said out loud before anything is simulated. A run
+    # charged ATR-scaled slippage and one charged a constant tick are not
+    # comparable, and the difference is invisible in every number below.
+    slip_model = {"model": "constant_ticks",
+                  "slippage_ticks": float(args.slippage_ticks),
+                  "note": "ticks x that bar's tick size / price, per bar"}
+    if float(getattr(args, "slippage_atr_mult", 0.0) or 0.0) > 0:
+        slip_model = attach_atr_slippage(
+            bars, symbol, args.slippage_atr_mult,
+            period=args.slippage_atr_period,
+            floor_ticks=args.slippage_atr_floor)
+        print(f"  slippage   : {slip_model['atr_mult']:g} x "
+              f"ATR({slip_model['atr_period']}) per side  →  "
+              f"{slip_model['ticks_median']:.2f} ticks median "
+              f"({slip_model['ticks_min']:.2f}–{slip_model['ticks_max']:.2f}), "
+              f"floor {slip_model['floor_ticks']:g}")
+        print(f"               NOT comparable with a constant-tick run.")
+    else:
+        print(f"  slippage   : {args.slippage_ticks:g} tick(s) per side, "
+              f"constant")
+
     cfg = BacktestConfig(
         initial_capital=args.capital, contracts=args.contracts,
         slippage_ticks=args.slippage_ticks, flat_by_close=args.flat_by_close,
@@ -276,10 +522,16 @@ def verify_symbol(symbol: str, path: Path, tf: str, params: dict,
     # rather than under a hardcoded root, and at a STABLE path: the live
     # supervisor reads the latest profile, and burying it in this run's
     # timestamped directory would make it unfindable without one.
+    labelled_bars = None
     try:
         profiler = RegimeProfiler(bars, a.get("result"), strat_name, symbol, tf,
                                   out_dir=art_dir.parent)
         profiler.generate_profile()
+        # The frame the profiler CLASSIFIED, kept so the friction table below
+        # is attributed by exactly the labels the regime profile beside it
+        # used. Re-classifying here would be a second pass free to disagree
+        # with the artifact it sits next to, with nothing raising.
+        labelled_bars = profiler.df
     except Exception as e:                                        # noqa: BLE001
         print(f"[!] Regime Profiler failed for {symbol}: "
               f"{type(e).__name__}: {e}", file=sys.stderr)
@@ -287,6 +539,10 @@ def verify_symbol(symbol: str, path: Path, tf: str, params: dict,
     drag = cost_drag(metrics_a.get("trades"), a.get("result"), symbol, cfg)
     print("\n  COST DRAG · Version A")
     print(format_cost_drag(drag))
+
+    fbr = friction_by_regime(metrics_a.get("trades"), labelled_bars)
+    print("\n  NET FRICTION BY REGIME QUADRANT · Version A")
+    print(format_friction_by_regime(fbr))
 
     dow = day_of_week_breakdown(metrics_a.get("trades"))
     print("\n  DAY OF WEEK · Version A, whole lifecycle")
@@ -303,7 +559,14 @@ def verify_symbol(symbol: str, path: Path, tf: str, params: dict,
         try:
             reports = write_dual_reports(
                 out, bars=bars, out_dir=art_dir, strat_name=strat_name,
-                indicators=_strategy_indicators(run_info, bars), prefix=symbol)
+                indicators=_strategy_indicators(run_info, bars), prefix=symbol,
+                # Into `dual_metrics_<SYMBOL>.json` itself, not only into the
+                # stage summary: the snapshot is what a promotion cites and
+                # what the Stage 4 card reads, and a friction figure that
+                # lives anywhere else is one nobody has beside the metrics it
+                # qualifies.
+                extra={"cost_drag": drag, "friction_by_regime": fbr,
+                       "slippage_model": slip_model})
             print(f"\n  Version A  : {reports['report_version_a']}")
             if reports.get("report_version_b"):
                 print(f"  Version B  : {reports['report_version_b']}")
@@ -343,6 +606,8 @@ def verify_symbol(symbol: str, path: Path, tf: str, params: dict,
                        if not isinstance(v, (pd.DataFrame, pd.Series))}
                       if metrics_b else None),
         "cost_drag": drag,
+        "slippage_model": slip_model,
+        "friction_by_regime": fbr,
         "dow_breakdown": dow.to_dict("records"),
         "reports": {k: str(v) for k, v in reports.items()},
         "trade_log": str(trade_csv) if trade_csv else None,
@@ -381,6 +646,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--capital", type=float, default=100_000.0)
     p.add_argument("--contracts", type=int, default=1)
     p.add_argument("--slippage-ticks", type=float, default=1.0)
+    p.add_argument("--slippage-atr-mult", type=float, default=0.0,
+                   metavar="M",
+                   help="OFF by default (0.0). Above zero, slippage is "
+                        "charged as M x ATR(--slippage-atr-period) per side "
+                        "instead of a constant --slippage-ticks, converted to "
+                        "ticks per bar at that bar's own tick size. This "
+                        "CHANGES EVERY P&L FIGURE and a run using it is not "
+                        "comparable with one that does not, which is why it "
+                        "is opt-in and recorded in the snapshot.")
+    p.add_argument("--slippage-atr-period", type=int, default=14, metavar="N",
+                   help="ATR lookback for --slippage-atr-mult (default 14, "
+                        "the length mdlib/regimes.py draws its quadrants on).")
+    p.add_argument("--slippage-atr-floor", type=float, default=1.0,
+                   metavar="T",
+                   help="Fewest ticks --slippage-atr-mult may charge on any "
+                        "bar (default 1.0 — one tick, the spread you pay even "
+                        "in the quietest bar). 0.0 permits a free fill.")
     p.add_argument("--flat-by-close", action="store_true")
     p.add_argument("--variants-tested", type=int, default=None,
                    help="Carried onto the reports. Defaults to the count "

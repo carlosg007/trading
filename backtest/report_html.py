@@ -1373,7 +1373,8 @@ def write_dual_reports(dual: dict,
                        strat_description: str | None = None,
                        max_trade_rows: int = MAX_TRADE_ROWS,
                        indicators: Any = None,
-                       prefix: str = "") -> dict[str, Any]:
+                       prefix: str = "",
+                       extra: dict[str, Any] | None = None) -> dict[str, Any]:
     """
     Write `report_version_a.html` and `report_version_b.html` for a dual run.
 
@@ -1445,6 +1446,16 @@ def write_dual_reports(dual: dict,
         "generated_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "reports": {k: str(v) for k, v in paths.items()},
     }
+    # Stage-supplied blocks the snapshot carries verbatim - Stage 4's
+    # per-quadrant friction breakdown is the first user. Merged UNDER the keys
+    # the caller chose and never over one this function owns, so a stage can
+    # add evidence to the snapshot without being able to overwrite the metrics
+    # or the gate audit a promotion locks from it.
+    for k, v in (extra or {}).items():
+        if k in snapshot:
+            raise ValueError(f"write_dual_reports: extra[{k!r}] would "
+                             f"overwrite the snapshot's own {k!r} block")
+        snapshot[k] = _jsonable(v)
     snap_path = out_dir / f"dual_metrics{tag}.json"
     snap_path.write_text(json.dumps(snapshot, indent=2, default=str),
                          encoding="utf-8")

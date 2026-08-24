@@ -973,13 +973,40 @@ def run_monte_carlo_simulation(trade_returns: Iterable[float] | pd.Series | np.n
     to produce consecutive losers. Destroying that autocorrelation makes this
     an OPTIMISTIC estimate of drawdown. Treat the reported figure as a floor on
     the risk, not a ceiling.
+
+    Sanitation, and why it is not cosmetic (2026-08-24)
+    ---------------------------------------------------
+    A NaN reaching the drawdown distribution is the one corruption here that
+    reads as SAFETY rather than as an error, so three things are guarded and
+    all three are RECORDED on the result:
+
+    - **Non-finite inputs are dropped** (`n_dropped_nonfinite`). The old
+      `.dropna()` removed NaN and left +/-inf standing; an inf return makes the
+      whole cumulative path inf, and inf/inf is NaN in the drawdown division.
+    - **Returns at or below -1.00 are clipped to -1.00**
+      (`n_clipped_to_total_loss`). Below -1.00 the equity factor `1 + r` goes
+      negative and `cumprod` FLIPS THE SIGN of the rest of the path - which is
+      not a deeper drawdown but arithmetic that has stopped describing an
+      account. It reported a -142% drawdown on an account that cannot lose more
+      than it holds. Clipped, the account is simply ruined: equity 0, and 0 for
+      every later trade, which is a 100% drawdown.
+    - **A zero running peak no longer divides.** A path whose first resampled
+      trade is a total loss had a peak of 0 and computed 0/0.
+
+    What all three produced before was `max_drawdown_pct_at_confidence: NaN`
+    beside `prob_max_loss_breach: 0.0` - because the breach test is
+    `mean(max_dds <= -limit)` and `NaN <= -8.0` is False. A bootstrap over an
+    array containing an infinite loss therefore reported a ZERO percent chance
+    of breaching the loss limit, Gate 2 scored the NaN tail NOT EVALUATED, and
+    nothing on the console said the array was the reason. If a non-finite path
+    survives all of this anyway the function returns `ok: False` rather than a
+    tail computed over it - which puts Gate 2 into NOT EVALUATED, and NOT
+    EVALUATED is not a pass.
     """
-    arr = np.asarray(pd.Series(list(trade_returns)
+    raw = np.asarray(pd.Series(list(trade_returns)
                                if not isinstance(trade_returns, (pd.Series, np.ndarray))
-                               else trade_returns).dropna(), dtype=float)
-    n = arr.size
-    if n == 0:
-        return {"ok": False, "error": "no trades to resample", "n_trades": 0}
+                               else trade_returns), dtype=float)
+    n_supplied = int(raw.size)
     if n_iterations < 1:
         raise ValueError(f"n_iterations must be >= 1, got {n_iterations}")
     if not 0 < confidence_pct < 1:
@@ -988,7 +1015,43 @@ def run_monte_carlo_simulation(trade_returns: Iterable[float] | pd.Series | np.n
     if returns_are_dollars:
         if initial_capital <= 0:
             raise ValueError("initial_capital must be positive to convert dollars")
-        arr = arr / initial_capital
+        raw = raw / initial_capital
+
+    # -- Sanitize, and RECORD what was sanitized -------------------------
+    #
+    # Both of these reached the percentile as a silent NaN before 2026-08-24,
+    # and a NaN drawdown is the one corruption that reads as SAFETY: the
+    # breach probability is `mean(max_dds <= -limit)`, `NaN <= -8.0` is False,
+    # so a run containing an infinite loss reported a 0% chance of breaching
+    # the loss limit. The tail came back NaN, Gate 2 scored it NOT EVALUATED,
+    # and nothing on the console said the array was the reason.
+    #
+    # 1. NON-FINITE returns are dropped. `.dropna()` removed NaN and left
+    #    +/-inf standing - an inf return makes the whole cumprod inf, then
+    #    inf/inf = NaN in the drawdown division.
+    finite = np.isfinite(raw)
+    n_nonfinite = int((~finite).sum())
+    arr = raw[finite]
+
+    n = arr.size
+    if n == 0:
+        return {"ok": False,
+                "error": ("no finite trades to resample"
+                          if n_nonfinite else "no trades to resample"),
+                "n_trades": 0, "n_supplied": n_supplied,
+                "n_dropped_nonfinite": n_nonfinite}
+
+    # 2. A return at or below -1.00 wipes the account out. Below -1.00 the
+    #    equity factor `1 + r` goes NEGATIVE, and `cumprod` then FLIPS THE
+    #    SIGN of the whole rest of the path - which is not a deeper drawdown,
+    #    it is arithmetic that stopped describing an account (it reported a
+    #    -142% drawdown, on an account that cannot lose more than it holds).
+    #    Clipped to exactly -1.00: the account is dead, equity is 0, and it
+    #    stays 0 because every later factor multiplies into it. That is a
+    #    100% drawdown, which is the true reading of a ruined account.
+    n_clipped = int((arr < -1.0).sum())
+    if n_clipped:
+        arr = np.maximum(arr, -1.0)
 
     rng = np.random.default_rng(seed)
     max_dds = np.empty(n_iterations, dtype=float)
@@ -1014,13 +1077,38 @@ def run_monte_carlo_simulation(trade_returns: Iterable[float] | pd.Series | np.n
         np.cumprod(path, axis=1, out=path)
         finals[done:done + size] = path[:, -1]
         peak = np.maximum.accumulate(path, axis=1)
-        np.divide(path, peak, out=path)
+        # A path whose FIRST resampled trade is a total loss has equity 0 and
+        # therefore a running peak of 0, and the unguarded `path / peak` was
+        # 0/0 -> NaN. `where=` leaves those cells untouched and they are set
+        # to a ratio of 0.0, i.e. a -100% drawdown: the account is ruined, and
+        # ruin is the deepest drawdown there is rather than an absent number.
+        # Every LATER cell is safe unguarded - the peak is monotone
+        # non-decreasing, so once it is positive it stays positive.
+        ruined = peak <= 0.0
+        np.divide(path, peak, out=path, where=~ruined)
+        path[ruined] = 0.0
         np.subtract(path, 1.0, out=path)
         max_dds[done:done + size] = path.min(axis=1)
         done += size
-        del path, peak
+        del path, peak, ruined
 
     max_dds_pct = max_dds * 100.0
+    # The two guards above should make this unreachable. It is checked anyway
+    # because the failure it catches is the silent one: `np.percentile` over an
+    # array holding a single NaN returns NaN for the WHOLE tail, and the
+    # breach probability beside it would then be computed over comparisons that
+    # are all False - a corrupt bootstrap reporting perfect safety. Refusing
+    # with `ok: False` puts Gate 2 into NOT EVALUATED, which is not a pass.
+    if not np.all(np.isfinite(max_dds_pct)):
+        return {"ok": False,
+                "error": (f"the bootstrap produced "
+                          f"{int((~np.isfinite(max_dds_pct)).sum())} "
+                          f"non-finite drawdown path(s) of {n_iterations}; "
+                          f"refusing to report a tail computed over them"),
+                "n_trades": int(n), "n_supplied": n_supplied,
+                "n_dropped_nonfinite": n_nonfinite,
+                "n_clipped_to_total_loss": n_clipped}
+
     # Drawdowns are negative; the "95th percentile worst" is the 5th percentile
     # of the signed series.
     tail = float(np.percentile(max_dds_pct, (1.0 - confidence_pct) * 100.0))
@@ -1029,6 +1117,12 @@ def run_monte_carlo_simulation(trade_returns: Iterable[float] | pd.Series | np.n
     return {
         "ok": True,
         "n_trades": int(n),
+        # What the caller handed over, and what survived sanitation. A
+        # bootstrap over 400 of 500 supplied trades is a different measurement
+        # from one over all 500, and the difference is invisible in the tail.
+        "n_supplied": n_supplied,
+        "n_dropped_nonfinite": n_nonfinite,
+        "n_clipped_to_total_loss": n_clipped,
         "n_iterations": int(n_iterations),
         "confidence_pct": confidence_pct,
         "max_loss_pct": max_loss_pct,

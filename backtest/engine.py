@@ -558,7 +558,30 @@ def _cost_arrays(bars: pd.DataFrame,
     size = float(spec.multiplier) * cfg.contracts
 
     tick_size = spec.tick_size_array(ts)
-    slippage = cfg.slippage_ticks * tick_size / px
+    # The tick COUNT is per bar when the caller attached one, and the scalar
+    # `cfg.slippage_ticks` otherwise. It is read off the BARS rather than off
+    # the config because `_simulate` hands this function `bars.iloc[lo:hi]`:
+    # a per-bar array on the config would have to be sliced in step with every
+    # chunk boundary, and a slice that drifted would charge each bar the
+    # slippage of a different one - wrong in every trade, and invisible in a
+    # total. A column travels with its own rows for free.
+    #
+    # The default is unchanged and remains a CONSTANT tick count, so every
+    # existing result is bit-identical. What a per-bar column buys is a
+    # volatility-scaled fill assumption (see `backtest/verify_full.py
+    # --slippage-atr-mult`): one tick is a different fraction of the spread in
+    # a 2013 range than in a 2020 gap, and a constant charges both alike.
+    if "slippage_ticks" in getattr(bars, "columns", []):
+        ticks = bars["slippage_ticks"].to_numpy(dtype=float)
+        if not np.all(np.isfinite(ticks)) or np.any(ticks < 0):
+            raise ValueError(
+                "the bars carry a 'slippage_ticks' column holding non-finite "
+                "or negative values; a NaN there silently makes the fill "
+                "price NaN and drops the trade from the P&L with nothing "
+                "raising")
+    else:
+        ticks = cfg.slippage_ticks
+    slippage = ticks * tick_size / px
 
     commission = (cfg.commission_per_side
                   if cfg.commission_per_side is not None else spec.commission)
