@@ -5,7 +5,7 @@
   "symbols": [
     "NQ"
   ],
-  "timeframe": "30m",
+  "timeframe": "15m",
   "params": {
     "t3_period": 5,
     "t3_vfactor": 0.7,
@@ -30,7 +30,7 @@
   "source": "/home/cgrullon/src/trading/strategies/experimental/t3_braid_scalp_20260823.py",
   "source_sha256": "d184de94fa3bba9d828dc17247b820abd1d7ae5bd86fb89393458401a166e929",
   "promoted_sha256": "d184de94fa3bba9d828dc17247b820abd1d7ae5bd86fb89393458401a166e929",
-  "promoted_utc": "2026-08-24T19:02:25+00:00",
+  "promoted_utc": "2026-08-24T19:02:29+00:00",
   "costs_included": false,
   "variants_tested": null,
   "metrics_status": "NOT RECORDED",
@@ -43,13 +43,13 @@
     "gate_regime": "PASS"
   },
   "certification": {
-    "audit_file": "/mnt/backtest/artifacts/pipeline/t3_braid_scalp_20260823/gate_audit_NQ_30m.json",
-    "audit_sha256": "8f9acae9035641a2dfb9bafa907e03abd2e546bfed9f51e6d1fe570cc279437e",
+    "audit_file": "/mnt/backtest/artifacts/pipeline/t3_braid_scalp_20260823/gate_audit_NQ_15m.json",
+    "audit_sha256": "464b4669695bbd3f466255fd430204bdaad31ffe5a9cd1484c63a43d64d6965a",
     "audit_symbol": "NQ",
-    "audit_timeframe": "30m",
-    "target_quadrant": "Q2",
-    "target_regime": "High Volatility / Ranging",
-    "audit_generated_utc": "2026-08-24T15:06:12+00:00",
+    "audit_timeframe": "15m",
+    "target_quadrant": "Q1",
+    "target_regime": "High Volatility / Trending",
+    "audit_generated_utc": "2026-08-24T15:05:55+00:00",
     "in_sample": {
       "start": "2013-01-01",
       "end": "2022-12-31"
@@ -60,13 +60,13 @@
       "end_basis": "the present - every bar the lake holds"
     },
     "params": {
-      "t3_period": 5,
+      "t3_period": 14,
       "stiffness_threshold": 25.0,
-      "sl_atr_mult": 2.0,
+      "sl_atr_mult": 1.5,
       "tp_atr_mult": 1.5,
       "trailing": false
     },
-    "params_source": "stage 2 winner (best_params_NQ_30m.json)",
+    "params_source": "stage 2 winner (best_params_NQ_15m.json)",
     "variants_tested": 162,
     "wfo": {
       "train_years": 2,
