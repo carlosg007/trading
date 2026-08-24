@@ -305,8 +305,203 @@
     }
   },
   "version_b": null,
-  "generated_utc": "2026-08-24T15:06:44+00:00",
+  "generated_utc": "2026-08-24T20:39:28+00:00",
   "reports": {
-    "version_a": "/mnt/backtest/artifacts/pipeline/t3_braid_scalp_20260823/verify_20260824_150638/report_NQ_version_a.html"
+    "version_a": "/mnt/backtest/artifacts/pipeline/t3_braid_scalp_20260823/verify_20260824_203921/report_NQ_version_a.html"
+  },
+  "cost_drag": {
+    "trades": 17995,
+    "total_costs": 262367.0999999997,
+    "gross_pnl": 148315.0,
+    "net_pnl": -114052.09999999947,
+    "cost_per_trade": 14.579999999999982,
+    "cost_share_pct": 176.89856049624092,
+    "commission": 82417.09999999999,
+    "slippage": 179949.99999999968,
+    "split_available": true,
+    "modelled_round_turn": 14.58,
+    "by_year": [
+      {
+        "year": 2013,
+        "trades": 1081,
+        "gross_pnl": -8515.0,
+        "costs": 15760.980000000265,
+        "net_pnl": -24275.980000000265,
+        "cost_per_trade": 14.580000000000245,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2014,
+        "trades": 1035,
+        "gross_pnl": 2195.0,
+        "costs": 15090.30000000019,
+        "net_pnl": -12895.300000000188,
+        "cost_per_trade": 14.580000000000183,
+        "cost_share_pct": 687.4851936218765
+      },
+      {
+        "year": 2015,
+        "trades": 1217,
+        "gross_pnl": -10165.0,
+        "costs": 17743.860000000015,
+        "net_pnl": -27908.860000000008,
+        "cost_per_trade": 14.580000000000013,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2016,
+        "trades": 1384,
+        "gross_pnl": 3650.0,
+        "costs": 20178.72000000035,
+        "net_pnl": -16528.72000000035,
+        "cost_per_trade": 14.580000000000252,
+        "cost_share_pct": 552.841643835626
+      },
+      {
+        "year": 2017,
+        "trades": 1374,
+        "gross_pnl": -3350.0,
+        "costs": 20032.919999999896,
+        "net_pnl": -23382.919999999904,
+        "cost_per_trade": 14.579999999999925,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2018,
+        "trades": 1353,
+        "gross_pnl": -35370.0,
+        "costs": 19726.739999999438,
+        "net_pnl": -55096.739999999416,
+        "cost_per_trade": 14.579999999999584,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2019,
+        "trades": 1409,
+        "gross_pnl": 21945.0,
+        "costs": 20543.220000000292,
+        "net_pnl": 1401.779999999724,
+        "cost_per_trade": 14.580000000000208,
+        "cost_share_pct": 93.61230348598903
+      },
+      {
+        "year": 2020,
+        "trades": 1456,
+        "gross_pnl": 70455.0,
+        "costs": 21228.480000000673,
+        "net_pnl": 49226.51999999935,
+        "cost_per_trade": 14.580000000000462,
+        "cost_share_pct": 30.13055141579827
+      },
+      {
+        "year": 2021,
+        "trades": 1409,
+        "gross_pnl": 14055.0,
+        "costs": 20543.219999999055,
+        "net_pnl": -6488.219999999021,
+        "cost_per_trade": 14.57999999999933,
+        "cost_share_pct": 146.16307363926757
+      },
+      {
+        "year": 2022,
+        "trades": 1371,
+        "gross_pnl": -42930.0,
+        "costs": 19989.18000000039,
+        "net_pnl": -62919.180000000364,
+        "cost_per_trade": 14.580000000000284,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2023,
+        "trades": 1277,
+        "gross_pnl": -8955.0,
+        "costs": 18618.660000000535,
+        "net_pnl": -27573.66000000051,
+        "cost_per_trade": 14.58000000000042,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2024,
+        "trades": 1342,
+        "gross_pnl": 9340.0,
+        "costs": 19566.359999999302,
+        "net_pnl": -10226.359999999262,
+        "cost_per_trade": 14.57999999999948,
+        "cost_share_pct": 209.48993576016383
+      },
+      {
+        "year": 2025,
+        "trades": 1365,
+        "gross_pnl": 102100.0,
+        "costs": 19901.700000001852,
+        "net_pnl": 82198.29999999815,
+        "cost_per_trade": 14.580000000001357,
+        "cost_share_pct": 19.492360430951866
+      },
+      {
+        "year": 2026,
+        "trades": 922,
+        "gross_pnl": 33860.0,
+        "costs": 13442.759999997443,
+        "net_pnl": 20417.24000000256,
+        "cost_per_trade": 14.579999999997227,
+        "cost_share_pct": 39.70100413466463
+      }
+    ]
+  },
+  "friction_by_regime": {
+    "available": true,
+    "attribution": "the quadrant of the trade's ENTRY bar",
+    "regime_source": "the labels RegimeProfiler classified for this run",
+    "attributed_trades": 17995,
+    "unplaced_trades": 0,
+    "unplaced_note": null,
+    "by_regime": [
+      {
+        "regime": "High Volatility / Trending",
+        "quadrant": "Q1",
+        "trades": 5570,
+        "gross_pnl": 153055.0,
+        "costs": 81210.60000000018,
+        "net_pnl": 71844.3999999999,
+        "cost_per_trade": 14.580000000000032,
+        "cost_share_pct": 53.05974976315715
+      },
+      {
+        "regime": "High Volatility / Ranging",
+        "quadrant": "Q2",
+        "trades": 6278,
+        "gross_pnl": 25935.0,
+        "costs": 91533.239999999,
+        "net_pnl": -65598.23999999887,
+        "cost_per_trade": 14.57999999999984,
+        "cost_share_pct": 352.9332562174629
+      },
+      {
+        "regime": "Low Volatility / Trending",
+        "quadrant": "Q3",
+        "trades": 2573,
+        "gross_pnl": -12350.0,
+        "costs": 37514.33999999969,
+        "net_pnl": -49864.339999999684,
+        "cost_per_trade": 14.57999999999988,
+        "cost_share_pct": null
+      },
+      {
+        "regime": "Low Volatility / Ranging",
+        "quadrant": "Q4",
+        "trades": 3574,
+        "gross_pnl": -18325.0,
+        "costs": 52108.92000000083,
+        "net_pnl": -70433.92000000081,
+        "cost_per_trade": 14.580000000000231,
+        "cost_share_pct": null
+      }
+    ]
+  },
+  "slippage_model": {
+    "model": "constant_ticks",
+    "slippage_ticks": 1.0,
+    "note": "ticks x that bar's tick size / price, per bar"
   }
 }

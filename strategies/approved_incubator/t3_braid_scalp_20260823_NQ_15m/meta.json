@@ -33,7 +33,7 @@
   "source": "/home/cgrullon/src/trading/strategies/experimental/t3_braid_scalp_20260823.py",
   "source_sha256": "d184de94fa3bba9d828dc17247b820abd1d7ae5bd86fb89393458401a166e929",
   "promoted_sha256": "d184de94fa3bba9d828dc17247b820abd1d7ae5bd86fb89393458401a166e929",
-  "promoted_utc": "2026-08-24T20:06:52+00:00",
+  "promoted_utc": "2026-08-24T20:39:43+00:00",
   "costs_included": true,
   "variants_tested": null,
   "metrics_status": "RECORDED \u00b7 locked from dual_metrics_NQ.json",
@@ -65,12 +65,12 @@
   },
   "certification": {
     "audit_file": "/mnt/backtest/artifacts/pipeline/t3_braid_scalp_20260823/gate_audit_NQ_15m.json",
-    "audit_sha256": "464b4669695bbd3f466255fd430204bdaad31ffe5a9cd1484c63a43d64d6965a",
+    "audit_sha256": "c10e62c50c5f4306f4f99e67c31bc5ef6989658e9798edd3a65de234dddfd07a",
     "audit_symbol": "NQ",
     "audit_timeframe": "15m",
     "target_quadrant": "Q1",
     "target_regime": "High Volatility / Trending",
-    "audit_generated_utc": "2026-08-24T15:05:55+00:00",
+    "audit_generated_utc": "2026-08-24T20:38:38+00:00",
     "in_sample": {
       "start": "2013-01-01",
       "end": "2022-12-31"
