@@ -49,11 +49,18 @@ if str(REPO_ROOT) not in sys.path:
 from backtest.promote import (                                    # noqa: E402
     ALLOCATIONS_KEY,
     DEFAULT_ALLOCATION,
+    DEFAULT_VERSION,
     NOT_RESOLVED,
+    SOURCE_CANDIDATES,
     certified_scope,
+    ensure_portfolio_groups,
     incubator_portfolios,
+    merge_configuration,
     register_portfolio,
+    resolve_audit_file,
     resolve_portfolio,
+    resolve_source,
+    resolve_version,
 )
 
 REAL_CONFIG = REPO_ROOT / "config" / "portfolios.json"
@@ -538,6 +545,361 @@ def test_graduation_moves_the_allocation_record_with_the_permission() -> None:
     assert moved["status"] == "GRADUATED_PROP", moved["status"]
     assert moved["source_portfolio"] == "Incubator-Odd"
     assert moved["symbol"] == "NQ"
+
+
+# ==========================================================================
+# 6. the CLI resolves what it was not told, and the record holds every
+#    certified pair rather than only the last one promoted
+# ==========================================================================
+def test_a_missing_routing_table_is_created_rather_than_failing_a_promotion() -> None:
+    """
+    A promotion is written and committed BEFORE registration runs, so a
+    routing table that is not there must not turn a completed promotion into
+    an error and an unallocated strategy. The bootstrap creates the whole
+    four-account partition - `portfolio.config_loader` refuses a table missing
+    any of the four - with both incubator groups empty.
+    """
+    path = Path(tempfile.mkdtemp(prefix="promote_boot_")) / "portfolios.json"
+    assert not path.exists()
+    out = register_portfolio(STRAT, version="A", scope=scope(),
+                             config_path=path)
+    blob = read(path)
+    assert set(blob["portfolios"]) == {"Incubator-Odd", "Incubator-Even",
+                                       "Prop-Odd", "Prop-Even"}
+    assert out["portfolio_id"] in incubator_portfolios(blob["portfolios"])
+    # The one account that did NOT take the strategy is empty, which is what
+    # "initialised to []" has to mean for it to be worth anything.
+    other = [p for p in incubator_portfolios(blob["portfolios"])
+             if p != out["portfolio_id"]][0]
+    assert blob["portfolios"][other]["active_strategies"] == []
+
+
+def test_a_bootstrapped_table_announces_the_risk_envelope_it_invented() -> None:
+    """
+    `default_account_size` and the risk budget are what a live position is
+    sized against. A bootstrap cannot know them, so it writes the shipped
+    defaults and SAYS SO - a placeholder nobody was told about is the "rule
+    nobody wrote down" the loader refuses to apply elsewhere.
+    """
+    path = Path(tempfile.mkdtemp(prefix="promote_boot_")) / "portfolios.json"
+    out = register_portfolio(STRAT, version="A", scope=scope(),
+                             config_path=path)
+    assert any("SHIPPED DEFAULT" in n for n in out["notes"]), out["notes"]
+
+
+def test_a_bootstrapped_table_still_loads_through_the_real_loader() -> None:
+    """
+    The one guarantee that matters about a generated config: the loader that
+    the live loop, the incubator tracker and the Stage 5 card all go through
+    accepts it. A skeleton it refuses takes all three down together, on the
+    next run rather than on this one.
+    """
+    from portfolio.config_loader import load_portfolio_config
+    path = Path(tempfile.mkdtemp(prefix="promote_boot_")) / "portfolios.json"
+    register_portfolio(STRAT, version="A", scope=scope(), config_path=path)
+    cfg = load_portfolio_config(path)
+    assert set(cfg["portfolios"]) == {"Incubator-Odd", "Incubator-Even",
+                                      "Prop-Odd", "Prop-Even"}
+
+
+def test_a_group_missing_from_an_existing_table_is_created_alone() -> None:
+    """One missing group is added; the three that are there are not rewritten."""
+    def drop(blob):
+        blob["portfolios"].pop("Incubator-Odd")
+    path = temp_config(drop)
+    before = read(path)["portfolios"]["Prop-Even"]
+    out = register_portfolio(STRAT, version="A", scope=scope(),
+                             config_path=path)
+    after = read(path)["portfolios"]
+    assert "Incubator-Odd" in after
+    assert after["Prop-Even"] == before
+    assert any("created Incubator-Odd" in n for n in out["notes"]), out["notes"]
+
+
+def test_active_strategies_of_a_wrong_shape_is_refused_not_repaired() -> None:
+    """
+    An empty list and a string are the same to `if name in active`, so
+    replacing one would throw away a permission that is currently granted.
+    The bootstrap adds the key when it is ABSENT and never rewrites it.
+    """
+    def wreck(blob):
+        blob["portfolios"]["Incubator-Odd"]["active_strategies"] = "alpha"
+        blob["portfolios"]["Incubator-Even"]["active_strategies"] = "alpha"
+    path = temp_config(wreck)
+    try:
+        register_portfolio(STRAT, version="A", scope=scope(), config_path=path)
+    except ValueError as e:
+        assert "active_strategies" in str(e)
+    else:
+        raise AssertionError("a string active_strategies was accepted")
+
+
+def test_three_certified_timeframes_all_survive_in_the_record() -> None:
+    """
+    THE BUG THIS EXISTS FOR. A campaign certifies one strategy at several
+    timeframes and promotes it once per pair. Keyed by strategy id alone the
+    third promotion silently REPLACED the first two, and nothing on the
+    console said which two had been dropped.
+    """
+    path = temp_config()
+    pid = None
+    for tf, quad in (("15m", "Q1"), ("30m", "Q2"), ("1h", "Q2")):
+        out = register_portfolio(STRAT, version="A",
+                                 scope=scope(timeframe=tf, quadrant=quad),
+                                 config_path=path)
+        pid = out["portfolio_id"]
+    record = read(path)["portfolios"][pid][ALLOCATIONS_KEY][STRAT]
+    pairs = [(c["symbol"], c["timeframe"]) for c in record["configurations"]]
+    assert pairs == [("NQ", "15m"), ("NQ", "30m"), ("NQ", "1h")], pairs
+    # Each carries the whole payload, not just the pair.
+    for c in record["configurations"]:
+        for key in ("strat", "symbol", "timeframe", "version", "allocation",
+                    "regime_filter", "status"):
+            assert key in c, f"{key} missing from {c}"
+        assert c["status"] == "incubating"
+    # The top-level fields still describe ONE promotion - the last - because
+    # that is where config_loader and promotion_daemon read them.
+    assert record["timeframe"] == "1h"
+    assert record["symbol"] == "NQ"
+
+
+def test_re_promoting_one_pair_updates_it_and_does_not_duplicate_it() -> None:
+    """
+    Two entries for one (strat, symbol, timeframe) would size the same signal
+    twice on one account. The entry is updated IN PLACE and keeps its
+    position, so a re-run that changed nothing does not churn the table.
+    """
+    path = temp_config()
+    for tf in ("15m", "30m", "1h"):
+        out = register_portfolio(STRAT, version="A", scope=scope(timeframe=tf),
+                                 config_path=path)
+    pid = out["portfolio_id"]
+    again = register_portfolio(STRAT, version="B", scope=scope(timeframe="30m"),
+                               allocation=3, config_path=path)
+    record = read(path)["portfolios"][pid][ALLOCATIONS_KEY][STRAT]
+    configs = record["configurations"]
+    assert len(configs) == 3, [c["timeframe"] for c in configs]
+    assert [c["timeframe"] for c in configs] == ["15m", "30m", "1h"]
+    assert configs[1]["version"] == "B" and configs[1]["allocation"] == 3
+    assert any("UPDATED in place" in n for n in again["notes"]), again["notes"]
+
+
+def test_a_record_written_before_configurations_existed_is_not_lost() -> None:
+    """
+    Every allocation already in a live routing table predates this list. The
+    first re-promotion must carry it into `configurations` rather than
+    starting an empty one, which would drop a promotion somebody made.
+    """
+    def seed(blob):
+        block = blob["portfolios"]["Incubator-Even"]
+        block["active_strategies"] = [STRAT]
+        block[ALLOCATIONS_KEY] = {STRAT: {
+            "strat": STRAT, "symbol": "NQ", "timeframe": "5m",
+            "version": "A", "allocation": 1, "regime_filter": "Q1",
+            "status": "incubating"}}
+    path = temp_config(seed)
+    register_portfolio(STRAT, version="A", scope=scope(timeframe="1h"),
+                       config_path=path)
+    record = read(path)["portfolios"]["Incubator-Even"][ALLOCATIONS_KEY][STRAT]
+    pairs = [(c["symbol"], c["timeframe"]) for c in record["configurations"]]
+    assert pairs == [("NQ", "5m"), ("NQ", "1h")], pairs
+
+
+def test_a_re_promotion_does_not_move_the_account() -> None:
+    """
+    The count rule balances NEW strategies. Applied to one that already has an
+    account, each successive promotion of the same strategy found it on the
+    fuller side and moved it - bouncing Even -> Odd -> Even across three
+    certified timeframes, flipping which quadrants the account permits every
+    time, with each move announced as a routing decision.
+    """
+    path = temp_config()
+    first = register_portfolio(STRAT, version="A", scope=scope(timeframe="15m"),
+                               config_path=path)
+    for tf in ("30m", "1h"):
+        again = register_portfolio(STRAT, version="A",
+                                   scope=scope(timeframe=tf),
+                                   config_path=path)
+        assert again["portfolio_id"] == first["portfolio_id"], (
+            f"{tf} moved {STRAT} from {first['portfolio_id']} to "
+            f"{again['portfolio_id']}")
+        assert again["moved_from"] == []
+        assert "already registered" in again["basis"]
+
+
+def test_an_explicit_portfolio_still_beats_staying_put() -> None:
+    """An operator correcting the route outranks the strategy's own history."""
+    path = temp_config()
+    first = register_portfolio(STRAT, version="A", scope=scope(),
+                               config_path=path)
+    other = [p for p in incubator_portfolios(read(path)["portfolios"])
+             if p != first["portfolio_id"]][0]
+    moved = register_portfolio(STRAT, version="A", scope=scope(),
+                               portfolio=other, config_path=path)
+    assert moved["portfolio_id"] == other
+    assert moved["moved_from"] == [first["portfolio_id"]]
+
+
+def test_merge_configuration_is_keyed_on_the_triple_and_nothing_else() -> None:
+    """
+    Same strategy, same symbol, different timeframe is a DIFFERENT allocation;
+    the same triple in another spelling is the SAME one. Case folding is the
+    point - `nq`/`NQ` and `1H`/`1h` name one pair.
+    """
+    base = {"strat": "s", "symbol": "NQ", "timeframe": "1h", "version": "A"}
+    out, replaced = merge_configuration([], base)
+    assert not replaced and len(out) == 1
+    out, replaced = merge_configuration(out, dict(base, timeframe="30m"))
+    assert not replaced and len(out) == 2
+    out, replaced = merge_configuration(out, dict(base, symbol="nq",
+                                                 timeframe="1H", version="B"))
+    assert replaced and len(out) == 2, out
+    assert out[0]["version"] == "B"
+
+
+def test_ensure_portfolio_groups_leaves_a_complete_table_untouched() -> None:
+    """A table that already has both groups is returned byte-identical."""
+    blob = json.loads(REAL_CONFIG.read_text(encoding="utf-8"))
+    before = json.dumps(blob, sort_keys=True)
+    out, notes = ensure_portfolio_groups(blob)
+    assert notes == [], notes
+    assert json.dumps(out, sort_keys=True) == before
+
+
+# ==========================================================================
+# 7. what the command line no longer has to say
+# ==========================================================================
+def test_the_source_module_resolves_from_the_strategy_name() -> None:
+    """
+    `--source` was `required=True`, which made the orchestrator the only
+    practical caller. The candidates are tried in order and the one that
+    exists wins; this repository keeps its modules in `experimental/`.
+    """
+    path, basis = resolve_source("t3_braid_scalp_20260823")
+    assert path == REPO_ROOT / "strategies/experimental/t3_braid_scalp_20260823.py"
+    assert "experimental" in basis
+    assert SOURCE_CANDIDATES[0] == "strategies/{strat}.py"
+
+
+def test_an_unresolvable_source_raises_rather_than_guessing() -> None:
+    try:
+        resolve_source("no_such_strategy_at_all")
+    except FileNotFoundError as e:
+        assert "Tried" in str(e)
+    else:
+        raise AssertionError("a missing module resolved to something")
+
+
+def test_an_explicit_source_is_honoured_verbatim() -> None:
+    path, basis = resolve_source("anything", "strategies/x.py")
+    assert basis == "--source" and path.name == "x.py"
+
+
+def test_the_version_comes_from_the_gate_audits_own_per_version_verdict() -> None:
+    """
+    A gate audit carries `passed` KEYED BY VERSION, not a scalar `version`,
+    because Stage 3 audits both twins in one pass. The version promoted is the
+    one whose Gate R passed - promoting the other attaches a generated Version
+    B wrapper to an audit of the baseline.
+    """
+    directory = Path(tempfile.mkdtemp(prefix="promote_ver_"))
+    audit = directory / "gate_audit_NQ_1h.json"
+    audit.write_text(json.dumps({"passed": {"A": False, "B": True},
+                                 "versions": {"A": {}, "B": {}}}))
+    version, basis = resolve_version(audit)
+    assert version == "B", basis
+    assert "gate_audit_NQ_1h.json" in basis
+
+
+def test_two_passing_versions_are_not_chosen_between() -> None:
+    """
+    Which twin to trade is the Dual-Version Mandate's decision, made on
+    whether B beat A out of sample. It is the operator's, so both passing
+    falls through to the default and says why.
+    """
+    directory = Path(tempfile.mkdtemp(prefix="promote_ver_"))
+    audit = directory / "gate_audit_NQ_1h.json"
+    audit.write_text(json.dumps({"passed": {"A": True, "B": True}}))
+    version, basis = resolve_version(audit)
+    assert version == DEFAULT_VERSION
+    assert "--version" in basis
+
+
+def test_an_explicit_version_wins_and_is_upper_cased() -> None:
+    assert resolve_version(None, "b") == ("B", "--version")
+
+
+def test_the_audit_file_resolves_from_the_symbol_and_timeframe() -> None:
+    """`gate_audit_<SYMBOL>_<TF>.json` is where Stage 3 writes it."""
+    directory = Path(tempfile.mkdtemp(prefix="promote_aud_"))
+    (directory / "gate_audit_NQ_1h.json").write_text("{}")
+    path, basis = resolve_audit_file("s", "NQ", "1h", out_dir=str(directory))
+    assert path == directory / "gate_audit_NQ_1h.json"
+    assert "--symbol/--timeframe" in basis
+
+
+def test_several_certified_configurations_refuse_to_resolve_to_one() -> None:
+    """
+    Promoting one of several would leave the rest on disk with nothing saying
+    they were not chosen, and every field on the resulting card would still
+    read correctly.
+    """
+    directory = Path(tempfile.mkdtemp(prefix="promote_aud_"))
+    for tf in ("15m", "1h"):
+        (directory / f"gate_audit_NQ_{tf}.json").write_text("{}")
+    (directory / "stage3_audit_summary.json").write_text(json.dumps({
+        "results": [{"symbol": "NQ", "timeframe": "15m", "certified": True},
+                    {"symbol": "NQ", "timeframe": "1h", "certified": True}]}))
+    try:
+        resolve_audit_file("s", out_dir=str(directory))
+    except ValueError as e:
+        assert "2 certified" in str(e) and "--promote-only" in str(e)
+    else:
+        raise AssertionError("two certifications resolved to one")
+
+
+def test_one_certified_configuration_resolves_without_being_named() -> None:
+    directory = Path(tempfile.mkdtemp(prefix="promote_aud_"))
+    (directory / "gate_audit_NQ_1h.json").write_text("{}")
+    (directory / "stage3_audit_summary.json").write_text(json.dumps({
+        "results": [{"symbol": "NQ", "timeframe": "1h", "certified": True},
+                    {"symbol": "NQ", "timeframe": "5m", "certified": False}]}))
+    path, basis = resolve_audit_file("s", out_dir=str(directory))
+    assert path == directory / "gate_audit_NQ_1h.json"
+    assert "the one certified configuration" in basis
+
+
+def test_the_unsuffixed_gate_audit_is_never_counted_as_a_certification() -> None:
+    """
+    `gate_audit_<SYM>.json` duplicates whichever timeframe ran last. Counting
+    it would make one certification look like two and refuse the directory.
+    """
+    directory = Path(tempfile.mkdtemp(prefix="promote_aud_"))
+    (directory / "gate_audit_NQ.json").write_text("{}")
+    (directory / "gate_audit_NQ_1h.json").write_text("{}")
+    path, _ = resolve_audit_file("s", out_dir=str(directory))
+    assert path == directory / "gate_audit_NQ_1h.json"
+
+
+def test_an_audit_file_named_by_hand_and_missing_raises() -> None:
+    try:
+        resolve_audit_file("s", explicit="/nowhere/gate_audit_NQ_1h.json")
+    except FileNotFoundError as e:
+        assert "refused" in str(e)
+    else:
+        raise AssertionError("a missing --audit-file was resolved to another")
+
+
+def test_an_uncertified_pair_reports_why_rather_than_raising() -> None:
+    """
+    Nothing to cite is NOT CERTIFIED, which `promote()` already reports and
+    `--require-certification` already refuses. Raising here would fail a
+    promotion the operator may have meant to make without one.
+    """
+    directory = Path(tempfile.mkdtemp(prefix="promote_aud_"))
+    path, basis = resolve_audit_file("s", "NQ", "1h", out_dir=str(directory))
+    assert path is None
+    assert "has not certified" in basis
 
 
 # ==========================================================================

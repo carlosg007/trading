@@ -737,6 +737,241 @@ ALLOCATIONS_KEY = "strategy_allocations"
 NOT_RESOLVED = "NOT RESOLVED"
 
 
+# THE INCUBATOR TRACK IS CREATED IF IT IS NOT THERE, AND NEVER INVENTED
+# AROUND WHAT IS.
+#
+# `register_portfolio` used to raise on a routing table with no `portfolios`
+# object, which meant a fresh checkout - or a `--portfolios` pointed at a path
+# that does not exist yet - turned a completed, committed promotion into a
+# printed error and an unallocated strategy. What it must NOT do instead is
+# quietly write a plausible-looking account: `default_account_size`,
+# `fixed_risk_budget_usd` and `max_trailing_drawdown_usd` are the numbers a
+# live position is sized against, and a default that nobody chose is exactly
+# the "rule nobody wrote down" that `portfolio/config_loader.py` refuses to
+# apply when it declines to infer a portfolio from a strategy's name.
+#
+# So the bootstrap does both halves explicitly. It creates the two incubator
+# portfolios with `active_strategies: []`, filled from
+# `INCUBATOR_TRACK_TEMPLATE` below, and it PRINTS that the risk envelope is a
+# placeholder. The template mirrors the shipped `config/portfolios.json`
+# exactly, because `portfolio.config_loader` validates every field of it and a
+# skeleton it refuses takes the live loop, the incubator tracker and the Stage
+# 5 card down together - on the next run rather than on this one.
+#
+# The four-account partition is created whole. `REQUIRED_PORTFOLIOS` in
+# `portfolio/config_loader.py` refuses a table missing any of the four ("a
+# partition with a hole in it routes some strategy nowhere"), so writing only
+# the incubator half would produce a file this module could read back and that
+# loader could not.
+INCUBATOR_TRACK_TEMPLATE: dict[str, dict[str, Any]] = {
+    "Incubator-Odd":  {"account_type": "incubator_sim",
+                       "assets": ["MNQ", "MCL"],
+                       "correlation_group": "Index_Energy_Uncorrelated",
+                       "regime_quadrants": ["Q3_LOW_VOL_TREND",
+                                            "Q4_LOW_VOL_MEAN_REVERSION"]},
+    "Incubator-Even": {"account_type": "incubator_sim",
+                       "assets": ["MES", "MGC"],
+                       "correlation_group": "Index_Metals_Uncorrelated",
+                       "regime_quadrants": ["Q1_HIGH_VOL_TREND",
+                                            "Q2_HIGH_VOL_CHOP"]},
+    "Prop-Odd":       {"account_type": "prop_eval",
+                       "assets": ["MNQ", "MCL"],
+                       "correlation_group": "Index_Energy_Uncorrelated",
+                       "regime_quadrants": ["Q3_LOW_VOL_TREND",
+                                            "Q4_LOW_VOL_MEAN_REVERSION"]},
+    "Prop-Even":      {"account_type": "prop_eval",
+                       "assets": ["MES", "MGC"],
+                       "correlation_group": "Index_Metals_Uncorrelated",
+                       "regime_quadrants": ["Q1_HIGH_VOL_TREND",
+                                            "Q2_HIGH_VOL_CHOP"]},
+}
+
+# The placeholder risk envelope, and the reason it is announced every time it
+# is written rather than only the first time.
+BOOTSTRAP_RISK_PROFILE: dict[str, Any] = {
+    "fixed_risk_budget_usd": 250.0,
+    "max_trailing_drawdown_usd": 2500.0,
+    "max_forward_incubation_dd_pct": 0.4,
+    "clamping": {"min_contracts": 1, "max_contracts": 5},
+}
+BOOTSTRAP_ACCOUNT_SIZE = 50000
+
+# The asset metadata a bootstrapped basket refers to. READ from
+# `backtest/specs.py` rather than restated: `portfolio.config_loader`
+# reconciles this block against that module on every load and REFUSES the
+# config when they disagree, because a wrong multiplier silently scales every
+# P&L figure for that symbol. A hardcoded copy here would be a second source
+# of truth that the loader exists to catch - so it is generated from the first.
+BOOTSTRAP_SECTORS = {"MNQ": "Equity_Index", "MES": "Equity_Index",
+                     "MCL": "Energy", "MGC": "Metals"}
+
+
+def _bootstrap_asset_metadata() -> dict[str, dict[str, Any]]:
+    """`asset_metadata` for the template's baskets, from `backtest/specs.py`."""
+    from backtest.specs import SPECS
+    out: dict[str, dict[str, Any]] = {}
+    for symbol, sector in BOOTSTRAP_SECTORS.items():
+        spec = SPECS.get(symbol)
+        if spec is None:
+            raise ValueError(
+                f"backtest/specs.py declares no {symbol}, so a bootstrapped "
+                f"routing table cannot state its point value. Create "
+                f"{PORTFOLIO_CONFIG.name} by hand.")
+        out[symbol] = {"point_value": float(spec.multiplier),
+                       "tick_size": float(spec.tick_size),
+                       "sector": sector}
+    return out
+
+
+def _template_portfolio(pid: str) -> dict[str, Any]:
+    """One portfolio of the four-account partition, schema-valid and empty."""
+    tpl = INCUBATOR_TRACK_TEMPLATE[pid]
+    return {
+        "portfolio_id": pid,
+        "account_type": tpl["account_type"],
+        "target_account": pid,
+        "default_account_size": BOOTSTRAP_ACCOUNT_SIZE,
+        "risk_profile": json.loads(json.dumps(BOOTSTRAP_RISK_PROFILE)),
+        "basket": {"assets": list(tpl["assets"]),
+                   "correlation_group": tpl["correlation_group"],
+                   "regime_quadrants": list(tpl["regime_quadrants"]),
+                   "structures": ["MOMENTUM_TREND", "MEAN_REVERSION_SCALP"]},
+        "active_strategies": [],
+        ALLOCATIONS_KEY: {},
+    }
+
+
+def ensure_portfolio_groups(blob: dict | None) -> tuple[dict, list[str]]:
+    """
+    A routing table with both incubator groups present, and what was created.
+
+    Returns `(blob, notes)`. Every note is PRINTED at promotion, because each
+    one describes a number an operator has to confirm before the account it
+    describes is traded: a portfolio created here carries
+    `BOOTSTRAP_RISK_PROFILE`, which is the shipped envelope and not a decision
+    anybody made about this account.
+
+    Three repairs, all of them additive - nothing that is already there is
+    rewritten, because a table somebody edited by hand outranks a template:
+
+      * no file at all, or no `portfolios` object -> the whole four-account
+        partition, each with `active_strategies: []`.
+      * a missing group -> that group alone.
+      * `active_strategies` missing on a group that exists -> an empty list.
+        A group with no such key grants nothing and is the state a hand-edit
+        leaves behind; refusing it here would fail a promotion over a key that
+        means exactly what an empty list means.
+
+    `active_strategies` present and NOT a list is NOT repaired. An empty list
+    and a string are the same to `if name in active`, so replacing one would
+    throw away a permission that is currently granted - `register_portfolio`
+    raises on it, and that is the right outcome for a shape this module does
+    not recognise.
+    """
+    notes: list[str] = []
+    blob = dict(blob) if isinstance(blob, dict) else {}
+
+    portfolios = blob.get("portfolios")
+    if not isinstance(portfolios, dict) or not portfolios:
+        portfolios = {}
+        blob["portfolios"] = portfolios
+        blob.setdefault("version", "1.1.0")
+        blob.setdefault("base_currency", "USD")
+        blob.setdefault("asset_metadata", _bootstrap_asset_metadata())
+        for pid in INCUBATOR_TRACK_TEMPLATE:
+            portfolios[pid] = _template_portfolio(pid)
+        notes.append(
+            f"created the four-account partition "
+            f"({', '.join(INCUBATOR_TRACK_TEMPLATE)}), each with "
+            f"active_strategies: []. The risk envelope on every one of them is "
+            f"the SHIPPED DEFAULT ({BOOTSTRAP_RISK_PROFILE['fixed_risk_budget_usd']:.0f} "
+            f"USD risk budget, "
+            f"{BOOTSTRAP_RISK_PROFILE['max_trailing_drawdown_usd']:.0f} USD "
+            f"trailing limit, {BOOTSTRAP_ACCOUNT_SIZE} account) and not a "
+            f"decision anybody made about these accounts - confirm it before "
+            f"anything trades against them.")
+        return blob, notes
+
+    for pid in INCUBATOR_TRACK_TEMPLATE:
+        if pid not in portfolios:
+            portfolios[pid] = _template_portfolio(pid)
+            notes.append(
+                f"created {pid} with active_strategies: [] - it was missing "
+                f"from the routing table. Its risk envelope is the shipped "
+                f"default, not a decision about this account.")
+            continue
+        block = portfolios[pid]
+        if isinstance(block, dict) and "active_strategies" not in block:
+            block["active_strategies"] = []
+            notes.append(f"{pid} declared no active_strategies; initialised "
+                         f"it to [].")
+    return blob, notes
+
+
+def _load_portfolio_config(path: Path) -> tuple[dict, list[str]]:
+    """Read the routing table, creating what is missing. See above."""
+    if not Path(path).exists():
+        blob, notes = ensure_portfolio_groups(None)
+        return blob, [f"{Path(path).name} did not exist"] + notes
+    blob = json.loads(Path(path).read_text(encoding="utf-8"))
+    return ensure_portfolio_groups(blob)
+
+
+# The key a per-configuration record is deduplicated on.
+#
+# A promotion is ONE contract at ONE timeframe, and a campaign certifies
+# several: `t3_braid_scalp_20260823` certified NQ at 15m, 30m and 1h. Keyed by
+# strategy id alone, the third promotion silently REPLACED the first two - the
+# routing table ended up describing one allocation for a strategy that had
+# been promoted three times, and nothing on the console said which two had
+# been dropped. So the record keeps a `configurations` list, one entry per
+# (strat, symbol, timeframe), and re-promoting a pair UPDATES its entry in
+# place rather than appending a second one - two entries for one pair would
+# size the same signal twice on one account.
+#
+# The list lives INSIDE the id-keyed record rather than replacing the id key
+# with a composite one, and that is not a stylistic choice. Three consumers
+# read this block by strategy id:
+#
+#   portfolio.config_loader._reconcile_allocations   matches each key against
+#                                                    active_strategies
+#   portfolio.promotion_daemon.promote_strategy      moves the record by id
+#                                                    when a strategy graduates
+#   tests/test_promote_registration.py               the shape they pin
+#
+# A composite key breaks all three quietly: the reconciliation reports every
+# record as an orphan and every permission as unallocated, and a graduation
+# moves the permission while leaving the record on the incubator account -
+# which is precisely the half-moved pair the daemon documents itself as
+# existing to prevent.
+def _configuration_key(record: dict[str, Any]) -> tuple[str, str, str]:
+    """`(strat, symbol, timeframe)`, case-folded. The dedup identity."""
+    return (str(record.get("strat") or "").strip().lower(),
+            str(record.get("symbol") or "").strip().upper(),
+            str(record.get("timeframe") or "").strip().lower())
+
+
+def merge_configuration(existing: list[dict[str, Any]] | None,
+                        record: dict[str, Any]) -> tuple[list[dict[str, Any]], bool]:
+    """
+    `record` folded into the per-pair list. Returns `(list, replaced)`.
+
+    Order is preserved and an updated entry keeps its POSITION rather than
+    moving to the end, so re-running a promotion that changed nothing leaves
+    the file byte-identical apart from its timestamp. A promotion that is
+    re-run must not churn the routing table - a diff on it is how an operator
+    sees what actually moved.
+    """
+    out = [dict(r) for r in (existing or []) if isinstance(r, dict)]
+    key = _configuration_key(record)
+    for i, prior in enumerate(out):
+        if _configuration_key(prior) == key:
+            out[i] = dict(record)
+            return out, True
+    out.append(dict(record))
+    return out, False
+
+
 def _normalise_pid(name: Any) -> str:
     """
     A portfolio id reduced to what two spellings of it have in common.
@@ -758,7 +993,8 @@ def incubator_portfolios(portfolios: dict) -> list[str]:
 
 
 def resolve_portfolio(portfolios: dict,
-                      requested: str | None = None) -> tuple[str, str]:
+                      requested: str | None = None,
+                      strat: str | None = None) -> tuple[str, str]:
     """
     Which incubator portfolio this promotion is registered onto, and why.
 
@@ -768,13 +1004,25 @@ def resolve_portfolio(portfolios: dict,
     when it declines to infer a portfolio from a strategy's name.
 
     An explicit `--portfolio` wins outright and is matched case- and
-    punctuation-insensitively. Without one the target is the incubator
+    punctuation-insensitively. Failing that, a strategy ALREADY named on an
+    incubator portfolio stays on it. Otherwise the target is the incubator
     portfolio holding the FEWER active strategies, ties broken alphabetically -
     which is round-robin across successive promotions, because the portfolio
     that just took one is the one with more next time. It is a deterministic
     rule and that is the point: two operators promoting the same strategy get
     the same account, and a promotion that is re-run does not land somewhere
     else.
+
+    THE STAY-PUT STEP IS WHAT MAKES THE ROUND-ROBIN CORRECT, and it was added
+    on 2026-08-24 because a campaign that certifies several timeframes
+    promotes ONE strategy several times in a row. Balanced by count alone,
+    each of those promotions found its own strategy on the fuller account and
+    MOVED it to the emptier one - so three certified timeframes bounced the
+    strategy Even -> Odd -> Even, each move announced as a routing decision and
+    each one flipping which quadrants the account permits. The rule balances
+    NEW strategies across the two accounts; a strategy that has one is not new,
+    and re-promoting a second timeframe of it is not a reason to re-open the
+    question of where it lives.
 
     THE REGIME SCOPE IS NOT PART OF THIS CHOICE. A portfolio's
     `basket.regime_quadrants` is a permission held by the ACCOUNT, shared by
@@ -818,6 +1066,14 @@ def resolve_portfolio(portfolios: dict,
                 f"scripts/incubator_tracker.py --auto-promote, not on a "
                 f"certification.")
         return pid, f"--portfolio {requested}"
+
+    if strat:
+        wanted = _normalise_pid(strat)
+        for pid in candidates:
+            names = portfolios[pid].get("active_strategies") or []
+            if any(_normalise_pid(n) == wanted for n in names):
+                return pid, (f"already registered on {pid}; a re-promotion "
+                             f"does not move an account")
 
     counts = {pid: len([s for s in (portfolios[pid].get("active_strategies")
                                     or [])])
@@ -1021,12 +1277,16 @@ def register_portfolio(strat: str,
     lives, because that is where the schema-label -> `Q1`..`Q4` mapping lives.
     """
     path = Path(config_path)
-    blob = json.loads(path.read_text(encoding="utf-8"))
+    # Creates the incubator track when it is missing rather than failing a
+    # promotion that is already written and committed - see
+    # `ensure_portfolio_groups`, which announces every default it had to
+    # supply instead of writing a plausible account silently.
+    blob, bootstrap_notes = _load_portfolio_config(path)
     portfolios = blob.get("portfolios")
     if not isinstance(portfolios, dict) or not portfolios:
         raise ValueError(f"{path} carries no `portfolios` object")
 
-    pid, basis = resolve_portfolio(portfolios, portfolio)
+    pid, basis = resolve_portfolio(portfolios, portfolio, strat)
     target = portfolios[pid]
     active = target.get("active_strategies")
     if not isinstance(active, list):
@@ -1041,7 +1301,33 @@ def register_portfolio(strat: str,
                          f"{allocation}")
 
     wanted = _normalise_pid(strat)
-    notes: list[str] = []
+    notes: list[str] = list(bootstrap_notes)
+
+    # Every per-pair configuration already on the record, from wherever the
+    # record currently is. Collected BEFORE the move below pops it off the
+    # other portfolio: a strategy certified on NQ 15m on one account and then
+    # promoted at 1h onto the other would otherwise arrive with an empty list
+    # and the 15m allocation would vanish with nothing saying so.
+    prior_configurations: list[dict[str, Any]] = []
+    for block in portfolios.values():
+        if not isinstance(block, dict):
+            continue
+        allocs = block.get(ALLOCATIONS_KEY)
+        if not isinstance(allocs, dict):
+            continue
+        for key, prior in allocs.items():
+            if _normalise_pid(key) != wanted or not isinstance(prior, dict):
+                continue
+            carried = prior.get("configurations")
+            if isinstance(carried, list) and carried:
+                prior_configurations = [dict(c) for c in carried
+                                        if isinstance(c, dict)]
+            elif prior.get("symbol") and prior.get("timeframe"):
+                # A record written before `configurations` existed. Seeded
+                # from its top-level fields rather than dropped: that record
+                # IS a promotion somebody made, and losing it here is exactly
+                # the silent replacement this list was added to stop.
+                prior_configurations = [dict(prior)]
 
     # Remove the id and any stale allocation record from every OTHER portfolio
     # on this track. Leaving one behind is the double-sizing config the loader
@@ -1097,6 +1383,34 @@ def register_portfolio(strat: str,
         "routing_basis": basis,
         "resolved_from": dict(scope.get("resolved_from") or {}),
     }
+
+    # One entry per certified (strat, symbol, timeframe), deduplicated on that
+    # triple. The top-level fields above describe THIS promotion - the most
+    # recent one - and stay exactly where `portfolio.config_loader` and
+    # `portfolio.promotion_daemon` already read them; `configurations` is the
+    # complete list, so a campaign that certified three timeframes stops
+    # collapsing into whichever was promoted last. See `merge_configuration`.
+    configurations, replaced = merge_configuration(prior_configurations,
+                                                   record)
+    record["configurations"] = configurations
+    if replaced:
+        notes.append(
+            f"{record['symbol']} {record['timeframe']} was already registered; "
+            f"its allocation record was UPDATED in place rather than added a "
+            f"second time - two entries for one pair would size the same "
+            f"signal twice on one account.")
+    elif len(configurations) > 1:
+        others = ", ".join(f"{c.get('symbol')} {c.get('timeframe')}"
+                           for c in configurations
+                           if _configuration_key(c) != _configuration_key(record))
+        notes.append(
+            f"{strat_id} now holds {len(configurations)} certified "
+            f"configurations on {pid} ({others}, and this one). "
+            f"approved_incubator/{strat_id}/ holds ONE module and ONE "
+            f"meta.json, and they describe the promotion that ran LAST - so "
+            f"the live loop trades this pair's parameters for every "
+            f"configuration listed here until each is promoted into its own "
+            f"strategy id.")
 
     allocs = target.get(ALLOCATIONS_KEY)
     if not isinstance(allocs, dict):
@@ -1174,6 +1488,240 @@ def post_stage5_card(strat: str, *, dry_run: bool = False,
 
 
 # --------------------------------------------------------------------------
+# CLI auto-resolution
+# --------------------------------------------------------------------------
+# `--strat` names one strategy, and everything else on the command line is
+# derivable from it plus what Stage 3 already wrote. Before 2026-08-24
+# `--version` and `--source` were both `required=True`, which made the
+# ORCHESTRATOR the only practical caller: an operator promoting one certified
+# pair by hand had to retype a module path and a version letter that the gate
+# audit beside it already records, and a mistyped version letter promotes a
+# Version B wrapper under Version A's metrics with nothing raising.
+#
+# Every resolution here NAMES THE FILE IT CAME FROM and refuses to guess when
+# more than one answer is available. That is the same rule the Stage 5 Discord
+# card follows: a resolved value is only better than a typed one while it is
+# traceable back to the artifact that supplied it.
+
+# Where a strategy module is looked for, in order. `strategies/<strat>.py` is
+# the path the orchestrator's documentation spells; in this repository the
+# modules actually live one level down in `experimental/`, so both are tried
+# and the one that exists wins. `approved_incubator/<strat>/strat.py` is
+# deliberately NOT a candidate - promoting from the previous promotion's own
+# copy is circular, and it would silently re-promote a generated Version B
+# wrapper as though it were a source module.
+SOURCE_CANDIDATES = ("strategies/{strat}.py",
+                     "strategies/experimental/{strat}.py")
+
+# The version a promotion defaults to when neither the CLI nor the gate audit
+# names one. Version A is the rule-based baseline and is what Stage 3
+# certifies unless a run said otherwise; defaulting to B would promote a
+# generated ML wrapper on the strength of an audit of the baseline.
+DEFAULT_VERSION = "A"
+
+
+def resolve_source(strat: str, explicit: str | Path | None = None,
+                   repo_root: Path = REPO_ROOT) -> tuple[Path, str]:
+    """
+    The strategy module `--source` cites, and where it was found.
+
+    An explicit `--source` is honoured verbatim, including one that does not
+    exist - `promote` raises on it with the path in the message, which is what
+    an operator who typed a path wants to see. Without one the candidates in
+    `SOURCE_CANDIDATES` are tried in order and the FIRST that exists wins.
+
+    More than one candidate existing is not resolved silently: two modules
+    named for one strategy are two different strategies, and promoting
+    whichever the tuple happened to list first would record a SHA-256 for a
+    file nobody chose. It raises and names both.
+    """
+    if explicit:
+        path = Path(explicit)
+        if not path.is_absolute():
+            path = (repo_root / path).resolve()
+        return path, "--source"
+
+    found = [repo_root / c.format(strat=strat) for c in SOURCE_CANDIDATES]
+    found = [p for p in found if p.exists()]
+    if not found:
+        tried = ", ".join(c.format(strat=strat) for c in SOURCE_CANDIDATES)
+        raise FileNotFoundError(
+            f"no strategy module for {strat!r}. Tried {tried} relative to "
+            f"{repo_root}. Name it with --source.")
+    if len(found) > 1:
+        names = ", ".join(str(p.relative_to(repo_root)) for p in found)
+        raise ValueError(
+            f"{strat!r} names more than one module ({names}). Two modules "
+            f"under one strategy name are two different strategies and the "
+            f"promoted SHA-256 would describe whichever was listed first. "
+            f"Name one with --source.")
+    return found[0], f"resolved from --strat ({found[0].relative_to(repo_root)})"
+
+
+def _pipeline_dir(strat: str, out_dir: str | Path | None = None) -> Path:
+    """
+    Stage 3's handoff directory, behind a seam.
+
+    Imported lazily and from `backtest.pipeline`, which pulls in `json`, `os`
+    and `mdlib.env` and nothing else - promoting must not depend on the engine
+    or on vectorbtpro being importable, since a promotion reads artifacts and
+    runs no simulation.
+    """
+    from backtest.pipeline import pipeline_dir
+    return pipeline_dir(strat, out_dir)
+
+
+def resolve_audit_file(strat: str,
+                       symbol: str | None = None,
+                       timeframe: str | None = None,
+                       explicit: str | Path | None = None,
+                       out_dir: str | Path | None = None
+                       ) -> tuple[Path | None, str]:
+    """
+    The Stage 3 certification this promotion rests on, and where it came from.
+
+    Returns `(path, basis)`; `path` is None when nothing could be resolved,
+    which promote() reports as NOT CERTIFIED rather than treating as a pass.
+
+    Four routes, tried in order, each narrower than the one after it:
+
+      1. `--audit-file`, verbatim. A file named by hand and missing RAISES -
+         the operator asked for a specific certification and the answer that
+         it is not there is the useful one.
+      2. `--symbol` + `--timeframe` -> `gate_audit_<SYMBOL>_<TF>.json` in
+         `<BT_ARTIFACTS>/pipeline/<strat>/`. This is the pair Stage 3 writes
+         and the one the orchestrator passes.
+      3. `stage3_audit_summary.json`, when it records EXACTLY ONE certified
+         configuration. More than one is refused and all of them are named:
+         picking one would promote a pair nobody chose while the others sat on
+         disk, and every field on the resulting card would still read
+         correctly.
+      4. Exactly one `gate_audit_<SYMBOL>_<TF>.json` on disk. Only the
+         SUFFIXED files are considered - the unsuffixed `gate_audit_<SYM>.json`
+         duplicates whichever timeframe ran last, so counting it would make two
+         files look like two certifications and refuse a directory holding one.
+    """
+    if explicit:
+        path = Path(explicit)
+        if not path.exists():
+            raise FileNotFoundError(
+                f"--audit-file {path} does not exist. A certification named "
+                f"by hand and missing is refused rather than resolved to "
+                f"another one.")
+        return path, "--audit-file"
+
+    try:
+        directory = _pipeline_dir(strat, out_dir)
+    except Exception as exc:                                      # noqa: BLE001
+        return None, (f"the pipeline directory could not be resolved "
+                      f"({type(exc).__name__}: {exc})")
+
+    if symbol and timeframe:
+        path = directory / f"gate_audit_{symbol}_{timeframe}.json"
+        if path.exists():
+            return path, (f"resolved from --symbol/--timeframe "
+                          f"({path.name} in {directory})")
+        return None, (f"no {path.name} in {directory} - Stage 3 has not "
+                      f"certified {symbol} at {timeframe}")
+
+    summary = directory / "stage3_audit_summary.json"
+    if summary.exists():
+        try:
+            rows = (json.loads(summary.read_text(encoding="utf-8"))
+                    .get("results") or [])
+        except (OSError, ValueError):
+            rows = []
+        certified = [r for r in rows if r.get("certified") is True]
+        if len(certified) == 1:
+            row = certified[0]
+            named = row.get("audit_file")
+            path = (Path(named) if named
+                    else directory / f"gate_audit_{row.get('symbol')}_"
+                                     f"{row.get('timeframe')}.json")
+            if path.exists():
+                return path, (f"resolved from {summary.name} - the one "
+                              f"certified configuration ({row.get('symbol')} "
+                              f"{row.get('timeframe')})")
+        elif len(certified) > 1:
+            pairs = ", ".join(f"{r.get('symbol')} {r.get('timeframe')}"
+                              for r in certified)
+            raise ValueError(
+                f"{summary.name} records {len(certified)} certified "
+                f"configurations ({pairs}). Promoting one of them would leave "
+                f"the rest on disk with nothing saying they were not chosen. "
+                f"Name the pair with --symbol/--timeframe, the file with "
+                f"--audit-file, or promote all of them with "
+                f"`python3 backtest/run_pipeline.py --strat {strat} "
+                f"--promote-only`.")
+
+    audits = sorted(p for p in directory.glob("gate_audit_*_*.json")
+                    if p.is_file())
+    if len(audits) == 1:
+        return audits[0], (f"resolved from {directory} - the one gate audit "
+                           f"on disk ({audits[0].name})")
+    if len(audits) > 1:
+        raise ValueError(
+            f"{directory} holds {len(audits)} gate audits "
+            f"({', '.join(p.name for p in audits)}) and no summary naming one "
+            f"certified configuration. Name the pair with "
+            f"--symbol/--timeframe or the file with --audit-file.")
+    return None, (f"no gate audit for {strat} in {directory}")
+
+
+def resolve_version(audit_path: Path | None = None,
+                    explicit: str | None = None) -> tuple[str, str]:
+    """
+    Which version is being promoted, and on whose authority.
+
+    An explicit `--version` wins. Otherwise the gate audit says which twin it
+    certified, and promoting the other one would attach a generated Version B
+    wrapper to an audit of the baseline. With neither, `DEFAULT_VERSION`.
+
+    A gate audit does not carry a scalar `version` - it carries `passed` and
+    `status` as objects KEYED BY VERSION (`{"A": true}`), because Stage 3
+    audits both twins in one pass. So the version is the one whose `passed` is
+    True, and a scalar `version` is still read first for a handoff that
+    carries one.
+
+    Two things it will not do. It never picks between two PASSING versions:
+    which twin to trade is the Dual-Version Mandate's decision, made on
+    whether B beat A out of sample, and it belongs to the operator - so both
+    passing falls through to `DEFAULT_VERSION` and says so. And anything that
+    is not A or B is IGNORED rather than passed through: `--version` is a
+    two-value choice everywhere else in this module, and a third token would
+    reach `promote()` and select the Version B branch by not being "A".
+    """
+    if explicit:
+        return str(explicit).upper(), "--version"
+    if audit_path is not None and Path(audit_path).exists():
+        name = Path(audit_path).name
+        try:
+            blob = json.loads(Path(audit_path).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            blob = {}
+        recorded = str(blob.get("version") or "").strip().upper()
+        if recorded in ("A", "B"):
+            return recorded, f"{name} (the certification)"
+        passed = blob.get("passed")
+        if isinstance(passed, dict):
+            won = [str(k).upper() for k, v in passed.items()
+                   if v is True and str(k).upper() in ("A", "B")]
+            if len(won) == 1:
+                return won[0], f"{name} (the version whose Gate R passed)"
+            if len(won) > 1:
+                return DEFAULT_VERSION, (
+                    f"default - {name} certified {', '.join(sorted(won))} and "
+                    f"choosing between them is the Dual-Version Mandate's "
+                    f"decision, not this script's. Name one with --version.")
+        audited = [str(k).upper() for k in (blob.get("versions") or {})
+                   if str(k).upper() in ("A", "B")]
+        if len(audited) == 1:
+            return audited[0], f"{name} (the one version it audited)"
+    return DEFAULT_VERSION, (f"default - neither --version nor a gate audit "
+                             f"named one")
+
+
+# --------------------------------------------------------------------------
 # Git
 # --------------------------------------------------------------------------
 def git_commit(dest: Path, strat: str, version: str,
@@ -1220,10 +1768,15 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         description="Promote a strategy version into approved_incubator/.")
     p.add_argument("--strat", required=True, help="Strategy name (directory name)")
-    p.add_argument("--version", required=True, choices=["A", "B", "a", "b"],
-                   help="A = rule-based baseline, B = baseline + ML filter")
-    p.add_argument("--source", required=True,
-                   help="Path to the experimental strategy module")
+    p.add_argument("--version", default=None, choices=["A", "B", "a", "b"],
+                   help="A = rule-based baseline, B = baseline + ML filter. "
+                        "Omitted, it is read from the gate audit's own "
+                        f"`version`, and failing that defaults to "
+                        f"{DEFAULT_VERSION}.")
+    p.add_argument("--source", default=None,
+                   help="Path to the experimental strategy module. Omitted, "
+                        "it resolves to the first of "
+                        + " / ".join(SOURCE_CANDIDATES) + " that exists.")
     p.add_argument("--metrics", default=None,
                    help="dual_metrics.json from the run being promoted on. "
                         "Without it meta.json records NOT RECORDED rather than "
@@ -1288,10 +1841,36 @@ def main(argv: list[str] | None = None) -> int:
 
     params = json.loads(args.params) if args.params else None
 
+    # ---- resolve what the command line did not say -----------------------
+    # `--strat` plus what Stage 3 already wrote is enough to promote. Each
+    # value NAMES the file it came from and is printed below, because a
+    # resolved argument is only better than a typed one while it stays
+    # traceable to the artifact that supplied it. A resolution that cannot be
+    # made unambiguously RAISES here rather than picking one - see
+    # `resolve_audit_file`, which refuses a directory holding several
+    # certifications instead of promoting whichever sorted first.
+    try:
+        source, source_basis = resolve_source(args.strat, args.source)
+        audit_path, audit_basis = resolve_audit_file(
+            args.strat, args.symbol, args.timeframe, args.audit_file)
+        version, version_basis = resolve_version(audit_path, args.version)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"REFUSED: {exc}", file=sys.stderr)
+        return 2
+
+    print("Resolving the promotion:")
+    print(f"  source         {source}")
+    print(f"                 ({source_basis})")
+    print(f"  version        {version}")
+    print(f"                 ({version_basis})")
+    print(f"  audit file     {audit_path or 'NOT RESOLVED'}")
+    print(f"                 ({audit_basis})")
+    print()
+
     out = promote(
-        strat=args.strat, version=args.version, source=Path(args.source),
+        strat=args.strat, version=version, source=source,
         metrics_path=Path(args.metrics) if args.metrics else None,
-        audit_path=Path(args.audit_file) if args.audit_file else None,
+        audit_path=audit_path,
         symbol=args.symbol, timeframe=args.timeframe, params=params,
         threshold=args.threshold, notes=args.notes,
         variants_tested=args.variants_tested, force=args.force,
@@ -1362,9 +1941,7 @@ def main(argv: list[str] | None = None) -> int:
               "not\n                  permission to trade it.")
     else:
         cfg = Path(args.portfolios) if args.portfolios else PORTFOLIO_CONFIG
-        scope = certified_scope(meta.get("certification"), meta,
-                                Path(args.audit_file) if args.audit_file
-                                else None)
+        scope = certified_scope(meta.get("certification"), meta, audit_path)
         # An explicit --symbol/--timeframe outranks the certification, the
         # same way --params does: an operator correcting the record on
         # purpose beats a file. It is recorded as the source so the override
@@ -1388,7 +1965,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"    The promotion stands. Re-run registration with:\n"
                   f"      python3 backtest/promote.py --strat {args.strat} "
                   f"--version {meta['version']} \\\n"
-                  f"          --source {args.source} --portfolio "
+                  f"          --source {source} --portfolio "
                   f"<incubator-odd|incubator-even>")
         else:
             rec = registration["record"]

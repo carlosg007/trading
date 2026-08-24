@@ -826,6 +826,21 @@ def auto_promote(strat: str, *, out_dir: str | None = None,
                   "promoted": False, "commit": None, "error": ""}
         audit = r.get("audit_file")
         if not audit:
+            # A handoff written before Stage 3 recorded the path on the row.
+            # The file is still where Stage 3 always writes it, so the
+            # convention is tried before the row is given up on - and only the
+            # SUFFIXED name, never the unsuffixed `gate_audit_<SYM>.json`,
+            # which holds whichever timeframe ran last and would certify this
+            # pair against another one's verdict.
+            guess = (pipeline_dir(strat, out_dir)
+                     / f"gate_audit_{record['symbol']}_{record['timeframe']}.json")
+            if guess.exists():
+                audit = str(guess)
+                record["audit_file"] = audit
+                print(f"  {record['symbol']} {record['timeframe']}: the row "
+                      f"records no audit file; using {guess.name}, which is "
+                      f"where Stage 3 writes it.")
+        if not audit:
             record["error"] = ("the row records no audit file, so there is no "
                                "certification to cite")
             print(f"  SKIPPED  {record['symbol']} {record['timeframe']}: "
