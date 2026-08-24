@@ -219,7 +219,7 @@ bt-status  # = .venv/bin/python3 ~/src/trading/backtest/status.py
 streamlit run dashboard/app.py
 
 # Tests. No pytest config - each is a script that exits non-zero on failure.
-# Thirty-four suites. Everything except test_streaming_lake, test_engine_batching
+# Thirty-five suites. Everything except test_streaming_lake, test_engine_batching
 # and test_engine_vbt runs without the lake or a network (test_batch_runner's
 # --symbols checks skip, loudly, without it). test_report_gates.py shells out
 # to `node` for the trade inspector's own checks and skips them, loudly, when
@@ -252,6 +252,7 @@ python tests/test_stage1_charter.py     # the Stage 1 charter + the Discord card
 python tests/test_stage2_charter.py     # the Stage 2 charter: pairs, window, plateau
 python tests/test_stage3_charter.py     # the Stage 3 charter: Gate R, retention, the seal
 python tests/test_stage4_card.py        # the Stage 4 card: friction share, regime alpha
+python tests/test_stage5_card.py        # the Stage 5 card: what it resolves, and what it refuses to
 python tests/test_temporal_chunking.py  # chunk continuity, warm-up, the trades a boundary cuts
 python tests/test_portfolio_config.py   # the four-account routing table and its guards
 python tests/test_portfolio_manager.py  # ATR sizing, signal netting, account routing
@@ -383,6 +384,18 @@ python3 backtest/discord_reporter.py --stage 4 --strat X \
     --artifacts /mnt/backtest/artifacts/pipeline/X/verify_20260824_101112
 python3 backtest/discord_reporter.py --stage 1 --strat X \
     --survivors /mnt/backtest/artifacts/pipeline/X/surviving_assets.json
+# Stage 5's promotion scorecard. With --strat alone every value is RESOLVED
+# from what the promotion already wrote: the contract and timeframe, Gate R's
+# out-of-sample profit factor, the holdout drawdown, the certified quadrant
+# and the tear sheet path. Each one names the file it came from on the card.
+python3 backtest/discord_reporter.py --stage 5 --strat X
+# --audit-file and --metrics name those files explicitly (spelled the way
+# promote.py spells them); --symbol/--tf/--pf/--dd/--regime/--report override
+# any of the resolved values by hand.
+python3 backtest/discord_reporter.py --stage 5 --strat X \
+    --audit-file /mnt/backtest/artifacts/pipeline/X/gate_audit_NQ_15m.json
+python3 backtest/discord_reporter.py --stage 5 --strat X --symbol NQ --tf 15m \
+    --pf 1.42 --dd 8.30 --regime "Q1 · High Volatility / Trending"
 # Stage 2 still HONOURS an exclude_days a handoff carries; nothing writes one.
 python3 backtest/scan.py --strat X --tf 15m --ignore-stage1-exclude-days
 python3 backtest/scan.py --strat X --tf 15m --exclude-days 3,4   # CLI wins
@@ -1763,7 +1776,8 @@ whether the run is slow or dead.
 **`backtest/discord_reporter.py`** — the webhook notifier, and the only place
 this repo posts anything to Discord. Five cards over one transport:
 `--mode promotion` (the default, `--stage 5`) is the promotion scorecard, whose
-values are passed in on the command line; `--stage 1` / `--mode baseline` is
+values are passed in on the command line or resolved from what the promotion
+wrote; `--stage 1` / `--mode baseline` is
 Stage 1's regime-firewall leaderboard, read straight out of
 `surviving_assets.json`; `--stage 2` / `--mode scan` is Stage 2's parameter
 optimization summary, read straight out of `stage2_summary.json`; `--stage 3` /
@@ -1772,6 +1786,48 @@ optimization summary, read straight out of `stage2_summary.json`; `--stage 3` /
 full-lifecycle summary, read straight out of the `dual_metrics_<SYMBOL>.json`
 snapshots in one run's artifacts directory.
 
+- **The Stage 5 card resolves itself from the promotion, and `--strat` alone
+  is a complete command (2026-08-24).** It reads
+  `strategies/approved_incubator/<strat>/meta.json`, the `dual_metrics.json`
+  beside it, and the Stage 3 `gate_audit_<SYMBOL>_<TF>.json` the first cites,
+  and fills the contract, the timeframe, Gate R's out-of-sample profit factor,
+  the max drawdown, the certified quadrant and the tear sheet path.
+  `--audit-file` and `--metrics` name those two files directly and are spelled
+  the way `backtest/promote.py` spells them, so a Stage 5 command already in an
+  operator's shell history runs here instead of dying on an unrecognised
+  argument — which is what sends somebody back to retyping four numbers by
+  hand. `--symbol`, `--tf`, `--pf`, `--dd`, `--regime` and `--report` still
+  override anything, and `--incubator` moves the directory it all comes from.
+  - **The out-of-sample profit factor is Gate R's or nothing.**
+    `dual_metrics.json` and meta.json's snapshot both carry a profit factor and
+    both measured it over a window that CONTAINS the holdout. The field is
+    headed `Out-of-Sample PF`, so taking it from either would put an in-sample
+    number under an out-of-sample heading with every other field on the card
+    still correct. With no readable certification the field keeps its
+    `NOT REPORTED` token and the card says the number was DECLINED rather than
+    absent — the two are fixed by different work. The drawdown beside it is the
+    audit's HOLDOUT drawdown, from the same window as the factor above it, and
+    is labelled `NOT the holdout` when it falls back to a snapshot.
+  - **The contract and the timeframe resolve as a PAIR, from one file.**
+    meta.json's top-level `symbols`/`timeframe` are the MODULE's declarations —
+    every contract it targets, at the timeframe it prefers — while a promotion
+    is one contract at one timeframe: `t3_braid_scalp_20260823` declares
+    `NQ,ES,CL,GC` at 5m and was certified on NQ at 1h. Mixing the halves
+    announces NQ at 5m for a run nobody made, with both halves individually
+    true. The certification's own `audit_symbol` plus the timeframe in the
+    audit's FILENAME is what supplies the pair when the audit itself is gone;
+    the module's declarations are used only where it names exactly ONE symbol.
+  - **Every resolved value names its file, and nothing is invented.** An
+    `Auto-resolved` field lists what came from where and over which window; a
+    card whose values were all typed does not carry it and is byte-identical to
+    what it was before this existed. A value no file carries stays
+    `NOT REPORTED` and the card names the files it looked in. A `--symbol` that
+    disagrees with the certification is honoured and FLAGGED. A file named
+    explicitly and missing RAISES; one this went looking for on its own is a
+    note. Another strategy's meta.json, snapshot or gate audit is refused, and
+    so is a gate audit written by another stage. `--audit-file`, `--metrics`
+    and `--incubator` on any of the other four cards are REFUSED rather than
+    parsed and ignored.
 - **The Stage 4 card is the only one that carries no verdict, because Stage 4
   produces none.** That window CONTAINS the Stage 3 holdout, so every number on
   it is in-sample by construction: the card says so above the table, states it

@@ -6,8 +6,46 @@ Location:  ~/src/trading/backtest/discord_reporter.py
 Five cards, one transport
 -------------------------
 - **`--mode promotion`** (the default, and `--stage 5`): the handful of numbers
-  a promotion decision rests on, passed in on the command line by whatever
-  produced them (Stage 3's `gate_audit_<SYMBOL>.json`, Stage 5's `meta.json`).
+  a promotion decision rests on. They may be passed in on the command line by
+  whatever produced them, and with `--strat` alone they are RESOLVED from what
+  the promotion already wrote - `approved_incubator/<strat>/meta.json`, the
+  `dual_metrics.json` beside it, and the Stage 3 `gate_audit_<SYMBOL>_<TF>.json`
+  the first cites. `--audit-file` and `--metrics` name those two files
+  explicitly and are spelled the way `promote.py` spells them, so the command
+  an operator already has from Stage 5 runs here rather than dying on an
+  unrecognised argument and sending them back to retype four numbers by hand.
+
+  Three rules make the resolution safe to trust, and each one is a way the
+  card could otherwise mislead:
+
+  **The out-of-sample profit factor is Gate R's or nothing.**
+  `dual_metrics.json` and meta.json's snapshot both carry one, and both
+  measured it over a window that CONTAINS the holdout - the field is headed
+  `Out-of-Sample PF`, so filling it from either would print an in-sample
+  number under an out-of-sample heading with every other field on the card
+  still correct. Where no certification is readable the field keeps its
+  `NOT REPORTED` token and the card says the number was DECLINED rather than
+  absent. The drawdown beside it comes from the same holdout when the audit
+  supplies it, and is labelled `NOT the holdout` when it falls back to the
+  snapshot.
+
+  **The contract and the timeframe resolve as a PAIR, from one file.**
+  meta.json's top-level `symbols`/`timeframe` are the MODULE's declarations -
+  every contract it targets, at the timeframe it prefers - while a promotion
+  is one contract at one timeframe: `t3_braid_scalp_20260823` declares
+  `NQ,ES,CL,GC` at 5m and was certified on NQ at 1h. Mixing the halves is how
+  a card announces NQ at 5m for a run nobody made, with both halves
+  individually true. The declarations are used only where the module names
+  exactly ONE symbol and there is nothing to pick between.
+
+  **Nothing is invented and every resolved value names its file.** An
+  `Auto-resolved` field lists what came from where and over which window; a
+  card whose values were all typed does not carry it and is byte-identical to
+  what it was before any of this existed. A `--symbol` that disagrees with the
+  certification is honoured and FLAGGED. A file named explicitly and missing
+  RAISES; one this went looking for on its own is a note. Another strategy's
+  meta.json, snapshot or audit is refused outright, the way
+  `pipeline.read_stage` refuses another strategy's handoff.
 - **`--mode baseline`** (equivalently `--stage 1`): Stage 1's REGIME FIREWALL
   leaderboard, read straight out of `surviving_assets.json` - every
   (symbol, timeframe) configuration screened, the quadrant it cleared, that
@@ -153,7 +191,10 @@ What it will not do
   not floats. A numeric value is formatted (`1.42`, `-8.30 %`) and anything
   else - `NOT EVALUATED`, `n/a` - is printed verbatim. Coercing those to 0.0
   would put a zero drawdown on a card for a run whose drawdown nobody measured,
-  which is the one failure mode a status notifier can cause on its own.
+  which is the one failure mode a status notifier can cause on its own. The
+  Stage 5 auto-resolution obeys the same rule: a value no file carries stays
+  `NOT REPORTED`, and the card names the files it looked in - which is a
+  different statement from a zero, and points at different work.
 - **It does not raise on a transport failure.** A dead webhook must not take
   down whatever called it; the outcome is printed and returned in the exit
   code. Same reasoning as `live/dispatcher.send_execution_signal`.
@@ -236,6 +277,11 @@ if str(REPO) not in sys.path:
 from backtest.pipeline import (STAGE2_SUMMARY_FILE,               # noqa: E402
                                STAGE3_SUMMARY_FILE, SURVIVORS_FILE,
                                pipeline_dir, read_stage)
+# The one place `strategies/approved_incubator/` is spelled out is
+# `backtest/promote.py`, which creates it. A second copy of that path here
+# would be free to point somewhere else after a move, and the symptom is a
+# promotion card that silently resolves nothing.
+from backtest.promote import INCUBATOR                            # noqa: E402
 
 # Emerald green. Discord wants a decimal int; 0x2ECC71 == 3066993.
 EMERALD_GREEN = 0x2ECC71
@@ -532,6 +578,479 @@ def _fmt_report(raw: str) -> str:
     return rendered
 
 
+# --------------------------------------------------------------------------
+# Stage 5 · resolving the card from what the promotion already wrote
+# --------------------------------------------------------------------------
+
+# `backtest/promote.py` writes both of these into
+# `strategies/approved_incubator/<strat>/`, and between them - plus the Stage 3
+# certification `meta.json` cites - they already hold every value this card
+# asks for on the command line. Reading them is not a convenience: the
+# alternative is an operator copying a profit factor out of one file and a
+# drawdown out of another into a card nobody cross-checks afterwards, and a
+# transcription slip there is invisible in exactly the way a promotion
+# announcement must not be.
+PROMOTED_META_FILE = "meta.json"
+PROMOTED_METRICS_FILE = "dual_metrics.json"
+
+# `gate_audit_<SYMBOL>_<TF>.json`. The TIMEFRAME is in the filename and
+# nowhere in meta.json's certification block, while meta.json's own
+# `timeframe` is the MODULE's declared one - `t3_braid_scalp_20260823`
+# declares 5m and was certified at 1h. Reading the declaration as the
+# certified timeframe would head the card with a run nobody made.
+GATE_AUDIT_NAME = re.compile(
+    r"^gate_audit_(?P<symbol>[^_]+)_(?P<tf>[^_]+)\.json$", re.IGNORECASE)
+
+# What each auto-resolved field is called on the card's provenance list. The
+# labels are the card's own field names, so a reader can see at a glance which
+# line above them a file supplied.
+PROMOTION_FIELD_LABELS = {
+    "symbol": "Asset",
+    "tf": "Timeframe",
+    "pf": "Out-of-Sample PF",
+    "dd": "Max Drawdown",
+    "regime": "Certified Regime Firewall",
+    "report": "Artifacts / Report",
+}
+
+# The one number on this card that may ONLY come from a Stage 3 gate audit.
+# `dual_metrics.json` and the `metrics` block in `meta.json` both carry a
+# profit factor, and both are measured over the whole run - which for a
+# lifecycle snapshot CONTAINS the holdout. Filling "Out-of-Sample PF" from
+# either would print an in-sample number under an out-of-sample heading with
+# every other field on the card still correct. Gate R's is the only profit
+# factor here that was measured out of sample, inside the one quadrant Stage 1
+# designated, and it is the only one this module will resolve.
+PF_IS_GATE_R_ONLY = (
+    "profit factor is Gate R's or nothing: the one in dual_metrics.json is "
+    "measured over the whole run, which contains the holdout")
+
+
+def promoted_dir(strat: str, incubator: str | Path | None = None) -> Path:
+    """`strategies/approved_incubator/<strat>/` - the directory Stage 5 wrote."""
+    root = Path(incubator) if incubator else INCUBATOR
+    return root / strat
+
+
+def _read_promotion_json(path: Path, label: str) -> dict[str, Any]:
+    """Read one of the promotion's files, or say which one could not be read."""
+    path = Path(path)
+    try:
+        blob = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise FileNotFoundError(f"{label} not readable: {path} ({exc})") from exc
+    except ValueError as exc:
+        raise ValueError(f"{label} is not valid JSON: {path} ({exc})") from exc
+    if not isinstance(blob, dict):
+        raise ValueError(f"{label} is not a JSON object: {path}")
+    return blob
+
+
+def _refuse_other_strategy(recorded: str, strat: str | None, path: Path,
+                           what: str) -> None:
+    """
+    Refuse another strategy's promotion artifact.
+
+    The same refusal `pipeline.read_stage` makes about a handoff and
+    `_check_strategy` makes about a lifecycle snapshot, for the same reason and
+    with more at stake: this card announces a PROMOTION, and one strategy's
+    certified profit factor posted under another's name is a claim nobody
+    downstream can contradict. `strat` is the name the operator typed and a
+    promoted module records itself as `strat` (it is
+    `approved_incubator/<strat>/strat.py`), so that one spelling is accepted.
+    """
+    recorded = str(recorded or "").strip()
+    wanted = str(strat or "").strip()
+    if not recorded or not wanted:
+        return
+    if recorded.lower() in (wanted.lower(), "strat"):
+        return
+    raise ValueError(
+        f"{path.name} is {what} strategy {recorded!r}, not {wanted!r}. "
+        f"Posting it under --strat {wanted} would announce one strategy's "
+        f"promotion under another's name.")
+
+
+def load_promoted_meta(path: str | Path,
+                       strat: str | None = None) -> dict[str, Any]:
+    """Read `approved_incubator/<strat>/meta.json`, and refuse another's."""
+    path = Path(path)
+    blob = _read_promotion_json(path, PROMOTED_META_FILE)
+    _refuse_other_strategy(blob.get("name"), strat, path, "the promotion of")
+    return blob
+
+
+def load_promotion_metrics(path: str | Path,
+                           strat: str | None = None) -> dict[str, Any]:
+    """Read the `dual_metrics.json` a promotion locked, and refuse another's."""
+    path = Path(path)
+    blob = _read_promotion_json(path, PROMOTED_METRICS_FILE)
+    _check_strategy(blob, path, strat)
+    return blob
+
+
+def load_promotion_audit(path: str | Path,
+                         strat: str | None = None) -> dict[str, Any]:
+    """
+    Read one Stage 3 `gate_audit_<SYMBOL>_<TF>.json` - the certification.
+
+    A file written by another stage is refused the way `promote.py` refuses it:
+    only `backtest/audit_gates.py` produces a verdict a promotion may rest on,
+    and the audit inside a `dual_metrics.json` can evaluate Gate 1 alone.
+    """
+    path = Path(path)
+    blob = _read_promotion_json(path, "gate audit")
+    stage = blob.get("stage")
+    if stage is not None and str(stage) != "3":
+        raise ValueError(
+            f"{path.name} was written by stage {stage}, not stage 3. Only the "
+            f"certification stage (backtest/audit_gates.py) produces the gate "
+            f"verdict a promotion rests on.")
+    _refuse_other_strategy(blob.get("strategy"), strat, path, "the audit of")
+    return blob
+
+
+def _as_float(value: Any) -> float | None:
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if out != out else out                       # NaN is not a value
+
+
+def audit_promotion_values(blob: dict[str, Any],
+                           version: str = "A") -> dict[str, Any]:
+    """
+    The certified claim, transcribed out of Stage 3's own audit.
+
+    Contract, timeframe, Gate R's HOLDOUT profit factor and the quadrant it was
+    measured in, and the holdout max drawdown. Nothing is recomputed and no
+    gate is re-scored - the same rule the Stage 3 card is held to.
+
+    The version is not guessed at. An audit carrying only Version A while the
+    promotion recorded B is reported as a gap rather than filled from the block
+    that happens to be there: two versions' numbers under one heading is the
+    substitution this card could not survive.
+    """
+    out: dict[str, Any] = {"notes": []}
+    symbol = str(blob.get("symbol") or "").strip()
+    tf = str(blob.get("timeframe") or "").strip()
+    if symbol and tf:
+        out["pair"] = (symbol, tf)
+
+    want = str(version or "A").upper()
+    block = (blob.get("versions") or {}).get(want)
+    if not isinstance(block, dict):
+        have = ", ".join(sorted(blob.get("versions") or {})) or "no version"
+        out["notes"].append(
+            f"the gate audit carries {have}, not Version {want} - its Gate R "
+            f"numbers were left off rather than read off the wrong version")
+        return out
+
+    gate_r = ((block.get("gate_audit") or {}).get("gates") or {}).get("gate_regime") or {}
+    regime = str(gate_r.get("target_regime") or blob.get("target_regime") or "").strip()
+    quadrant = str(gate_r.get("quadrant") or blob.get("target_quadrant") or "").strip()
+    where = " · ".join(t for t in (quadrant, regime) if t)
+
+    measured = gate_r.get("measured") or {}
+    pf = _as_float(measured.get("profit_factor"))
+    trades = measured.get("trade_count")
+    if pf is not None:
+        if pf >= REGIME_PF_SENTINEL:
+            # The profiler's sentinel: the quadrant never had a losing trade,
+            # so there is no measured factor. 999.00 on a promotion card is
+            # the strongest number anybody will ever read here, attached to a
+            # quadrant that may hold one trade.
+            out["pf"] = "NOT MEASURED"
+            out["pf_basis"] = (f"Gate R · holdout · {where} · no losing trade "
+                               f"in the quadrant" if where else
+                               "Gate R · holdout · no losing trade in the quadrant")
+        else:
+            count = f" · {int(trades):,} trades" if _as_float(trades) is not None else ""
+            out["pf"] = f"{pf:.2f}"
+            out["pf_basis"] = f"Gate R · holdout{f' · {where}' if where else ''}{count}"
+
+    if where:
+        out["regime"] = where
+        out["regime_basis"] = "Stage 3's certification target"
+
+    # The drawdown from the SAME window as the profit factor above it. Pairing
+    # Gate R's holdout factor with a full-run drawdown would put two windows on
+    # one card with nothing saying so.
+    dd = _as_float((block.get("metrics_holdout") or {}).get("max_drawdown_pct"))
+    if dd is not None:
+        out["dd"] = f"{abs(dd):.2f}"
+        out["dd_basis"] = "holdout · blended across quadrants"
+    return out
+
+
+def metrics_promotion_values(blob: dict[str, Any],
+                             version: str = "A") -> dict[str, Any]:
+    """
+    What the locked `dual_metrics.json` supplies: the contract, the timeframe,
+    the run's max drawdown and the tear sheet.
+
+    It supplies NO profit factor. Its window is the whole run, which for a
+    lifecycle snapshot contains the Stage 3 holdout; the card's field is headed
+    `Out-of-Sample PF` and that number is Gate R's alone (`PF_IS_GATE_R_ONLY`).
+    """
+    out: dict[str, Any] = {"notes": []}
+    meta = blob.get("meta") or {}
+    symbol = str(meta.get("symbol") or "").strip()
+    tf = str(meta.get("timeframe") or "").strip()
+    if symbol and tf:
+        out["pair"] = (symbol, tf)
+
+    key = "version_b" if str(version or "A").upper() == "B" else "version_a"
+    block = blob.get(key)
+    if not isinstance(block, dict):
+        out["notes"].append(
+            f"the metrics snapshot carries no {key} block - Version "
+            f"{str(version).upper()} was not run in it")
+        return out
+
+    window = " → ".join(str(meta.get(k) or "")[:10] for k in ("start", "end")).strip(" →")
+    if _as_float((block.get("metrics") or {}).get("profit_factor")) is not None:
+        # Seen and DECLINED, and the card says so. Silence would read as "no
+        # profit factor was recorded anywhere", which is a different fact.
+        out["pf_declined"] = True
+    dd = _as_float((block.get("metrics") or {}).get("max_drawdown_pct"))
+    if dd is not None:
+        out["dd"] = f"{abs(dd):.2f}"
+        out["dd_basis"] = (f"whole run {window} · NOT the holdout" if window
+                           else "whole run · NOT the holdout")
+
+    report = (blob.get("reports") or {}).get(key)
+    if report:
+        out["report"] = str(report)
+        out["report_basis"] = f"Version {str(version).upper()} tear sheet"
+    return out
+
+
+def meta_promotion_values(blob: dict[str, Any]) -> dict[str, Any]:
+    """
+    What `meta.json` supplies on its own, once the files it points at are gone.
+
+    The contract comes from the CERTIFICATION block, never from the top-level
+    `symbols`/`timeframe`: those are the MODULE's declarations - every symbol
+    it targets and the timeframe it prefers - and a promotion is one contract
+    at one timeframe. `t3_braid_scalp_20260823` declares `NQ,ES,CL,GC` at 5m
+    and was certified on NQ at 1h. The declarations are used only when the
+    module names exactly ONE symbol, where there is nothing to pick between,
+    and the card says where they came from either way.
+    """
+    out: dict[str, Any] = {"notes": []}
+    cert = blob.get("certification")
+    cert = cert if isinstance(cert, dict) else {}
+
+    symbol = str(cert.get("audit_symbol") or "").strip()
+    audit_file = str(cert.get("audit_file") or "").strip()
+    match = GATE_AUDIT_NAME.match(Path(audit_file).name) if audit_file else None
+    if symbol and match and match.group("symbol").upper() == symbol.upper():
+        out["pair"] = (symbol, match.group("tf"))
+        out["pair_basis"] = f"certified on {Path(audit_file).name}"
+    elif symbol and audit_file:
+        out["notes"].append(
+            f"meta.json certifies {symbol} but {Path(audit_file).name} names "
+            f"no timeframe this can read - the pair was left unresolved rather "
+            f"than paired with the module's declared timeframe")
+
+    if _as_float((blob.get("metrics") or {}).get("profit_factor")) is not None:
+        out["pf_declined"] = True
+    dd = _as_float((blob.get("metrics") or {}).get("max_drawdown_pct"))
+    if dd is not None:
+        out["dd"] = f"{abs(dd):.2f}"
+        out["dd_basis"] = "meta.json metrics snapshot · NOT the holdout"
+
+    declared = blob.get("symbols")
+    declared = [str(s).strip() for s in declared] if isinstance(declared, list) else []
+    tf = str(blob.get("timeframe") or "").strip()
+    if len(declared) == 1 and declared[0] and tf:
+        out["declared_pair"] = (declared[0], tf)
+        out["declared_pair_basis"] = "the module's own SYMBOLS/TIMEFRAME"
+    return out
+
+
+def resolve_promotion_fields(
+        strat: str,
+        *,
+        symbol: str = "",
+        tf: str = "",
+        pf: str = "",
+        dd: str = "",
+        regime: str = "",
+        report: str = "",
+        audit_file: str | Path | None = None,
+        metrics_file: str | Path | None = None,
+        incubator: str | Path | None = None) -> dict[str, Any]:
+    """
+    Fill the promotion card from what Stage 3 and Stage 5 already wrote.
+
+    Precedence, strongest evidence first:
+
+      1. the command line - an operator correcting the record outranks a file,
+         exactly as `--params` outranks a handoff in `promote.py`;
+      2. the Stage 3 certification (`--audit-file`, else the one `meta.json`
+         cites) - the ONLY source of an out-of-sample profit factor and of the
+         certified quadrant;
+      3. the locked metrics snapshot (`--metrics`, else the promotion's own
+         `dual_metrics.json`) - the drawdown and the tear sheet;
+      4. `meta.json` itself, for the contract and a snapshot drawdown.
+
+    The contract and the timeframe are resolved as a PAIR, from one source.
+    They are two halves of one statement, and taking the symbol from a
+    certification while taking the timeframe from a module declaration is how a
+    card comes to announce NQ at 5m for a run certified on NQ at 1h - with
+    every field on it individually true.
+
+    Nothing is invented. A field no source carries is returned empty, the card
+    prints its existing NOT REPORTED token, and the provenance list says where
+    this looked - which is a different statement from a value of zero. A file
+    named explicitly and missing RAISES; one this went looking for on its own
+    is a note.
+    """
+    given = {"symbol": symbol, "tf": tf, "pf": pf, "dd": dd,
+             "regime": regime, "report": report}
+    values = {k: str(v).strip() for k, v in given.items() if str(v or "").strip()}
+    sources = {k: "--" + ("tf" if k == "tf" else k) for k in values}
+    resolved: list[tuple[str, str, str]] = []
+    notes: list[str] = []
+    inspected: list[str] = []
+
+    home = promoted_dir(strat, incubator)
+    meta_path = home / PROMOTED_META_FILE
+    meta: dict[str, Any] | None = None
+    if meta_path.exists():
+        meta = load_promoted_meta(meta_path, strat)
+        inspected.append(meta_path.name)
+
+    # Which twin was promoted, and therefore which block to read in both files.
+    # Defaulted to A rather than guessed at from a file's contents: A is what
+    # `promote.py` writes when nothing says otherwise.
+    version = str((meta or {}).get("version") or "A").upper()
+
+    # --- the certification -------------------------------------------------
+    audit_path = Path(audit_file) if audit_file else None
+    if audit_path is not None and not audit_path.exists():
+        raise FileNotFoundError(f"--audit-file not found: {audit_path}")
+    if audit_path is None and meta is not None:
+        cited = str((meta.get("certification") or {}).get("audit_file") or "").strip()
+        if cited:
+            cited_path = Path(cited)
+            if cited_path.exists():
+                audit_path = cited_path
+            else:
+                notes.append(f"meta.json cites {cited_path.name}, which is not "
+                             f"on disk - Gate R's numbers were not read")
+
+    # --- the metrics snapshot ----------------------------------------------
+    metrics_path = Path(metrics_file) if metrics_file else None
+    if metrics_path is not None and not metrics_path.exists():
+        raise FileNotFoundError(f"--metrics not found: {metrics_path}")
+    if metrics_path is None:
+        candidate = home / PROMOTED_METRICS_FILE
+        if candidate.exists():
+            metrics_path = candidate
+
+    candidates: list[tuple[str, dict[str, Any]]] = []
+    if audit_path is not None:
+        blob = load_promotion_audit(audit_path, strat)
+        inspected.append(audit_path.name)
+        candidates.append((audit_path.name, audit_promotion_values(blob, version)))
+    if metrics_path is not None:
+        blob = load_promotion_metrics(metrics_path, strat)
+        inspected.append(metrics_path.name)
+        candidates.append((metrics_path.name,
+                           metrics_promotion_values(blob, version)))
+    if meta is not None:
+        candidates.append((meta_path.name, meta_promotion_values(meta)))
+
+    for name, cand in candidates:
+        for note in cand.get("notes") or []:
+            notes.append(f"{name}: {note}")
+
+    # --- the scalar fields -------------------------------------------------
+    for name, cand in candidates:
+        for field in ("pf", "dd", "regime", "report"):
+            if field in values or not cand.get(field):
+                continue
+            values[field] = str(cand[field])
+            sources[field] = name
+            resolved.append((PROMOTION_FIELD_LABELS[field],
+                             str(cand.get(f"{field}_basis") or ""), name))
+
+    # --- the contract, as a pair -------------------------------------------
+    for key in ("pair", "declared_pair"):
+        if values.get("symbol") and values.get("tf"):
+            break
+        for name, cand in candidates:
+            pair = cand.get(key)
+            if not pair:
+                continue
+            found_symbol, found_tf = (str(pair[0]).strip(), str(pair[1]).strip())
+            basis = str(cand.get(f"{key}_basis") or "")
+            if not values.get("symbol"):
+                values["symbol"] = found_symbol
+                sources["symbol"] = name
+                resolved.append((PROMOTION_FIELD_LABELS["symbol"], basis, name))
+            elif values["symbol"].upper() != found_symbol.upper():
+                notes.append(f"--symbol {values['symbol']} names a different "
+                             f"contract from {name}'s {found_symbol}")
+            if not values.get("tf"):
+                values["tf"] = found_tf
+                sources["tf"] = name
+                resolved.append((PROMOTION_FIELD_LABELS["tf"], basis, name))
+            break
+
+    # Said only when a file that WAS read carries a profit factor this
+    # declined. Where nothing carried one, "not found" is the whole story and
+    # this note would describe a decision nobody had to make.
+    if "pf" not in values and any(c.get("pf_declined") for _, c in candidates):
+        notes.append(PF_IS_GATE_R_ONLY)
+
+    missing = [PROMOTION_FIELD_LABELS[f]
+               for f in ("pf", "dd", "regime", "report") if f not in values]
+
+    return {
+        "symbol": values.get("symbol", ""),
+        "tf": values.get("tf", ""),
+        "pf": values.get("pf", ""),
+        "dd": values.get("dd", ""),
+        "regime": values.get("regime", ""),
+        "report": values.get("report", ""),
+        "version": version,
+        "sources": sources,
+        "resolved": resolved,
+        "missing": missing,
+        "inspected": inspected,
+        "notes": notes,
+        "home": str(home),
+    }
+
+
+def format_resolution(resolution: dict[str, Any]) -> str:
+    """
+    The provenance list, as one field value.
+
+    Every auto-resolved value names the FILE it came from and the window it was
+    measured over. A promotion card is read once and acted on, and "1.22"
+    resolved out of a gate audit and "1.22" typed by an operator are the same
+    six characters - the difference is whether anybody can check it later.
+    """
+    lines: list[str] = []
+    for label, basis, where in resolution.get("resolved") or []:
+        lines.append(f"`{label}` ← `{where}`" + (f" · {basis}" if basis else ""))
+    for label in resolution.get("missing") or []:
+        looked = ", ".join(f"`{n}`" for n in resolution.get("inspected") or [])
+        lines.append(f"`{label}` · not found in {looked or 'any promoted artifact'}")
+    for note in resolution.get("notes") or []:
+        lines.append(f"⚠ {note}")
+    value = "\n".join(lines)
+    if len(value) > MAX_FIELD_VALUE:
+        value = value[: MAX_FIELD_VALUE - 3] + "..."
+    return value
+
+
 def build_embed(
     strat: str,
     symbol: str,
@@ -540,9 +1059,19 @@ def build_embed(
     dd: str,
     regime: str,
     report: str,
+    resolution: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build the Discord embed dict. Pure - sends nothing, reads nothing."""
-    return {
+    """
+    Build the Discord embed dict. Pure - sends nothing, reads nothing.
+
+    `resolution` is what `resolve_promotion_fields` returned, when anything on
+    the card was filled from a file rather than typed. It adds ONE field
+    naming the file and the window behind each auto-resolved value, and is
+    omitted entirely when every value came from the command line - a card an
+    operator typed in full is unchanged, to the byte, by this parameter
+    existing.
+    """
+    embed = {
         "title": f"\U0001F680 Incubation Promotion: {strat}",
         "color": EMERALD_GREEN,
         "fields": [
@@ -574,6 +1103,16 @@ def build_embed(
         ],
         "footer": {"text": "backtest/discord_reporter.py · values as supplied, not recomputed"},
     }
+    # Only when something was actually resolved from a file. A promotion card
+    # whose values were all typed carries no provenance list, because there is
+    # no provenance to state beyond the footer it already has.
+    if resolution and resolution.get("resolved"):
+        embed["fields"].append({
+            "name": "Auto-resolved",
+            "value": format_resolution(resolution),
+            "inline": False,
+        })
+    return embed
 
 
 
@@ -2520,7 +3059,10 @@ def build_parser() -> argparse.ArgumentParser:
             + ", ".join("$" + name for name in DISCORD_WEBHOOK_VARS)
             + " is set, in the environment or in .env.\n"
             "\n"
-            "  --mode promotion   --strat X --symbol NQ --tf 15m --pf 1.42 ...\n"
+            "  --stage 5          --strat X   (everything else auto-resolved\n"
+            "                     from approved_incubator/X/, overridable with\n"
+            "                     --symbol --tf --pf --dd --regime --report,\n"
+            "                     --audit-file and --metrics)\n"
             "  --stage 1          --strat X [--survivors <surviving_assets.json>]\n"
             "  --stage 2          --strat X [--summary <stage2_summary.json>]\n"
             "  --stage 3          --strat X [--audit <stage3_audit_summary.json>]\n"
@@ -2592,6 +3134,29 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dd", default="", help="max drawdown in percent, or a token like 'NOT EVALUATED'")
     parser.add_argument("--regime", default="", help="certified regime, e.g. 'High-Vol/Trending'")
     parser.add_argument("--report", default="", help="artifact URL or path to the tear sheet")
+    # The two files a promotion is made from, spelled the way `promote.py`
+    # spells them. They are aliases in the sense that matters: the command an
+    # operator already has in their shell history from Stage 5 now runs here
+    # unchanged instead of dying on an unrecognised argument, which is the
+    # failure that sends somebody to retype four numbers by hand.
+    parser.add_argument("--audit-file", dest="audit_file", default=None,
+                        help="promotion mode: the Stage 3 certification "
+                             "(gate_audit_<SYMBOL>_<TF>.json) to read the "
+                             "contract, Gate R's out-of-sample profit factor, "
+                             "the certified quadrant and the holdout drawdown "
+                             "from (default: the one meta.json cites)")
+    parser.add_argument("--metrics", dest="metrics", default=None,
+                        help="promotion mode: the locked "
+                             f"{PROMOTED_METRICS_FILE} to read the contract, "
+                             "the drawdown and the tear sheet path from "
+                             "(default: the promotion's own copy). It supplies "
+                             "no profit factor: its window contains the "
+                             "holdout, and the card's is Gate R's")
+    parser.add_argument("--incubator", default=None,
+                        help="promotion mode: override the directory "
+                             f"{PROMOTED_META_FILE} and "
+                             f"{PROMOTED_METRICS_FILE} are looked up under "
+                             "(default: strategies/approved_incubator/<strat>/)")
     parser.add_argument("--dry-run", action="store_true",
                         help="print the payload and send nothing")
     return parser
@@ -2614,9 +3179,27 @@ def resolve_mode(mode: str | None, stage: str | None) -> str:
     return mode or from_stage or "promotion"
 
 
+# The flags that only mean something on the promotion card. Refused elsewhere
+# rather than ignored: `--stage 3 --metrics <file>` parses cleanly, changes
+# nothing, and posts a card built from an entirely different file - which is
+# the shape of every silently-inert flag this repository has had to fix.
+PROMOTION_ONLY_FLAGS = (("--audit-file", "audit_file"),
+                        ("--metrics", "metrics"),
+                        ("--incubator", "incubator"))
+
+
 def _build_card(args: argparse.Namespace) -> tuple[dict[str, Any], str]:
     """The embed and the one-line summary its success message prints."""
     mode = resolve_mode(args.mode, args.stage)
+
+    if mode != "promotion":
+        stray = [flag for flag, dest in PROMOTION_ONLY_FLAGS
+                 if getattr(args, dest, None)]
+        if stray:
+            raise ValueError(
+                f"{', '.join(stray)}: promotion-mode flag(s) that would change "
+                f"nothing on the {mode} card. Stage 3's summary is named with "
+                f"--audit, Stage 4's run directory with --artifacts.")
 
     if mode == "baseline":
         path = Path(args.survivors) if args.survivors else \
@@ -2683,24 +3266,44 @@ def _build_card(args: argparse.Namespace) -> tuple[dict[str, Any], str]:
         return embed, (f"Stage 4 lifecycle '{args.strat}' "
                        f"({read}/{len(rows)} contract(s) from {path.name})")
 
-    # The promotion card names one contract, so those two are required here
-    # and only here. Checked rather than defaulted: a card headed `?` · `?` is
-    # a promotion announcement for a strategy on no instrument.
-    missing = [f for f, v in (("--symbol", args.symbol), ("--tf", args.tf))
-               if not (v or "").strip()]
+    # Everything the promotion card needs, from the command line first and
+    # from what Stages 3 and 5 already wrote for anything left over. A file
+    # named explicitly and missing raises here rather than being defaulted
+    # around: an operator who typed a path meant that path.
+    res = resolve_promotion_fields(
+        args.strat,
+        symbol=args.symbol, tf=args.tf, pf=args.pf, dd=args.dd,
+        regime=args.regime, report=args.report,
+        audit_file=args.audit_file, metrics_file=args.metrics,
+        incubator=args.incubator)
+
+    # The card names ONE contract, so these two are still required - but only
+    # after the resolution has had its turn. Checked rather than defaulted: a
+    # card headed `?` · `?` is a promotion announcement for a strategy on no
+    # instrument. The refusal names where this looked, because "pass --symbol"
+    # and "your meta.json cites an audit that is not on disk" send an operator
+    # to two completely different places.
+    missing = [f for f, v in (("--symbol", res["symbol"]), ("--tf", res["tf"]))
+               if not v]
     if missing:
-        raise ValueError(f"--mode promotion needs {' and '.join(missing)}.")
+        looked = ", ".join(res["inspected"]) or f"nothing under {res['home']}"
+        raise ValueError(
+            f"--mode promotion needs {' and '.join(missing)}: the contract "
+            f"could not be resolved from {looked}.")
 
     embed = build_embed(
         strat=args.strat,
-        symbol=args.symbol,
-        tf=args.tf,
-        pf=args.pf,
-        dd=args.dd,
-        regime=args.regime,
-        report=args.report,
+        symbol=res["symbol"],
+        tf=res["tf"],
+        pf=res["pf"],
+        dd=res["dd"],
+        regime=res["regime"],
+        report=res["report"],
+        resolution=res,
     )
-    return embed, f"'{args.strat}' ({args.symbol} {args.tf})"
+    auto = len(res["resolved"])
+    return embed, (f"'{args.strat}' ({res['symbol']} {res['tf']})"
+                   + (f", {auto} value(s) auto-resolved" if auto else ""))
 
 
 def main(argv: list[str] | None = None) -> int:
