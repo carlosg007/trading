@@ -168,6 +168,31 @@ CANONICAL_REGIME: dict[str, str] = {
     "Q4_LOW_VOL_MEAN_REVERSION": "Low Volatility / Ranging",
 }
 
+# THE STRATEGY ALLOCATION RECORDS, written by `backtest/promote.py`.
+#
+# A portfolio grants PERMISSION through `active_strategies`, a flat list of
+# strategy-id strings, and that is what `get_portfolio_for_strategy`,
+# `realtime/live_dispatcher.py` and the Stage 5 card all read. The rich record
+# behind each id - the certified contract, timeframe, version, quadrant and
+# contract count - lives here instead, keyed by the same id, because putting a
+# dict into `active_strategies` would break those three readers quietly rather
+# than loudly.
+#
+# THIS BLOCK IS OPTIONAL AND DESCRIPTIVE. Nothing routes, sizes or gates an
+# order from it: a strategy is permitted because `active_strategies` names it,
+# and it is permitted in a quadrant because `basket.regime_quadrants` declares
+# that quadrant for the ACCOUNT. An allocation record cannot widen either, and
+# `_reconcile_allocations` reports where the two halves disagree rather than
+# raising, for the same reason `assets_without_market_data` is reported: a
+# config written before this key existed is a legitimate state, and so is one
+# whose records lag a hand edit.
+#
+# `backtest/promote.py` carries this same literal. It cannot import it - the
+# dependency runs one way and nothing in `backtest/` may import from
+# `portfolio/` - so `tests/test_portfolio_config.py` asserts the two agree,
+# which is what turns an unenforceable convention into a caught drift.
+ALLOCATIONS_KEY = "strategy_allocations"
+
 _CACHE: dict[str, dict] = {}
 
 
@@ -300,6 +325,103 @@ def _validate_basket(pid: str, basket: Any, known_assets: set[str]) -> None:
              f"{pid}: basket.structures must be a non-empty list")
 
 
+def _validate_allocations(pid: str, allocations: Any) -> None:
+    """
+    Shape-check the optional `strategy_allocations` block.
+
+    ABSENT IS FINE and is the state of every config written before
+    `backtest/promote.py` started writing one. What is not fine is a block that
+    is present and is not a mapping of strategy id to record: `active_strategies`
+    would still grant the permission, so a malformed block changes no routing
+    and would be discovered by whoever next tried to read a contract count out
+    of it.
+
+    The record's CONTENTS are deliberately not pinned here. They describe what
+    was certified - a contract, a timeframe, a quadrant - and this module is
+    not the authority on any of those; pinning them would make an older
+    promotion's record unloadable the first time a field was added to it.
+    """
+    if allocations is None:
+        return
+    _require(isinstance(allocations, dict),
+             f"{pid}: {ALLOCATIONS_KEY} must be an object keyed by strategy "
+             f"id; got {type(allocations).__name__}. Permission still comes "
+             f"from active_strategies, so this block being wrong changes no "
+             f"routing - which is exactly why it has to be caught here.")
+    for key, record in allocations.items():
+        _require(isinstance(key, str) and key.strip(),
+                 f"{pid}: {ALLOCATIONS_KEY} has an empty strategy id")
+        _require(isinstance(record, dict),
+                 f"{pid}: {ALLOCATIONS_KEY}[{key!r}] must be an object; got "
+                 f"{type(record).__name__}")
+
+
+def _reconcile_allocations(portfolios: dict) -> dict[str, list]:
+    """
+    Where the permission and the record disagree. REPORTED, NEVER RAISED.
+
+    Three findings, kept apart because they are fixed by completely different
+    work:
+
+    `orphan_records`      an allocation record for a strategy the portfolio's
+                          `active_strategies` does not name. The record
+                          describes an allocation that grants nothing. This is
+                          what a graduation that moved only half the pair
+                          leaves behind - see `portfolio/promotion_daemon.py`,
+                          which moves both.
+    `unallocated`         an id in `active_strategies` with no record beside
+                          it. NOT a defect: it is every strategy assigned by
+                          hand, and every one assigned before this key existed.
+                          Reported so "registered by promote.py" and "added by
+                          an operator" are distinguishable.
+    `regime_conflicts`    a record whose `regime_filter` is not among the
+                          ACCOUNT's canonical quadrants. The live gate reads
+                          `basket.regime_quadrants` and nothing else, so this
+                          strategy is stood down in the one quadrant it was
+                          certified for and will never trade. It is the finding
+                          most worth seeing and the one least likely to
+                          announce itself: every count in every table still
+                          adds up, and the symptom is silence.
+
+    None of the three is raised. An allocation record cannot route an order,
+    size one, or grant a permission, so refusing to load the config over one
+    would take the live loop down for a descriptive field - and the config the
+    loader must keep loading is precisely the one somebody is midway through
+    fixing.
+    """
+    out: dict[str, list] = {"orphan_records": [], "unallocated": [],
+                            "regime_conflicts": []}
+    for pid in sorted(portfolios):
+        portfolio = portfolios[pid]
+        active = [str(s) for s in (portfolio.get("active_strategies") or [])]
+        records = portfolio.get(ALLOCATIONS_KEY) or {}
+        permitted = list(portfolio.get("derived", {})
+                         .get("canonical_quadrants") or [])
+        for name in active:
+            if name not in records:
+                out["unallocated"].append({"portfolio_id": pid,
+                                           "strategy_id": name})
+        for name, record in sorted(records.items()):
+            if name not in active:
+                out["orphan_records"].append({
+                    "portfolio_id": pid, "strategy_id": name,
+                    "note": (f"{ALLOCATIONS_KEY} describes {name} but "
+                             f"active_strategies does not name it, so the "
+                             f"record grants nothing")})
+            quadrant = str((record or {}).get("regime_filter") or "").strip()
+            if quadrant and permitted and quadrant not in permitted:
+                out["regime_conflicts"].append({
+                    "portfolio_id": pid, "strategy_id": name,
+                    "regime_filter": quadrant,
+                    "portfolio_quadrants": permitted,
+                    "note": (f"{name} is certified in {quadrant} and {pid} "
+                             f"trades {permitted}. The live regime gate reads "
+                             f"the portfolio's quadrants, so this strategy is "
+                             f"stood down in the one quadrant it was "
+                             f"certified for and will never trade.")})
+    return out
+
+
 def _validate_portfolio(pid: str, portfolio: Any,
                         known_assets: set[str]) -> None:
     _require(isinstance(portfolio, dict),
@@ -324,6 +446,7 @@ def _validate_portfolio(pid: str, portfolio: Any,
     _require(isinstance(portfolio.get("active_strategies"), list),
              f"{pid}: active_strategies must be a list (an empty one is "
              f"fine — it means nothing has been assigned yet)")
+    _validate_allocations(pid, portfolio.get(ALLOCATIONS_KEY))
     _validate_risk_profile(pid, portfolio.get("risk_profile"))
     _validate_basket(pid, portfolio.get("basket"), known_assets)
 
@@ -665,6 +788,11 @@ def load_portfolio_config(config_path: str = DEFAULT_CONFIG_PATH,
     # Reported, never raised — see `_assets_without_market_data`.
     config["assets_without_market_data"] = _assets_without_market_data(
         known_assets)
+    # Runs AFTER the `derived` blocks above, because the regime comparison is
+    # against `derived.canonical_quadrants` — the schema labels resolved
+    # through CANONICAL_QUADRANT — and never against the digit in the label,
+    # which is wrong for all four values at schema 1.0.0.
+    config["allocation_reconciliation"] = _reconcile_allocations(portfolios)
     config["config_path"] = str(path)
 
     if use_cache:
