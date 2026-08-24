@@ -339,6 +339,77 @@ def test_opposing_signals_on_mnq_net_out_before_any_payload(tmp_path):
     assert len(mnq[0]["contributors"]) == 2
 
 
+def test_the_execution_summary_counts_what_the_stages_recorded(tmp_path):
+    """
+    The four-key summary is DERIVED from the stage records, so it cannot
+    disagree with them. Three strategies on one contract: one long, one short
+    (they net flat), and one whose quadrant is not permitted - so the cycle
+    evaluates three, approves two and sends nothing.
+    """
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["fixture_long", "fixture_short"],
+                           "Incubator-Even": ["fixture_blocked"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"fixture_long": dict(side="long"),
+                          "fixture_short": dict(side="short"),
+                          "fixture_blocked": dict(side="long")})
+    report = d.process_bar_cycle({"MNQ": make_bars()})
+
+    # Incubator-Even does not hold MNQ, so its strategy is never evaluated on
+    # it; the two that are net flat.
+    assert report["evaluated_signals"] == (
+        len(report["signals"])
+        + len([x for x in report["declines"] if x.get("strategy_id")])
+        + len(report["ml_vetoes"])
+        + len(report["errors"]))
+    assert report["approved_signals"] == 2
+    assert report["orders"] == []
+    assert report["processed_at"] == report["finished_at"]
+
+
+def test_orders_and_payloads_are_the_same_list(tmp_path):
+    """Two names for what was sent must not be able to disagree about it."""
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["fixture_long"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"fixture_long": dict(side="long")})
+    report = d.process_bar_cycle({"MNQ": make_bars()})
+
+    assert len(report["orders"]) == 1
+    assert report["orders"] is report["payloads"]
+    assert report["approved_signals"] == 1
+    assert report["evaluated_signals"] == 1
+
+
+def test_a_declined_signal_is_evaluated_but_not_approved(tmp_path):
+    """A cycle that gated everything away must still report that it looked -
+    an evaluated count of zero reads as a feed that delivered nothing."""
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["fixture_long"]},
+              state={"MNQ": {"quadrant": FORBIDDEN_QUADRANT}},
+              strategies={"fixture_long": dict(side="long")})
+    report = d.process_bar_cycle({"MNQ": make_bars()})
+
+    assert report["evaluated_signals"] == 1
+    assert report["approved_signals"] == 0
+    assert report["orders"] == []
+
+
+def test_an_empty_roster_is_not_counted_as_an_evaluation(tmp_path):
+    """The 'no active strategies' note carries no strategy_id: it is a warning
+    about the config, not a (strategy, symbol) the loop looked at."""
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": []},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={})
+    report = d.process_bar_cycle({"MNQ": make_bars()})
+
+    assert report["declines"]                      # it still says so
+    assert report["evaluated_signals"] == 0
+    assert report["approved_signals"] == 0
+    assert report["orders"] == []
+
+
 def test_reinforcing_signals_stack_into_one_larger_order(tmp_path):
     """Two longs net to +2, and conviction scales the size - which is what
     makes stacking observable in the order rather than only in a field."""
@@ -795,12 +866,32 @@ def test_load_env_file_does_not_touch_the_process_environment(tmp_path,
 def test_the_cli_defaults_are_the_documented_ones():
     import master_live
     args = master_live.build_parser().parse_args([])
-    assert args.dry_run is False          # dry-run is opt-IN, per the spec
     assert args.interval_sec == 60
     assert args.config.endswith("portfolios.json")
     assert args.state_file.endswith("live_regime_state.json")
     assert args.once is False
-    assert master_live.build_parser().parse_args(["--dry-run"]).dry_run is True
+
+
+def test_a_command_naming_no_mode_is_a_dry_run():
+    """
+    The safe mode is the one an operator gets by forgetting a flag. A market
+    order this process cannot see is not undone by noticing the mistake, so the
+    default has to be the recoverable one.
+    """
+    import master_live
+    parse = master_live.build_parser().parse_args
+    assert master_live.resolve_dry_run(parse([])) is True
+    assert master_live.resolve_dry_run(parse(["--dry-run"])) is True
+    assert master_live.resolve_dry_run(parse(["--live"])) is False
+
+
+def test_asking_for_both_modes_is_refused_rather_than_resolved():
+    """Either resolution leaves half the command describing a run that did not
+    happen - and the wrong half is the one about whether real orders went."""
+    import master_live
+    args = master_live.build_parser().parse_args(["--dry-run", "--live"])
+    with pytest.raises(ValueError):
+        master_live.resolve_dry_run(args)
 
 
 def test_bars_for_a_micro_are_read_from_its_full_size_parent(monkeypatch):

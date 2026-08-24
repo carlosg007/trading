@@ -587,6 +587,17 @@ class LiveExecutionDispatcher:
             dispatches     one attempt record per payload
             errors         anything that raised, per strategy
 
+        and the four-key execution summary over them, every value derived from
+        the records above rather than counted a second time:
+
+            processed_at        when the cycle finished (== `finished_at`)
+            evaluated_signals   every (strategy, symbol) actually evaluated
+            approved_signals    the entries that cleared BOTH gates and
+                                reached netting - FLAT records are not
+                                approvals
+            orders              the payloads that were dispatched (the same
+                                list object as `payloads`)
+
         Nothing in the report is derived twice: `payloads` is taken from the
         plan, which is exactly what `build_order_payloads` returns for the same
         input.
@@ -649,6 +660,32 @@ class LiveExecutionDispatcher:
         report["ok"] = all(d.get("ok") for d in report["dispatches"])
         report["elapsed_ms"] = round((time.perf_counter() - cycle_started) * 1000, 1)
         report["finished_at"] = _utcnow()
+
+        # ---- the four-key execution summary ------------------------------
+        # DERIVED from the stage records above, never counted a second time
+        # while the stages run: a counter incremented alongside a list is one
+        # early `return` away from disagreeing with the list it summarises,
+        # and the summary is the half a caller reads.
+        #
+        # Every evaluation terminates in exactly ONE of declines / ml_vetoes /
+        # signals, or raises into errors, so the sum double-counts nothing.
+        # The "no active strategies" note carries no strategy_id and is not an
+        # evaluation, so it is excluded rather than inflating the count.
+        report["processed_at"] = report["finished_at"]
+        report["evaluated_signals"] = (
+            len(report["signals"])
+            + len([d for d in report["declines"] if d.get("strategy_id")])
+            + len(report["ml_vetoes"])
+            + len(report["errors"]))
+        # APPROVED is the entries that cleared both gates and reached netting.
+        # A FLAT record is an evaluation that produced no entry - counting it
+        # would report approvals on a cycle where no strategy wanted a
+        # position.
+        report["approved_signals"] = len(
+            [s for s in report["signals"] if s["direction"] in (LONG, SHORT)])
+        # The same list, not a copy: `orders` and `payloads` must not be able
+        # to disagree about what was sent.
+        report["orders"] = report["payloads"]
         return report
 
     def _evaluate(self, handle: StrategyHandle, symbol: str, bars,

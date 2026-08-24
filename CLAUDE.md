@@ -430,12 +430,15 @@ python3 realtime/regime_reader.py --symbol NQ
 
 # THE LIVE EXECUTION LOOP. Signals -> regime gate -> ML gate -> netting and
 # ATR sizing -> CrossTrade. Reads the regime state the daemon publishes; it
-# does NOT classify. RUN --dry-run FIRST, and after any config change: it runs
-# every gate and formats every payload but opens no socket.
+# does NOT classify. A dry run is the DEFAULT and runs every gate and formats
+# every payload but opens no socket; --live is the only flag that arms it.
 python3 master_live.py --dry-run --once            # one cycle, nothing sent
 python3 master_live.py --dry-run --interval-sec 30
-python3 master_live.py --interval-sec 60           # LIVE. SENDS REAL ORDERS.
+python3 master_live.py --interval-sec 60           # ALSO A DRY RUN
+python3 master_live.py --live --interval-sec 60    # LIVE. SENDS REAL ORDERS.
 #   --config/--state-file  the routing table and the published regime state
+#   --live                 send real orders. Without it nothing reaches the
+#                          wire; --dry-run and --live together are REFUSED
 #   --max-regime-age-sec   refuse a regime reading older than this
 #   --no-verify-hash       skip the meta.json SHA-256 check. Do not use this
 #                          to trade an edited module.
@@ -1987,7 +1990,15 @@ daemon WRITES, the reader READS, the formatter FORMATS and sends nothing.
 execution loop, added 2026-08-23. `LiveExecutionDispatcher` is the pipeline
 (signals → regime gate → ML gate → netting and ATR sizing → CrossTrade);
 `master_live.py` is the CLI, the interval loop and the shutdown handling, so
-the wiring is unit-testable without a clock.
+the wiring is unit-testable without a clock. `process_bar_cycle` returns the
+per-stage record — signals, declines, ML vetoes, exits, plan, payloads,
+dispatches, errors — and a four-key summary over it (`processed_at`,
+`evaluated_signals`, `approved_signals`, `orders`) DERIVED from those records
+rather than counted beside them: a counter incremented alongside a list is one
+early return away from disagreeing with the list it summarises, and the
+summary is the half a caller reads. `orders` IS `payloads`, the same list, so
+the two cannot disagree about what was sent; a FLAT record is an evaluation
+that produced no entry and is never counted as an approval.
 
 - **THE PIPELINE OPENS POSITIONS AND CANNOT CLOSE THEM.** `PortfolioManager`
   does not know what is open and never emits FLATTEN, and nothing here invents
@@ -2044,7 +2055,13 @@ the wiring is unit-testable without a clock.
 - **`--dry-run` runs every stage except the socket**: strategies loaded and
   hash-checked, signals computed, both gates applied, positions netted and
   sized, payloads formatted and validated. Run it first and after any config
-  change. **Live mode refuses to START without a webhook URL** rather than
+  change. **It is also the DEFAULT, and `--live` is the only flag that arms
+  the socket** — the mode an operator gets by forgetting a flag has to be the
+  recoverable one, because a market order this process cannot see is not
+  undone by noticing the mistake. Asking for both is REFUSED rather than
+  resolved: either resolution leaves half the command describing a run that
+  did not happen, and the wrong half is the one about whether real orders went
+  out. **Live mode refuses to START without a webhook URL** rather than
   discovering it at the first order — which on a console reads exactly like a
   quiet market. Credentials come from `.env` (`CROSSTRADE_WEBHOOK_URL`,
   `CROSSTRADE_API_KEY`) via a fifteen-line reader rather than a new pinned

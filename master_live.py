@@ -2,9 +2,9 @@
 """
 master_live.py - the live execution loop.
 
-    python3 master_live.py --dry-run
+    python3 master_live.py                             # dry run, the DEFAULT
     python3 master_live.py --dry-run --interval-sec 30 --once
-    python3 master_live.py --interval-sec 60            # LIVE. Sends orders.
+    python3 master_live.py --live --interval-sec 60     # LIVE. Sends orders.
 
 One process, one job: every `--interval-sec`, read the newest closed bars for
 the symbols the four baskets hold, hand them to
@@ -31,6 +31,11 @@ regime and ML gates are applied, positions are netted and sized, and payloads
 are formatted and validated. The single thing that does not happen is the
 socket. That is the mode to run first, and the mode to run after any config
 change.
+
+It is also the DEFAULT: a command that names neither mode sends nothing, and
+`--live` is the only thing that arms the socket. The safe mode is the one you
+get by forgetting a flag, because the unsafe one is unrecoverable - a market
+order this process cannot see is not undone by noticing the mistake.
 
 Live mode refuses to start without a webhook URL, rather than discovering it at
 the first order - see `LiveExecutionDispatcher.__init__`.
@@ -178,9 +183,16 @@ def build_parser() -> argparse.ArgumentParser:
                     help="path to config/portfolios.json")
     ap.add_argument("--state-file", default=DEFAULT_STATE_FILE,
                     help="path to data/live_regime_state.json")
-    ap.add_argument("--dry-run", action="store_true",
+    # DEFAULT TRUE, and `--live` is the only way off it. The two are separate
+    # flags rather than one `--no-dry-run` because arming real money should be
+    # a word an operator means, not a double negative typed by habit; and
+    # `--dry-run` stays spellable so every documented command still parses and
+    # still says on its face which mode it is in.
+    ap.add_argument("--dry-run", action="store_true", default=None,
                     help="run every gate and format every payload, but open "
-                         "no socket")
+                         "no socket. THIS IS THE DEFAULT")
+    ap.add_argument("--live", action="store_true",
+                    help="SEND REAL ORDERS. Without it the loop is a dry run")
     ap.add_argument("--interval-sec", type=float, default=DEFAULT_INTERVAL_S,
                     help=f"seconds between cycles (default {DEFAULT_INTERVAL_S})")
     ap.add_argument("--once", action="store_true",
@@ -205,14 +217,34 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+def resolve_dry_run(args: argparse.Namespace) -> bool:
+    """
+    The effective mode, from the two flags.
+
+    `--dry-run` is the default and `--live` is the only thing that clears it,
+    so a command that says neither sends nothing. Asking for BOTH is refused
+    rather than resolved: whichever way it were resolved, half of the command
+    would be describing a run that did not happen, and the half that is wrong
+    is the half about whether real orders went out.
+    """
+    if args.live and args.dry_run:
+        raise ValueError("--dry-run and --live contradict each other; pass one")
+    return not args.live
+
+
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        dry_run = resolve_dry_run(args)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     try:
         dispatcher = LiveExecutionDispatcher(
             config_path=args.config,
             state_file=args.state_file,
-            dry_run=args.dry_run,
+            dry_run=dry_run,
             strategy_root=args.strategy_root,
             ml_model_dir=args.models,
             env_file=args.env_file,
@@ -225,7 +257,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     print(dispatcher.describe(), flush=True)
-    if not args.dry_run:
+    if not dry_run:
         print("[master_live] LIVE MODE — orders will be sent.", flush=True)
 
     symbols = basket_symbols(dispatcher)
