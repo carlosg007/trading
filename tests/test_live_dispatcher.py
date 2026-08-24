@@ -130,8 +130,22 @@ def write_strategy(root: Path, strategy_id: str, *, side="long",
 
 
 def write_config(tmp_path: Path, assignments: dict) -> Path:
-    """The real config with `active_strategies` filled in per portfolio."""
+    """
+    The real config with `active_strategies` filled in per portfolio.
+
+    Every portfolio is CLEARED first, and only then are `assignments` applied.
+    These cases count handles and errors — "one strategy loaded, one error" —
+    and a portfolio the case did not name still carries whatever
+    `config/portfolios.json` holds today. Once `backtest/promote.py` started
+    registering promotions automatically that stopped being empty, and a real
+    allocation on an untouched portfolio silently became a second handle in
+    every count. The fixture is meant to fix the assignment set, not to inherit
+    the operator's.
+    """
     blob = json.loads(REAL_CONFIG.read_text())
+    for portfolio in blob["portfolios"].values():
+        portfolio["active_strategies"] = []
+        portfolio.pop("strategy_allocations", None)
     for pid, strategies in assignments.items():
         blob["portfolios"][pid]["active_strategies"] = list(strategies)
     path = tmp_path / "portfolios.json"
