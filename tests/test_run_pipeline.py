@@ -232,13 +232,17 @@ def test_stage4_cmd() -> None:
 
 def test_discord_and_promote_cmds() -> None:
     print("\n6. The Discord card and the promotion command")
-    for stage in (1, 2, 3):
+    for stage in (1, 2, 3, 4, 5):
         cmd = rp.discord_cmd(STRAT, stage)
         check(f"stage {stage} card runs discord_reporter.py",
               script_of(cmd) == "discord_reporter.py"
               and flag_value(cmd, "--stage") == str(stage))
-    ok, _ = raises(lambda: rp.discord_cmd(STRAT, 4), ValueError)
-    check("stage 4 has no card and asking for one raises", ok)
+    check("DISCORD_STAGES is the transmission ORDER, ascending",
+          list(rp.DISCORD_STAGES) == sorted(rp.DISCORD_STAGES) == [1, 2, 3, 4, 5],
+          str(rp.DISCORD_STAGES))
+    for bad in (0, 6):
+        ok, _ = raises(lambda b=bad: rp.discord_cmd(STRAT, b), ValueError)
+        check(f"stage {bad} is not a card and asking for one raises", ok)
     check("--dry-run is expressible",
           "--dry-run" in rp.discord_cmd(STRAT, 1, dry_run=True))
 
@@ -366,25 +370,54 @@ def test_stops_when_nothing_survived(tmp: Path) -> None:
     check("Stage 4 never launches", "verify_full.py" not in seq)
 
 
-def test_discord_after_1_2_3(tmp: Path) -> None:
-    print("\n12. --report-discord posts after Stages 1, 2 and 3 only")
+def test_discord_strict_sequential_order(tmp: Path) -> None:
+    """
+    Cards are transmitted in strict numerical sequence, 1 -> 2 -> 3 -> 4 -> 5.
+
+    A reader scrolling a Discord channel reconstructs the campaign from the
+    order the cards arrived in, and nothing on a card says when it was built.
+    A Stage 3 certification landing after Stage 5's promotion therefore reads
+    as a decision taken after the evidence was announced, when in fact it was
+    taken before - and every field on both cards is individually correct, so
+    there is nothing to notice.
+    """
+    print("\n12. --report-discord posts cards in strict numerical order")
     write_stage2(tmp, [s2row("NQ", "15m")])
     runner = FakeRunner()
     _main_with(runner, ["--strat", STRAT, "--tf", "15m", "--report-discord",
                         "--out-dir", str(tmp)])
     seq = runner.scripts()
     stages = [flag_value(c, "--stage") for c in runner.for_script("discord_reporter.py")]
-    check("three cards are posted", stages == ["1", "2", "3"], str(stages))
+    card = [i for i, s in enumerate(seq) if s == "discord_reporter.py"]
+    check("four cards are posted, ascending", stages == ["1", "2", "3", "4"],
+          str(stages))
     check("the Stage 1 card follows baseline.py",
-          seq.index("discord_reporter.py") > seq.index("baseline.py"))
-    check("the Stage 2 card follows scan.py",
-          seq.index("scan.py") < [i for i, s in enumerate(seq)
-                                  if s == "discord_reporter.py"][1])
+          card[0] > seq.index("baseline.py"))
+    check("the Stage 2 card follows scan.py", card[1] > seq.index("scan.py"))
     check("the Stage 3 card follows the LAST audit_gates.py",
-          [i for i, s in enumerate(seq) if s == "discord_reporter.py"][2]
-          > max(i for i, s in enumerate(seq) if s == "audit_gates.py"))
-    check("no card is posted for Stage 4",
-          "4" not in stages)
+          card[2] > max(i for i, s in enumerate(seq) if s == "audit_gates.py"))
+    check("the Stage 4 card follows the LAST verify_full.py",
+          card[3] > max(i for i, s in enumerate(seq) if s == "verify_full.py"))
+    check("Stage 4 runs BEFORE the Stage 4 card and after the Stage 3 card",
+          card[2] < min(i for i, s in enumerate(seq) if s == "verify_full.py"))
+    check("no Stage 5 card without a promotion", "5" not in stages)
+
+    # With --auto-promote the fifth card joins, still last, still after the
+    # promotion it announces.
+    write_stage3(tmp, [s3row("NQ", "15m", certified=True)])
+    runner = FakeRunner()
+    _main_with(runner, ["--strat", STRAT, "--tf", "15m", "--report-discord",
+                        "--auto-promote", "--out-dir", str(tmp)])
+    seq = runner.scripts()
+    stages = [flag_value(c, "--stage") for c in runner.for_script("discord_reporter.py")]
+    check("all five cards are posted, ascending",
+          stages == ["1", "2", "3", "4", "5"], str(stages))
+    card = [i for i, s in enumerate(seq) if s == "discord_reporter.py"]
+    check("Stage 4 runs and its card posts BEFORE promote.py runs",
+          card[3] < seq.index("promote.py"),
+          f"card4@{card[3]} promote@{seq.index('promote.py')}")
+    check("the Stage 5 card follows the LAST promote.py",
+          card[4] > max(i for i, s in enumerate(seq) if s == "promote.py"))
 
 
 def test_stage_failure_aborts_discord_failure_does_not(tmp: Path) -> None:
@@ -505,17 +538,39 @@ def test_promote_only(tmp: Path) -> None:
           "scoped nothing would read as one that did",
           all(flag_value(c, "--symbol") != "ES" for c in promos))
 
-    # The Discord card, and only after the promotions: the outcome is on the
-    # handoff by then, so the section reads PROMOTED with a commit instead of
-    # printing a command that has already run.
+    # The cards, and only after the promotions: the outcome is on the handoff
+    # by then, so Stage 3 reads PROMOTED with a commit instead of printing a
+    # command that has already run. They still go out in numerical order.
+    #
+    # Stage 4 is not run by this path, so its card is posted only when an
+    # earlier run left lifecycle snapshots behind. Both branches are pinned:
+    # a skipped Stage 4 card and a missing one are the same absence on the
+    # channel, and only one of them is correct.
     runner = FakeRunner()
     _main_with(runner, ["--strat", STRAT, "--promote-only", "--report-discord",
                         "--out-dir", str(tmp)])
     scripts = runner.scripts()
-    check("--report-discord posts the Stage 3 card AFTER the promotion",
-          "discord_reporter.py" in scripts
-          and scripts.index("discord_reporter.py") > scripts.index("promote.py"),
+    stages = [flag_value(c, "--stage")
+              for c in runner.for_script("discord_reporter.py")]
+    check("with no lifecycle snapshot, Stages 3 and 5 post and 4 is skipped",
+          stages == ["3", "5"], str(stages))
+    check("...and every card follows the promotion",
+          all(i > scripts.index("promote.py")
+              for i, s in enumerate(scripts) if s == "discord_reporter.py"),
           str(scripts))
+
+    verify = pipeline_dir(STRAT, tmp) / "verify_20260821_120000"
+    verify.mkdir(parents=True, exist_ok=True)
+    (verify / "dual_metrics_NQ.json").write_text("{}", encoding="utf-8")
+    check("stage4_metrics_exist sees the snapshot",
+          rp.stage4_metrics_exist(STRAT, str(tmp)))
+    runner = FakeRunner()
+    _main_with(runner, ["--strat", STRAT, "--promote-only", "--report-discord",
+                        "--out-dir", str(tmp)])
+    stages = [flag_value(c, "--stage")
+              for c in runner.for_script("discord_reporter.py")]
+    check("with one, the order is 3 -> 4 -> 5", stages == ["3", "4", "5"],
+          str(stages))
 
     # A webhook outage must not fail a promotion that already happened.
     runner = FakeRunner(fail_on={"discord_reporter.py": 1})
@@ -687,7 +742,7 @@ def main() -> int:
         test_order_and_expansion(tmp)
         test_skips_unsurvived_timeframe(tmp)
         test_stops_when_nothing_survived(tmp)
-        test_discord_after_1_2_3(tmp)
+        test_discord_strict_sequential_order(tmp)
         test_stage_failure_aborts_discord_failure_does_not(tmp)
         test_auto_promote(tmp)
         test_auto_promote_every_timeframe(tmp)

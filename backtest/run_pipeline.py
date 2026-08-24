@@ -6,7 +6,7 @@ Location: ~/src/trading/backtest/run_pipeline.py
 
 Runs Stage 1 (baseline.py), Stage 2 (scan.py), Stage 3 (audit_gates.py) and
 Stage 4 (verify_full.py) in sequence with `subprocess.run(..., check=True)`,
-posting the Discord card for Stages 1-3 with `--report-discord` and optionally
+posting the Discord card for every stage with `--report-discord` and optionally
 promoting Stage 3's certified configurations with `--auto-promote` - or with
 `--promote-only`, which runs that promotion pass ALONE against the
 certifications already on the handoff.
@@ -146,9 +146,12 @@ STAGE_SCRIPTS = {
 DISCORD_SCRIPT = BACKTEST / "discord_reporter.py"
 PROMOTE_SCRIPT = BACKTEST / "promote.py"
 
-#: Stages whose handoff has a Discord card. Stage 4 has none - it is a
-#: lifecycle report, not a verdict, and there is nothing to announce.
-DISCORD_STAGES = (1, 2, 3)
+#: Stages with a Discord card, and the ORDER they are transmitted in. Cards
+#: are posted in strict numerical sequence 1..5 - a reader scrolling a channel
+#: reconstructs the campaign from the order the cards arrive in, so a Stage 3
+#: card landing after Stage 5's promotion describes a decision that had
+#: already been taken by the time it was announced.
+DISCORD_STAGES = (1, 2, 3, 4, 5)
 
 W = 78
 
@@ -292,6 +295,42 @@ def discord_cmd(strat: str, stage: int, dry_run: bool = False,
     if out_dir:
         cmd += ["--out-dir", out_dir]
     return cmd
+
+
+def stage4_metrics_exist(strat: str, out_dir: str | None = None) -> bool:
+    """
+    Whether THIS campaign produced a Stage 4 lifecycle snapshot to announce.
+
+    The Stage 4 card is built from the `dual_metrics_<SYMBOL>.json` files in a
+    `verify_<stamp>/` directory, and refuses a directory holding none. On the
+    `--promote-only` path Stage 4 is not run, so the card is posted only when
+    an earlier run left snapshots behind - otherwise the reporter would exit
+    non-zero and print a warning about a stage this invocation never ran.
+    """
+    home = pipeline_dir(strat, out_dir)
+    try:
+        stamps = sorted((d for d in home.glob("verify_*") if d.is_dir()),
+                        key=lambda d: d.name, reverse=True)
+    except OSError:
+        return False
+    return any(any(d.glob("dual_metrics_*.json")) for d in stamps)
+
+
+def post_card(strat: str, stage: int, *, out_dir: str | None = None,
+              dry_run: bool = False) -> int:
+    """
+    Post one stage's card, and never let a webhook outage fail the run.
+
+    `check=False` throughout: a card is an ANNOUNCEMENT and the stage's
+    artifacts are the evidence. A completed certification must not be
+    discarded because Discord was unreachable.
+    """
+    rc = run_step(discord_cmd(strat, stage, out_dir=out_dir),
+                  f"DISCORD · Stage {stage} card", dry_run=dry_run, check=False)
+    if rc:
+        print(f"  WARNING  Stage {stage} Discord card failed (exit {rc}); "
+              f"the stage itself is unaffected.", file=sys.stderr, flush=True)
+    return rc
 
 
 def promote_cmd(strat: str, version: str, source: str | Path,
@@ -726,17 +765,28 @@ def _promote_only(args: argparse.Namespace) -> int:
     rows, promotions = outcome["rows"], outcome["promotions"]
 
     if args.report_discord:
-        # After the promotions, exactly as in the --auto-promote path: the
-        # outcome is on the handoff by now, so the card reads AUTOMATICALLY
-        # PROMOTED with the commit instead of printing a command that has
-        # already run. check=False - a webhook outage must not fail a
-        # promotion that already happened.
-        code = run_step(discord_cmd(strat, 3, out_dir=out_dir),
-                        "DISCORD · Stage 3 card", dry_run=dry, check=False)
-        if code:
-            print(f"  WARNING  Stage 3 Discord card failed (exit {code}); the "
-                  f"promotion itself is unaffected.", file=sys.stderr,
+        # Strict numerical order, the same sequence the full pipeline posts in:
+        # Stage 3's certification, then Stage 4's lifecycle, then Stage 5's
+        # promotion. All three go out AFTER the promotions have run, because
+        # this path exists to promote what is already on the handoff - so the
+        # Stage 3 card reads AUTOMATICALLY PROMOTED with the commit rather than
+        # printing a command that has already run, and Stage 5 reports the
+        # outcome of the run the operator is watching.
+        #
+        # Stage 4 is NOT run by this path. Its card is posted only when an
+        # earlier run left lifecycle snapshots behind; with none, the reporter
+        # would refuse the empty directory and warn about a stage this
+        # invocation never ran. Under --dry-run nothing is read, so the card is
+        # traced unconditionally to keep the dry run a faithful rehearsal of
+        # the order.
+        post_card(strat, 3, out_dir=out_dir, dry_run=dry)
+        if dry or stage4_metrics_exist(strat, out_dir):
+            post_card(strat, 4, out_dir=out_dir, dry_run=dry)
+        else:
+            print("  Stage 4 card skipped: this campaign has no "
+                  "verify_<stamp>/dual_metrics_*.json to announce.",
                   flush=True)
+        post_card(strat, 5, out_dir=out_dir, dry_run=dry)
 
     if rows:
         print("\n" + promotion_summary_table(rows, promotions))
@@ -777,13 +827,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     def discord(stage: int) -> None:
         if not args.report_discord:
             return
-        # check=False: a card is an announcement, the stage's artifacts are the
-        # evidence. A webhook outage must not discard a completed stage.
-        rc = run_step(discord_cmd(strat, stage, out_dir=out_dir),
-                      f"DISCORD · Stage {stage} card", dry_run=dry, check=False)
-        if rc:
-            print(f"  WARNING  Stage {stage} Discord card failed (exit {rc}); "
-                  f"the stage itself is unaffected.", file=sys.stderr, flush=True)
+        post_card(strat, stage, out_dir=out_dir, dry_run=dry)
 
     try:
         run_step(stage1_cmd(strat, args.symbols, tfs, args.start, args.end, out_dir),
@@ -832,13 +876,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         # Stage 3 merges each invocation into one summary and the card reads
         # that summary: posted per timeframe it would announce the same
         # campaign several times, each edition missing the timeframes that had
-        # not run yet. With --auto-promote it waits longer still - see below.
-        if not args.auto_promote:
-            discord(3)
+        # not run yet.
+        #
+        # It is posted HERE and not after the promotion, even under
+        # --auto-promote. Cards go out in strict numerical order, so Stage 3's
+        # certification is announced before Stage 4's lifecycle and Stage 5's
+        # promotion rather than after them. The cost is that under
+        # --auto-promote this card is built before `auto_promotion` is on the
+        # handoff, so its promotion section reads READY FOR PROMOTION / STAGED
+        # and prints the --promote-only command that this same run is about to
+        # execute. That is the correct division: Stage 3 announces what was
+        # CERTIFIED, and the promotion outcome is Stage 5's card to carry.
+        discord(3)
 
         for tf in certify_tfs:
             run_step(stage4_cmd(strat, tf, args.start, _today(), out_dir),
                      f"STAGE 4 · verify_full.py · lifecycle {tf}", dry_run=dry)
+        # Card 4 after every timeframe, for the same reason Card 3 waits: it
+        # reads ONE run's artifacts directory and defaults to the newest.
+        discord(4)
     except subprocess.CalledProcessError as e:
         print(f"\nABORTED: {' '.join(str(c) for c in e.cmd)} exited "
               f"{e.returncode}.", file=sys.stderr)
@@ -851,10 +907,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         outcome = auto_promote(strat, out_dir=out_dir, dry_run=dry)
         rc = int(outcome["returncode"])
         promotions, rows = outcome["promotions"], outcome["rows"]
-        # Now the card, and only now: the promotion outcome is on the handoff,
-        # so the section reads AUTOMATICALLY PROMOTED with the commit rather
-        # than telling a reader to run a command that has already run.
-        discord(3)
+        # Card 5 last, and only now: the promotion outcome is on the handoff,
+        # so the card reports what was actually promoted and to which commit
+        # rather than a promotion that had not happened when it was built.
+        discord(5)
     elif not dry:
         rows = ((_read_summary(strat, STAGE3_SUMMARY_FILE, 3, out_dir) or {})
                 .get("results") or [])

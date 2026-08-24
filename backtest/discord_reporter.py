@@ -1734,7 +1734,7 @@ def build_stage1_embed(strat: str, blob: dict[str, Any],
     ]
 
     return {
-        "title": f"\U0001F9ED Stage 1 · Regime Firewall: {strat}",
+        "title": f"\U0001F50D Stage 1 · Baseline Screening & Regime Profiling: {strat}",
         "description": text,
         "color": SLATE_BLUE if promoted else AMBER,
         "fields": fields,
@@ -2190,7 +2190,7 @@ def build_stage2_embed(strat: str, blob: dict[str, Any],
     ]
 
     embed = {
-        "title": f"\U0001F39B\uFE0F Stage 2 · Parameter Optimization: {strat}",
+        "title": f"\U0001F4CA Stage 2 · Parameter Scan & Plateau Ranking: {strat}",
         "description": text,
         # Violet when something was optimised, amber when nothing was. Amber
         # rather than red for the same reason as Stage 1: a stage that produced
@@ -3121,7 +3121,7 @@ def build_stage3_embed(strat: str, blob: dict[str, Any],
     ]
 
     embed = {
-        "title": f"\U0001F510 Stage 3 · Gate Audit & Certification: {strat}",
+        "title": f"\U0001F512 Stage 3 · Gate Audit & Certification: {strat}",
         "description": text,
         # Teal when something was certified, amber when nothing was. Amber
         # rather than red for the same reason as the other cards: a holdout
@@ -3649,7 +3649,7 @@ def build_stage4_embed(strat: str, rows: list[dict[str, Any]],
     ]
 
     return {
-        "title": f"\U0001F4D8 Stage 4 · Full Lifecycle: {strat}",
+        "title": f"\U0001F4C8 Stage 4 · Lifecycle Verification & Tear Sheet: {strat}",
         "description": text,
         # Graphite when something was verified, amber when nothing could be
         # read - amber rather than red for the reason Stage 1 gives: a stage
