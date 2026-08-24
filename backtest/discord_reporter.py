@@ -3,7 +3,7 @@ backtest.discord_reporter - post a pipeline card to a Discord webhook.
 
 Location:  ~/src/trading/backtest/discord_reporter.py
 
-Four cards, one transport
+Five cards, one transport
 -------------------------
 - **`--mode promotion`** (the default, and `--stage 5`): the handful of numbers
   a promotion decision rests on, passed in on the command line by whatever
@@ -82,8 +82,46 @@ Four cards, one transport
   sealed configuration was staged by Stage 3 and committed by nobody, and
   announcing it as promoted is how a strategy nobody promoted comes to be
   believed to be in the incubator.
+- **`--mode verify`** (equivalently `--stage 4`): Stage 4's FULL LIFECYCLE
+  summary, read out of the `dual_metrics_<SYMBOL>.json` snapshots in the run's
+  own artifacts directory (`--artifacts`, defaulting to the newest
+  `verify_<stamp>/` and naming whichever it picked on the card). One row per
+  contract: CAGR, net P&L, total trades, the friction share, and the top
+  regime's alpha score.
 
-Four cards now, and the reason the count keeps growing is that each one
+  **It carries no gate table and no verdict, because Stage 4 produces
+  neither.** That window CONTAINS the Stage 3 holdout, so every number on the
+  card is in-sample by construction - the card says so above the table, in the
+  colour it is drawn in (graphite, never the promotion green), and in a field
+  that states outright that this stage certifies nothing. A lifecycle run read
+  as a certification is the one mistake this card could cause on its own.
+
+  Four of its five columns are transcribed straight from the snapshot. The
+  fifth, FRIC, is a division of two figures the run recorded - total costs
+  over GROSS profit - and it inherits `verify_full.cost_drag`'s rule exactly:
+  undefined, printed `--`, where gross P&L was not positive, because a
+  strategy that lost money gross has no profit for its costs to be a share of
+  and `0%` there reads as a run that cost nothing. It is on the card because
+  it is the number that decides whether an edge is real: an edge handing 85%
+  of its gross to the broker dies on one extra tick of slippage while every
+  ratio above it still reads fine.
+
+  ALPHA is the designated quadrant's `net P&L x profit factor`, transcribed
+  from the UNSUFFIXED `regime_profile_<SYM>_<TF>.json` Stage 4 wrote for the
+  same run. The suffixed `_version_a` files beside it are STAGE 1's, profiled
+  over the charter window alone; reading one as a fallback would put an
+  in-sample score under a lifecycle heading with every column still lining up.
+  A missing profile and a run that designated no home regime both print `--`
+  and are COUNTED separately under the table, because they are fixed by
+  different work.
+
+  Rows are ordered by contract and NOT ranked. Stage 4 selects nothing, and
+  sorting by CAGR would give a leaderboard's shape to a stage that produced no
+  leaderboard. Nothing is summed across contracts either: symbols are never
+  blended here, and a total net P&L over a run of independent simulations is a
+  portfolio number no backtest in this repository produced.
+
+Five cards now, and the reason the count keeps growing is that each one
 announces a DIFFERENT decision. A Stage 2 card is not a promotion and not a
 screen: every configuration on it advanced, because Stage 2 prunes nothing, and
 the card says so rather than letting a reader infer a survival rate from a
@@ -375,6 +413,71 @@ NOT_AUDITED = "NOT AUDITED"
 # The Stage 1 handoff, and the two words it records per configuration.
 PROMOTED = "PROMOTED"
 DROPPED = "DROPPED"
+
+# --------------------------------------------------------------------------
+# Stage 4 · the full-lifecycle card
+# --------------------------------------------------------------------------
+
+# Stage 4's own colour. Graphite, and deliberately neither the promotion green
+# nor Stage 3's teal: this stage certifies NOTHING. Its window contains the
+# holdout Stage 3 already spent, so every number on the card is in-sample by
+# construction, and a card in a certification colour is exactly how a
+# lifecycle run comes to be read as a verdict. The five cards in a channel are
+# slate (screen), violet (sweep), teal (certification), graphite (lifecycle)
+# and green (promotion).
+GRAPHITE = 0x607D8B
+
+# A Stage 4 row carries five metrics for one contract. Whatever does not fit is
+# COUNTED on the card, as everywhere else here.
+STAGE4_MAX_ROWS = 24
+
+# The width the Stage 4 table is built to, for the reason the Stage 3 one is:
+# Discord wraps a code block that overruns the viewport, and a wrapped
+# fixed-width table is worse than no table. It is a design TARGET, not a clip -
+# the columns still size to their widest CELL - so the way to hold it is to
+# keep the TOKENS short, which is what `_fmt_money` is for (`123.5k`, not
+# `123,456.78`).
+STAGE4_TABLE_WIDTH = 56
+
+# What Stage 4 writes per contract, and what this card reads. The metrics
+# snapshot beside the tear sheets - `backtest/report_html.write_dual_reports` -
+# rather than the `verify_<SYMBOL>.json` handoff, because the snapshot is the
+# file a promotion cites and it lives in the run's OWN timestamped directory:
+# a handoff at a stable path is rewritten by the next lifecycle run, and a card
+# announcing one run's window over another run's numbers is the substitution
+# nothing downstream could detect.
+DUAL_METRICS_GLOB = "dual_metrics_*.json"
+DUAL_METRICS_PREFIX = "dual_metrics_"
+
+# The regime profile Stage 4 writes for the SAME run, and the only file this
+# card takes a quadrant from. It is UNSUFFIXED because `verify_full.py`
+# constructs `RegimeProfiler` with no `version`, and the suffixed
+# `regime_profile_<SYM>_<TF>_version_<a|b>.json` files sitting beside it are
+# STAGE 1's - profiled over the charter window alone. Reading one of those as a
+# fallback would print an in-sample-window alpha score under a lifecycle
+# heading, with every column still lining up. A missing profile is reported as
+# missing.
+REGIME_PROFILE_FILE = "regime_profile_{symbol}_{tf}.json"
+
+# Stage 4's own words about what it is not, on the card rather than in a
+# footnote. The stage prints this on the console and records
+# `is_certification: false` in its JSON; a card that dropped it would be the
+# one place these metrics appear with no such statement attached.
+STAGE4_NOT_CERTIFICATION = (
+    "**Not a certification** — this window CONTAINS the Stage 3 holdout, so "
+    "every number below is in-sample by construction. The certified verdicts "
+    "are Gate R's, in `gate_audit_<SYMBOL>_<TF>.json`.")
+
+# The metrics on this card are VERSION A's. Stage 4 profiles Version A, drags
+# its costs and writes its trade log, so pairing those with Version B's
+# headline numbers would describe two different runs in one row.
+STAGE4_VERSION_NOTE = "Version A · rule-based"
+
+# The profiler's designation, when it did not make one. `primary` is None when
+# no quadrant cleared the designation bars, which is a FINDING - the strategy
+# has no home environment on these bars - and must not render as the same `--`
+# a missing profile gets. Counted separately under the table.
+NO_HOME_REGIME = "None"
 
 # A webhook POST succeeds with 204 No Content. With ?wait=true it is 200 and the
 # body is the created message, so both are accepted.
@@ -1901,6 +2004,438 @@ def _fenced_fields(lines: list[str], budget: int, name: str, cont: str,
     return fields, len(lines) - i
 
 
+# --------------------------------------------------------------------------
+# Stage 4 · full-lifecycle verification
+# --------------------------------------------------------------------------
+
+def default_verify_dir(strat: str, out_dir: str | None = None) -> Path:
+    """
+    The NEWEST `verify_<stamp>/` directory under the strategy's pipeline dir.
+
+    Stage 4 writes into a directory stamped with the run's UTC time precisely
+    so a re-run never overwrites the evidence an earlier decision was made on,
+    which means there is no stable path to default to. Sorted by NAME rather
+    than by mtime: the name carries the stamp Stage 4 wrote it under, and an
+    mtime moves when a directory is copied off the NFS mount or a report is
+    regenerated inside it.
+
+    Whichever directory this resolves to is PRINTED on the card and in the
+    success line, so the choice is visible rather than silent - that is the
+    whole reason it is allowed to be a default at all.
+    """
+    base = pipeline_dir(strat, out_dir)
+    runs = sorted((p for p in base.glob("verify_*") if p.is_dir()),
+                  key=lambda p: p.name)
+    if not runs:
+        raise FileNotFoundError(
+            f"no verify_<stamp>/ directory in {base}. Run stage 4 first "
+            f"(python3 backtest/verify_full.py --strat {strat} ...), or name "
+            f"the directory with --artifacts.")
+    return runs[-1]
+
+
+def _finite(value: Any) -> float | None:
+    """
+    A float, or None for anything that is not a measurement.
+
+    NaN is the shape a missing metric arrives in: the engine writes NaN for a
+    ratio it could not compute and `json.dump` round-trips it as a float, so an
+    unguarded format call renders `nan%` where the truthful cell is `--`.
+    """
+    if value is None or value == "":
+        return None
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if out != out else out
+
+
+def _fmt_money(value: Any) -> str:
+    """
+    One money cell, compact, so the table holds `STAGE4_TABLE_WIDTH`.
+
+    `123.5k` rather than `123,456.78`: net P&L over sixteen years and an alpha
+    score (net P&L x profit factor) are both wide enough on their own to wrap
+    this table on a phone, and a wrapped fixed-width table is worse than a
+    coarse one. The exact figures are in `dual_metrics_<SYMBOL>.json` and on
+    the tear sheet, and the card names the directory holding both.
+    """
+    number = _finite(value)
+    if number is None:
+        return "--"
+    size = abs(number)
+    if size >= 1_000_000:
+        return f"{number / 1_000_000:,.2f}M"
+    if size >= 10_000:
+        return f"{number / 1_000:,.1f}k"
+    return f"{number:,.0f}"
+
+
+def _fmt_pct(value: Any, decimals: int = 1) -> str:
+    """One percentage cell. `--` for a metric nobody measured, never `0.0%`."""
+    number = _finite(value)
+    return "--" if number is None else f"{number:.{decimals}f}%"
+
+
+def friction_share(metrics: dict[str, Any]) -> float | None:
+    """
+    Costs as a percentage of GROSS profit, or None when that is undefined.
+
+    The one derived number on this card, and it is a division of two figures
+    the run already recorded (`total_costs`, `gross_pnl`) rather than a metric
+    re-scored from bars. It is here because it is the number that decides
+    whether an edge is real - an edge handing 85% of its gross to the broker
+    dies on one extra tick of slippage while every ratio above it still reads
+    fine - and `dual_metrics.json` carries the two totals but not their ratio.
+
+    **The undefined rule is `backtest/verify_full.cost_drag`'s, exactly**: a
+    non-positive gross P&L has no profit for costs to be a share of, so the
+    answer is None rather than 0.0. Printing 0% for a strategy that lost money
+    gross reads as a run that cost nothing, which is the opposite of what
+    happened.
+    """
+    gross = _finite(metrics.get("gross_pnl"))
+    costs = _finite(metrics.get("total_costs"))
+    if gross is None or costs is None or gross <= 0:
+        return None
+    return 100.0 * costs / gross
+
+
+def top_regime_alpha(artifacts: Path, symbol: str, tf: str) -> dict[str, Any] | None:
+    """
+    The designated quadrant and its ALPHA SCORE, read from Stage 4's own
+    regime profile - or None when this run wrote none.
+
+    The score is `net P&L x profit factor` inside one quadrant, which is what
+    `backtest/profiler.designate` ranks on; it is transcribed, never
+    recomputed. Nothing else on this card knows how a home regime is chosen and
+    nothing here re-derives one, because a quadrant named by a notifier is a
+    live-trading instruction nobody certified.
+
+    Only the UNSUFFIXED `regime_profile_<SYMBOL>_<TF>.json` is read. The
+    suffixed `_version_a` / `_version_b` files in the same directory are Stage
+    1's, profiled over the charter window alone - printing one of those under a
+    lifecycle heading would attach an in-sample score to a whole-lifecycle row
+    with every column still lining up.
+
+    Looked up in the artifacts directory first and then in its PARENT, because
+    `verify_full.py` passes the profiler `art_dir.parent` - the stage's own
+    pipeline directory - so the live supervisor can find the latest profile
+    without being told a timestamp.
+    """
+    name = REGIME_PROFILE_FILE.format(symbol=symbol, tf=tf)
+    for candidate in (artifacts / name, artifacts.parent / name):
+        try:
+            blob = json.loads(candidate.read_text())
+        except (OSError, ValueError):
+            continue
+        regime = str(blob.get("optimal_regime") or NO_HOME_REGIME)
+        designated = regime != NO_HOME_REGIME
+        return {
+            "regime": regime if designated else None,
+            "quadrant": blob.get("optimal_quadrant") if designated else None,
+            "score": blob.get("optimal_score") if designated else None,
+            "profit_factor": (blob.get("optimal_profit_factor")
+                              if designated else None),
+            "trade_count": (blob.get("optimal_trade_count")
+                            if designated else None),
+            "designated": designated,
+            "source": str(candidate),
+        }
+    return None
+
+
+def _symbol_from_name(path: Path) -> str:
+    """`dual_metrics_NQ.json` -> `NQ`. The fallback when a file has no meta."""
+    stem = path.stem
+    return stem[len(DUAL_METRICS_PREFIX):] if stem.startswith(
+        DUAL_METRICS_PREFIX) else stem
+
+
+def _check_strategy(blob: dict[str, Any], path: Path,
+                    strat: str | None) -> None:
+    """
+    Refuse another strategy's snapshot, the way `pipeline.read_stage` refuses
+    another strategy's handoff.
+
+    A `dual_metrics_<SYMBOL>.json` is not written through `write_stage` and
+    carries no stage number, so that check cannot be delegated - but the
+    failure it prevents is the same one and is worse here: a card posts one
+    strategy's lifecycle numbers under another's name, and a Discord card is
+    exactly the artifact nobody cross-checks.
+
+    `strat` is the name the OPERATOR typed and `meta.strategy` is the MODULE's,
+    and for a promoted strategy those differ by construction:
+    `approved_incubator/<strat>/strat.py` is module `strat` under directory
+    name `<strat>`. That one spelling is accepted; anything else is refused.
+    """
+    recorded = str((blob.get("meta") or {}).get("strategy") or "").strip()
+    wanted = str(strat or "").strip()
+    if not wanted or not recorded:
+        return
+    if recorded.lower() in (wanted.lower(), "strat"):
+        return
+    raise ValueError(
+        f"{path.name} was written for strategy {recorded!r}, not {wanted!r}. "
+        f"Posting it under --strat {wanted} would announce one strategy's "
+        f"lifecycle under another's name.")
+
+
+def stage4_rows(artifacts: str | Path,
+                strat: str | None = None) -> list[dict[str, Any]]:
+    """
+    One row per `dual_metrics_<SYMBOL>.json` in the artifacts directory.
+
+    Every file in the directory becomes a row, INCLUDING one that could not be
+    read: a card shorter than the run it announces reads as a shorter run, and
+    "the snapshot is corrupt" and "this contract was never verified" are fixed
+    by completely different work. An unreadable row carries `error` and renders
+    every metric as `--`; it never renders as a contract that measured zero.
+
+    Ordered by (symbol, timeframe) and NOT ranked. Stage 4 selects nothing -
+    it is one full-lifecycle run per contract, no gate and no verdict - and
+    sorting by CAGR or net P&L would put a leaderboard's shape on a stage that
+    produced no leaderboard.
+    """
+    directory = Path(artifacts)
+    if not directory.is_dir():
+        raise FileNotFoundError(f"{directory} is not a directory. Name the "
+                                f"stage 4 run's artifacts directory with "
+                                f"--artifacts.")
+    files = sorted(directory.glob(DUAL_METRICS_GLOB))
+    if not files:
+        # An empty screen is a result; an artifacts directory with no metrics
+        # snapshot in it is the wrong directory. Refused rather than posted as
+        # an empty card, because the numbers a card would need are not missing
+        # - they were never looked for here.
+        raise FileNotFoundError(
+            f"no {DUAL_METRICS_GLOB} in {directory}. Stage 4 writes them into "
+            f"its verify_<stamp>/ directory; name that one with --artifacts.")
+
+    rows: list[dict[str, Any]] = []
+    for path in files:
+        symbol = _symbol_from_name(path)
+        try:
+            blob = json.loads(path.read_text())
+        except (OSError, ValueError) as exc:
+            rows.append({"symbol": symbol, "tf": None, "source": str(path),
+                         "error": f"{type(exc).__name__}: {exc}"})
+            continue
+
+        _check_strategy(blob, path, strat)
+        meta = blob.get("meta") or {}
+        version_a = blob.get("version_a") or {}
+        metrics = version_a.get("metrics") or {}
+        symbol = str(meta.get("symbol") or symbol)
+        tf = str(meta.get("timeframe") or "") or None
+        regime = top_regime_alpha(directory, symbol, tf) if tf else None
+
+        rows.append({
+            "symbol": symbol,
+            "tf": tf,
+            # CAGR, net P&L and the trade count as the run recorded them. The
+            # engine computed `annualized_return_pct` off its DAILY equity
+            # curve, which is what makes a 15m run and a 1d run comparable;
+            # recomputing it from anything on this card would not be.
+            "cagr_pct": metrics.get("annualized_return_pct"),
+            "net_pnl": metrics.get("total_pnl"),
+            "trades": metrics.get("trade_count"),
+            "gross_pnl": metrics.get("gross_pnl"),
+            "total_costs": metrics.get("total_costs"),
+            "friction_pct": friction_share(metrics),
+            "regime": regime,
+            "window": {"start": meta.get("start"), "end": meta.get("end")},
+            # Whether the snapshot holds a Version B at all. None is "not run"
+            # and must not collapse into a B that ran and scored nothing.
+            "version_b": blob.get("version_b") is not None,
+            "source": str(path),
+            "error": None,
+        })
+    return rows
+
+
+def format_stage4_table(rows: list[dict[str, Any]],
+                        max_rows: int = STAGE4_MAX_ROWS
+                        ) -> tuple[str, int, dict[str, str]]:
+    """
+    The lifecycle table as one fixed-width block, plus the quadrant legend.
+
+    Returns `(text, hidden, legend)`. `hidden` is how many contracts did not
+    fit and is printed on the card by the caller.
+
+    The QD column carries the `Q1`..`Q4` id the profiler recorded and the
+    legend maps only the ids that appear, built FROM the rows - no short
+    spelling of a regime name lives in this module, for the reason the Stage 1
+    table gives: a second one would be free to disagree with `mdlib.regimes`,
+    and a card naming the wrong environment is caught only in live trading.
+    """
+    header = ["SYM", "TF", "CAGR", "NET P&L", "TRD", "FRIC", "QD", "ALPHA"]
+    body: list[list[str]] = []
+    legend: dict[str, str] = {}
+
+    ordered = sorted(rows, key=lambda r: (str(r.get("symbol") or ""),
+                                          str(r.get("tf") or "")))
+    shown = ordered[: max(0, int(max_rows))]
+    for row in shown:
+        regime = row.get("regime") or {}
+        quad, name = regime.get("quadrant"), regime.get("regime")
+        if quad and name:
+            legend[str(quad)] = str(name)
+        body.append([
+            str(row.get("symbol") or "?"),
+            str(row.get("tf") or "--"),
+            _fmt_pct(row.get("cagr_pct"), decimals=2),
+            _fmt_money(row.get("net_pnl")),
+            _fmt_count(row.get("trades")),
+            _fmt_pct(row.get("friction_pct")),
+            str(quad) if quad else "--",
+            _fmt_money(regime.get("score")),
+        ])
+
+    widths = [max(len(header[i]), *(len(r[i]) for r in body)) if body
+              else len(header[i]) for i in range(len(header))]
+    align = ["<", "<", ">", ">", ">", ">", "<", ">"]
+
+    def line(cells: list[str]) -> str:
+        return "  ".join(format(c, f"{align[i]}{widths[i]}")
+                         for i, c in enumerate(cells)).rstrip()
+
+    out = [line(header), line(["-" * w for w in widths])]
+    out.extend(line(r) for r in body)
+    return "\n".join(out), len(ordered) - len(shown), legend
+
+
+def stage4_regime_note(rows: list[dict[str, Any]]) -> str:
+    """
+    What the ALPHA column is, and why a `--` in it is one of two things.
+
+    A contract with NO profile and a contract whose profile designated no home
+    regime both print `--`, and they are fixed by different work: the first is
+    a profiler that did not run (or wrote elsewhere), the second is a strategy
+    with no environment on these bars. Counted separately rather than left as
+    one dash.
+    """
+    missing = sum(1 for r in rows if not r.get("error") and not r.get("regime"))
+    undesignated = sum(1 for r in rows
+                       if (r.get("regime") or {}).get("designated") is False)
+    note = ("_ALPHA is the designated quadrant's alpha score (net P&L × PF) "
+            "from `regime_profile_<SYM>_<TF>.json`, as the profiler ranked "
+            "it._")
+    if missing:
+        note += f" _{missing} contract(s) have no profile._"
+    if undesignated:
+        note += (f" _{undesignated} designated no home quadrant — no quadrant "
+                 f"cleared the designation bars._")
+    return note
+
+
+def stage4_window(rows: list[dict[str, Any]]) -> str:
+    """
+    The lifecycle window, or a statement that it varies.
+
+    Every contract in one Stage 4 run is asked for the same `--start`/`--end`,
+    but the bars each one HAS are its own - the window recorded here is the
+    first and last bar the run actually saw. Where they differ the card says
+    so rather than printing one contract's span above another's numbers.
+    """
+    spans = {(r["window"].get("start"), r["window"].get("end"))
+             for r in rows if not r.get("error") and r.get("window")}
+    spans = {s for s in spans if s[0] and s[1]}
+    if not spans:
+        return "not recorded"
+    if len(spans) > 1:
+        return "varies by contract — see the tear sheets"
+    start, end = spans.pop()
+    return f"{start} → {end}"
+
+
+def build_stage4_embed(strat: str, rows: list[dict[str, Any]],
+                       source: str | Path | None = None,
+                       max_rows: int = STAGE4_MAX_ROWS) -> dict[str, Any]:
+    """
+    Stage 4's card. Pure - sends nothing, reads nothing, and every value on it
+    except the friction share is transcribed from the metrics snapshot Stage 4
+    wrote (see `friction_share` for the one division and the rule it inherits).
+
+    It carries no gate table and no verdict, because Stage 4 produces neither:
+    the window contains the holdout Stage 3 spent, so a badge here would be a
+    certification of contaminated bars wearing the same shape as a real one.
+    What is on it is the lifecycle question set - what it compounded at, what
+    it made, how often it traded, what the broker took, and which environment
+    the alpha actually came from.
+    """
+    table, hidden, legend = format_stage4_table(rows, max_rows)
+    readable = [r for r in rows if not r.get("error")]
+    broken = len(rows) - len(readable)
+    with_b = sum(1 for r in readable if r.get("version_b"))
+
+    description = [
+        f"**Lifecycle window** `{stage4_window(readable)}`",
+        STAGE4_NOT_CERTIFICATION,
+        f"**Metrics** {STAGE4_VERSION_NOTE} — the version Stage 4 profiles, "
+        f"drags the costs of, and writes the trade log for",
+        "```text",
+        table if table.strip() else "no contract was verified",
+        "```",
+        # FRIC is the number a reader acts on and it is the one that is
+        # meaningless unlabelled: costs as a share of GROSS profit, undefined
+        # (`--`) where there was no gross profit for them to be a share of.
+        "_FRIC is total costs as a share of GROSS profit — `--` where gross "
+        "P&L was not positive, which is not the same as costing nothing._",
+        stage4_regime_note(readable),
+    ]
+    if legend:
+        description.append("**Regimes** " + " · ".join(
+            f"`{q}` {legend[q]}" for q in sorted(legend)))
+    if hidden:
+        description.append(
+            f"_{hidden} further contract(s) are not shown — every snapshot is "
+            f"in the artifacts directory below._")
+    if broken:
+        description.append(
+            f"_{broken} snapshot(s) could not be read and carry no metrics — "
+            f"that is a corrupt file, not a contract that traded nothing._")
+
+    text = "\n".join(description)
+    if len(text) > MAX_EMBED_DESCRIPTION:
+        # Trim the TABLE and never the header lines: without the window and
+        # the not-a-certification statement the numbers underneath are
+        # unlabelled, which is the one way this card can mislead.
+        keep = MAX_EMBED_DESCRIPTION - 64
+        text = text[:keep] + "\n```\n_truncated — see the artifacts._"
+
+    fields = [
+        {"name": "Contracts", "value": str(len(rows)), "inline": True},
+        {"name": "Verified", "value": str(len(readable)), "inline": True},
+        {"name": "Unreadable", "value": str(broken), "inline": True},
+        # NOT RUN rather than 0: a Version B that was never asked for and one
+        # that ran and filtered nothing are different runs, and `--ml` is
+        # opt-in on this stage.
+        {"name": "Version B",
+         "value": (f"{with_b}/{len(readable)} snapshot(s)" if with_b
+                   else "NOT RUN"),
+         "inline": True},
+        {"name": "Certifies", "value": "nothing — Stage 3 holds the verdict",
+         "inline": True},
+        {"name": "Artifacts", "value": _fmt_report(str(source or "")),
+         "inline": False},
+    ]
+
+    return {
+        "title": f"\U0001F4D8 Stage 4 · Full Lifecycle: {strat}",
+        "description": text,
+        # Graphite when something was verified, amber when nothing could be
+        # read - amber rather than red for the reason Stage 1 gives: a stage
+        # that produced no rows is a result to look at, not a crash.
+        "color": GRAPHITE if readable else AMBER,
+        "fields": fields,
+        "footer": {"text": "backtest/discord_reporter.py · Stage 4 full "
+                           "lifecycle · values as recorded by verify_full.py, "
+                           "not recomputed · NOT a certification"},
+    }
+
+
 def build_payload(embed: dict[str, Any]) -> dict[str, Any]:
     return {"embeds": [embed]}
 
@@ -1975,8 +2510,9 @@ def build_parser() -> argparse.ArgumentParser:
         description="Post a pipeline card to a Discord webhook: a promotion "
                     "scorecard (--mode promotion), Stage 1's regime-firewall "
                     "leaderboard (--stage 1), Stage 2's parameter "
-                    "optimization summary (--stage 2), or Stage 3's gate "
-                    "audit and certification (--stage 3).",
+                    "optimization summary (--stage 2), Stage 3's gate "
+                    "audit and certification (--stage 3), or Stage 4's "
+                    "full-lifecycle metrics (--stage 4).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Values are printed as supplied - nothing here recomputes a metric.\n"
@@ -1987,7 +2523,8 @@ def build_parser() -> argparse.ArgumentParser:
             "  --mode promotion   --strat X --symbol NQ --tf 15m --pf 1.42 ...\n"
             "  --stage 1          --strat X [--survivors <surviving_assets.json>]\n"
             "  --stage 2          --strat X [--summary <stage2_summary.json>]\n"
-            "  --stage 3          --strat X [--audit <stage3_audit_summary.json>]"
+            "  --stage 3          --strat X [--audit <stage3_audit_summary.json>]\n"
+            "  --stage 4          --strat X [--artifacts <verify_<stamp>/>]"
         ),
     )
     # Resolved in main() rather than defaulted here, so the NAME that supplied
@@ -2003,15 +2540,18 @@ def build_parser() -> argparse.ArgumentParser:
     # dest so they cannot disagree. A card labelled Stage 1 that was built by
     # the promotion path would announce a screen as a promotion.
     parser.add_argument("--mode", dest="mode", default=None,
-                        choices=["promotion", "baseline", "scan", "audit"],
+                        choices=["promotion", "baseline", "scan", "audit",
+                                 "verify"],
                         help="promotion (default): the Stage 5 scorecard. "
                              "baseline: Stage 1's regime-firewall leaderboard. "
                              "scan: Stage 2's parameter optimization summary. "
-                             "audit: Stage 3's gate audit and certification.")
+                             "audit: Stage 3's gate audit and certification. "
+                             "verify: Stage 4's full-lifecycle metrics.")
     parser.add_argument("--stage", dest="stage", default=None,
-                        choices=["1", "2", "3", "5"],
+                        choices=["1", "2", "3", "4", "5"],
                         help="1 == --mode baseline, 2 == --mode scan, "
-                             "3 == --mode audit, 5 == --mode promotion")
+                             "3 == --mode audit, 4 == --mode verify, "
+                             "5 == --mode promotion")
     parser.add_argument("--strat", required=True, help="strategy name, e.g. sma_momentum_crossover")
     parser.add_argument("--symbol", default="", help="promotion mode: the contract the decision rests on, e.g. NQ")
     parser.add_argument("--tf", default="", help="promotion mode: timeframe, e.g. 15m")
@@ -2027,15 +2567,25 @@ def build_parser() -> argparse.ArgumentParser:
                         help="audit mode: path to stage3_audit_summary.json "
                              "(default: <BT_ARTIFACTS>/pipeline/<strat>/"
                              f"{STAGE3_SUMMARY_FILE})")
+    parser.add_argument("--artifacts", default=None,
+                        help="verify mode: the Stage 4 run's artifacts "
+                             "directory, holding its "
+                             f"{DUAL_METRICS_GLOB} snapshots (default: the "
+                             "NEWEST verify_<stamp>/ under "
+                             "<BT_ARTIFACTS>/pipeline/<strat>/, named on the "
+                             "card either way)")
     parser.add_argument("--out-dir", default=None,
-                        help="baseline, scan and audit modes: override the "
-                             "pipeline directory the handoff is looked up in")
+                        help="baseline, scan, audit and verify modes: "
+                             "override the pipeline directory the handoff - "
+                             "or, in verify mode, the verify_<stamp>/ run - "
+                             "is looked up in")
     parser.add_argument("--max-rows", type=int, default=None,
                         help=f"leaderboard rows on the card. Each mode keeps "
                              f"its OWN default, because the rows are different "
                              f"widths: baseline {STAGE1_MAX_ROWS}, scan "
                              f"{STAGE2_MAX_ROWS} (each row carries a parameter "
-                             f"set), audit {STAGE3_MAX_ROWS}. Whatever does "
+                             f"set), audit {STAGE3_MAX_ROWS}, verify "
+                             f"{STAGE4_MAX_ROWS}. Whatever does "
                              f"not fit is COUNTED on the card, never dropped "
                              f"in silence.")
     parser.add_argument("--pf", default="", help="out-of-sample profit factor, or a token like 'NOT EVALUATED'")
@@ -2057,7 +2607,7 @@ def resolve_mode(mode: str | None, stage: str | None) -> str:
     before the Stage 1 mode existed.
     """
     from_stage = {"1": "baseline", "2": "scan", "3": "audit",
-                  "5": "promotion"}.get(stage or "")
+                  "4": "verify", "5": "promotion"}.get(stage or "")
     if mode and from_stage and mode != from_stage:
         raise ValueError(f"--mode {mode} and --stage {stage} disagree "
                          f"(--stage {stage} means --mode {from_stage}).")
@@ -2115,6 +2665,23 @@ def _build_card(args: argparse.Namespace) -> tuple[dict[str, Any], str]:
         passed = sum(1 for r in rows if r.get("certified"))
         return embed, (f"Stage 3 certification '{args.strat}' "
                        f"({passed}/{len(rows)} certified)")
+
+    if mode == "verify":
+        # The DIRECTORY is the input here, not a handoff file: Stage 4 writes
+        # one `dual_metrics_<SYMBOL>.json` per contract into a run-stamped
+        # directory, and the card describes that run. Whichever directory this
+        # resolves to is named on the card and in the success line, so a
+        # defaulted choice is never a silent one.
+        path = (Path(args.artifacts) if args.artifacts
+                else default_verify_dir(args.strat, args.out_dir))
+        rows = stage4_rows(path, args.strat)
+        embed = build_stage4_embed(args.strat, rows, source=path,
+                                   max_rows=(args.max_rows
+                                             if args.max_rows is not None
+                                             else STAGE4_MAX_ROWS))
+        read = sum(1 for r in rows if not r.get("error"))
+        return embed, (f"Stage 4 lifecycle '{args.strat}' "
+                       f"({read}/{len(rows)} contract(s) from {path.name})")
 
     # The promotion card names one contract, so those two are required here
     # and only here. Checked rather than defaulted: a card headed `?` · `?` is

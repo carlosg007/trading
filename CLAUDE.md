@@ -219,7 +219,7 @@ bt-status  # = .venv/bin/python3 ~/src/trading/backtest/status.py
 streamlit run dashboard/app.py
 
 # Tests. No pytest config - each is a script that exits non-zero on failure.
-# Thirty-three suites. Everything except test_streaming_lake, test_engine_batching
+# Thirty-four suites. Everything except test_streaming_lake, test_engine_batching
 # and test_engine_vbt runs without the lake or a network (test_batch_runner's
 # --symbols checks skip, loudly, without it). test_report_gates.py shells out
 # to `node` for the trade inspector's own checks and skips them, loudly, when
@@ -251,6 +251,7 @@ python tests/test_profiler_precomputed.py  # the profiler reads the cache, not i
 python tests/test_stage1_charter.py     # the Stage 1 charter + the Discord card
 python tests/test_stage2_charter.py     # the Stage 2 charter: pairs, window, plateau
 python tests/test_stage3_charter.py     # the Stage 3 charter: Gate R, retention, the seal
+python tests/test_stage4_card.py        # the Stage 4 card: friction share, regime alpha
 python tests/test_temporal_chunking.py  # chunk continuity, warm-up, the trades a boundary cuts
 python tests/test_portfolio_config.py   # the four-account routing table and its guards
 python tests/test_portfolio_manager.py  # ATR sizing, signal netting, account routing
@@ -372,6 +373,14 @@ python3 backtest/discord_reporter.py --stage 2 --strat X
 # stage3_audit_summary.json: both windows, the target quadrant, Gate R, the
 # IS/OOS profit factors and the SHA-256 seal.
 python3 backtest/discord_reporter.py --stage 3 --strat X
+# Stage 4's full-lifecycle card, read from the dual_metrics_<SYMBOL>.json
+# snapshots in ONE run's artifacts directory: CAGR, net P&L, total trades, the
+# friction share and the top regime's alpha score, per contract. It certifies
+# nothing and carries no gate table. --artifacts defaults to the NEWEST
+# verify_<stamp>/ and the card names whichever it read.
+python3 backtest/discord_reporter.py --stage 4 --strat X
+python3 backtest/discord_reporter.py --stage 4 --strat X \
+    --artifacts /mnt/backtest/artifacts/pipeline/X/verify_20260824_101112
 python3 backtest/discord_reporter.py --stage 1 --strat X \
     --survivors /mnt/backtest/artifacts/pipeline/X/surviving_assets.json
 # Stage 2 still HONOURS an exclude_days a handoff carries; nothing writes one.
@@ -1735,7 +1744,10 @@ window contains the Stage 3 holdout, so its metrics are in-sample by
 construction and no gate table is printed. Cost drag is reported as a total,
 per trade, and as a share of GROSS profit; the third is the one that decides
 whether an edge is real, and it is `None` rather than `0%` when there is no
-gross profit for costs to be a share of.
+gross profit for costs to be a share of. The stage ends by printing the
+`discord_reporter.py --stage 4` command with `--artifacts` naming THIS run's
+directory: the snapshots that card reads live in a timestamped directory, and
+one built from the wrong one would describe a different run.
 
 **`backtest/status.py`** — the job tracker, both halves. `JobTracker` is what
 the runner writes (atomically: temp file, then `os.replace`); `main()` is what
@@ -1749,14 +1761,64 @@ PID is gone reads as **STALE**, because a bar frozen at 12/27 looks identical
 whether the run is slow or dead.
 
 **`backtest/discord_reporter.py`** — the webhook notifier, and the only place
-this repo posts anything to Discord. Four cards over one transport:
+this repo posts anything to Discord. Five cards over one transport:
 `--mode promotion` (the default, `--stage 5`) is the promotion scorecard, whose
 values are passed in on the command line; `--stage 1` / `--mode baseline` is
 Stage 1's regime-firewall leaderboard, read straight out of
 `surviving_assets.json`; `--stage 2` / `--mode scan` is Stage 2's parameter
 optimization summary, read straight out of `stage2_summary.json`; `--stage 3` /
 `--mode audit` is Stage 3's gate audit and certification, read straight out of
-`stage3_audit_summary.json`.
+`stage3_audit_summary.json`; `--stage 4` / `--mode verify` is Stage 4's
+full-lifecycle summary, read straight out of the `dual_metrics_<SYMBOL>.json`
+snapshots in one run's artifacts directory.
+
+- **The Stage 4 card is the only one that carries no verdict, because Stage 4
+  produces none.** That window CONTAINS the Stage 3 holdout, so every number on
+  it is in-sample by construction: the card says so above the table, states it
+  again in a `Certifies` field, and is drawn in graphite — never the promotion
+  green, and never Stage 3's teal. A lifecycle run read as a certification is
+  the one mistake this card could cause on its own.
+- **One row per contract**: `SYM · TF · CAGR · NET P&L · TRD · FRIC · QD ·
+  ALPHA`. Ordered by contract and NOT ranked — Stage 4 selects nothing, and
+  sorting by CAGR would give a leaderboard's shape to a stage that produced no
+  leaderboard. **Nothing is summed across contracts**: symbols are never
+  blended here, so a total net P&L would be a portfolio number no backtest in
+  this repository produced.
+- **FRIC is the one derived value on any of the five cards**, and it is a
+  division of two figures the run already recorded (`total_costs` over
+  `gross_pnl`), not a metric re-scored from bars. It inherits
+  `verify_full.cost_drag`'s rule exactly: **undefined, printed `--`, where
+  gross P&L was not positive**, because a strategy that lost money gross has no
+  profit for its costs to be a share of and `0%` there reads as a run that cost
+  nothing. It is on the card because it is the number that decides whether an
+  edge is real — an edge handing 85% of its gross to the broker dies on one
+  extra tick of slippage while every ratio above it still reads fine.
+- **ALPHA is the designated quadrant's `net P&L × profit factor`**, transcribed
+  from the UNSUFFIXED `regime_profile_<SYM>_<TF>.json` Stage 4 wrote for the
+  same run (looked up in the artifacts directory, then in the pipeline
+  directory the profiler actually writes to). The suffixed `_version_a` files
+  beside it are **Stage 1's**, profiled over the charter window alone, and are
+  never read as a fallback — that would put an in-sample score under a
+  lifecycle heading with every column still lining up. A missing profile and a
+  run that designated no home quadrant both print `--` and are COUNTED
+  separately under the table, because they are fixed by different work.
+- **A snapshot that cannot be read is a ROW, not a dropped file.** It carries
+  `--` in every metric column and is counted in `Unreadable`; a card shorter
+  than the run it announces reads as a shorter run, and "the file is corrupt"
+  and "this contract was never verified" must not share a shape. A directory
+  holding NO snapshots is refused outright rather than posted as an empty card:
+  that is the wrong directory, not an empty result.
+- **Another strategy's snapshot is refused**, the way `pipeline.read_stage`
+  refuses another strategy's handoff. `dual_metrics.json` is not written
+  through `write_stage` so that check cannot be delegated, and the failure it
+  prevents is worse here — the card would post one strategy's lifecycle under
+  another's name. The one accepted mismatch is the module spelling `strat`,
+  which is what `approved_incubator/<strat>/strat.py` records.
+- **`--artifacts` defaults to the NEWEST `verify_<stamp>/`**, sorted by NAME
+  (the stamp Stage 4 wrote it under) rather than by mtime, which moves when a
+  directory is copied off the NFS mount. The directory it resolved to is named
+  on the card and in the success line, so a defaulted choice is never a silent
+  one. Stage 4 prints the exact command with `--artifacts` filled in.
 
 - **The Stage 3 card carries the whole claim per configuration**: the strategy,
   BOTH windows (in-sample, so a reader knows what the parameters were fitted

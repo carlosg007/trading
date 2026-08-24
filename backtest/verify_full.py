@@ -489,6 +489,13 @@ def main(argv: list[str] | None = None) -> int:
 
     sym = rows[0]["symbol"] if rows else (symbols[0] if symbols else "NQ")
     print(next_step([
+        "Post the Stage 4 lifecycle card. It reads the dual_metrics_<SYMBOL>",
+        "snapshots in THIS run's directory and certifies nothing:",
+        "",
+        f"  python3 backtest/discord_reporter.py --stage 4 "
+        f"--strat {strat_name} \\",
+        f"      --artifacts {art_dir}",
+        "",
         "Read the tear sheets, then decide. Stage 5 promotes ONE version and",
         "refuses any whose Stage 3 audit is not PASS:",
         "",
