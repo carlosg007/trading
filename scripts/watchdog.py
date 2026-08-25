@@ -184,8 +184,20 @@ def alert(message: str, webhook: str | None = None) -> bool:
         embed = {"title": "🐕 Trading watchdog — DEGRADED",
                  "description": f"```\n{message[:3800]}\n```",
                  "color": 0xE67E22}
-        result = post_embed(build_payload([embed]), url)
-        return bool(getattr(result, "ok", result))
+        # (webhook, payload) — that ORDER, and build_payload takes ONE embed,
+        # not a list. Reversed, `requests.post` was handed the payload dict as
+        # its URL and raised AttributeError inside the except below, so every
+        # DEGRADED verdict was found, printed, and silently never delivered.
+        result = post_embed(url, build_payload(embed))
+        # post_embed returns a DICT. `getattr(result, "ok", result)` found no
+        # attribute and fell back to the dict itself, which is truthy for every
+        # non-empty dict — a failed post reported success.
+        if not result.get("ok"):
+            print(f"[watchdog] alert not delivered: "
+                  f"HTTP {result.get('http_status')} {result.get('error')}",
+                  file=sys.stderr)
+            return False
+        return True
     except Exception as exc:                                       # noqa: BLE001
         print(f"[watchdog] alert failed: {type(exc).__name__}: {exc}",
               file=sys.stderr)
