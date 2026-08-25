@@ -11,6 +11,7 @@ paths:
   - "tests/test_live_feed.py"
   - "data_pull/databento_live.py"
   - "tests/test_nt8_feed.py"
+  - "tests/test_nt8_listener.py"
 ---
 
 # The live regime service and the execution loop
@@ -259,6 +260,59 @@ that produced no entry and is never counted as an approval.
     `{SYMBOL}_{TF}.csv`, header `ts,open,high,low,close,volume`, appended on
     bar close, ISO-8601 timestamps carrying `Z` or an explicit offset. Until it
     runs, `--feed nt8` refuses and `auto` falls back to the lake.
+- **`realtime/nt8_bar_listener.py` is the PUSH transport, and it WRITES THE
+  SPOOL.** Added 2026-08-25. `POST /api/bars` takes one closed bar (or a list,
+  to drain a backlog after a reconnect) and appends it to the same
+  `{SYMBOL}_{TF}.csv` the feed reads; `GET /health` is what `trading-watchdog`
+  polls. It is the transport `nt8_feed.py` said to build if a push channel were
+  ever added — *write this spool rather than bypass it* — so `--feed nt8` and
+  `load_symbol_bars(source="nt8")` mean exactly one thing whether a bar arrived
+  over HTTP or was appended by a NinjaScript.
+  - **A private bar store would have cost four things at once**: the
+    forming-bar drop, the micro alias, aggregation through the LAKE's
+    resampler, and the single `ts` conversion. All four live behind
+    `realtime/feed.py`, and a second store read directly by `load_symbol_bars`
+    reaches a strategy having skipped every one of them.
+  - **The listener does NOT convert `ts`.** It writes the timestamp through
+    unchanged and declares the convention in the file's `# stamp=` header;
+    `read_spool` does the one subtraction. Converting in both places shifts
+    every bar a period the other way, and nothing raises. The default is
+    `close` because that is NT8's, it is PRINTED at startup and echoed on every
+    accepted bar, because the author of the NinjaScript is who has to notice it
+    is wrong.
+  - **One file carries one convention.** `read_spool` takes the LAST `# stamp=`
+    it sees, so a payload DECLARING a stamp that disagrees with the file's
+    header is refused (409) rather than appended — it would re-interpret every
+    bar already written. A payload that declares nothing has merely inherited
+    this process's default, and the FILE's header outranks that, for the same
+    reason it outranks it on read.
+  - **A duplicate timestamp is idempotent, not an error.** A publisher retrying
+    a request whose response was lost must not crash-loop and must not
+    double-write. It is reported as `duplicate` and COUNTED: a publisher
+    sending only duplicates is broken in a way that otherwise looks identical
+    to a working one. The duplicate index and the out-of-order high-water mark
+    are both re-seeded FROM THE FILE at startup — the ring buffer is memory and
+    the spool is the record.
+  - **What is refused at the door**, because nothing downstream re-checks it: a
+    naive timestamp, a timestamp off the timeframe's grid, an incoherent bar
+    (high below the close, negative volume, a non-finite price), and a
+    timeframe the lake cannot build. The forming-bar rule is NOT applied here —
+    it belongs to the reader and already runs there for every feed, and putting
+    it in two places lets them drift.
+  - **`/health` reports both clocks.** `last_bar_utc` is the market's and
+    `last_post_utc` is this process's; a publisher looping over a dead feed
+    keeps the second fresh forever while the first stops. `STARVED` (nothing
+    ever received, and a 503) is distinct from `HEALTHY` — a health endpoint
+    that says HEALTHY before its first bar is a watchdog that can never fire.
+    `STALE` is also what a shut market looks like; the watchdog owns the
+    session calendar that separates them.
+  - **THE PORT IS A REAL EXPOSURE.** It binds `0.0.0.0:8000`, so anything that
+    can route to the box can inject bars that live strategies decide on. Set
+    `$BT_NT8_LISTEN_TOKEN` to require an `X-NT8-Token` header, and prefer
+    binding the interface the NT8 workstation is actually on.
+  - Built on **Starlette**, which is already pinned and is the ASGI layer
+    FastAPI is built on. FastAPI is not installed and this is two routes over a
+    JSON body; the endpoints and payloads are unchanged by that choice.
 - **The bar feed resolves micros to their parent.** The baskets hold
   MNQ/MES/MCL/MGC and the tape is the full-size contract's, so without the
   alias this loop reads nothing and no-ops forever — looking exactly like a
@@ -345,6 +399,17 @@ python3 master_live.py --dry-run --once            # one cycle, nothing sent
 python3 master_live.py --dry-run --once --tf 1h --feed nt8    # the broker feed
 python3 master_live.py --dry-run --once --feed lake           # against history
 BT_NT8_SPOOL=/path/to/spool python3 master_live.py --feed nt8 --dry-run --once
+
+# THE PUSH RECEIVER. NT8 POSTs closed bars; this appends them to the spool
+# above, so `--feed nt8` reads pushed and file-appended bars identically.
+# Binds 0.0.0.0:8000 — set $BT_NT8_LISTEN_TOKEN before exposing it.
+python3 realtime/nt8_bar_listener.py
+python3 realtime/nt8_bar_listener.py --port 8000 --spool-dir /mnt/backtest/artifacts/nt8_bars
+#   --stamp close|open     what a posted `timestamp_utc` MEANS. Default close
+#                          (NT8's own). Written into the file header; the
+#                          conversion happens on READ, in read_spool, once
+#   --stale-after-bars N   /health reports STALE after N bar widths of silence
+curl -s localhost:8000/health
 # Databento is HISTORICAL: gap-fill and verification, never the live path.
 python3 data_pull/databento_live.py --symbol NQ --minutes 120
 python3 master_live.py --dry-run --interval-sec 30
