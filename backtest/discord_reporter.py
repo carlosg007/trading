@@ -2339,6 +2339,17 @@ def stage3_rows_from_audit(blob: dict[str, Any],
             "symbol": blob.get("symbol"),
             "timeframe": blob.get("timeframe"),
             "version": ver,
+            # The version STAGE 1 qualified this pair on, beside the version
+            # this row audits. `**prov` puts all three on the gate audit, so
+            # the adapter reads them off the file rather than re-deriving
+            # them - a B survivor certified as A only has to read the same way
+            # here as it does in `stage3_audit_summary.json`.
+            "stage1_version": blob.get("stage1_version"),
+            "stage1_version_certified": (
+                None if not blob.get("stage1_version")
+                else str(blob.get("stage1_version")).upper() == ver),
+            "version_b_certified": bool(blob.get("version_b_certified")),
+            "version_b_source": blob.get("version_b_source"),
             "status": status.get(ver, audit.get("status", NOT_EVALUATED)),
             # Gate R's own flag, never re-read off the numbers beside it.
             "certified": bool(passed.get(ver, audit.get("passed"))),

@@ -1642,6 +1642,194 @@ def test_drop_losing_days_clis() -> None:
 
 
 # --------------------------------------------------------------------------
+
+# --------------------------------------------------------------------------
+# 29. The Version A / Version B handoff, Stage 1 -> Stage 2 -> Stage 3
+# --------------------------------------------------------------------------
+# Stage 1 screens BOTH versions and a pair survives on either, recording which
+# one carried it. Until 2026-08-25 that answer travelled as far as the Stage 2
+# summary row and then stopped: `--ml` was a single global flag an operator
+# typed, so a pair that only Version B cleared was certified as Version A
+# unless somebody remembered to type it. The failure is silent in every
+# output - the Stage 3 summary is complete, every gate is filled in, and the
+# version column simply reads `A`.
+def test_version_b_survives_the_handoff(tmp: Path) -> None:
+    print("\n29. A Version B survivor is evaluated as Version B")
+
+    from backtest.pipeline import stage1_pairs
+    from backtest.audit_gates import resolve_version_b
+    import argparse
+
+    survivors = {"surviving_pairs": [
+        {"symbol": "NQ", "tf": "30m", "version": "B", "status": "PROMOTED",
+         "optimal_regime": "High Volatility / Ranging", "quadrant": "Q2",
+         "regime_pf": 1.4, "regime_trade_count": 61},
+        {"symbol": "NQ", "tf": "1h", "version": "B", "status": "PROMOTED",
+         "optimal_regime": "High Volatility / Ranging", "quadrant": "Q2",
+         "regime_pf": 1.2, "regime_trade_count": 44},
+        {"symbol": "ES", "tf": "15m", "version": "A", "status": "PROMOTED",
+         "optimal_regime": "Low Volatility / Trending", "quadrant": "Q3",
+         "regime_pf": 1.1, "regime_trade_count": 90},
+    ]}
+
+    pairs = stage1_pairs(survivors)
+    by_pair = {(p["symbol"], p["tf"]): p for p in pairs}
+    check("Stage 1's handoff carries the version per pair",
+          [p["version"] for p in pairs] == ["B", "B", "A"],
+          str([p["version"] for p in pairs]))
+
+    # -- Stage 2: the confirmation is requested for B and not for A ---------
+    from backtest.scan import _resolve_ml_confirmation
+    args = argparse.Namespace(ml=False, no_stage1_ml=False, ml_threshold=0.5)
+    scan = {"winner": {"params": {"ema_period": 20}}}
+    for sym, tf, want in (("NQ", "30m", True), ("NQ", "1h", True),
+                          ("ES", "15m", False)):
+        scope = {"version": by_pair[(sym, tf)]["version"]}
+        # `bars=None` short-circuits before any engine work; what is under
+        # test is WHICH pairs are asked for, not the backtest itself.
+        record = _resolve_ml_confirmation(args, scope, scan, "x.py", sym, tf,
+                                          None, None, {}, "demo")
+        asked = "no in-memory bars" in str(record.get("reason", ""))
+        check(f"Stage 2 {'requests' if want else 'does not request'} the ML "
+              f"confirmation for {sym} {tf} (stage1_version="
+              f"{scope['version']})",
+              asked is want, record.get("reason", ""))
+
+    # -- Stage 3: Version B is certified for a B survivor, with no --ml -----
+    args = argparse.Namespace(ml=False, no_stage1_ml=False)
+    for sym, tf, want in (("NQ", "30m", True), ("NQ", "1h", True),
+                          ("ES", "15m", False)):
+        target = {"symbol": sym, "timeframe": tf,
+                  "stage1_version": by_pair[(sym, tf)]["version"]}
+        got, why = resolve_version_b(target, args)
+        check(f"Stage 3 {'certifies' if want else 'does not certify'} Version "
+              f"B for {sym} {tf} with no --ml typed", got is want, why)
+
+    # A global --ml is a SUPERSET and can never turn a B survivor into an A
+    # certification - the direction that matters.
+    args_ml = argparse.Namespace(ml=True, no_stage1_ml=False)
+    check("--ml still certifies Version B for the B survivors",
+          all(resolve_version_b({"stage1_version": "B"}, args_ml)[0]
+              for _ in range(1)))
+    check("--ml certifies Version B for the A survivors too, which is a "
+          "superset and not the bug",
+          resolve_version_b({"stage1_version": "A"}, args_ml)[0] is True)
+
+    # The override exists so a B survivor whose classifier cannot be rebuilt
+    # stays auditable, and it RECORDS that it fired.
+    args_off = argparse.Namespace(ml=False, no_stage1_ml=True)
+    got, why = resolve_version_b({"stage1_version": "B"}, args_off)
+    check("--no-stage1-ml overrides the handoff and says so",
+          got is False and "no-stage1-ml" in why, why)
+
+    # A pair with no recorded version is Version A and says so, rather than
+    # defaulting to an hours-long classifier run nobody asked for.
+    got, why = resolve_version_b({}, argparse.Namespace(ml=False,
+                                                        no_stage1_ml=False))
+    check("a pair with no recorded version certifies Version A only",
+          got is False and "no stage1_version" in why, why)
+
+    # -- the orchestrator's independent second reading ---------------------
+    from backtest.run_pipeline import check_version_b_certified
+    from backtest.pipeline import pipeline_dir, write_stage, STAGE3_SUMMARY_FILE
+
+    d = pipeline_dir("demo_vb", tmp / "vb", create=True)
+    write_stage(d / STAGE3_SUMMARY_FILE, 3, "demo_vb", {"results": [
+        {"symbol": "NQ", "timeframe": "30m", "version": "A"},
+        {"symbol": "NQ", "timeframe": "30m", "version": "B"},
+        {"symbol": "NQ", "timeframe": "1h", "version": "A"},
+    ]})
+    gaps = check_version_b_certified("demo_vb", [("NQ", "30m"), ("NQ", "1h")],
+                                     str(tmp / "vb"))
+    check("the orchestrator passes the pair that WAS certified on B",
+          not any("30m" in g for g in gaps), str(gaps))
+    check("...and names the pair that was audited as Version A only",
+          len(gaps) == 1 and "1h" in gaps[0], str(gaps))
+
+
+# --------------------------------------------------------------------------
+# 30. Stage 2's two minimum robustness bars
+# --------------------------------------------------------------------------
+def test_stage2_refuses_a_spike_and_a_ruinous_cell() -> None:
+    print("\n30. Stage 2 exports no spike and no ruined account")
+
+    from backtest.scan import (FRAGILE_RUIN, FRAGILE_SPIKE,
+                               SELECTED_PRUNED_FRAGILE, _select_best_row,
+                               fragility_of)
+    from backtest.pipeline import RUIN_MIN_DRAWDOWN_PCT
+    from backtest.report import PASS as GATE_PASS
+
+    def cell(sharpe, *, spike=False, dd=-20.0, gate1=GATE_PASS, ema=20):
+        return {"ema_period": ema, "sharpe": sharpe, "gate1": gate1,
+                "max_drawdown_pct": dd, "is_spike": spike,
+                "plateau_score": sharpe}
+
+    # A spike with the best Sharpe on the grid, beside a stable shelf.
+    rows = [cell(3.10, spike=True, ema=20), cell(1.40, ema=21),
+            cell(1.35, ema=22)]
+    best, selection = _select_best_row(rows)
+    check("the spike is NOT exported when a stable plateau exists",
+          best is not None and best["ema_period"] == 21,
+          f"picked ema_period={None if best is None else best['ema_period']}")
+    check("...and the winner is the stable cell, not merely a lower-ranked "
+          "spike", best is not None and not best["is_spike"])
+
+    # A ruinous cell with the best Sharpe. -100% is not a deeper loss; it is
+    # arithmetic that has stopped describing an account.
+    rows = [cell(2.90, dd=RUIN_MIN_DRAWDOWN_PCT, ema=20), cell(1.10, ema=21)]
+    best, _ = _select_best_row(rows)
+    check("a cell that drew down to the ruin boundary is not exported",
+          best is not None and best["ema_period"] == 21,
+          f"picked ema_period={None if best is None else best['ema_period']}")
+    rows = [cell(2.90, dd=-140.0, ema=20), cell(1.10, ema=21)]
+    best, _ = _select_best_row(rows)
+    check("...and neither is one past it", best["ema_period"] == 21)
+
+    # The bars are applied BEFORE Gate 1 is preferred. A ruinous spike that is
+    # the grid's only Gate 1 pass must not be exported under a "GATE 1 PASS"
+    # heading - the most persuasive label this stage can print on its least
+    # defensible row.
+    rows = [cell(2.5, spike=True, dd=-160.0, gate1=GATE_PASS, ema=20),
+            cell(0.9, gate1="FAIL", ema=21)]
+    best, selection = _select_best_row(rows)
+    check("a ruinous spike does not win on being the only Gate 1 pass",
+          best is not None and best["ema_period"] == 21, str(selection))
+
+    # Nothing eligible at all -> PRUNED_FRAGILE, and NO winner.
+    rows = [cell(2.5, spike=True, ema=20), cell(2.4, dd=-101.0, ema=21)]
+    best, selection = _select_best_row(rows)
+    check("a grid with no eligible cell yields no winner",
+          best is None, str(best))
+    check("...and is labelled PRUNED_FRAGILE rather than NO SHARPE",
+          selection == SELECTED_PRUNED_FRAGILE, selection)
+
+    # The reasons are distinguishable, and ruin outranks the spike label.
+    check("an isolated spike is reported as a spike",
+          fragility_of(cell(1.0, spike=True)) == FRAGILE_SPIKE)
+    check("a ruined account is reported as ruinous, even when it is also a "
+          "spike",
+          fragility_of(cell(1.0, spike=True, dd=-120.0)) == FRAGILE_RUIN)
+    check("a healthy cell is not fragile", fragility_of(cell(1.0)) is None)
+
+    # The counterfactual is NOT pruned - it answers what the old rule would
+    # have picked, which is a different question.
+    rows = [cell(3.10, spike=True, ema=20), cell(1.40, ema=21)]
+    old_best, _ = _select_best_row(rows, rank="sharpe", prune_fragile=False)
+    check("the pre-charter counterfactual still names the spike, so the "
+          "comparison stays honest", old_best["ema_period"] == 20)
+
+    # Stage 3 admits a pair only when the Stage 2 status reads OPTIMIZED.
+    from backtest.audit_gates import stage2_targets
+    from backtest.scan import STAGE2_PRUNED_FRAGILE
+    targets = stage2_targets({"results": [
+        {"symbol": "NQ", "timeframe": "30m", "status": STAGE2_PRUNED_FRAGILE},
+        {"symbol": "ES", "timeframe": "30m", "status": "OPTIMIZED"},
+    ]}, "30m")
+    certifiable = {t["symbol"]: t["certifiable"] for t in targets}
+    check("a PRUNED_FRAGILE pair is not certifiable by Stage 3",
+          certifiable == {"NQ": False, "ES": True}, str(certifiable))
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="pipefilt_") as td:
         tmp = Path(td)
@@ -1675,6 +1863,8 @@ def main() -> int:
         test_stage1_to_stage2_exclude_days(tmp)
         test_stage2_to_stage3_filter_inheritance(tmp)
         test_drop_losing_days_clis()
+        test_version_b_survives_the_handoff(tmp)
+        test_stage2_refuses_a_spike_and_a_ruinous_cell()
 
     print("\n" + "=" * 60)
     if _failures:

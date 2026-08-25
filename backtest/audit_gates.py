@@ -183,7 +183,8 @@ from backtest.baseline import (MIN_REGIME_PROFIT_FACTOR,           # noqa: E402
                                MIN_REGIME_TRADES, quadrant_id)
 from backtest.pipeline import (BEST_PARAMS_FILE, CHARTER_IS_END,   # noqa: E402
                                CHARTER_IS_START, GATE_AUDIT_FILE,
-                               HOLDOUT_START, STAGE2_SUMMARY_FILE,
+                               HOLDOUT_START, RUIN_MIN_DRAWDOWN_PCT,
+                               STAGE2_SUMMARY_FILE,
                                STAGE3_SUMMARY_FILE, next_step, pipeline_dir,
                                read_stage, stage_banner, write_stage)
 from backtest.profiler import (REGIME_TO_QUADRANT, REGIMES,        # noqa: E402
@@ -896,13 +897,11 @@ def retention_scores(is_metrics: dict | None,
 GATE_RUIN = "gate_ruin"
 RUIN_CHECK_FAILED = "FAILED_RUIN_CHECK"
 
-# An account cannot lose more than it holds. The engine's equity is
-# `initial_capital + cumsum(net P&L)` with NO ruin barrier, so a strategy whose
-# cumulative losses exceed the starting capital produces a negative equity, and
-# `equity / peak - 1` then reports a drawdown past -100% - which is not a
-# deeper loss but arithmetic that has stopped describing an account. It is the
-# same reading the Monte Carlo sanitation clips to -1.00 and calls ruin.
-RUIN_MIN_DRAWDOWN_PCT = -100.0
+# The ruin boundary is `backtest.pipeline`'s, so Stage 2's parameter selection
+# and this gate refuse the same equity curves. Re-exported under its original
+# name because every caller in this module and its tests reads it from here.
+# It is the same reading the Monte Carlo sanitation clips to -1.00 and calls
+# ruin.
 
 
 def ruin_guard(metrics: dict | None) -> dict:
@@ -1298,6 +1297,57 @@ def gate2_evidence(path: Path, symbol: str, tf: str, params: dict,
     return out
 
 
+# --------------------------------------------------------------------------
+# Which VERSION this pair qualified on
+# --------------------------------------------------------------------------
+# Stage 1 screens both versions and a pair survives on EITHER, recording which
+# one carried it. That answer travelled as far as the Stage 2 summary row
+# (`stage1_version`) and then stopped: `--ml` was a single global flag typed by
+# an operator, so a pair that only Version B cleared was certified as Version A
+# unless somebody remembered. Version B is a different claim from Version A -
+# it is the rules plus a classifier that suppressed some of their entries - so
+# certifying A against a Stage 1 designation that B earned tests a strategy
+# nobody screened, passes or fails it on that basis, and stages the result
+# under a name the metrics do not describe.
+STAGE1_ML_VERSION = "B"
+
+
+def resolve_version_b(target: dict | None, args: argparse.Namespace
+                      ) -> tuple[bool, str]:
+    """
+    `(run_version_b, why)` for ONE pair.
+
+    Three inputs, in precedence order:
+
+      1. `--no-stage1-ml` - the operator overriding the handoff. It exists
+         because a Version B survivor whose classifier cannot be rebuilt has to
+         remain auditable as Version A, and the alternative would be editing
+         `surviving_assets.json`.
+      2. `--ml` - certify BOTH versions for every pair, whatever Stage 1 said.
+         Still a global, still supported: it is a superset, so it cannot cause
+         a B survivor to be certified as A.
+      3. Stage 1's own answer, `stage1_version == "B"`, per pair. This is the
+         one that was missing.
+
+    A pair with NO recorded version is Version A, and says so. It is what every
+    handoff written before the version travelled looks like, and defaulting it
+    to B would run an hours-long classifier over pairs nobody asked it for.
+    """
+    if getattr(args, "no_stage1_ml", False):
+        return bool(args.ml), ("--no-stage1-ml: Stage 1's version is ignored; "
+                               f"--ml is {'on' if args.ml else 'off'}")
+    if args.ml:
+        return True, "--ml: both versions certified for every pair"
+    version = str((target or {}).get("stage1_version") or "").strip().upper()
+    if version == STAGE1_ML_VERSION:
+        return True, (f"stage1_version={version}: this pair cleared Stage 1 on "
+                      f"the ML-filtered version, so it is certified on it")
+    if version:
+        return False, f"stage1_version={version}: rule-based, no ML filter"
+    return False, ("no stage1_version recorded for this pair; certifying "
+                   "Version A only")
+
+
 def certify_symbol(symbol: str, path: Path, tf: str, args: argparse.Namespace,
                    cfg_kwargs: dict, out_dir: Path, strat_name: str,
                    grid: dict | None, target: dict | None = None) -> dict:
@@ -1335,6 +1385,17 @@ def certify_symbol(symbol: str, path: Path, tf: str, args: argparse.Namespace,
     prov["target_quadrant"] = quadrant_id(regime) if regime else None
     prov["target_regime_source"] = regime_source
     quad = prov["target_quadrant"]
+
+    # WHICH VERSION, resolved per pair from Stage 1's handoff rather than from
+    # a global flag. Printed beside the regime because the two together are
+    # the whole certification target: this parameter set, on this version, in
+    # this quadrant.
+    use_ml, ml_reason = resolve_version_b(target, args)
+    prov["stage1_version"] = (target or {}).get("stage1_version")
+    prov["version_b_certified"] = bool(use_ml)
+    prov["version_b_source"] = ml_reason
+    print(f"  versions   : A" + ("  +  B (ML-filtered)" if use_ml else " only")
+          + f"   [{ml_reason}]")
     print(f"  regime     : "
           + (f"{regime} ({quad})" if regime else "NOT DECLARED")
           + f"   [{regime_source}]")
@@ -1351,14 +1412,14 @@ def certify_symbol(symbol: str, path: Path, tf: str, args: argparse.Namespace,
     # -- Gate 1 evidence: the in-sample run -------------------------------
     print(f"\n  [1/3] in-sample   {args.is_start or 'lake start'} → {args.is_end}")
     is_bars = load_bars(symbol, tf, args.is_start, args.is_end)
-    is_dual = _dual(path, is_bars, symbol, tf, params, cfg, args.ml,
+    is_dual = _dual(path, is_bars, symbol, tf, params, cfg, use_ml,
                     args.threshold, strat_name)
 
     # -- Gate R and Gate 3 evidence: the holdout, run once ----------------
     print(f"  [3/3] holdout     {args.holdout_start} → "
           f"{args.holdout_end or 'present'}")
     ho_bars = load_bars(symbol, tf, args.holdout_start, args.holdout_end)
-    ho_dual = _dual(path, ho_bars, symbol, tf, params, cfg, args.ml,
+    ho_dual = _dual(path, ho_bars, symbol, tf, params, cfg, use_ml,
                     args.threshold, strat_name)
 
     # -- Gate 2 evidence: walk-forward and bootstrap, in-sample only ------
@@ -1528,6 +1589,15 @@ def certify_symbol(symbol: str, path: Path, tf: str, args: argparse.Namespace,
             "params": params,
             "params_locked": bool(prov["params_locked"]),
             "in_stage1": bool((target or {}).get("in_stage1", True)),
+            # WHICH version Stage 1 qualified this pair on, and whether the
+            # ML-filtered version was actually certified for it. Carried so
+            # `stage3_audit_summary.json` records the version that won Stage 1
+            # beside the versions that were audited: a B survivor certified as
+            # A only is a gap, and it has to be visible in the summary rather
+            # than discoverable by comparing two files.
+            "stage1_version": (target or {}).get("stage1_version"),
+            "version_b_certified": bool(prov.get("version_b_certified")),
+            "version_b_source": prov.get("version_b_source"),
             "incubator": seals,
             # Gate R and the three advisory gates individually, not only the
             # rolled-up verdict. A FAIL and a NOT EVALUATED are fixed by
@@ -1715,7 +1785,14 @@ def build_parser() -> argparse.ArgumentParser:
                         "a missing best_params file is an error rather than a "
                         "silent fallback.")
     p.add_argument("--ml", action="store_true",
-                   help="Also certify Version B (the ML-filtered pipeline)")
+                   help="Certify Version B (the ML-filtered pipeline) for "
+                        "EVERY pair. Not needed for a pair Stage 1 qualified "
+                        "on B - that is resolved per pair from the handoff.")
+    p.add_argument("--no-stage1-ml", action="store_true",
+                   help="Ignore stage1_version and do NOT run Version B on a "
+                        "pair that qualified on it. For a B survivor whose "
+                        "classifier cannot be rebuilt; the audit records that "
+                        "the version was overridden.")
     p.add_argument("--threshold", type=float, default=0.50)
     p.add_argument("--wfo-train", type=int, default=2,
                    help="Walk-forward train window in years (default 2)")
@@ -1936,6 +2013,19 @@ def write_stage3_summary(strat_name: str, out_dir: Path, results: list[dict],
                 "symbol": r["symbol"],
                 "timeframe": r.get("timeframe"),
                 "version": ver,
+                # The version STAGE 1 qualified the pair on, beside the version
+                # this row audits. They are different questions and only one of
+                # them was ever recorded: `version` is what ran here,
+                # `stage1_version` is what earned the survivorship. Stage 5
+                # promotes on the first and the charter designated on the
+                # second, so a summary that carried only one of them cannot say
+                # whether they agree.
+                "stage1_version": r.get("stage1_version"),
+                "stage1_version_certified": (
+                    None if not r.get("stage1_version")
+                    else str(r.get("stage1_version")).upper() == ver),
+                "version_b_certified": bool(r.get("version_b_certified")),
+                "version_b_source": r.get("version_b_source"),
                 "status": r["status"][ver],
                 "certified": bool(r["passed"].get(ver)),
                 "target_regime": r.get("target_regime"),
@@ -2379,7 +2469,19 @@ def main(argv: list[str] | None = None) -> int:
         print("               fixed parameters means the ratio compares two "
               "time periods,\n               not fitted-versus-unseen. "
               "Recorded as wfo_optimized: false.")
-    print(f"  Version B  : {'certified' if args.ml else 'NOT RUN (--ml is off)'}")
+    # Per pair, from Stage 1's handoff - not a single global answer any more.
+    b_pairs = [f"{t['symbol']}·{t['timeframe']}" for t in targets
+               if resolve_version_b(t, args)[0]]
+    if args.ml:
+        print(f"  Version B  : certified for ALL {len(targets)} pair(s) (--ml)")
+    elif getattr(args, "no_stage1_ml", False):
+        print("  Version B  : NOT RUN (--no-stage1-ml overrides the handoff)")
+    elif b_pairs:
+        print(f"  Version B  : certified for {len(b_pairs)} of {len(targets)} "
+              f"pair(s) that cleared Stage 1 on it: {', '.join(b_pairs)}")
+    else:
+        print("  Version B  : NOT RUN - no target pair records "
+              "stage1_version=B, and --ml is off")
     print(f"  incubator  : "
           + (f"certified versions staged into {args.incubator} "
              f"(never committed)" if args.promote

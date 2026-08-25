@@ -83,12 +83,54 @@ enforced in the module rather than left to how the command was typed:**
   dropped — the hole IS the evidence that the space around the cell does not
   trade. Nothing about a market changes between a 20-bar mean and a 21-bar one,
   so a Sharpe that does is a property of this sample. `is_spike` (neighbours
-  keep under `PLATEAU_SPIKE_RATIO`, 0.5, of the cell's Sharpe) is **reported
-  and never acted on** — Stage 2 drops nothing, including spikes. A grid with
+  keep under `PLATEAU_SPIKE_RATIO`, 0.5, of the cell's Sharpe) is reported for
+  every cell and, since 2026-08-25, is one of **two minimum robustness bars
+  that decide eligibility**: an isolated spike and a cell whose in-sample
+  drawdown reached `RUIN_MIN_DRAWDOWN_PCT` (-100%, `backtest/pipeline.py`, the
+  same boundary Stage 3's ruin guard applies) cannot be selected as the winner,
+  and a pair whose entire grid fails them is `PRUNED_FRAGILE` in
+  `stage2_summary.json` **with no `best_params` file**, so Stage 3 cannot
+  certify it. That is a departure from "Stage 2 prunes nothing", and a narrow
+  one: the charter's rule is about aggregate PERFORMANCE — a Sharpe, a profit
+  factor, a trade count — and neither bar is a performance judgement. One says
+  the cell has no neighbourhood and the other says the account was ruined on
+  the bars the parameters were chosen on. The bars are applied BEFORE Gate 1 is
+  preferred, so a ruinous spike cannot be exported under a "GATE 1 PASS"
+  heading. `fragile_counts` records how much of each grid they removed. A grid
+  with
   one value per axis has no neighbours and the rank degenerates to Sharpe,
   which is correct: with nothing adjacent tested there is no evidence either
   way. `--select sharpe` restores the pre-charter single-best-cell rule, and
   the `selection` string names which ran.
+- **The VERSION travels, and both later stages act on it.** Stage 1 screens
+  Version A (rules) and Version B (the same signals with an ML confirmation
+  filter) and a pair survives on EITHER, recording which in
+  `surviving_assets.json` as `version`. Until 2026-08-25 that answer travelled
+  as far as `stage2_summary.json`'s `stage1_version` column and then stopped:
+  `--ml` was a single global flag an operator typed, so a pair only Version B
+  cleared was certified as Version A unless somebody remembered. The failure is
+  invisible in every output — the Stage 3 summary is complete, every gate is
+  filled in, and the version column simply reads `A`. Now:
+  `audit_gates.resolve_version_b` resolves it PER PAIR (`--ml` still forces B
+  everywhere, a superset that cannot cause the bug; `--no-stage1-ml` is the
+  override for a classifier that cannot be rebuilt, and it is recorded on the
+  audit as `version_b_source`), and `run_pipeline` reads
+  `surviving_assets.json` a second time to print the plan before Stage 2 and
+  check after Stage 3 that every B survivor actually got a Version B row.
+  **No global `--ml` is passed by the orchestrator** — it would run the filter
+  over the Version A survivors too, which is the mirror image of the bug.
+- **Stage 2 ranks on Version A and CONFIRMS Version B on the winner.**
+  `ml_confirm_winner` re-runs the single winning parameter set with the filter
+  on and writes both curves to `best_params` as `ml_confirmation`; a "no" is
+  always recorded with its reason, never an absent key. It is not the grid,
+  for two reasons: the sweep is one `vbt.Portfolio.from_signals` call over
+  every combination as a COLUMN while Version B refits per completed trade and
+  has no column form, so a 162-cell grid becomes 162 sequential backtests; and
+  ranking the grid on the ML-filtered curve would select parameters against a
+  classifier fitted on the same in-sample bars, stacking a second in-sample
+  selection under the first — the exact reason the sweep is not masked to the
+  Stage 1 quadrant either. `b_beats_a` here is IN-SAMPLE and labelled as such.
+  Stage 3 is where Version B is certified, on the holdout.
 - **Two files leave the stage beside the per-contract winners**:
   `stage2_summary.json` (through `pipeline.write_stage`, so `read_stage` can
   refuse the wrong strategy's) and `stage2_summary_matrix.csv`. Both carry

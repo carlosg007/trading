@@ -1497,6 +1497,106 @@ def test_stage3_input_resolution(tmp: Path) -> None:
           msg[:160])
 
 
+
+# --------------------------------------------------------------------------
+# The sample floor, and what a starved quadrant is allowed to become
+# --------------------------------------------------------------------------
+def test_regime_starvation_is_never_certified() -> None:
+    print("\nGate R's sample floor: 30 trades inside the designated quadrant")
+
+    from backtest.audit_gates import (MIN_REGIME_TRADES, charter_audit,
+                                      regime_gate)
+
+    REGIME = "High Volatility / Ranging"
+
+    def profile(n, pf=2.50):
+        return {"regime_breakdown": {REGIME: {
+            "trade_count": n, "profit_factor": pf, "win_rate": 0.55,
+            "net_pnl": 1000.0}}}
+
+    check("the floor is 30 and it comes from Stage 1's screen, not a second "
+          "number here", MIN_REGIME_TRADES == 30, str(MIN_REGIME_TRADES))
+
+    # The boundary, from both sides. A floor written `>` instead of `>=` fails
+    # exactly one configuration in the whole campaign and nothing says so.
+    for n, want in ((0, False), (1, False), (29, False), (30, True),
+                    (31, True)):
+        g = regime_gate(profile(n), REGIME, 1.00, MIN_REGIME_TRADES)
+        check(f"{n} holdout trade(s) in the quadrant "
+              f"{'PASSES' if want else 'FAILS'} the sample floor",
+              (g["status"] == "PASS") is want, g["status"])
+
+    # A magnificent profit factor over three trades is the case the floor
+    # exists for, and it must not survive it.
+    starved = regime_gate(profile(3, pf=999.0), REGIME, 1.00,
+                          MIN_REGIME_TRADES)
+    check("a 999 profit factor over 3 trades still fails",
+          starved["status"] == "FAIL", starved["status"])
+    check("...the profit-factor row itself PASSES, so the two reasons stay "
+          "distinguishable",
+          [c["status"] for c in starved["checks"]] == ["FAIL", "PASS"],
+          str([c["status"] for c in starved["checks"]]))
+    check("...and REGIME_STARVATION is attached with a message an operator "
+          "can act on",
+          bool((starved.get("regime_starvation") or {}).get("message")),
+          str((starved.get("regime_starvation") or {}).get("message"))[:90])
+
+    # Starvation is keyed on the TRADE COUNT, not on the overall verdict. A
+    # quadrant that traded 90 times and lost is a different finding and must
+    # not carry the diagnostic that says it was never sampled.
+    lost = regime_gate(profile(90, pf=0.60), REGIME, 1.00, MIN_REGIME_TRADES)
+    check("a quadrant that traded enough and LOST is not marked starved",
+          lost["status"] == "FAIL" and lost.get("regime_starvation") is None,
+          str(lost.get("regime_starvation")))
+
+    # And the verdict: a starved configuration is NOT CERTIFIED. Gate R is the
+    # verdict gate under charter clause 3, so this is the whole promotion
+    # decision - `promote` refuses anything whose status is not PASS.
+    survived = {"ruined": False, "max_drawdown_pct": -18.0}
+    audit = {"status": "PASS", "passed": True, "gates": {
+        "gate1": {"status": "PASS"}, "gate2": {"status": "PASS"},
+        "gate3": {"status": "PASS"}}}
+    folded = charter_audit(dict(audit), starved, {"metrics": {}},
+                           in_sample_metrics=survived)
+    check("a starved quadrant is NOT CERTIFIED even with Gates 1-3 all "
+          "passing", folded["passed"] is False, str(folded["passed"]))
+    check("...and the verdict gate is named as Gate R",
+          folded["verdict_gate"] == GATE_R, folded["verdict_gate"])
+    check("...while the advisory roll-up is preserved, so the loosening stays "
+          "legible", folded.get("aggregate_status") == "PASS",
+          str(folded.get("aggregate_status")))
+
+    # The same fold with a healthy quadrant certifies, which is what makes the
+    # check above a measurement rather than a tautology.
+    healthy = regime_gate(profile(61), REGIME, 1.00, MIN_REGIME_TRADES)
+    ok = charter_audit(dict(audit), healthy, {"metrics": {}},
+                       in_sample_metrics=survived)
+    check("a quadrant with 61 trades and PF 2.50 IS certified",
+          ok["passed"] is True and ok["status"] == "PASS", ok["status"])
+
+
+def test_version_b_survivor_is_audited_as_version_b() -> None:
+    print("\nA Version B survivor is certified on Version B, with no --ml")
+
+    from backtest.audit_gates import resolve_version_b, stage2_targets
+
+    # Stage 2's summary row is where Stage 3 reads the version from, and it is
+    # the hop the answer used to die on.
+    targets = stage2_targets({"results": [
+        {"symbol": "NQ", "timeframe": "30m", "status": "OPTIMIZED",
+         "stage1_version": "B", "quadrant": "Q2"},
+        {"symbol": "ES", "timeframe": "30m", "status": "OPTIMIZED",
+         "stage1_version": "A", "quadrant": "Q3"},
+    ]}, "30m")
+    versions = {t["symbol"]: t["stage1_version"] for t in targets}
+    check("Stage 2's summary row carries the version into Stage 3's targets",
+          versions == {"NQ": "B", "ES": "A"}, str(versions))
+
+    args = SimpleNamespace(ml=False, no_stage1_ml=False)
+    verdicts = {t["symbol"]: resolve_version_b(t, args)[0] for t in targets}
+    check("the B survivor is audited as Version B without --ml being typed",
+          verdicts == {"NQ": True, "ES": False}, str(verdicts))
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="stage3charter_") as td:
         tmp = Path(td)
@@ -1517,6 +1617,8 @@ def main() -> int:
         test_promotion_section(multi)
         test_pair_audit_ingestion(tmp)
         test_stage3_input_resolution(tmp)
+        test_regime_starvation_is_never_certified()
+        test_version_b_survivor_is_audited_as_version_b()
 
     print("\n" + "=" * 60)
     if _failures:

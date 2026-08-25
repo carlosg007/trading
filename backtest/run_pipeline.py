@@ -375,6 +375,67 @@ def promote_cmd(strat: str, version: str, source: str | Path,
 # handoff readers
 # ---------------------------------------------------------------------------
 
+def version_b_pairs(strat: str, out_dir: str | None = None
+                    ) -> list[tuple[str, str]]:
+    """
+    The `(symbol, timeframe)` pairs `surviving_assets.json` says cleared Stage
+    1 on VERSION B - the ML-filtered pipeline.
+
+    Read here so the orchestrator can PRINT the plan before Stage 2 runs and
+    CHECK it after Stage 3, but never to pass a global `--ml`: that flag turns
+    the filter on for every pair, and a Version A survivor certified with a
+    classifier over it is the mirror image of the bug being fixed. Both stages
+    resolve the version per pair from the handoff they already read; this is
+    the orchestrator's independent second reading of the same file, which is
+    what makes a silent regression in either of them visible.
+    """
+    from backtest.pipeline import SURVIVORS_FILE, stage1_pairs
+
+    path = pipeline_dir(strat, out_dir) / SURVIVORS_FILE
+    if not path.exists():
+        return []
+    try:
+        blob = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return []
+    return [(str(p["symbol"]), str(p["tf"])) for p in stage1_pairs(blob)
+            if str(p.get("version") or "").strip().upper() == "B"]
+
+
+def check_version_b_certified(strat: str, expected: list[tuple[str, str]],
+                              out_dir: str | None = None) -> list[str]:
+    """
+    Every Stage 1 Version B survivor that Stage 3 did NOT audit as Version B.
+
+    Returned as messages, printed by the caller, and never fatal - the run is
+    already over by the time this can be checked and the certifications on
+    disk are real. It exists because the failure it detects is silent in every
+    other output: a B survivor certified as A only produces a complete,
+    plausible Stage 3 summary in which every gate is filled in and the version
+    column reads `A`, and nothing else in the pipeline compares that column
+    against the handoff that designated it.
+    """
+    summary = _read_summary(strat, STAGE3_SUMMARY_FILE, 3, out_dir)
+    rows = (summary or {}).get("results") or []
+    audited = {(str(r.get("symbol")), str(r.get("timeframe")),
+                str(r.get("version") or "").upper()) for r in rows}
+    missing = []
+    for symbol, tf in expected:
+        if (symbol, tf, "B") in audited:
+            continue
+        if not any(r for r in rows if str(r.get("symbol")) == symbol
+                   and str(r.get("timeframe")) == tf):
+            missing.append(f"{symbol} {tf}: cleared Stage 1 on Version B and "
+                           f"never reached Stage 3")
+            continue
+        missing.append(
+            f"{symbol} {tf}: cleared Stage 1 on Version B but Stage 3 audited "
+            f"only {sorted(v for s, t, v in audited if (s, t) == (symbol, tf))}"
+            f". The certification does not describe the version that earned "
+            f"the survivorship.")
+    return missing
+
+
 def stage2_timeframes(summary: dict[str, Any] | None) -> list[str]:
     """
     The timeframes Stage 2 actually optimised something at.
@@ -857,6 +918,19 @@ def main(argv: Sequence[str] | None = None) -> int:
               f"run's result.", file=sys.stderr)
         return int(e.returncode or 1)
 
+    # WHICH PAIRS CARRY A CLASSIFIER, read straight off Stage 1's handoff.
+    # Printed rather than turned into a flag: Stages 2 and 3 each resolve the
+    # version per pair from the handoff, and a global `--ml` here would run the
+    # filter over the Version A survivors too.
+    b_pairs = [] if dry else version_b_pairs(strat, out_dir)
+    if b_pairs:
+        print(f"\n  VERSION B · {len(b_pairs)} pair(s) cleared Stage 1 on the "
+              f"ML-filtered version:\n    "
+              + ", ".join(f"{s}·{t}" for s, t in b_pairs)
+              + "\n    Stage 2 confirms the filter on each winner and Stage 3 "
+                "certifies Version B for them,\n    resolved per pair from "
+                "surviving_assets.json. No global --ml is passed.", flush=True)
+
     # Which timeframes have something to certify is a fact about Stage 2's
     # output, not about the CLI.
     if dry:
@@ -900,6 +974,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         # execute. That is the correct division: Stage 3 announces what was
         # CERTIFIED, and the promotion outcome is Stage 5's card to carry.
         discord(3)
+
+        if b_pairs:
+            gaps = check_version_b_certified(strat, b_pairs, out_dir)
+            if gaps:
+                print("\n  ! VERSION B GAP — a pair that only the ML-filtered "
+                      "version carried was\n    certified without it:",
+                      file=sys.stderr)
+                for gap in gaps:
+                    print(f"      {gap}", file=sys.stderr)
+            else:
+                print(f"\n  Version B preserved end to end for all "
+                      f"{len(b_pairs)} pair(s).", flush=True)
 
         for tf in certify_tfs:
             run_step(stage4_cmd(strat, tf, args.start, _today(), out_dir),
