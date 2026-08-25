@@ -221,6 +221,8 @@ SPECS: dict[str, ContractSpec] = {
     "MNQ": ContractSpec("MNQ", "Micro E-mini Nasdaq",   "CME",    2,     0.25, _MICRO, True),
     "MCL": ContractSpec("MCL", "Micro Crude Oil",       "NYMEX", 100,    0.01, _MICRO, True),
     "MGC": ContractSpec("MGC", "Micro Gold",            "COMEX",  10,    0.10, _MICRO, True),
+    "M2K": ContractSpec("M2K", "Micro E-mini Russell",  "CME",     5,    0.10, _MICRO, True),
+    "MYM": ContractSpec("MYM", "Micro E-mini Dow",      "CBOT",    0.50, 1.00, _MICRO, True),
 }
 
 
