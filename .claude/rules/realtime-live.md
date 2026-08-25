@@ -8,6 +8,8 @@ paths:
   - "tests/test_regime_daemon.py"
   - "tests/test_live_dispatcher.py"
   - "tests/test_dispatcher.py"
+  - "tests/test_live_feed.py"
+  - "data_pull/databento_live.py"
 ---
 
 # The live regime service and the execution loop
@@ -176,9 +178,68 @@ that produced no entry and is never counted as an approval.
   micro/full-size alias — a certification on `['NQ']` authorizes MNQ and the
   reverse — but a strategy certified on ZS cannot trade MNQ because a config
   line put them in one basket.
+- **`realtime/feed.py` is where bars come from, and the forming-bar rule lives
+  there and nowhere else.** Added 2026-08-25. `load_symbol_bars` used to inline
+  a lake read, which is why the loop could poll every sixty seconds against a
+  tape that had stopped eighteen days earlier and report nothing wrong. One
+  interface (`BarFeed.closed_bars`), two implementations (`LakeFeed`,
+  `LiveFeed`), and `--feed auto|live|lake` on both `master_live.py` and the
+  regime daemon's `--publish`.
+  - **A bar is stamped when it OPENS**, so the 14:00 bar on an hourly feed
+    covers 14:00–15:00 and is unfinished until 15:00. Acting on it is
+    lookahead — a decision made with information from inside the interval being
+    traded — and it is what makes a live curve diverge from its backtest for
+    reasons nobody can find afterwards. `drop_forming_bar` removes EVERY
+    unfinished interval, not just the last: after a reconnect a feed can return
+    several, and dropping only the tail leaves a half-formed bar looking
+    complete. It is a DROP, never a fill-forward and never a "close so far".
+  - **The cut is at the EARLIER of the clock and the feed's horizon.** A vendor
+    publishing on a lag can leave an interval whose end has passed but whose
+    last minutes have not arrived: at 17:05, with data published to 16:50, the
+    16:45 quarter-hour is finished by the clock and built from five minutes of
+    bars — wrong high, wrong low, wrong close, a fifth of the volume, and it
+    reads as a quiet quarter of an hour. `BarFeed.horizon()` makes a lagging
+    feed produce FEWER bars rather than wrong ones.
+  - **Live bars are aggregated by the LAKE's resampler** (`mdlib.lake.DERIVED`,
+    `OHLCV`, `_resample`, imported), so a live 15m bar is assembled exactly as
+    the 15m bar the strategy was certified on. A second aggregation would
+    differ in the last decimal, which is enough to move a bar across an
+    indicator threshold with nothing in any log to explain it.
+  - **`--feed live` REFUSES when none is configured** rather than falling back.
+    An operator who typed it and silently got fortnight-old bars would read a
+    rehearsal as a live session, and a stale tape produces no signals — which
+    looks exactly like a quiet market. `auto` falls back and says so;
+    `describe()` names the feed before the first cycle and every cycle prints
+    how long ago the newest bar CLOSED.
+  - **The choice is NOT tied to `--dry-run`.** Dry-run is about whether a
+    socket opens; a dry run against stale bars cannot rehearse a decision the
+    loop would make now.
+- **`data_pull/databento_live.py` is the only module in the live path that
+  touches a vendor**, because `data_pull/` is the layer that does that.
+  `GLBX.MDP3`, `ohlcv-1m`, continuous symbols on the volume roll (`NQ.v.0`) —
+  the constants IMPORTED from `pull_futures.py`, because a second opinion about
+  the dataset or the roll rule is a second price series that jumps at different
+  dates than the one the certification was computed on.
+  - **The lag was measured, not assumed: GLBX.MDP3 publishes `ohlcv-1m` in
+    TEN-MINUTE CHUNKS**, so the newest bar is 4–14 minutes old depending on
+    where in the cycle you ask (sampled 2026-08-25, 17:08–17:14 UTC). That
+    makes this transport fine for **1h**, marginal for 15m (a 14-minute lag on
+    a 15-minute bar means acting almost a full bar late), and unusable at 5m
+    and below. `databento.Live` — a streaming session, deliberately not
+    implemented — is the transport for anything faster.
+  - **The request must not ask past the dataset's published availability**:
+    Databento returns 422 rather than clamping, so a poll stamped `now` fails
+    every cycle. `available_end()` reads it (a free metadata call, cached 20s)
+    and the window ends there.
+  - **History is cached and topped up.** A strategy on 400 hourly bars needs
+    ~24,000 minute bars behind it; re-requesting that every 60 seconds would
+    pull ~100,000 rows a minute across four symbols on an endpoint billed by
+    bytes. The first call per symbol warms up, every call after asks only for
+    the minutes since the last bar held, and `requests` / `rows_fetched` on the
+    client say what a session actually spent.
 - **The bar feed resolves micros to their parent.** The baskets hold
-  MNQ/MES/MCL/MGC and the lake holds only the full-size contracts, so without
-  the alias this loop reads nothing and no-ops forever — looking exactly like a
+  MNQ/MES/MCL/MGC and the tape is the full-size contract's, so without the
+  alias this loop reads nothing and no-ops forever — looking exactly like a
   market with no signals. Same price series, same tick size, reconciled against
   `backtest/specs.py`; the substitution is PRINTED, and the order is still for
   the micro and sized on the micro's own point value.
@@ -259,6 +320,9 @@ python3 realtime/regime_reader.py --symbol NQ
 # does NOT classify. A dry run is the DEFAULT and runs every gate and formats
 # every payload but opens no socket; --live is the only flag that arms it.
 python3 master_live.py --dry-run --once            # one cycle, nothing sent
+python3 master_live.py --dry-run --once --tf 1h --feed live   # against the vendor
+python3 master_live.py --dry-run --once --feed lake           # against history
+python3 data_pull/databento_live.py --symbol NQ --minutes 120 # probe the feed
 python3 master_live.py --dry-run --interval-sec 30
 python3 master_live.py --interval-sec 60           # ALSO A DRY RUN
 python3 master_live.py --live --interval-sec 60    # LIVE. SENDS REAL ORDERS.
