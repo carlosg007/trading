@@ -136,6 +136,13 @@ from portfolio.config_loader import (  # noqa: E402
     PortfolioConfigError,
     load_portfolio_config,
 )
+# The switchboard's signal vocabulary is BUILT from these rather than typed out
+# again: `live.dispatcher` owns the actions that may reach the wire and
+# `portfolio.portfolio_manager` owns the direction tokens a strategy emits. A
+# token this module invented would be one nothing upstream sends, so its gate
+# would never fire while every log line read as though it had.
+from live.dispatcher import VALID_ACTIONS  # noqa: E402
+from portfolio.portfolio_manager import FLAT, LONG, SHORT  # noqa: E402
 # The reader owns path resolution, and the writer borrows it rather than
 # spelling the rule twice: a daemon that resolved `data/live_regime_state.json`
 # differently from its readers would publish to a file nothing reads, and both
@@ -214,6 +221,63 @@ DEFAULT_ML_THRESHOLD = 0.50
 MODEL_SUFFIXES = (".pkl", ".joblib", ".onnx")
 
 
+# --------------------------------------------------------------------------
+# The strategy registry and the switchboard vocabulary
+# --------------------------------------------------------------------------
+# Where a promoted strategy's CERTIFICATION lives. `config/portfolios.json`
+# grants the permission (`active_strategies`) and carries the routing record;
+# `meta.json` carries the quadrant Gate R actually certified against. Both are
+# read, and they are RECONCILED - see `load_strategy_registry`.
+DEFAULT_INCUBATOR_DIR = "strategies/approved_incubator"
+
+STATUS_ACTIVE = "ACTIVE"
+STATUS_MUTED = "MUTED"
+
+DECISION_ALLOWED = "ALLOWED"
+DECISION_BLOCKED = "BLOCKED"
+
+KIND_ENTRY = "ENTRY"
+KIND_EXIT = "EXIT"
+
+# Why a strategy is muted. The status alone is not actionable - "MUTED" reads
+# identically whether the market moved out of the strategy's quadrant, the feed
+# died, or its certification could not be resolved, and those have completely
+# different fixes.
+MUTE_REGIME_MISMATCH = "regime_mismatch"
+MUTE_NO_REGIME = "no_regime_published"
+MUTE_WARMUP = "indicator_warmup"
+MUTE_TIMEFRAME = "timeframe_mismatch"
+MUTE_UNCERTIFIED = "certification_unresolved"
+
+# FLATTEN is the wire action that closes a position. Pinned against
+# `live.dispatcher` at import rather than assumed: if that vocabulary were ever
+# renamed, the exit set below would quietly lose its only wire token and a
+# muted strategy would be unable to flatten what it is already holding.
+_WIRE_EXIT = {"FLATTEN"}
+if not _WIRE_EXIT <= set(VALID_ACTIONS):
+    raise ImportError(
+        f"live.dispatcher.VALID_ACTIONS is {sorted(VALID_ACTIONS)} and does "
+        f"not contain {sorted(_WIRE_EXIT)}. The switchboard builds its exit "
+        f"vocabulary from that set; without the flatten token a muted "
+        f"strategy could not close an open position.")
+
+# ENTRY tokens open exposure; EXIT tokens reduce or close it. The switchboard
+# mutes the first and never the second.
+ENTRY_SIGNALS = frozenset(
+    {str(a).upper() for a in VALID_ACTIONS if str(a).upper() not in _WIRE_EXIT}
+    | {LONG.upper(), SHORT.upper()}
+    | {"ENTRY", "ENTER", "ENTER_LONG", "ENTER_SHORT"})
+EXIT_SIGNALS = frozenset(
+    _WIRE_EXIT
+    | {FLAT.upper()}
+    | {"EXIT", "CLOSE", "EXIT_LONG", "EXIT_SHORT"})
+if ENTRY_SIGNALS & EXIT_SIGNALS:
+    raise ImportError(
+        f"a signal token is both an entry and an exit: "
+        f"{sorted(ENTRY_SIGNALS & EXIT_SIGNALS)}. The switchboard would gate "
+        f"it as whichever branch it tested first.")
+
+
 class RegimeDaemonError(RuntimeError):
     """The daemon cannot answer. Never a value that reads like an answer."""
 
@@ -231,6 +295,17 @@ class ThetaAnchorMissing(RegimeDaemonError):
 
 class MLGateError(RegimeDaemonError):
     """A registered model could not be evaluated. See the module docstring."""
+
+
+class UnknownStrategy(RegimeDaemonError):
+    """
+    A strategy id the switchboard does not carry.
+
+    Its own type because it is a CONFIGURATION fault, not a market state. It
+    must never be caught into "muted": a caller that treated an unregistered id
+    as muted would silently stop trading a strategy somebody forgot to add to
+    `active_strategies`, and the console for that is a quiet market.
+    """
 
 
 def _utcnow() -> str:
@@ -385,6 +460,198 @@ def _verify_alias_tick_sizes() -> list[str]:
 
 
 # --------------------------------------------------------------------------
+# Module A - the strategy registry
+# --------------------------------------------------------------------------
+def _as_quadrant(value: Any) -> tuple[str | None, str | None]:
+    """
+    Resolve `Q2` or `Q2_HIGH_VOL_CHOP` to the canonical id, or explain why not.
+
+    Returns `(quadrant, error)`; exactly one of the two is None. Both spellings
+    are accepted because a Stage 1 handoff writes the id and a portfolio
+    basket writes the schema label, and a resolver that took only one of them
+    would report every strategy written the other way as uncertified.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return None, None
+    if text.upper() in QUADRANT_TO_LABEL and text.upper() != "Q0":
+        return text.upper(), None
+    if text in CANONICAL_QUADRANT:
+        return CANONICAL_QUADRANT[text], None
+    if text.upper() == "Q0" or text == UNDEFINED_LABEL:
+        return None, (f"{text!r} is the warm-up sentinel, not a quadrant. "
+                      f"Nothing may be certified in a regime nobody measured.")
+    return None, (f"{text!r} is not a quadrant. Expected one of "
+                  f"{sorted(q for q in QUADRANT_TO_LABEL if q != 'Q0')} or a "
+                  f"schema label from {sorted(CANONICAL_QUADRANT)}.")
+
+
+def _read_meta(incubator_dir: Path, strategy_id: str) -> tuple[dict, str | None]:
+    """`meta.json` for one promoted strategy, or the reason there is none."""
+    path = Path(incubator_dir) / strategy_id / "meta.json"
+    if not path.is_file():
+        return {}, (f"no {path} - the strategy is named in active_strategies "
+                    f"but nothing in the incubator records what it was "
+                    f"certified for")
+    try:
+        blob = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        return {}, f"{path} is unreadable: {exc}"
+    if not isinstance(blob, dict):
+        return {}, f"{path} is not an object"
+    return blob, None
+
+
+def load_strategy_registry(config: dict,
+                           incubator_dir: str | Path = DEFAULT_INCUBATOR_DIR,
+                           ) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    """
+    Every strategy the routing table PERMITS, with the quadrant it was
+    certified in. Returns `(registry, conflicts)`.
+
+    Permission comes from `active_strategies` and nothing else. Being in
+    `strategies/approved_incubator/` is not permission to trade - the directory
+    is a shelf, the config is the grant - so a promoted strategy nobody
+    activated is absent from the registry rather than muted in it.
+
+    THE CERTIFIED QUADRANT IS READ TWICE AND RECONCILED
+    ---------------------------------------------------
+    `strategy_allocations[id].regime_filter` in `config/portfolios.json` and
+    `certification.target_quadrant` in `meta.json` are two records of the same
+    fact, written by the same promotion but at different times. When they
+    DISAGREE the strategy is left with `optimal_regime = None`, which the
+    switchboard mutes: picking either one would be picking at random which
+    market a certified strategy is turned loose in, and the log line would read
+    correctly whichever way it went. The timeframe is reconciled the same way
+    and for a sharper reason - theta_vol is per (symbol, TIMEFRAME), so the
+    wrong one silently relabels roughly a third of the session.
+
+    Conflicts are RETURNED, never raised. A daemon that refused to start over
+    one strategy's metadata would take the regime feed down for every other
+    strategy on the account, and the config somebody is midway through fixing
+    is exactly the one that must keep loading.
+    """
+    incubator_dir = Path(incubator_dir)
+    registry: dict[str, dict[str, Any]] = {}
+    conflicts: list[str] = []
+
+    for pid in sorted((config.get("portfolios") or {})):
+        portfolio = config["portfolios"][pid] or {}
+        records = portfolio.get("strategy_allocations") or {}
+        basket = portfolio.get("basket") or {}
+        permitted = list((portfolio.get("derived") or {})
+                         .get("canonical_quadrants") or [])
+        for strategy_id in (portfolio.get("active_strategies") or []):
+            strategy_id = str(strategy_id)
+            record = records.get(strategy_id) or {}
+            meta, meta_error = _read_meta(incubator_dir, strategy_id)
+            problems: list[str] = []
+            if meta_error:
+                problems.append(meta_error)
+
+            # -- the certified quadrant, from both records -----------------
+            from_config, err = _as_quadrant(record.get("regime_filter"))
+            if err:
+                problems.append(f"{pid}.strategy_allocations: {err}")
+            from_meta, err = _as_quadrant(
+                (meta.get("certification") or {}).get("target_quadrant"))
+            if err:
+                problems.append(f"meta.json certification: {err}")
+
+            if from_config and from_meta and from_config != from_meta:
+                problems.append(
+                    f"certified quadrant disagrees: portfolios.json says "
+                    f"{from_config} and meta.json says {from_meta}. Refusing "
+                    f"to choose - one of them decides which market this "
+                    f"strategy is turned loose in.")
+                optimal = None
+            else:
+                optimal = from_config or from_meta
+            if optimal is None and not problems:
+                problems.append(
+                    "no certified quadrant in either portfolios.json "
+                    "(regime_filter) or meta.json (certification."
+                    "target_quadrant)")
+
+            # -- symbol and timeframe, reconciled the same way -------------
+            cfg_symbol = str(record.get("symbol") or "").strip().upper()
+            meta_symbol = str(meta.get("symbol") or "").strip().upper()
+            if cfg_symbol and meta_symbol and cfg_symbol != meta_symbol:
+                problems.append(
+                    f"certified symbol disagrees: portfolios.json says "
+                    f"{cfg_symbol} and meta.json says {meta_symbol}")
+                symbol = None
+            else:
+                symbol = cfg_symbol or meta_symbol or None
+            if symbol is None and not any("symbol" in p for p in problems):
+                problems.append("no certified symbol in either record")
+
+            cfg_tf = str(record.get("timeframe") or "").strip()
+            meta_tf = str(meta.get("timeframe") or "").strip()
+            if cfg_tf and meta_tf and cfg_tf != meta_tf:
+                problems.append(
+                    f"certified timeframe disagrees: portfolios.json says "
+                    f"{cfg_tf} and meta.json says {meta_tf}. theta_vol is per "
+                    f"(symbol, TIMEFRAME), so the two name different "
+                    f"volatility boundaries on the same tape.")
+                timeframe = None
+            else:
+                timeframe = cfg_tf or meta_tf or None
+            if timeframe is None and not any("timeframe" in p
+                                             for p in problems):
+                problems.append(
+                    "no certified timeframe in either record, so no theta_vol "
+                    "anchor can be selected")
+
+            entry = {
+                "strategy_id": strategy_id,
+                "portfolio_id": pid,
+                "portfolio_ids": [pid],
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "version": str(record.get("version")
+                               or meta.get("version") or "") or None,
+                "optimal_regime": optimal,
+                "optimal_regime_label": (QUADRANT_TO_LABEL.get(optimal)
+                                         if optimal else None),
+                "optimal_regime_sources": {"portfolios.json": from_config,
+                                           "meta.json": from_meta},
+                "portfolio_quadrants": permitted,
+                "basket_assets": [str(a).upper()
+                                  for a in (basket.get("assets") or [])],
+                "status_in_config": record.get("status"),
+                "module_path": record.get("path") or meta.get("source"),
+                "meta_path": str(incubator_dir / strategy_id / "meta.json"),
+                "problems": problems,
+            }
+
+            if strategy_id in registry:
+                # The same id activated on two accounts. Not automatically an
+                # error, but if the two grants disagree about the certified
+                # quadrant there is no single answer to "is it active", and
+                # the switchboard publishes one status per id.
+                first = registry[strategy_id]
+                first["portfolio_ids"].append(pid)
+                if first["optimal_regime"] != entry["optimal_regime"]:
+                    note = (f"{strategy_id} is active on "
+                            f"{first['portfolio_ids']} with different "
+                            f"certified quadrants "
+                            f"({first['optimal_regime']} vs "
+                            f"{entry['optimal_regime']})")
+                    first["problems"].append(note)
+                    first["optimal_regime"] = None
+                    first["optimal_regime_label"] = None
+                continue
+            registry[strategy_id] = entry
+
+    for strategy_id, entry in sorted(registry.items()):
+        for problem in entry["problems"]:
+            conflicts.append(f"{strategy_id}: {problem}")
+
+    return registry, conflicts
+
+
+# --------------------------------------------------------------------------
 # The daemon
 # --------------------------------------------------------------------------
 class MasterRegimeDaemon:
@@ -407,8 +674,10 @@ class MasterRegimeDaemon:
                  symbols: tuple[str, ...] | None = None,
                  timeframes: tuple[str, ...] | None = None,
                  cache_root: str | Path | None = None,
+                 incubator_dir: str | Path = DEFAULT_INCUBATOR_DIR,
                  strict_config: bool = True) -> None:
         self.config_path = str(config_path)
+        self.incubator_dir = Path(incubator_dir)
         self.state_file = resolve_state_path(state_file)
         self.model_dir = Path(ml_model_dir)
         self.default_tf = str(default_tf)
@@ -435,10 +704,36 @@ class MasterRegimeDaemon:
             for asset in (p.get("basket", {}).get("assets") or [])
         }))
 
+        # ---- the strategy registry (Module A) ----------------------------
+        # Permission from `active_strategies`, certification from `meta.json`,
+        # and the two reconciled. Conflicts are held, printed and published -
+        # never raised, or one strategy's stale metadata would take the regime
+        # feed down for every other strategy on the account.
+        self.registry, self.registry_conflicts = load_strategy_registry(
+            self.config, self.incubator_dir)
+        for conflict in self.registry_conflicts:
+            _warn(f"strategy registry: {conflict}")
+
         # ---- theta_vol anchors -------------------------------------------
         self.alias_problems = _verify_alias_tick_sizes()
         for problem in self.alias_problems:
             _warn(f"theta anchor alias: {problem}")
+
+        # What the REGISTRY needs, which is the only set that actually has to
+        # resolve. `default_tf` is a default and the baskets name contracts,
+        # but a certification names a (symbol, TIMEFRAME) pair - and an anchor
+        # loaded at the wrong timeframe is not a near miss: NQ's theta_vol is
+        # 7.90 at 15m and 16.23 at 1h. Loading only the default timeframe left
+        # a strategy certified at 1h permanently unclassifiable, reported as
+        # "no regime published", which reads exactly like a quiet market.
+        registry_pairs = tuple(
+            (str(e["symbol"]), str(e["timeframe"]))
+            for e in self.registry.values() if e["symbol"] and e["timeframe"])
+        registry_symbols = tuple(
+            dict.fromkeys(
+                [sym for sym, _ in registry_pairs]
+                + [THETA_ANCHOR_ALIAS[sym] for sym, _ in registry_pairs
+                   if sym in THETA_ANCHOR_ALIAS]))
 
         wanted_symbols = tuple(symbols) if symbols else tuple(
             dict.fromkeys(REFERENCE_SYMBOLS
@@ -446,8 +741,11 @@ class MasterRegimeDaemon:
                                   for s in self.tradeable_symbols
                                   if s in THETA_ANCHOR_ALIAS)
                           + tuple(s for s in self.tradeable_symbols
-                                  if s not in THETA_ANCHOR_ALIAS)))
-        wanted_tfs = tuple(timeframes) if timeframes else (self.default_tf,)
+                                  if s not in THETA_ANCHOR_ALIAS)
+                          + registry_symbols))
+        wanted_tfs = tuple(timeframes) if timeframes else tuple(
+            dict.fromkeys((self.default_tf,)
+                          + tuple(tf for _, tf in registry_pairs)))
 
         self.theta_anchors = load_theta_anchors(
             anchors_path=anchors_path,
@@ -459,9 +757,25 @@ class MasterRegimeDaemon:
         # caller narrowing to one contract does not need to hear about the
         # three it did not ask for, and a warning that fires every time trains
         # a reader to skip the one that matters.
-        self.missing_anchors = tuple(
-            (s, tf) for s in wanted_symbols if s in REFERENCE_SYMBOLS
-            for tf in wanted_tfs if (s, tf) not in self.theta_anchors)
+        # Two sources of "should have resolved": the reference symbols at the
+        # timeframe this daemon defaults to, and every (symbol, timeframe) a
+        # REGISTERED strategy was certified on. The cross product of all
+        # requested symbols and all requested timeframes is not it - it would
+        # report CL/1h missing because some other strategy trades 1h, and a
+        # warning that fires every time trains a reader to skip the one that
+        # matters.
+        should_resolve = {(s, self.default_tf) for s in wanted_symbols
+                          if s in REFERENCE_SYMBOLS}
+        should_resolve |= {(THETA_ANCHOR_ALIAS.get(sym, sym), tf)
+                           for sym, tf in registry_pairs}
+        if symbols or timeframes:
+            should_resolve = {(s, tf) for s in wanted_symbols
+                              if s in REFERENCE_SYMBOLS for tf in wanted_tfs}
+        self.missing_anchors = tuple(sorted(
+            pair for pair in should_resolve
+            if pair not in self.theta_anchors
+            and (THETA_ANCHOR_ALIAS.get(pair[0], pair[0]), pair[1])
+            not in self.theta_anchors))
         if self.missing_anchors:
             _warn(f"no pinned theta_vol for {list(self.missing_anchors)} - "
                   f"those symbols CANNOT be classified. Build the regime cache "
@@ -486,7 +800,7 @@ class MasterRegimeDaemon:
             return {"schema_version": STATE_SCHEMA_VERSION,
                     "updated_at": None,
                     "quadrant_standard": dict(QUADRANT_TO_LABEL),
-                    "symbols": {}}
+                    "symbols": {}, "by_timeframe": {}, "strategies": {}}
         try:
             blob = json.loads(self.state_file.read_text())
         except (OSError, json.JSONDecodeError) as exc:
@@ -495,9 +809,11 @@ class MasterRegimeDaemon:
             return {"schema_version": STATE_SCHEMA_VERSION,
                     "updated_at": None,
                     "quadrant_standard": dict(QUADRANT_TO_LABEL),
-                    "symbols": {}}
+                    "symbols": {}, "by_timeframe": {}, "strategies": {}}
         blob.setdefault("schema_version", STATE_SCHEMA_VERSION)
         blob.setdefault("symbols", {})
+        blob.setdefault("by_timeframe", {})
+        blob.setdefault("strategies", {})
         blob["quadrant_standard"] = dict(QUADRANT_TO_LABEL)
         return blob
 
@@ -816,6 +1132,290 @@ class MasterRegimeDaemon:
         return float(proba[0][1])
 
     # -- state ------------------------------------------------------------
+    # -- Module C: the deterministic switchboard --------------------------
+    @staticmethod
+    def _symbol_candidates(symbol: str) -> list[str]:
+        """
+        Every contract whose published regime describes `symbol`'s tape.
+
+        Both directions of the micro alias: a strategy certified on NQ is
+        answered by a published MNQ reading and the reverse, because the two
+        quote the same price series at the same tick size and only the
+        multiplier differs - and a multiplier appears nowhere in an ADX or an
+        ATR. Without this a strategy certified on NQ and routed to a basket of
+        MNQ would find no reading and sit muted forever, which on a console
+        looks exactly like a market that never entered its quadrant.
+        """
+        sym = str(symbol or "").strip().upper()
+        out = [sym] if sym else []
+        parent = THETA_ANCHOR_ALIAS.get(sym)
+        if parent:
+            out.append(parent)
+        out.extend(m for m, full in sorted(THETA_ANCHOR_ALIAS.items())
+                   if full == sym)
+        return list(dict.fromkeys(out))
+
+    def _published_record(self, symbol: str, tf: str,
+                          state: dict[str, Any] | None = None
+                          ) -> tuple[dict[str, Any] | None, str]:
+        """
+        The published regime covering `(symbol, tf)`, or `(None, why not)`.
+
+        THE TIMEFRAME IS PART OF THE LOOKUP. A record published for NQ at 15m
+        does not answer a question about NQ at 1h: theta_vol is 7.90 at 15m and
+        16.23 at 1h on the same tape, so the two labels are drawn against
+        boundaries that differ by more than a factor of two. Falling back to
+        "whatever was published for this symbol" would answer with the wrong
+        one and nothing would raise.
+        """
+        state = self.state if state is None else state
+        by_tf = state.get("by_timeframe") or {}
+        symbols = state.get("symbols") or {}
+        candidates = self._symbol_candidates(symbol)
+        for candidate in candidates:
+            record = (by_tf.get(candidate) or {}).get(tf)
+            if record:
+                return dict(record), "published"
+        # Documents written before `by_timeframe` existed, and any writer that
+        # publishes only the flat map. Accepted only when the record NAMES the
+        # timeframe asked for.
+        for candidate in candidates:
+            record = symbols.get(candidate)
+            if record and str(record.get("tf")) == str(tf):
+                return dict(record), "published"
+        seen = sorted({f"{sym}/{rec.get('tf')}"
+                       for sym, rec in symbols.items() if isinstance(rec, dict)})
+        if any(c in symbols for c in candidates):
+            return None, (f"nothing published for {'/'.join(candidates)} at "
+                          f"{tf}; published: {seen}")
+        return None, (f"no regime published for {'/'.join(candidates)}; "
+                      f"published: {seen}")
+
+    def strategy_status(self, strategy_id: str,
+                        state: dict[str, Any] | None = None
+                        ) -> dict[str, Any]:
+        """
+        Is this strategy permitted to OPEN a position right now, and why.
+
+        `ACTIVE` when the live quadrant for its certified (symbol, timeframe)
+        equals its certified quadrant. `MUTED` in every other case, including
+        every case where the answer is not known - an unreadable, absent or
+        warm-up regime is not permission, and defaulting it to ACTIVE would
+        trade a market nobody has measured.
+
+        `exits_allowed` is unconditionally True and is not a regime decision.
+        A muted strategy still owns whatever it is already holding, and a gate
+        that blocked its exit would strand inventory in the one environment its
+        certification says it should not be in.
+        """
+        sid = str(strategy_id)
+        entry = self.registry.get(sid)
+        if entry is None:
+            raise UnknownStrategy(
+                f"{sid!r} is not in the switchboard. Registered: "
+                f"{sorted(self.registry)}. An unregistered id is a config "
+                f"fault, not a muted strategy - `active_strategies` in "
+                f"{self.config_path} is what grants permission.")
+
+        status = {
+            "strategy_id": sid,
+            "portfolio_id": entry["portfolio_id"],
+            "portfolio_ids": list(entry["portfolio_ids"]),
+            "symbol": entry["symbol"],
+            "timeframe": entry["timeframe"],
+            "version": entry["version"],
+            "optimal_regime": entry["optimal_regime"],
+            "optimal_regime_label": entry["optimal_regime_label"],
+            "live_quadrant": None,
+            "live_regime": None,
+            "resolved_symbol": None,
+            "bar_ts": None,
+            "written_at": None,
+            "status": STATUS_MUTED,
+            "reason": MUTE_UNCERTIFIED,
+            "detail": "",
+            "entries_allowed": False,
+            # NEVER conditional. See the docstring.
+            "exits_allowed": True,
+            "problems": list(entry["problems"]),
+            "evaluated_at": _utcnow(),
+        }
+
+        if not entry["optimal_regime"] or not entry["symbol"] \
+                or not entry["timeframe"]:
+            status["detail"] = ("; ".join(entry["problems"])
+                                or "certification incomplete")
+            return status
+
+        record, why = self._published_record(entry["symbol"],
+                                             entry["timeframe"], state=state)
+        if record is None:
+            status["reason"] = MUTE_NO_REGIME
+            status["detail"] = why
+            return status
+
+        status["resolved_symbol"] = record.get("symbol")
+        status["live_quadrant"] = record.get("quadrant")
+        status["live_regime"] = record.get("regime")
+        status["bar_ts"] = record.get("bar_ts")
+        status["written_at"] = record.get("written_at")
+        status["adx_14"] = record.get("adx_14")
+        status["atr_14"] = record.get("atr_14")
+        status["theta_vol"] = record.get("theta_vol")
+
+        if record.get("quadrant") in (None, "", f"Q{QUADRANT_UNDEFINED}") \
+                or record.get("regime") == UNDEFINED_LABEL:
+            status["reason"] = MUTE_WARMUP
+            status["detail"] = (
+                f"{record.get('symbol')} is inside the ADX({ADX_LENGTH})/"
+                f"ATR({ATR_LENGTH}) warm-up. Q0 is not a quadrant, so it "
+                f"matches nothing - including the strategy's own.")
+            return status
+
+        if str(record.get("tf")) != str(entry["timeframe"]):
+            # Defence in depth: `_published_record` already keys on the
+            # timeframe, so reaching this means a writer put a record under a
+            # key that disagrees with its own `tf` field.
+            status["reason"] = MUTE_TIMEFRAME
+            status["detail"] = (
+                f"the published record is at {record.get('tf')} and the "
+                f"strategy is certified at {entry['timeframe']}; theta_vol is "
+                f"per (symbol, TIMEFRAME) and the two boundaries differ.")
+            return status
+
+        if record.get("quadrant") == entry["optimal_regime"]:
+            status["status"] = STATUS_ACTIVE
+            status["entries_allowed"] = True
+            status["reason"] = "regime_match"
+            status["detail"] = (
+                f"{record.get('symbol')} {record.get('tf')} is in "
+                f"{record.get('quadrant')} ({record.get('regime')}), the "
+                f"quadrant {sid} was certified in.")
+            return status
+
+        status["reason"] = MUTE_REGIME_MISMATCH
+        status["detail"] = (
+            f"{record.get('symbol')} {record.get('tf')} is in "
+            f"{record.get('quadrant')} ({record.get('regime')}) and {sid} is "
+            f"certified in {entry['optimal_regime']} "
+            f"({entry['optimal_regime_label']}). New entries are blocked; "
+            f"exits remain permitted so open inventory can still be managed.")
+        return status
+
+    def evaluate_switchboard(self, state: dict[str, Any] | None = None
+                             ) -> dict[str, dict[str, Any]]:
+        """Every registered strategy's status, against one state snapshot."""
+        return {sid: self.strategy_status(sid, state=state)
+                for sid in sorted(self.registry)}
+
+    def is_strategy_active(self, strategy_id: str,
+                           state: dict[str, Any] | None = None) -> bool:
+        """True only when entries are permitted. Never a default."""
+        return self.strategy_status(strategy_id,
+                                    state=state)["status"] == STATUS_ACTIVE
+
+    @staticmethod
+    def classify_signal(signal: Any) -> str:
+        """
+        `KIND_ENTRY` or `KIND_EXIT` for a signal token, or RAISE.
+
+        A token in neither vocabulary is refused rather than defaulted. Either
+        default is wrong in a way nothing reports: treated as an entry it is
+        blocked, and a strategy silently stops flattening; treated as an exit
+        it is allowed, and a muted strategy opens a position in the one
+        environment it was certified against.
+        """
+        token = str(signal or "").strip().upper()
+        if token in EXIT_SIGNALS:
+            return KIND_EXIT
+        if token in ENTRY_SIGNALS:
+            return KIND_ENTRY
+        raise RegimeDaemonError(
+            f"{signal!r} is not a signal this switchboard recognises. Entries: "
+            f"{sorted(ENTRY_SIGNALS)}. Exits: {sorted(EXIT_SIGNALS)}. Refusing "
+            f"to guess - one default blocks a flatten and the other opens a "
+            f"position in a muted regime.")
+
+    def gate_signal(self, strategy_id: str, signal: Any,
+                    state: dict[str, Any] | None = None) -> dict[str, Any]:
+        """
+        The switchboard verdict for one signal: `ALLOWED` or `BLOCKED`.
+
+        Entries are allowed only while the strategy is ACTIVE. **Exits are
+        allowed in every regime, including one where the strategy is muted and
+        one where no regime has been published at all** - the muting exists to
+        stop new exposure, and a position already open has to be closable from
+        whatever state the daemon is in.
+        """
+        kind = self.classify_signal(signal)
+        status = self.strategy_status(strategy_id, state=state)
+        if kind == KIND_EXIT:
+            decision, why = DECISION_ALLOWED, (
+                "exit signals are permitted in every regime: muting blocks "
+                "new exposure, it does not trap open inventory")
+        elif status["status"] == STATUS_ACTIVE:
+            decision, why = DECISION_ALLOWED, status["detail"]
+        else:
+            decision, why = DECISION_BLOCKED, status["detail"]
+        return {"strategy_id": str(strategy_id),
+                "signal": str(signal or "").strip().upper(),
+                "kind": kind,
+                "decision": decision,
+                "status": status["status"],
+                "reason": status["reason"],
+                "detail": why,
+                "live_quadrant": status["live_quadrant"],
+                "optimal_regime": status["optimal_regime"],
+                "evaluated_at": status["evaluated_at"]}
+
+    # -- Module E: publication --------------------------------------------
+    def _stamp(self, candidate: dict[str, Any]) -> dict[str, Any]:
+        """
+        Finish a state document: the standards it was written under, and the
+        switchboard computed FROM THAT DOCUMENT.
+
+        The switchboard is derived from `candidate` rather than from
+        `self.state`, so every status published in a file was drawn on the
+        quadrants published in the same file. Computing it from memory would
+        let a reader see a status that disagrees with the reading printed
+        beside it, with both looking correct.
+        """
+        candidate["schema_version"] = STATE_SCHEMA_VERSION
+        candidate["quadrant_standard"] = dict(QUADRANT_TO_LABEL)
+        candidate["adx_trend_threshold"] = ADX_TREND_THRESHOLD
+        candidate["in_sample_window"] = [DEFAULT_IS_START, DEFAULT_IS_END]
+        # Published so the reader can classify a signal without importing this
+        # module and without a second copy of the vocabulary.
+        candidate["signal_vocabulary"] = {
+            "entry": sorted(ENTRY_SIGNALS),
+            "exit": sorted(EXIT_SIGNALS),
+            "note": ("exit tokens are permitted in every regime; muting "
+                     "blocks new exposure only"),
+        }
+        candidate["strategies"] = self.evaluate_switchboard(state=candidate)
+        candidate["registry_conflicts"] = list(self.registry_conflicts)
+        return candidate
+
+    def publish_switchboard(self) -> dict[str, dict[str, Any]]:
+        """
+        Recompute and republish the switchboard against the regimes already on
+        disk, without a new bar.
+
+        Needed because a strategy's permission can change with no market
+        movement at all - an operator adding an id to `active_strategies`, or a
+        promotion rewriting a certified quadrant. Without this the switchboard
+        would only ever refresh on the next tick of a symbol somebody happened
+        to be watching.
+        """
+        candidate = dict(self.state)
+        candidate.setdefault("symbols", {})
+        candidate.setdefault("by_timeframe", {})
+        candidate["updated_at"] = _utcnow()
+        self._stamp(candidate)
+        write_state_atomic(self.state_file, candidate)
+        self.state = candidate
+        return candidate["strategies"]
+
     def update_state(self, symbol: str, regime_data: dict) -> None:
         """
         Merge one symbol's regime into the cache and rewrite the whole file
@@ -854,11 +1454,20 @@ class MasterRegimeDaemon:
         # nothing looked wrong.
         candidate = dict(self.state)
         candidate["symbols"] = {**self.state.get("symbols", {}), sym: entry}
-        candidate["schema_version"] = STATE_SCHEMA_VERSION
+        # `symbols` holds the LATEST reading per contract, which is what a
+        # caller asking "what is NQ doing" wants. `by_timeframe` holds one per
+        # (symbol, timeframe), because they are different measurements: NQ's
+        # theta_vol is 7.90 at 15m and 16.23 at 1h, so a 15m reading is not an
+        # answer about a strategy certified at 1h. Keeping only the flat map
+        # would let the last symbol to tick decide which boundary every
+        # strategy on it was judged against.
+        tf_key = str(entry.get("tf") or self.default_tf)
+        by_tf = {s: dict(v) for s, v in
+                 (self.state.get("by_timeframe") or {}).items()}
+        by_tf.setdefault(sym, {})[tf_key] = entry
+        candidate["by_timeframe"] = by_tf
         candidate["updated_at"] = entry["written_at"]
-        candidate["quadrant_standard"] = dict(QUADRANT_TO_LABEL)
-        candidate["adx_trend_threshold"] = ADX_TREND_THRESHOLD
-        candidate["in_sample_window"] = [DEFAULT_IS_START, DEFAULT_IS_END]
+        self._stamp(candidate)
 
         write_state_atomic(self.state_file, candidate)
         self.state = candidate
@@ -889,6 +1498,21 @@ class MasterRegimeDaemon:
         if self.missing_anchors:
             lines.append(f"  MISSING anchors: "
                          f"{', '.join(f'{s}/{t}' for s, t in self.missing_anchors)}")
+        lines.append("  switchboard (active_strategies x certified quadrant):")
+        if not self.registry:
+            lines.append("    NONE registered. `active_strategies` in "
+                         f"{self.config_path} grants the permission; the "
+                         "incubator directory does not.")
+        for sid, entry in sorted(self.registry.items()):
+            lines.append(
+                f"    {sid:<36} {str(entry['symbol']):<5} "
+                f"{str(entry['timeframe']):<5} certified "
+                f"{entry['optimal_regime'] or 'UNRESOLVED'} "
+                f"({entry['optimal_regime_label'] or '-'}) "
+                f"on {entry['portfolio_id']}")
+        if self.registry_conflicts:
+            lines.append("  REGISTRY CONFLICTS (these strategies stay muted):")
+            lines.extend(f"    {c}" for c in self.registry_conflicts)
         lines.append(f"  models registered: {sorted(self.models) or 'none'}")
         if self.model_errors:
             lines.append(f"  models FAILED to load: {sorted(self.model_errors)}")
@@ -1003,15 +1627,71 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--state-file", default=DEFAULT_STATE_FILE)
     ap.add_argument("--models", default=DEFAULT_MODEL_DIR)
     ap.add_argument("--tf", default=DEFAULT_TF)
+    ap.add_argument("--incubator-dir", default=DEFAULT_INCUBATOR_DIR)
+    ap.add_argument(
+        "--publish", action="store_true",
+        help="classify each registered strategy's (symbol, timeframe) from "
+             "the lake and publish the state file. Without it this command "
+             "reads no bars and only reports what is wired up.")
+    ap.add_argument("--bars", type=int, default=400,
+                    help="how many trailing bars to classify over "
+                         f"(minimum {MIN_BARS_FOR_REGIME})")
     args = ap.parse_args(argv)
 
     daemon = MasterRegimeDaemon(config_path=args.config,
                                 state_file=args.state_file,
                                 ml_model_dir=args.models,
                                 default_tf=args.tf,
+                                incubator_dir=args.incubator_dir,
                                 strict_config=False)
     print(daemon.describe())
-    return 1 if daemon.missing_anchors or daemon.model_errors else 0
+
+    if not args.publish:
+        return 1 if daemon.missing_anchors or daemon.model_errors else 0
+
+    # THE LAKE IS READ HERE AND NOWHERE ELSE IN THIS MODULE. `MasterRegimeDaemon`
+    # owns no feed - the live loop hands it frames - and the import is inside
+    # `main()` so that stays true: a class that could read the lake would grow
+    # a code path where a live permission was drawn on historical bars.
+    # This is the OPERATOR BOOTSTRAP: it fills the state file from the lake so
+    # the switchboard has something to publish before a live feed exists.
+    from mdlib import lake                                        # noqa: PLC0415
+
+    published, failed = 0, 0
+    targets = sorted({(e["symbol"], e["timeframe"])
+                      for e in daemon.registry.values()
+                      if e["symbol"] and e["timeframe"]})
+    if not targets:
+        print("\nnothing to publish: no registered strategy names both a "
+              "symbol and a timeframe.")
+        return 1
+    print()
+    for symbol, tf in targets:
+        try:
+            bars = lake.get_bars(symbol, tf=tf)
+            if bars is None or not len(bars):
+                raise RegimeDaemonError(f"the lake returned no {tf} bars")
+            tail = bars.tail(max(int(args.bars), MIN_BARS_FOR_REGIME))
+            data = daemon.refresh(symbol, tail, tf=tf)
+        except Exception as exc:
+            failed += 1
+            print(f"  {symbol} {tf}: FAILED - {type(exc).__name__}: {exc}")
+            continue
+        published += 1
+        print(f"  {symbol} {tf}: {data['quadrant']} ({data['regime']})  "
+              f"ADX={data['adx_14']:.2f}  ATR={data['atr_14']:.4f}  "
+              f"theta={data['theta_vol']:.4f}  bar={data['bar_ts']}")
+
+    # Republish the switchboard even when nothing classified, so the file
+    # always carries a status for every registered strategy rather than an
+    # absence a reader would have to interpret.
+    for sid, st in sorted(daemon.publish_switchboard().items()):
+        print(f"  {sid}: {st['status']} ({st['reason']}) - entries "
+              f"{'ALLOWED' if st['entries_allowed'] else 'BLOCKED'}, exits "
+              f"{'ALLOWED' if st['exits_allowed'] else 'BLOCKED'}")
+    print(f"\npublished {published} reading(s) to {daemon.state_file}"
+          + (f", {failed} failed" if failed else ""))
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

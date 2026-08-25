@@ -55,7 +55,10 @@ from realtime.crosstrade_formatter import (                     # noqa: E402
     format_flatten_command,
     redact,
 )
+from realtime import regime_daemon as regime_daemon_module     # noqa: E402
 from realtime.regime_daemon import (                            # noqa: E402
+    ENTRY_SIGNALS,
+    EXIT_SIGNALS,
     MIN_BARS_FOR_REGIME,
     QUADRANT_TO_LABEL,
     UNDEFINED_LABEL,
@@ -63,6 +66,7 @@ from realtime.regime_daemon import (                            # noqa: E402
     MasterRegimeDaemon,
     RegimeDaemonError,
     ThetaAnchorMissing,
+    UnknownStrategy,
     _verify_alias_tick_sizes,
 )
 from realtime.regime_reader import (                            # noqa: E402
@@ -883,3 +887,499 @@ def test_live_labels_reproduce_the_cached_quadrant(tmp_path):
     assert not disagreements, (
         f"live daemon disagrees with the cached quadrant on "
         f"{len(disagreements)} of 25 bars: {disagreements[:5]}")
+
+
+# --------------------------------------------------------------------------
+# 8. The strategy registry (Module A) and the switchboard (Module C)
+# --------------------------------------------------------------------------
+# These build their OWN portfolios.json and their OWN incubator directory
+# rather than leaning on the repository's. `config/portfolios.json` is a live
+# routing table an operator edits, so a switchboard test pinned to whatever is
+# promoted today would start failing on the next promotion for a reason that
+# is not a defect - and, worse, would start PASSING vacuously if the strategy
+# it names were ever deactivated.
+SWITCH_ID = "fixture_strategy_NQ_1h"
+
+
+def write_switchboard_config(tmp_path: Path, *, strategy_id: str = SWITCH_ID,
+                             symbol: str = "NQ", tf: str = "1h",
+                             quadrant: str | None = "Q2") -> str:
+    """
+    The repository's config with ONE portfolio's strategy list replaced.
+
+    Derived from the real file so every other invariant the config loader
+    enforces - the four accounts, the asset metadata reconciled against
+    `backtest/specs.py`, the orthogonal baskets - still holds. Only the grant
+    under test is synthetic.
+    """
+    blob = json.loads(Path(CONFIG).read_text())
+    record = {"strat": strategy_id, "symbol": symbol, "timeframe": tf,
+              "version": "A", "allocation": 1, "status": "incubating"}
+    if quadrant is not None:
+        record["regime_filter"] = quadrant
+    for pid, portfolio in blob["portfolios"].items():
+        if pid == "Incubator-Odd":
+            portfolio["active_strategies"] = [strategy_id]
+            portfolio["strategy_allocations"] = {strategy_id: record}
+        else:
+            portfolio["active_strategies"] = []
+            portfolio.pop("strategy_allocations", None)
+    path = tmp_path / "portfolios.json"
+    path.write_text(json.dumps(blob, indent=1))
+    return str(path)
+
+
+def write_incubator(tmp_path: Path, *, strategy_id: str = SWITCH_ID,
+                    symbol: str = "NQ", tf: str = "1h",
+                    quadrant: str | None = "Q2") -> Path:
+    """An `approved_incubator/<id>/meta.json` carrying the certification."""
+    directory = tmp_path / "incubator" / strategy_id
+    directory.mkdir(parents=True, exist_ok=True)
+    meta = {"name": strategy_id, "symbol": symbol, "symbols": [symbol],
+            "timeframe": tf, "version": "A"}
+    if quadrant is not None:
+        meta["certification"] = {"target_quadrant": quadrant,
+                                 "audit_symbol": symbol, "audit_timeframe": tf}
+    (directory / "meta.json").write_text(json.dumps(meta, indent=1))
+    return tmp_path / "incubator"
+
+
+def make_switchboard_daemon(tmp_path: Path, *, theta: float = 0.5,
+                            tf: str = "1h", cfg_quadrant: str | None = "Q2",
+                            meta_quadrant: str | None = "Q2",
+                            cfg_tf: str | None = None,
+                            meta_tf: str | None = None,
+                            with_meta: bool = True) -> MasterRegimeDaemon:
+    config = write_switchboard_config(tmp_path, tf=cfg_tf or tf,
+                                      quadrant=cfg_quadrant)
+    if with_meta:
+        incubator = write_incubator(tmp_path, tf=meta_tf or tf,
+                                    quadrant=meta_quadrant)
+    else:
+        incubator = tmp_path / "empty_incubator"
+        incubator.mkdir(parents=True, exist_ok=True)
+    empty_cache = tmp_path / "no_cache"
+    empty_cache.mkdir(parents=True, exist_ok=True)
+    return MasterRegimeDaemon(
+        config_path=config,
+        state_file=str(tmp_path / "state" / "live_regime_state.json"),
+        ml_model_dir=str(tmp_path / "models"),
+        anchors_path=str(write_anchors(
+            tmp_path, {"NQ": {tf: {"theta_vol": theta,
+                                   "is_start": "2013-01-01",
+                                   "is_end": "2022-12-31"}}})),
+        default_tf=tf,
+        symbols=("NQ",),
+        timeframes=(tf,),
+        cache_root=str(empty_cache),
+        incubator_dir=str(incubator),
+    )
+
+
+def test_registry_takes_permission_from_config_and_certification_from_meta(tmp_path):
+    daemon = make_switchboard_daemon(tmp_path)
+    entry = daemon.registry[SWITCH_ID]
+    assert entry["optimal_regime"] == "Q2"
+    assert entry["optimal_regime_label"] == "Q2_HIGH_VOL_CHOP"
+    assert entry["symbol"] == "NQ" and entry["timeframe"] == "1h"
+    assert entry["portfolio_id"] == "Incubator-Odd"
+    # Both sources are recorded, so a later disagreement is diagnosable.
+    assert entry["optimal_regime_sources"] == {"portfolios.json": "Q2",
+                                               "meta.json": "Q2"}
+    assert daemon.registry_conflicts == []
+
+
+def test_a_schema_label_and_a_quadrant_id_resolve_to_the_same_thing(tmp_path):
+    """A basket writes `Q2_HIGH_VOL_CHOP`, a Stage 1 handoff writes `Q2`."""
+    daemon = make_switchboard_daemon(tmp_path, cfg_quadrant="Q2_HIGH_VOL_CHOP",
+                                     meta_quadrant="Q2")
+    assert daemon.registry[SWITCH_ID]["optimal_regime"] == "Q2"
+    assert daemon.registry_conflicts == []
+
+
+def test_the_incubator_directory_alone_is_not_permission_to_trade(tmp_path):
+    """A promoted strategy nobody activated is ABSENT, not muted."""
+    config = write_switchboard_config(tmp_path, strategy_id=SWITCH_ID)
+    blob = json.loads(Path(config).read_text())
+    blob["portfolios"]["Incubator-Odd"]["active_strategies"] = []
+    Path(config).write_text(json.dumps(blob))
+    incubator = write_incubator(tmp_path)          # the code is on the shelf
+    empty_cache = tmp_path / "no_cache"
+    empty_cache.mkdir(parents=True, exist_ok=True)
+    daemon = MasterRegimeDaemon(
+        config_path=config,
+        state_file=str(tmp_path / "state.json"),
+        ml_model_dir=str(tmp_path / "models"),
+        anchors_path=str(write_anchors(tmp_path, {"NQ": {"1h": 0.5}})),
+        default_tf="1h", symbols=("NQ",), timeframes=("1h",),
+        cache_root=str(empty_cache), incubator_dir=str(incubator))
+    assert daemon.registry == {}
+
+
+def test_the_two_certification_records_disagreeing_refuses_to_choose(tmp_path):
+    """
+    portfolios.json says Q2 and meta.json says Q1. Picking either would be
+    picking at random which market a certified strategy is turned loose in.
+    """
+    daemon = make_switchboard_daemon(tmp_path, cfg_quadrant="Q2",
+                                     meta_quadrant="Q1")
+    entry = daemon.registry[SWITCH_ID]
+    assert entry["optimal_regime"] is None
+    assert any("disagree" in c for c in daemon.registry_conflicts)
+    status = daemon.strategy_status(SWITCH_ID)
+    assert status["status"] == "MUTED"
+    assert status["reason"] == "certification_unresolved"
+    assert status["entries_allowed"] is False
+    assert status["exits_allowed"] is True
+
+
+def test_disagreeing_timeframes_refuse_to_choose_an_anchor(tmp_path):
+    """theta_vol is per (symbol, TIMEFRAME) - 15m and 1h are different rules."""
+    daemon = make_switchboard_daemon(tmp_path, cfg_tf="15m", meta_tf="1h")
+    assert daemon.registry[SWITCH_ID]["timeframe"] is None
+    assert any("timeframe disagrees" in c for c in daemon.registry_conflicts)
+    assert daemon.strategy_status(SWITCH_ID)["status"] == "MUTED"
+
+
+def test_an_active_strategy_with_no_meta_json_is_muted_not_assumed(tmp_path):
+    daemon = make_switchboard_daemon(tmp_path, cfg_quadrant=None,
+                                     with_meta=False)
+    assert daemon.registry[SWITCH_ID]["optimal_regime"] is None
+    assert daemon.strategy_status(SWITCH_ID)["entries_allowed"] is False
+
+
+# -- the switchboard verdict ------------------------------------------------
+def test_switchboard_activates_in_the_certified_quadrant(tmp_path):
+    """chop bars against theta=0.5 are high-vol and ranging: Q2."""
+    daemon = make_switchboard_daemon(tmp_path, theta=0.5)
+    data = daemon.refresh("NQ", make_bars(120, "chop", tf_minutes=60), tf="1h")
+    assert data["quadrant"] == "Q2"
+
+    status = daemon.strategy_status(SWITCH_ID)
+    assert status["status"] == "ACTIVE"
+    assert status["entries_allowed"] is True
+    assert status["exits_allowed"] is True
+    assert status["live_quadrant"] == "Q2"
+    assert daemon.is_strategy_active(SWITCH_ID) is True
+
+
+def test_switchboard_mutes_outside_the_certified_quadrant(tmp_path):
+    """trend bars against theta=2.0 are high-vol and trending: Q1, not Q2."""
+    daemon = make_switchboard_daemon(tmp_path, theta=2.0)
+    data = daemon.refresh("NQ", make_bars(120, "trend", tf_minutes=60), tf="1h")
+    assert data["quadrant"] == "Q1"
+
+    status = daemon.strategy_status(SWITCH_ID)
+    assert status["status"] == "MUTED"
+    assert status["reason"] == "regime_mismatch"
+    assert status["entries_allowed"] is False
+    assert daemon.is_strategy_active(SWITCH_ID) is False
+
+
+def test_muted_blocks_entries_and_still_permits_exits(tmp_path):
+    """
+    THE ONE INVARIANT THIS MODULE EXISTS FOR. Muting stops new exposure; it
+    must never trap a position that is already open.
+    """
+    daemon = make_switchboard_daemon(tmp_path, theta=2.0)
+    daemon.refresh("NQ", make_bars(120, "trend", tf_minutes=60), tf="1h")
+    assert daemon.strategy_status(SWITCH_ID)["status"] == "MUTED"
+
+    for entry_signal in ("BUY", "SELL", "LONG", "SHORT", "ENTRY"):
+        verdict = daemon.gate_signal(SWITCH_ID, entry_signal)
+        assert verdict["kind"] == "ENTRY"
+        assert verdict["decision"] == "BLOCKED", entry_signal
+
+    for exit_signal in ("EXIT", "FLAT", "FLATTEN", "CLOSE", "exit_long"):
+        verdict = daemon.gate_signal(SWITCH_ID, exit_signal)
+        assert verdict["kind"] == "EXIT"
+        assert verdict["decision"] == "ALLOWED", exit_signal
+
+
+def test_active_permits_both(tmp_path):
+    daemon = make_switchboard_daemon(tmp_path, theta=0.5)
+    daemon.refresh("NQ", make_bars(120, "chop", tf_minutes=60), tf="1h")
+    assert daemon.gate_signal(SWITCH_ID, "BUY")["decision"] == "ALLOWED"
+    assert daemon.gate_signal(SWITCH_ID, "FLATTEN")["decision"] == "ALLOWED"
+
+
+def test_exits_survive_a_state_file_that_holds_no_regime_at_all(tmp_path):
+    """
+    A daemon that has published nothing still lets a strategy get flat. A gate
+    that expired an exit permission would hold a position through exactly the
+    conditions that killed the feed.
+    """
+    daemon = make_switchboard_daemon(tmp_path)
+    status = daemon.strategy_status(SWITCH_ID)
+    assert status["status"] == "MUTED"
+    assert status["reason"] == "no_regime_published"
+    assert status["exits_allowed"] is True
+    assert daemon.gate_signal(SWITCH_ID, "FLATTEN")["decision"] == "ALLOWED"
+    assert daemon.gate_signal(SWITCH_ID, "BUY")["decision"] == "BLOCKED"
+
+
+def test_the_warmup_matches_nothing_including_its_own_quadrant(tmp_path):
+    daemon = make_switchboard_daemon(tmp_path, theta=0.5)
+    daemon.refresh("NQ", make_bars(MIN_BARS_FOR_REGIME - 1, "chop",
+                                   tf_minutes=60), tf="1h")
+    status = daemon.strategy_status(SWITCH_ID)
+    assert status["status"] == "MUTED"
+    assert status["reason"] == "indicator_warmup"
+    assert status["exits_allowed"] is True
+
+
+def test_a_15m_reading_does_not_answer_for_a_1h_strategy(tmp_path):
+    """
+    NQ's theta_vol is 7.90 at 15m and 16.23 at 1h. Answering a 1h question
+    with a 15m label draws the permission against the wrong boundary, and
+    nothing about the log line would look wrong.
+    """
+    config = write_switchboard_config(tmp_path, tf="1h")
+    incubator = write_incubator(tmp_path, tf="1h")
+    empty_cache = tmp_path / "no_cache"
+    empty_cache.mkdir(parents=True, exist_ok=True)
+    daemon = MasterRegimeDaemon(
+        config_path=config,
+        state_file=str(tmp_path / "state.json"),
+        ml_model_dir=str(tmp_path / "models"),
+        anchors_path=str(write_anchors(
+            tmp_path, {"NQ": {"15m": 0.5, "1h": 0.5}})),
+        default_tf="15m", symbols=("NQ",), timeframes=("15m", "1h"),
+        cache_root=str(empty_cache), incubator_dir=str(incubator))
+
+    # A 15m reading in the certified quadrant is published - and ignored.
+    published = daemon.refresh("NQ", make_bars(120, "chop"), tf="15m")
+    assert published["quadrant"] == "Q2"
+    status = daemon.strategy_status(SWITCH_ID)
+    assert status["status"] == "MUTED"
+    assert status["reason"] == "no_regime_published"
+    assert "1h" in status["detail"]
+
+    # The 1h reading activates it, and the 15m one is still on file.
+    daemon.refresh("NQ", make_bars(120, "chop", tf_minutes=60), tf="1h")
+    assert daemon.strategy_status(SWITCH_ID)["status"] == "ACTIVE"
+    assert set(daemon.state["by_timeframe"]["NQ"]) == {"15m", "1h"}
+
+
+def test_a_micro_reading_answers_for_its_full_size_certification(tmp_path):
+    """MNQ and NQ quote the same tape; only the multiplier differs."""
+    daemon = make_switchboard_daemon(tmp_path, theta=0.5)
+    daemon.refresh("MNQ", make_bars(120, "chop", tf_minutes=60), tf="1h")
+    status = daemon.strategy_status(SWITCH_ID)
+    assert status["status"] == "ACTIVE"
+    assert status["resolved_symbol"] == "MNQ"
+
+
+def test_an_unrecognised_signal_token_raises_rather_than_defaulting(tmp_path):
+    daemon = make_switchboard_daemon(tmp_path)
+    with pytest.raises(RegimeDaemonError):
+        daemon.gate_signal(SWITCH_ID, "SCALE_IN")
+
+
+def test_an_unknown_strategy_raises_rather_than_reading_as_muted(tmp_path):
+    daemon = make_switchboard_daemon(tmp_path)
+    with pytest.raises(UnknownStrategy):
+        daemon.strategy_status("never_promoted")
+
+
+def test_the_signal_vocabulary_is_not_a_second_list(tmp_path):
+    """It is built from the vocabularies that already exist upstream."""
+    from live.dispatcher import VALID_ACTIONS
+    from portfolio.portfolio_manager import FLAT, LONG, SHORT
+    assert "FLATTEN" in EXIT_SIGNALS
+    assert FLAT.upper() in EXIT_SIGNALS
+    assert {LONG.upper(), SHORT.upper()} <= ENTRY_SIGNALS
+    assert {a for a in VALID_ACTIONS if a != "FLATTEN"} <= ENTRY_SIGNALS
+    assert not (ENTRY_SIGNALS & EXIT_SIGNALS)
+
+
+# -- the published switchboard, read without the daemon ---------------------
+def test_the_reader_answers_the_switchboard_without_importing_the_daemon(tmp_path):
+    daemon = make_switchboard_daemon(tmp_path, theta=0.5)
+    daemon.refresh("NQ", make_bars(120, "chop", tf_minutes=60), tf="1h")
+    sf = daemon.state_file
+
+    assert regime_reader.is_strategy_active(SWITCH_ID, state_file=sf) is True
+    assert regime_reader.is_entry_permitted(SWITCH_ID, state_file=sf) is True
+    assert regime_reader.is_exit_permitted(SWITCH_ID, state_file=sf) is True
+    assert regime_reader.is_signal_permitted(SWITCH_ID, "BUY",
+                                             state_file=sf) is True
+    assert regime_reader.is_signal_permitted(SWITCH_ID, "FLATTEN",
+                                             state_file=sf) is True
+    assert list(regime_reader.get_all_strategy_statuses(sf)) == [SWITCH_ID]
+
+
+def test_the_reader_reports_a_muted_strategy_and_still_permits_its_exit(tmp_path):
+    daemon = make_switchboard_daemon(tmp_path, theta=2.0)
+    daemon.refresh("NQ", make_bars(120, "trend", tf_minutes=60), tf="1h")
+    sf = daemon.state_file
+    assert regime_reader.is_strategy_active(SWITCH_ID, state_file=sf) is False
+    assert regime_reader.is_signal_permitted(SWITCH_ID, "BUY",
+                                             state_file=sf) is False
+    assert regime_reader.is_signal_permitted(SWITCH_ID, "EXIT",
+                                             state_file=sf) is True
+
+
+def test_the_reader_raises_for_an_unregistered_strategy(tmp_path):
+    daemon = make_switchboard_daemon(tmp_path)
+    daemon.publish_switchboard()
+    with pytest.raises(RegimeStateError):
+        regime_reader.get_strategy_status("never_promoted",
+                                          state_file=daemon.state_file)
+
+
+def test_a_stale_active_permission_is_refused_and_a_muted_one_is_not(tmp_path):
+    """
+    max_age_s refuses a stale ACTIVE record. It must NOT refuse a muted one:
+    that read is what `is_exit_permitted` rests on, and an exit has to remain
+    available from whatever state the daemon is in.
+    """
+    daemon = make_switchboard_daemon(tmp_path, theta=0.5)
+    daemon.refresh("NQ", make_bars(120, "chop", tf_minutes=60), tf="1h")
+    sf = daemon.state_file
+    # `bar_ts` is 2026-08-01 in the fixtures, so every record is hours stale.
+    with pytest.raises(RegimeStateError):
+        regime_reader.is_strategy_active(SWITCH_ID, state_file=sf, max_age_s=60)
+
+    daemon.refresh("NQ", make_bars(120, "trend", tf_minutes=60), tf="1h")
+    assert regime_reader.get_strategy_status(
+        SWITCH_ID, state_file=sf, max_age_s=60)["status"] == "MUTED"
+    assert regime_reader.is_exit_permitted(SWITCH_ID, state_file=sf) is True
+
+
+def test_the_reader_refuses_a_timeframe_that_was_not_published(tmp_path):
+    daemon = make_switchboard_daemon(tmp_path, theta=0.5)
+    daemon.refresh("NQ", make_bars(120, "chop", tf_minutes=60), tf="1h")
+    sf = daemon.state_file
+    assert get_current_regime("NQ", sf, tf="1h")["quadrant"] == "Q2"
+    with pytest.raises(RegimeStateError):
+        get_current_regime("NQ", sf, tf="15m")
+
+
+def test_a_state_file_with_no_switchboard_says_so(tmp_path):
+    """A document from a daemon older than the switchboard grants nothing."""
+    path = tmp_path / "old_state.json"
+    path.write_text(json.dumps({"schema_version": "1.0.0", "symbols": {}}))
+    with pytest.raises(RegimeStateError):
+        regime_reader.get_strategy_status(SWITCH_ID, state_file=path)
+    with pytest.raises(RegimeStateError):
+        regime_reader.is_signal_permitted(SWITCH_ID, "BUY", state_file=path)
+
+
+# --------------------------------------------------------------------------
+# 9. Pinned anchor integrity - theta_vol does not drift with live bars
+# --------------------------------------------------------------------------
+def test_theta_vol_does_not_drift_as_live_bars_arrive(tmp_path):
+    """
+    Feed the daemon progressively more volatile bars and assert the boundary
+    never moves. A rolling median would track the tape: on a quiet morning
+    every bar reads high-volatility, and a Q1-certified strategy is handed
+    permission for a market it is not in with a plausible equity curve behind
+    it.
+    """
+    daemon = make_daemon(tmp_path)
+    seen = set()
+    for scale in (1.0, 5.0, 25.0, 100.0):
+        bars = make_bars(120, "trend")
+        for col in ("high", "low", "close"):
+            bars[col] = 15000.0 + (bars[col] - 15000.0) * scale
+        data = daemon.calculate_regime("NQ", bars)
+        seen.add(data["theta_vol"])
+        assert data["theta_source"] == "anchors_file"
+        assert data["theta_window"] == ["2013-01-01", "2022-12-31"]
+    assert seen == {FIXTURE_THETA}, (
+        f"theta_vol moved with the bars: {sorted(seen)}. It must be the "
+        f"pinned in-sample median and nothing else.")
+
+
+def test_the_published_anchor_window_is_the_in_sample_window(tmp_path):
+    daemon = make_daemon(tmp_path)
+    daemon.refresh("NQ", make_bars(120, "trend"))
+    blob = json.loads(Path(daemon.state_file).read_text())
+    assert blob["in_sample_window"] == ["2013-01-01", "2022-12-31"]
+
+
+# --------------------------------------------------------------------------
+# 10. Atomic serialisation under concurrent read/write
+# --------------------------------------------------------------------------
+def test_concurrent_readers_never_observe_a_partial_document(tmp_path):
+    """
+    Hammer the state file from several reader threads while the daemon
+    rewrites it. `os.replace` is atomic within a filesystem, so every read
+    must land on a complete document - the previous one or the new one, never
+    a truncated one. A JSONDecodeError here is the whole reason the write goes
+    through a temp file in the DESTINATION directory rather than /tmp.
+    """
+    import threading
+
+    daemon = make_switchboard_daemon(tmp_path, theta=0.5)
+    daemon.refresh("NQ", make_bars(120, "chop", tf_minutes=60), tf="1h")
+    sf = daemon.state_file
+
+    stop = threading.Event()
+    errors: list[str] = []
+    reads = [0]
+    lock = threading.Lock()
+
+    def reader():
+        while not stop.is_set():
+            try:
+                record = get_current_regime("NQ", sf)
+                assert record["quadrant"] in ("Q1", "Q2")
+                status = regime_reader.get_strategy_status(SWITCH_ID,
+                                                           state_file=sf)
+                assert status["exits_allowed"] is True
+                with lock:
+                    reads[0] += 1
+            except BaseException as exc:            # noqa: BLE001
+                with lock:
+                    errors.append(f"{type(exc).__name__}: {exc}")
+                return
+
+    threads = [threading.Thread(target=reader, daemon=True) for _ in range(6)]
+    for thread in threads:
+        thread.start()
+    try:
+        chop = make_bars(120, "chop", tf_minutes=60)
+        trend = make_bars(120, "trend", tf_minutes=60)
+        for i in range(120):
+            daemon.refresh("NQ", chop if i % 2 else trend, tf="1h")
+    finally:
+        stop.set()
+        for thread in threads:
+            thread.join(timeout=10)
+
+    assert not errors, f"concurrent reads failed: {errors[:3]}"
+    assert reads[0] > 50, f"only {reads[0]} reads completed; not a real race"
+    # Nothing partial left behind either.
+    assert not [p for p in Path(sf).parent.iterdir() if p.name.endswith(".tmp")]
+
+
+def test_a_reader_started_mid_write_sees_the_previous_complete_document(tmp_path):
+    """
+    The write is temp-file-plus-rename, so the destination path is never open
+    for writing. A reader that opens it during a write reads the OLD document
+    in full rather than a half-written new one.
+    """
+    daemon = make_switchboard_daemon(tmp_path, theta=0.5)
+    daemon.refresh("NQ", make_bars(120, "chop", tf_minutes=60), tf="1h")
+    before = json.loads(Path(daemon.state_file).read_text())
+
+    original = regime_daemon_module.write_state_atomic
+    observed: list[dict] = []
+
+    def spy(path, payload):
+        # Mid-write: the file on disk must still be the previous document.
+        observed.append(json.loads(Path(path).read_text()))
+        return original(path, payload)
+
+    regime_daemon_module.write_state_atomic = spy
+    try:
+        daemon.refresh("NQ", make_bars(120, "trend", tf_minutes=60), tf="1h")
+    finally:
+        regime_daemon_module.write_state_atomic = original
+
+    assert observed and observed[0]["symbols"]["NQ"]["quadrant"] == \
+        before["symbols"]["NQ"]["quadrant"] == "Q2"
+    assert json.loads(Path(daemon.state_file).read_text()) \
+        ["symbols"]["NQ"]["quadrant"] == "Q1"
