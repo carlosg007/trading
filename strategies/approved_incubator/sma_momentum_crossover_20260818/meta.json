@@ -1,11 +1,16 @@
 {
   "name": "sma_momentum_crossover_20260818",
+  "strategy": "sma_momentum_crossover_20260818",
+  "symbol": null,
   "version": "A",
   "description": "Promoted Version A (rule-based baseline).",
   "symbols": [
-    "ZS"
+    "NQ",
+    "ES",
+    "CL",
+    "GC"
   ],
-  "timeframe": "30m",
+  "timeframe": "15m",
   "params": {
     "fast_window": 10,
     "slow_window": 30,
@@ -19,75 +24,25 @@
     "trailing": false
   },
   "params_source": "sma_momentum_crossover_20260818.py DEFAULT_PARAMS",
+  "params_conflict": [],
   "risk": {
     "sl_atr_mult": 1.0,
     "tp_atr_mult": 2.0,
     "trailing": false
   },
   "source": "/home/cgrullon/src/trading/strategies/experimental/sma_momentum_crossover_20260818.py",
-  "source_sha256": "884807fcc056c83f65606fff6fb7cb80f2f4dcef89983f5479115178a44059ff",
-  "promoted_sha256": "884807fcc056c83f65606fff6fb7cb80f2f4dcef89983f5479115178a44059ff",
-  "promoted_utc": "2026-08-21T21:53:48+00:00",
+  "source_sha256": "b6a96268115e0c719a5fe1550910a969d7f9aa63974c078dd032bb4de53b73a4",
+  "promoted_sha256": "b6a96268115e0c719a5fe1550910a969d7f9aa63974c078dd032bb4de53b73a4",
+  "promoted_utc": "2026-08-25T16:05:43+00:00",
   "costs_included": false,
   "variants_tested": null,
   "metrics_status": "NOT RECORDED",
   "metrics": null,
-  "gate_audit_status": "PASS",
-  "gate_audit": {
-    "gate1": "FAIL",
-    "gate2": "FAIL",
-    "gate3": "PASS",
-    "gate_regime": "PASS"
-  },
-  "certification": {
-    "audit_file": "/mnt/backtest/artifacts/pipeline/sma_momentum_crossover_20260818/gate_audit_ZS_30m.json",
-    "audit_sha256": "b2524d48922a89c2111bf49d0ce1dc6d44b847dc0984533ecc08f779f119b46d",
-    "audit_symbol": "ZS",
-    "audit_generated_utc": "2026-08-21T21:43:35+00:00",
-    "in_sample": {
-      "start": "2013-01-01",
-      "end": "2022-12-31"
-    },
-    "holdout": {
-      "start": "2023-01-01",
-      "end": null,
-      "end_basis": "the present - every bar the lake holds"
-    },
-    "params": {
-      "fast_window": 15,
-      "slow_window": 50,
-      "tp_atr_mult": 3.0,
-      "sl_atr_mult": 1.5,
-      "trailing": false
-    },
-    "params_source": "stage 2 winner (best_params_ZS_30m.json)",
-    "variants_tested": 54,
-    "wfo": {
-      "train_years": 2,
-      "test_years": 1,
-      "optimized": false
-    },
-    "monte_carlo": {
-      "iterations": 1000,
-      "seed": 42
-    },
-    "entry_filters": {
-      "news_filter": false,
-      "news_window_minutes": 30.0,
-      "news_kinds": [
-        "FOMC",
-        "CPI",
-        "NFP",
-        "PPI"
-      ],
-      "exclude_days": null
-    },
-    "status": "PASS",
-    "snapshot_gate_status": "NOT EVALUATED",
-    "agrees_with_snapshot": null
-  },
+  "gate_audit_status": "NOT EVALUATED",
+  "gate_audit": null,
+  "certification": "NOT CERTIFIED",
   "gates_overridden": false,
-  "oos_status": "passed_gate3",
+  "oos_status": "not_run",
   "audit_warnings": [
     "import from 'backtest.event_calendar' is not allowed"
   ],

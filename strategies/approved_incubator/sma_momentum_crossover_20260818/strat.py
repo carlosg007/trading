@@ -239,7 +239,7 @@ import pandas as pd
 # real identifier and this constant is the assertion that the two agree;
 # `tests/test_sma_momentum_crossover.py` pins it against the module's own
 # filename so a rename cannot leave the two disagreeing.
-STRATEGY_NAME = "sma_momentum_crossover"
+STRATEGY_NAME = "sma_momentum_crossover_20260818"
 
 TIMEFRAME = "15m"
 SYMBOLS = ["NQ", "ES", "CL", "GC"]
@@ -554,7 +554,7 @@ def _walk_loop(long_entry_ok: np.ndarray,
     THREE-state machine over the bars: flat, long, or short — each side under
     its own stop and target.
 
-    This kernel is DUPLICATED VERBATIM in `ema_crossover.py`,
+    This kernel is DUPLICATED VERBATIM in `ema_crossover_20260821.py`,
     `ema_trend_filter.py` and `sma_momentum_crossover.py`, by the same convention that duplicates `_wilder`,
     `_atr` and `_session_masks` across this directory: strategy modules are
     loaded from a file path and are deliberately self-contained.
