@@ -57,6 +57,7 @@ from realtime.crosstrade_formatter import (                     # noqa: E402
 )
 from realtime import regime_daemon as regime_daemon_module     # noqa: E402
 from realtime.regime_daemon import (                            # noqa: E402
+    ADX_TREND_THRESHOLD,
     ENTRY_SIGNALS,
     EXIT_SIGNALS,
     MIN_BARS_FOR_REGIME,
@@ -181,6 +182,82 @@ def test_low_vol_low_adx_is_q4(tmp_path):
     assert out["is_trending"] is False
     assert out["adx_14"] < 25.0
     assert out["atr_14"] <= FIXTURE_THETA
+
+
+@pytest.mark.parametrize(
+    "kind, theta, quadrant, label, high_vol, trending",
+    [
+        ("trend", 2.0,  "Q1", "Q1_HIGH_VOL_TREND",           True,  True),
+        ("chop",  0.5,  "Q2", "Q2_HIGH_VOL_CHOP",            True,  False),
+        ("trend", 20.0, "Q3", "Q3_LOW_VOL_TREND",            False, True),
+        ("chop",  2.0,  "Q4", "Q4_LOW_VOL_MEAN_REVERSION",   False, False),
+    ],
+)
+def test_the_full_two_by_two_truth_table(tmp_path, kind, theta, quadrant,
+                                         label, high_vol, trending):
+    """
+    All FOUR quadrants out of `calculate_regime`, on the two axes separately.
+
+    The suite already pins the DIAGONAL - trending-and-volatile is Q1,
+    quiet-and-choppy is Q4 - because those are what the two bar fixtures
+    produce against the default anchor. The off-diagonal cases are the ones a
+    transposed encoding survives: swap the two middle labels and Q1 and Q4 are
+    both still correct, every count still adds up, and the only thing that
+    changes is which strategy a live supervisor turns loose in which market.
+
+    Q2 is not a hypothetical here. `t3_braid_scalp_20260823_NQ_1h` is
+    certified in `Q2 · High Volatility / Ranging`, so this row is the exact
+    classification the promoted strategy's permission to trade rests on.
+
+    The axes are moved INDEPENDENTLY, which is what makes this a truth table
+    rather than four assertions: the bar fixture sets the ADX axis (trend
+    pins ADX at 100.0, chop collapses it to 3.7) and the pinned anchor sets
+    the volatility axis (trend ATR is 8.00, chop ATR is 0.75). Every cell is
+    therefore reached by one deliberate change from its neighbour, so a
+    failure names the axis that broke.
+    """
+    daemon = make_daemon(tmp_path, anchors={
+        "NQ": {"15m": {"theta_vol": theta,
+                       "is_start": "2013-01-01", "is_end": "2022-12-31"}}})
+    out = daemon.calculate_regime("NQ", make_bars(200, kind))
+
+    assert out["quadrant"] == quadrant
+    assert out["regime"] == label
+    assert out["is_high_vol"] is high_vol
+    assert out["is_trending"] is trending
+
+    # The classification must follow from the two comparisons the charter
+    # states, not merely agree with them by coincidence on this fixture.
+    assert (out["adx_14"] > ADX_TREND_THRESHOLD) is trending
+    assert (out["atr_14"] > out["theta_vol"]) is high_vol
+    assert out["theta_vol"] == theta, "the anchor was not the one pinned"
+
+
+def test_the_two_axes_are_independent(tmp_path):
+    """
+    Holding one axis and moving the other moves exactly one bit.
+
+    Q1 -> Q3 is the anchor alone on identical bars; Q1 -> Q2 is the bars alone
+    at a fixed anchor. If either move flipped both bits the quadrant encoding
+    would be a single ordered scale rather than two independent axes, and
+    `kill_switch_regimes` - which is derived as "the other three" - would be
+    naming environments nobody measured.
+    """
+    def q(kind, theta):
+        d = make_daemon(tmp_path / f"{kind}{theta}", anchors={
+            "NQ": {"15m": {"theta_vol": theta, "is_start": "2013-01-01",
+                           "is_end": "2022-12-31"}}})
+        return d.calculate_regime("NQ", make_bars(200, kind))
+
+    q1, q3 = q("trend", 2.0), q("trend", 20.0)
+    assert (q1["quadrant"], q3["quadrant"]) == ("Q1", "Q3")
+    assert q1["is_trending"] is q3["is_trending"] is True, "ADX axis moved"
+    assert q1["adx_14"] == q3["adx_14"], "identical bars gave a different ADX"
+
+    hi_trend, hi_chop = q("trend", 0.5), q("chop", 0.5)
+    assert (hi_trend["quadrant"], hi_chop["quadrant"]) == ("Q1", "Q2")
+    assert hi_trend["is_high_vol"] is hi_chop["is_high_vol"] is True, \
+        "volatility axis moved when only the bars changed"
 
 
 def test_returned_keys_match_the_specified_contract(tmp_path):
