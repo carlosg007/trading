@@ -142,7 +142,8 @@ class ShutdownFlag:
 
 
 def load_symbol_bars(symbols, tf: str, lookback_bars: int,
-                     feed=None) -> tuple[dict, dict]:
+                     feed=None, source: str | None = None
+                     ) -> tuple[dict, dict]:
     """
     `({basket_symbol: bars}, {basket_symbol: which contract supplied them})`.
 
@@ -172,11 +173,24 @@ def load_symbol_bars(symbols, tf: str, lookback_bars: int,
 
     `feed` is injected so the loop can be tested without a vendor and so the
     mode is decided once, at startup, rather than re-resolved every cycle.
+    `source` names a mode instead - `load_symbol_bars(..., source="nt8")` is
+    the same thing `--feed nt8` gets, resolved here for a caller that has a
+    name rather than a feed. An injected `feed` WINS: it is the object the
+    loop already described on the console, and re-resolving it per call is how
+    a run ends up reading one tape while its startup banner names another.
+
+    THE PUSH LISTENER ARRIVES THROUGH THIS SAME PATH.
+    `realtime/nt8_bar_listener.py` receives bars over HTTP and APPENDS THEM TO
+    THE NT8 SPOOL rather than holding its own store, so `source="nt8"` reads
+    pushed bars and spooled bars identically and there is one format, one
+    forming-bar drop, one micro alias and one `ts` conversion. A second bar
+    store read directly here would have bypassed all four.
     """
     from realtime.feed import resolve_feed
 
-    return (feed or resolve_feed("auto")).closed_bars(
-        symbols, tf, lookback_bars)
+    if feed is None:
+        feed = resolve_feed(source or "auto")
+    return feed.closed_bars(symbols, tf, lookback_bars)
 
 
 def basket_symbols(dispatcher: LiveExecutionDispatcher) -> list[str]:
