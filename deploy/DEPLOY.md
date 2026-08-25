@@ -33,15 +33,33 @@ test -f .env && stat -c '%a %n' .env             # expect 600
 # unrelated tool's debug output.
 chmod 600 ~/src/trading/.env
 chmod 600 ~/src/trading/deploy/systemd/trading.env
-mkdir -p ~/src/trading/logs ~/src/trading/data
+# `logs/` and `.cache/` are not optional and are not in git. Skipping this line
+# does not produce a missing-directory error — systemd opens the append: target
+# as PID 1, before the process exists, and reports:
+#   Failed at step STDOUT spawning .../python3: No such file or directory
+# which names the interpreter and sends you to audit a venv that is fine.
+mkdir -p ~/src/trading/logs ~/src/trading/data ~/src/trading/.cache/numba
+```
+
+Then make it stick across reboots and fresh clones, so the step above is never
+the one somebody skips:
+
+```bash
+sudo cp ~/src/trading/deploy/systemd/trading-dirs.conf /etc/tmpfiles.d/
+sudo systemd-tmpfiles --create /etc/tmpfiles.d/trading-dirs.conf
 ```
 
 ## 1. Install the units
 
 ```bash
+# .service and .timer ONLY. `cp deploy/systemd/*` also lands trading.env in
+# /etc/systemd/system, where systemd ignores it — leaving a second copy of the
+# env file that is not the one EnvironmentFile= reads, for somebody to edit.
 sudo cp ~/src/trading/deploy/systemd/*.service /etc/systemd/system/
 sudo cp ~/src/trading/deploy/systemd/*.timer   /etc/systemd/system/
 sudo systemctl daemon-reload
+sudo systemd-analyze verify /etc/systemd/system/trading-*.service \
+                            /etc/systemd/system/trading-*.timer
 
 # Health checks and the regime publisher first. They place no orders.
 sudo systemctl enable --now trading-regime-daemon.timer
@@ -59,23 +77,9 @@ systemctl status trading-master-live --no-pager
 ## 2. Log rotation
 
 ```bash
-sudo tee /etc/logrotate.d/trading >/dev/null <<'EOF'
-/home/cgrullon/src/trading/logs/*.log
-/home/cgrullon/src/trading/logs/*.err {
-    daily
-    rotate 30
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 0640 cgrullon cgrullon
-    # COPYTRUNCATE, because the units append to these files with an open
-    # handle. Renaming underneath a running process leaves it writing to an
-    # unlinked inode: the log looks empty while the loop is trading.
-    copytruncate
-    su cgrullon cgrullon
-}
-EOF
+# The stanza is a FILE in the repo, not a heredoc here: a config that only
+# exists inside install docs is one nobody notices was never installed.
+sudo cp ~/src/trading/deploy/systemd/trading.logrotate /etc/logrotate.d/trading
 
 sudo logrotate --debug /etc/logrotate.d/trading   # dry run, prints its plan
 sudo logrotate --force /etc/logrotate.d/trading   # do it once now
