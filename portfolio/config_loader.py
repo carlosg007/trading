@@ -460,29 +460,30 @@ def _micro_alias() -> dict[str, str]:
     """
     The micro -> full-size parent map, IMPORTED rather than restated.
 
-    `realtime/regime_daemon.py` owns it and reconciles its tick sizes against
-    `backtest/specs.py` on every construction. A second copy here would be free
-    to disagree, and the disagreement would route a live order: a config that
-    believed MNQ and NQ were unrelated would refuse every correctly-routed
-    strategy, and one that believed MES was a Nasdaq micro would permit a
-    wrong one.
+    `realtime/contract_alias.py` owns it, and `realtime/regime_daemon.py`
+    reconciles its tick sizes against `backtest/specs.py` on every
+    construction. A second copy here would be free to disagree, and the
+    disagreement would route a live order: a config that believed MNQ and NQ
+    were unrelated would refuse every correctly-routed strategy, and one that
+    believed MES was a Nasdaq micro would permit a wrong one.
 
-    Imported lazily because that module pulls in pandas and numpy, and this
-    loader is read by tooling that has no reason to pay for them -
-    `master_live.py` imports the same table the same way for the same reason.
-    An import failure RAISES rather than falling back to a local table, for
-    the reason above.
+    It used to be imported from the daemon, lazily, because that module pulls
+    in pandas and numpy and this loader is read by tooling with no reason to
+    pay for them. The table now lives in a module that imports nothing but the
+    standard library, so the cost is gone and the lazy import is kept only to
+    hold the failure inside `PortfolioConfigError`. An import failure RAISES
+    rather than falling back to a local table, for the reason above.
     """
     try:
-        from realtime.regime_daemon import THETA_ANCHOR_ALIAS
+        from realtime.contract_alias import MICRO_TO_PARENT
     except Exception as exc:                                      # noqa: BLE001
         raise PortfolioConfigError(
             f"cannot import the micro/full-size alias from "
-            f"realtime.regime_daemon ({exc}). Symbol routing cannot be "
+            f"realtime.contract_alias ({exc}). Symbol routing cannot be "
             f"reconciled without it, and a local copy would be free to "
             f"disagree with the table the live loop actually uses.") from exc
     return {str(k).upper(): str(v).upper()
-            for k, v in THETA_ANCHOR_ALIAS.items()}
+            for k, v in MICRO_TO_PARENT.items()}
 
 
 def _basket_covers(symbol: str, assets: list[str],

@@ -157,17 +157,21 @@ def load_symbol_bars(symbols, tf: str,
     MNQ/MES/MCL/MGC; the lake holds only the full-size contracts. They quote
     the SAME price series at the SAME tick size - only the multiplier differs,
     and a multiplier appears in no indicator - so a micro's bars are read from
-    its parent. This is the third use of `THETA_ANCHOR_ALIAS`, whose tick sizes
-    are reconciled against `backtest/specs.py` on every daemon construction.
+    its parent. The table is `realtime/contract_alias.py`, shared with the
+    regime reader (which answers a micro's quadrant from the parent's record)
+    and the dispatcher (which accepts a certification on NQ as covering MNQ),
+    and its tick sizes are reconciled against `backtest/specs.py` on every
+    daemon construction. One table, so bars, regime and certification can
+    never disagree about which contract a symbol means.
 
     The substitution is REPORTED rather than silent: the order is still for the
     micro, sized on the micro's own point value, and an operator has to be able
     to see that its signal came from the full-size tape.
     """
     from mdlib.lake import iter_bars
-    from realtime.regime_daemon import THETA_ANCHOR_ALIAS
+    from realtime.contract_alias import resolve_parent
 
-    wanted = {sym: THETA_ANCHOR_ALIAS.get(sym, sym) for sym in symbols}
+    wanted = {sym: resolve_parent(sym) for sym in symbols}
     frames = {}
     for source_symbol, df in iter_bars(sorted(set(wanted.values())), tf,
                                        None, None):

@@ -59,10 +59,11 @@ message.
 MICRO CONTRACTS
 ===============
 The four portfolios trade micros (MNQ, MES, MCL, MGC) and the regime caches are
-keyed on the full-size contracts (NQ, ES, CL, GC). `THETA_ANCHOR_ALIAS` maps
-each micro onto its full-size parent, because they quote the SAME price series
-at the SAME tick size - only the multiplier differs, and a multiplier does not
-appear anywhere in an ADX or an ATR. The tick sizes are RECONCILED against
+keyed on the full-size contracts (NQ, ES, CL, GC). `THETA_ANCHOR_ALIAS` - the
+table in `realtime/contract_alias.py`, re-exported here under the name this
+module has always used - maps each micro onto its full-size parent, because
+they quote the SAME price series at the SAME tick size - only the multiplier
+differs, and a multiplier does not appear anywhere in an ADX or an ATR. The tick sizes are RECONCILED against
 `backtest/specs.py` at construction rather than asserted in a comment: if a
 future contract change made them differ, the alias would be quietly wrong in
 price units and every quadrant with it.
@@ -149,6 +150,10 @@ from portfolio.portfolio_manager import FLAT, LONG, SHORT  # noqa: E402
 # sides would log success. The dependency runs writer -> reader only; the
 # reader imports nothing from here, so it keeps answering when this module's
 # numeric stack is what is broken.
+from realtime.contract_alias import (MICRO_TO_PARENT,   # noqa: E402
+                                     micros_of,
+                                     normalize,
+                                     parent_of)
 from realtime.regime_reader import resolve_state_path  # noqa: E402
 
 # --------------------------------------------------------------------------
@@ -195,12 +200,14 @@ MIN_BARS_FOR_REGIME = 2 * ADX_LENGTH + 1
 # Micro -> full-size parent for theta_vol lookup. The two quote the same price
 # series at the same tick size; `_verify_alias_tick_sizes` checks that against
 # `backtest/specs.py` on every construction rather than trusting this comment.
-THETA_ANCHOR_ALIAS: dict[str, str] = {
-    "MNQ": "NQ",
-    "MES": "ES",
-    "MCL": "CL",
-    "MGC": "GC",
-}
+#
+# The table itself lives in `realtime/contract_alias.py` and is re-exported
+# here under the name this module has always used for it. It moved because
+# `realtime/regime_reader.py` needs the same map and refuses to import this
+# module (pandas, and the writer): a reader carrying its own copy would be
+# free to disagree, and a disagreement about whether MNQ means NQ resolves a
+# strategy into the wrong market with every log line reading correctly.
+THETA_ANCHOR_ALIAS: dict[str, str] = MICRO_TO_PARENT
 
 # Operator-supplied anchor overrides, read before the regime caches. The env
 # var wins so an operator can pin a boundary without editing the repository.
@@ -1146,13 +1153,12 @@ class MasterRegimeDaemon:
         MNQ would find no reading and sit muted forever, which on a console
         looks exactly like a market that never entered its quadrant.
         """
-        sym = str(symbol or "").strip().upper()
+        sym = normalize(symbol)
         out = [sym] if sym else []
-        parent = THETA_ANCHOR_ALIAS.get(sym)
+        parent = parent_of(sym)
         if parent:
             out.append(parent)
-        out.extend(m for m, full in sorted(THETA_ANCHOR_ALIAS.items())
-                   if full == sym)
+        out.extend(micros_of(sym))
         return list(dict.fromkeys(out))
 
     def _published_record(self, symbol: str, tf: str,
