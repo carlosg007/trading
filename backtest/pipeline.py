@@ -96,6 +96,21 @@ CHARTER_IS_END = "2022-12-31"
 HOLDOUT_START = "2023-01-01"
 
 SURVIVORS_FILE = "surviving_assets.json"
+
+# An account cannot lose more than it holds. The engine's equity is
+# `initial_capital + cumsum(net P&L)` with NO ruin barrier, so a strategy whose
+# cumulative losses exceed the starting capital produces a NEGATIVE equity, and
+# `equity / peak - 1` then reports a drawdown past -100% - which is not a
+# deeper loss but arithmetic that has stopped describing an account.
+#
+# It lives HERE, in the module every stage already imports, because Stage 2 and
+# Stage 3 both have to draw the line in the same place and they cannot import
+# each other: `audit_gates` imports `scan.expand_grid`, so the dependency runs
+# Stage 3 -> Stage 2 and a constant owned by Stage 3 is unreachable from Stage
+# 2. Two spellings of "ruin" would let a parameter set Stage 2 called
+# survivable be the same one Stage 3 calls ruined, with the sweep advancing it
+# and the gate killing it, and nothing naming the disagreement.
+RUIN_MIN_DRAWDOWN_PCT = -100.0
 # Stage 1's human-readable half. The JSON above is what Stage 2 reads; this is
 # what a person reads, and it is written on EVERY run - including one where
 # nothing survived, which is the run whose detail matters most. Markdown rather

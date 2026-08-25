@@ -576,13 +576,38 @@ def test_scan_selection_respects_gate1(tmp: Path) -> None:
 
     # The pre-charter rule is still available, and still means what it said:
     # the single highest-Sharpe cell of the eligible pool.
+    #
+    # ELIGIBLE is the word that carries the 2026-08-25 change. `--select
+    # sharpe` swaps the RANKING rule and not the eligibility one: an isolated
+    # spike and a cell that ruined the account in-sample are refused under
+    # either rank, because they are not statements about which cell is best -
+    # they are statements that the cell is not a candidate. A `--select sharpe`
+    # that bypassed the bars would be the one command in the pipeline that can
+    # still export a ruined account, and it is the command most likely to be
+    # typed by somebody chasing a number.
+    from backtest.scan import fragility_of
+
     spike = scan_symbol(path, bars, "ES", cfg,
                         {"fast": [3, 5, 10], "slow": [10, 20, 40]},
                         strat_name="scan_probe", rank=RANK_SHARPE)
-    expected = (float(passing["sharpe"].max()) if not passing.empty
-                else float(best_overall["sharpe"]))
-    check("--select sharpe restores the highest-Sharpe rule",
-          abs(spike["winner"]["sharpe"] - expected) < 1e-12)
+    rank_pool = passing if not passing.empty else table
+    eligible = [r for r in rank_pool.to_dict("records")
+                if fragility_of(r) is None]
+    check("at least one cell of the grid clears the robustness bars, so the "
+          "rank below is a measurement", bool(eligible),
+          f"{len(rank_pool) - len(eligible)} of {len(rank_pool)} ruled out")
+    expected = max(float(r["sharpe"]) for r in eligible)
+    check("--select sharpe restores the highest-Sharpe rule over the ELIGIBLE "
+          "cells", abs(spike["winner"]["sharpe"] - expected) < 1e-12,
+          f"{spike['winner']['sharpe']} vs {expected}")
+    ruled_out = [r for r in rank_pool.to_dict("records")
+                 if fragility_of(r) is not None]
+    if ruled_out:
+        check("...and the winner is not one of the cells the bars refused",
+              all(abs(float(r["sharpe"]) - spike["winner"]["sharpe"]) > 1e-12
+                  or fragility_of(r) is None for r in ruled_out),
+              f"{len(ruled_out)} ruled out: "
+              f"{sorted({fragility_of(r) for r in ruled_out})}")
     check("and it is labelled as a Sharpe rank, never as a plateau",
           spike["selection"] in (SELECTED_GATE1, SELECTED_NO_GATE1),
           spike["selection"])

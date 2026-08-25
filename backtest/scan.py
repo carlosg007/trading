@@ -171,6 +171,7 @@ from backtest.engine import (BacktestConfig, TRADE_COLUMNS,   # noqa: E402
 from backtest.event_calendar import (WEEKDAY_NAMES, add_filter_args,   # noqa: E402
                                     entry_block_mask)
 from backtest.pipeline import (CHARTER_IS_END, CHARTER_IS_START,  # noqa: E402
+                               RUIN_MIN_DRAWDOWN_PCT,
                                HOLDOUT_START)
 from backtest.report import INFO, PASS, audit_acceptance_gates  # noqa: E402
 from backtest.specs import get_spec                            # noqa: E402
@@ -218,11 +219,50 @@ RANK_SHARPE = "sharpe"
 # them would silently report every plateau-ranked sweep as a shortfall.
 CLEAN_SELECTIONS = frozenset({SELECTED_GATE1, SELECTED_GATE1_PLATEAU})
 
+# THE TWO MINIMUM ROBUSTNESS BARS, added 2026-08-25. A cell that fails either
+# is INELIGIBLE to be the winner - not merely down-ranked, because a ranking
+# penalty is a number somebody can out-argue with a big enough Sharpe, and
+# both of these are statements that the cell is not a result at all.
+#
+#   `is_spike`            the parameters one step away on the grid keep under
+#                         PLATEAU_SPIKE_RATIO of this cell's Sharpe. Nothing
+#                         about a market changes between `ema_period=20` and
+#                         `21`, so a Sharpe that does is a property of this
+#                         sample of bars. Exporting it as the winner hands
+#                         Stage 3 a parameter set whose entire edge is noise.
+#   ruinous drawdown      the account died on the very bars the parameters
+#                         were selected on. RUIN_MIN_DRAWDOWN_PCT is
+#                         `backtest.pipeline`'s, the same boundary Stage 3's
+#                         ruin guard applies, so a cell Stage 2 advances can
+#                         no longer be one Stage 3 refuses on arrival.
+#
+# This is a DEPARTURE from the 2026-08-21 charter's "Stage 2 prunes nothing".
+# The charter's rule was about aggregate PERFORMANCE metrics - a profit factor,
+# a Sharpe, a trade count - and it stands: Stage 2 still drops no contract and
+# no quadrant for being unimpressive, and a grid where nothing clears Gate 1
+# still advances. Neither bar here is a performance judgement. One says the
+# cell has no neighbourhood and the other says the account was ruined, and
+# advancing either is not "letting Stage 3 decide" - it is spending a
+# certification on a parameter set that was never a candidate.
+FRAGILE_SPIKE = "isolated_spike"
+FRAGILE_RUIN = "ruinous_in_sample_drawdown"
+
+# The status a pair carries in `stage2_summary.json` when EVERY cell in its
+# grid failed at least one of those bars. Distinct from OPTIMIZED (a winner was
+# chosen) and from ERROR (the sweep raised): the sweep ran, the grid was
+# measured, and nothing in it was a candidate. No `best_params` file is written
+# for it, so Stage 3 cannot certify it by accident.
+STAGE2_PRUNED_FRAGILE = "PRUNED_FRAGILE"
+SELECTED_PRUNED_FRAGILE = (
+    "PRUNED_FRAGILE · every combination is an isolated spike or ruinous "
+    "in-sample")
+
 # A cell is an isolated SPIKE when its neighbours keep less than this share of
-# its Sharpe. 0.5 is a judgement call and it is only ever REPORTED - nothing is
-# dropped for being a spike, because Stage 2 drops nothing at all. It exists so
-# a winner whose surroundings fall away is labelled as one on the card and in
-# the summary, rather than being read as a plateau because it happened to win.
+# its Sharpe. 0.5 is a judgement call. Until 2026-08-25 it was only ever
+# REPORTED; it is now one of the two bars that decide ELIGIBILITY - see
+# FRAGILE_SPIKE below. It is still reported for every cell, winner or not,
+# because "the winner survived a grid that was 90% spikes" and "the grid was
+# clean" are different results with identical winning rows.
 PLATEAU_SPIKE_RATIO = 0.5
 
 # The plateau columns, named once. `_NON_PARAM_COLUMNS` has to exclude them
@@ -392,8 +432,26 @@ def _gate1_status(gate1: Any) -> str | None:
     return gate1 if gate1 is None or isinstance(gate1, str) else str(gate1)
 
 
+def fragility_of(row: dict) -> str | None:
+    """
+    Why this cell cannot be a winner, or None when it can.
+
+    Order matters only for the message: a ruinous spike is reported as ruinous,
+    because "the account died" is the finding an operator has to act on and
+    "the neighbours fall away" is a comment on a curve that no longer exists.
+    """
+    dd = row.get("max_drawdown_pct")
+    if dd is not None and not pd.isna(dd) \
+            and float(dd) <= RUIN_MIN_DRAWDOWN_PCT:
+        return FRAGILE_RUIN
+    if bool(row.get("is_spike")):
+        return FRAGILE_SPIKE
+    return None
+
+
 def _select_best_row(rows: Iterable[dict],
-                     rank: str = RANK_PLATEAU) -> tuple[dict | None, str]:
+                     rank: str = RANK_PLATEAU,
+                     prune_fragile: bool = True) -> tuple[dict | None, str]:
     """
     The winning row and the label for HOW it won, from one rule.
 
@@ -406,11 +464,19 @@ def _select_best_row(rows: Iterable[dict],
     which row won, and the two would be compared by nobody.
 
     Gate 1 is a PREFERENCE here and never an elimination. Under the charter
-    Stage 2 drops nothing - not a strategy, not a contract, not a quadrant - so
-    a grid where no combination clears Gate 1 still returns a winner, still
-    writes `best_params_<SYMBOL>_<TF>.json`, and still advances to Stage 3. The
-    only thing that changes is the `selection` string, which says plainly that
-    nothing cleared the gate.
+    Stage 2 drops nothing on PERFORMANCE - not a strategy, not a contract, not
+    a quadrant - so a grid where no combination clears Gate 1 still returns a
+    winner, still writes `best_params_<SYMBOL>_<TF>.json`, and still advances
+    to Stage 3. The only thing that changes is the `selection` string, which
+    says plainly that nothing cleared the gate.
+
+    `prune_fragile` is the ONE exception, added 2026-08-25, and it is not a
+    performance judgement. A cell that is an isolated spike has no
+    neighbourhood, and a cell that drew down past RUIN_MIN_DRAWDOWN_PCT ruined
+    the account on the very bars it was selected on. Neither is a candidate, so
+    neither is ELIGIBLE to win, and a grid holding nothing else returns
+    `(None, SELECTED_PRUNED_FRAGILE)`. It is False for the counterfactual
+    ranking only, which asks what the pre-charter rule WOULD have picked.
 
     Sharpe is the underlying metric because it IS the risk-adjusted return,
     which is what the selection is supposed to maximise; ranking on raw return
@@ -438,11 +504,22 @@ def _select_best_row(rows: Iterable[dict],
     comparing raw would prefer the DEEPEST.
     """
     rows = list(rows)
-    passing = [r for r in rows
-               if r["gate1"] == PASS and not pd.isna(r["sharpe"])]
-    pool = passing or [r for r in rows if not pd.isna(r["sharpe"])]
-    if not pool:
+    measurable = [r for r in rows if not pd.isna(r["sharpe"])]
+    if not measurable:
         return None, SELECTED_NONE
+
+    # The two minimum robustness bars, applied BEFORE Gate 1 is preferred.
+    # Applying them after would let a grid whose only Gate 1 pass is a ruinous
+    # spike export that cell as "GATE 1 PASS", which is the most persuasive
+    # label this stage can print on its least defensible row.
+    eligible = measurable
+    if prune_fragile:
+        eligible = [r for r in measurable if fragility_of(r) is None]
+        if not eligible:
+            return None, SELECTED_PRUNED_FRAGILE
+
+    passing = [r for r in eligible if r["gate1"] == PASS]
+    pool = passing or eligible
 
     # Every pooled row has to carry a plateau score for the plateau ranking to
     # mean anything: ranking half a table on the plateau and the other half on
@@ -1090,7 +1167,11 @@ def _finalise_scan(symbol: str,
     # What the pre-charter rule would have picked, kept for one comparison:
     # whether ranking on the plateau moved the winner at all. It is recorded,
     # never acted on.
-    spike_best, _spike_sel = _select_best_row(rows, rank=RANK_SHARPE)
+    # NOT pruned: this is the counterfactual - what the pre-charter Sharpe rule
+    # WOULD have picked - and applying today's eligibility bars to it would
+    # answer a different question than the one the comparison asks.
+    spike_best, _spike_sel = _select_best_row(rows, rank=RANK_SHARPE,
+                                              prune_fragile=False)
 
     winner = None
     if best is not None:
@@ -1141,10 +1222,28 @@ def _finalise_scan(symbol: str,
         filter_info["entries_suppressed_all_columns"] = int(suppressed_total)
         filter_info["columns"] = len(valid)
 
+    # Every cell the robustness bars ruled out, by reason. Reported whether or
+    # not the pair was pruned: "one of 162 cells was ruinous" and "161 of 162
+    # were" are the same OPTIMIZED status and completely different grids, and
+    # the count is the only thing that separates them.
+    fragile = [{"reason": fragility_of(r), "sharpe": r.get("sharpe"),
+                "max_drawdown_pct": r.get("max_drawdown_pct"),
+                "params": {k: r.get(k) for k in valid[0]} if valid else {}}
+               for r in rows if fragility_of(r) is not None]
+
     result = {
         "symbol": symbol,
         "combinations": int(n_combinations),
         "evaluated": len(valid),
+        "fragile_cells": fragile,
+        "fragile_counts": {
+            FRAGILE_SPIKE: sum(1 for f in fragile
+                               if f["reason"] == FRAGILE_SPIKE),
+            FRAGILE_RUIN: sum(1 for f in fragile
+                              if f["reason"] == FRAGILE_RUIN),
+        },
+        "pruned_fragile": bool(best is None
+                               and selection == SELECTED_PRUNED_FRAGILE),
         "rejected": rejected,
         "table": table,
         "winner": winner,
@@ -1774,6 +1873,19 @@ def scan_from_csv(path: str | Path, symbol: str | None = None) -> dict:
         rows.append(rec)
 
     best, selection = _select_best_row(rows)
+    if best is None and selection == SELECTED_PRUNED_FRAGILE:
+        # A table written before the robustness bars existed can flag a row as
+        # `selected` that today is ineligible. Rebuilding it silently under the
+        # old rule would reproduce exactly the winner the bars exist to refuse;
+        # rebuilding it under the new one and writing no `best_params` would
+        # look like a corrupt table. Say which it is.
+        raise ScanError(
+            f"{path} contains no combination that clears Stage 2's minimum "
+            f"robustness bars: every evaluated cell is an isolated spike or "
+            f"ruinous in-sample (drawdown at or past "
+            f"{RUIN_MIN_DRAWDOWN_PCT:.0f}%). This table was written before "
+            f"those bars existed and its `selected` row would not be chosen "
+            f"today. Re-sweep the pair rather than rebuilding it.")
 
     winner = None
     if best is not None:
@@ -1912,13 +2024,127 @@ def format_scan_summary(scan: dict, top: int = 5) -> str:
 # selection rule, same tie-break on the shallower drawdown - a second sweep
 # implementation living in a CLI would be free to disagree with the one
 # `--scan` uses, and the two would be compared by nobody.
+# --------------------------------------------------------------------------
+# Version B confirmation of the WINNER
+# --------------------------------------------------------------------------
+def _resolve_ml_confirmation(args, scope: dict | None, scan: dict,
+                             strategy_path, symbol: str, tf: str,
+                             cfg, bars, base_params: dict,
+                             strat_name: str) -> dict:
+    """
+    Run the Version B confirmation for this pair, or say why it did not.
+
+    Every "no" is a RECORDED no. A pair that cleared Stage 1 on Version B and
+    reaches Stage 3 with no confirmation on file is exactly the handoff bug
+    this work exists to close, and an absent key is how it stayed invisible.
+    """
+    wanted = bool(getattr(args, "ml", False))
+    stage1_version = str((scope or {}).get("version") or "").strip().upper()
+    if getattr(args, "no_stage1_ml", False):
+        if not wanted:
+            return _ml_skipped("--no-stage1-ml")
+    elif stage1_version == "B":
+        wanted = True
+
+    if not wanted:
+        return _ml_skipped(
+            f"stage1_version={stage1_version or 'not recorded'}; the ML "
+            f"confirmation runs for a Version B survivor or under --ml")
+    if not (scan.get("winner") or {}).get("params"):
+        return _ml_skipped("the sweep produced no winner to confirm")
+    if bars is None:
+        return _ml_skipped(
+            "no in-memory bars for this pair - a --chunk-years sweep never "
+            "materialises the frame and --reuse-scan reads none. Re-run the "
+            "pair contiguously to measure the filter.")
+    params = {**base_params, **((scan.get("winner") or {}).get("params") or {})}
+    try:
+        return ml_confirm_winner(strategy_path, bars, symbol, tf, params, cfg,
+                                 strat_name,
+                                 threshold=float(getattr(args, "ml_threshold",
+                                                         0.50)))
+    except Exception as exc:                                      # noqa: BLE001
+        # RECORDED, never raised. A completed sweep is not thrown away because
+        # the confirmation could not run, and a swallowed failure that left the
+        # key absent would read as a pair nobody asked to confirm.
+        return _ml_skipped(f"{type(exc).__name__}: {exc}")
+
+
+def ml_confirm_winner(strategy_path: str | Path, bars, symbol: str, tf: str,
+                      params: dict, cfg, strat_name: str,
+                      threshold: float = 0.50) -> dict:
+    """
+    Re-run the single WINNING parameter set with the ML confirmation filter on,
+    and record both curves.
+
+    WHY THE WINNER AND NOT THE GRID. A pair that cleared Stage 1 on Version B
+    has to reach Stage 3 as Version B, and the naive reading of that is "sweep
+    the grid with --ml". Two reasons it is not done here:
+
+      * **Cost.** The sweep is one `vbt.Portfolio.from_signals` call over every
+        combination as a COLUMN. Version B refits its classifier once per
+        completed trade, which has no column form at all, so a 162-cell grid
+        becomes 162 sequential incremental-refit backtests - hours per pair
+        against seconds.
+      * **Rigor, which is the real reason.** Ranking the grid on the
+        ML-filtered curve selects parameters against a classifier that was
+        itself fitted on these same in-sample bars. That stacks a second
+        in-sample selection under the first, which is exactly why the charter
+        refuses to mask the sweep to the Stage 1 quadrant. The parameters are
+        chosen on the RULES - the version that says something about
+        overfitting - and the filter is then measured on that choice.
+
+    So this is ONE additional backtest per pair, and it decides nothing: it is
+    evidence written onto `best_params`, and Stage 3 is where Version B is
+    certified. `b_beats_a` here is an in-sample comparison and is labelled as
+    one - both versions were fitted on this window, and neither number is
+    evidence of an edge.
+    """
+    from agents.tier1_master import run_dual_version_backtest  # noqa: PLC0415
+
+    out = run_dual_version_backtest(
+        str(strategy_path), bars, freq=tf, symbol=symbol, cfg=cfg,
+        params=dict(params), threshold=float(threshold), ml=True,
+        emit_reports=False, strat_name=strat_name)
+    a = ((out.get("version_a") or {}).get("metrics") or {})
+    b = ((out.get("version_b") or {}).get("metrics") or {})
+    sharpe_a, sharpe_b = a.get("sharpe"), b.get("sharpe")
+    return {
+        "ran": True,
+        "threshold": float(threshold),
+        "version_a": _jsonable_metrics(a) if a else None,
+        "version_b": _jsonable_metrics(b) if b else None,
+        # None, not False, when either version has no Sharpe. A comparison that
+        # could not be made is not one Version A won - see the same distinction
+        # in `run_dual_version_backtest`'s `ml_evaluated`.
+        "b_beats_a": (None if sharpe_a is None or sharpe_b is None
+                      else bool(float(sharpe_b) > float(sharpe_a))),
+        "basis": ("IN-SAMPLE only. Both versions were fitted on this window; "
+                  "this is a description of the filter's effect on the "
+                  "selected parameters, not evidence of an edge. Stage 3 "
+                  "certifies Version B on the holdout."),
+        "selection_ranked_on": "A",
+        "selection_note": ("the grid was ranked on Version A. Ranking it on "
+                           "the ML-filtered curve would fit the parameters to "
+                           "a classifier trained on the same in-sample bars."),
+    }
+
+
+def _ml_skipped(reason: str) -> dict:
+    """A confirmation that did NOT run, and why. Never an absent key."""
+    return {"ran": False, "reason": reason, "version_a": None,
+            "version_b": None, "b_beats_a": None,
+            "selection_ranked_on": "A"}
+
+
 def write_best_params(scan: dict, strategy: str, symbol: str, tf: str,
                       start: str | None, end: str | None,
                       base_params: dict, out_dir: Path,
                       timeframes: list[str] | None = None,
                       variants_all_timeframes: int | None = None,
                       entry_filters: dict | None = None,
-                      stage1_pair: dict | None = None) -> list[Path]:
+                      stage1_pair: dict | None = None,
+                      ml_confirmation: dict | None = None) -> list[Path]:
     """
     `best_params_<SYMBOL>.json` - the winner, and what it was chosen from.
 
@@ -2003,6 +2229,18 @@ def write_best_params(scan: dict, strategy: str, symbol: str, tf: str,
         # identical in every other field of this file, and they are not the
         # same claim: Stage 3 certifies one of them, and the walk-forward is
         # where the difference shows up.
+        # WHICH VERSION Stage 1 qualified this pair on, at the TOP LEVEL of
+        # the file and not only nested inside `stage1_regime`. Stage 3 reads
+        # this file to decide whether to run the ML-filtered version, and a
+        # value it has to reach through a nested block is one an older
+        # `best_params` does not have at all.
+        "stage1_version": (stage1_pair or {}).get("version"),
+        # The winner re-run with the confirmation filter on, or the reason it
+        # was not. Never an absent key: "the filter was not measured" and "the
+        # filter was measured and changed nothing" are different findings and
+        # must not share an empty slot.
+        "ml_confirmation": ml_confirmation or _ml_skipped(
+            "no ML confirmation was requested for this pair"),
         "rank": scan.get("rank"),
         "plateau": (scan["winner"] or {}).get("plateau"),
         "plateau_surface": scan.get("plateau"),
@@ -2125,7 +2363,10 @@ def summary_matrix_rows(rows: list[dict], errors: list[dict]) -> list[dict]:
     out = [{
         "symbol": r["symbol"],
         "timeframe": r["timeframe"],
-        "status": "OPTIMIZED",
+        # Never hardcoded. `stage2_targets` in Stage 3 admits a pair only when
+        # this reads exactly OPTIMIZED, so a PRUNED_FRAGILE row printed as
+        # OPTIMIZED would advance the grid this stage refused.
+        "status": r.get("status") or "OPTIMIZED",
         "quadrant": (r.get("stage1") or {}).get("quadrant"),
         "optimal_regime": (r.get("stage1") or {}).get("optimal_regime"),
         "stage1_version": (r.get("stage1") or {}).get("version"),
@@ -2139,6 +2380,8 @@ def summary_matrix_rows(rows: list[dict], errors: list[dict]) -> list[dict]:
         "plateau_score": r.get("plateau_score"),
         "plateau_neighbours": r.get("plateau_neighbours"),
         "is_spike": r.get("is_spike"),
+        "fragile_spikes": (r.get("fragile_counts") or {}).get(FRAGILE_SPIKE),
+        "fragile_ruinous": (r.get("fragile_counts") or {}).get(FRAGILE_RUIN),
         # The rank this configuration was ACTUALLY selected under, which is
         # not always the one the CLI asked for: a --reuse-scan of a table
         # written before the plateau columns existed can only be ranked on
@@ -2164,7 +2407,8 @@ def summary_matrix_rows(rows: list[dict], errors: list[dict]) -> list[dict]:
         "params": "NOT OPTIMIZED",
         "profit_factor": None, "sharpe": None, "max_drawdown_pct": None,
         "trades": None, "plateau_score": None, "plateau_neighbours": None,
-        "is_spike": None, "rank": None, "selection": None,
+        "is_spike": None, "fragile_spikes": None, "fragile_ruinous": None,
+        "rank": None, "selection": None,
         "variants_tested": None,
         "exclude_days": "",
         "error": e.get("error", ""),
@@ -2236,10 +2480,16 @@ def write_stage2_summary(strategy: str, rows: list[dict], errors: list[dict],
             "optimized": len(rows),
             "errors": len(errors),
             "complete": not errors,
-            "rule": ("Stage 2 drops nothing: every configuration Stage 1 "
-                     "promoted receives an optimised parameter set and "
-                     "advances to Stage 3. A row here that is not OPTIMIZED "
-                     "is a run failure, not a screening decision."),
+            "rule": ("Stage 2 drops nothing on a PERFORMANCE metric: every "
+                     "configuration Stage 1 promoted receives an optimised "
+                     "parameter set and advances to Stage 3. The two "
+                     "exceptions are not performance judgements - a cell that "
+                     "is an isolated spike has no neighbourhood, and one past "
+                     f"{RUIN_MIN_DRAWDOWN_PCT:.0f}% drawdown ruined the "
+                     "account on the bars it was selected on. A pair whose "
+                     "whole grid fails both is PRUNED_FRAGILE and gets no "
+                     "best_params file. A row that is neither OPTIMIZED nor "
+                     "PRUNED_FRAGILE is a run failure."),
         },
         "results": matrix,
         "matrix_csv": str(csv_path),
@@ -2296,6 +2546,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--flat-by-close", action="store_true")
     p.add_argument("--out-dir", default=None,
                    help="Override <BT_ARTIFACTS>/pipeline/<strategy>/")
+    p.add_argument("--ml", action="store_true",
+                   help="Confirm the WINNER with the ML filter for every pair, "
+                        "not only those Stage 1 qualified on Version B. One "
+                        "extra backtest per pair; the grid is still ranked on "
+                        "Version A.")
+    p.add_argument("--no-stage1-ml", action="store_true",
+                   help="Do NOT confirm the winner even for a pair whose "
+                        "stage1_version is B. best_params records that the "
+                        "confirmation was skipped, and why.")
+    p.add_argument("--ml-threshold", type=float, default=0.50,
+                   help="P(win) at or above which the confirmation filter "
+                        "keeps an entry (default 0.50)")
     p.add_argument("--reuse-scan", action="store_true",
                    help="Do not sweep. Rebuild best_params_<SYMBOL>_<TF>.json "
                         "from the scan_<SYMBOL>.csv files already in the "
@@ -2768,6 +3030,12 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  exclude    : {list(excl)} "
                       f"({', '.join(WEEKDAY_NAMES[d] for d in excl)}) "
                       f"— {excl_source}")
+            # The frame and the config the Version B confirmation would re-run
+            # the winner under. Set only on the contiguous path: a chunked
+            # sweep never materialises the frame and --reuse-scan reads no bars
+            # at all, and confirming a winner against bars that were never
+            # loaded is not something to fall back to silently.
+            bars_for_ml, cfg_for_ml = None, None
             try:
                 tf_dir = out_dir / tf if len(timeframes) > 1 else out_dir
                 if args.reuse_scan:
@@ -2802,6 +3070,7 @@ def main(argv: list[str] | None = None) -> int:
                             start=args.start, end=args.end, tf=tf)
                     else:
                         bars = load_bars(sym, tf, args.start, args.end)
+                        bars_for_ml, cfg_for_ml = bars, cfg
                         warn_if_sweep_will_not_fit(
                             len(bars), len(expand_grid(grid)),
                             args.memory_budget_gib, sym, tf,
@@ -2812,18 +3081,48 @@ def main(argv: list[str] | None = None) -> int:
                                            rank=args.rank)
                     print(format_scan_summary(scan))
                     csv = write_scan_table(scan, tf_dir)
-                dest = write_best_params(
-                    scan, strat_name, sym, tf, args.start, args.end,
-                    base_params, out_dir, timeframes=timeframes,
-                    variants_all_timeframes=scan["evaluated"] * len(timeframes),
-                    entry_filters=filters_record,
-                    stage1_pair=(scope or None))
                 print(f"  table      → {csv}")
+                if scan.get("pruned_fragile"):
+                    # NO best_params FILE. The file IS the advance: Stage 3
+                    # resolves its targets from the Stage 2 summary and binds
+                    # `best_params_<SYMBOL>_<TF>.json` verbatim, so writing one
+                    # here and marking the row PRUNED_FRAGILE would leave the
+                    # pair certifiable by anybody who ran Stage 3 with
+                    # --symbols. The status and the absent file have to say the
+                    # same thing.
+                    counts = scan.get("fragile_counts") or {}
+                    print(f"  PRUNED     : every one of {scan['evaluated']} "
+                          f"evaluated combination(s) failed a minimum "
+                          f"robustness bar\n"
+                          f"               ({counts.get(FRAGILE_RUIN, 0)} "
+                          f"ruinous in-sample, "
+                          f"{counts.get(FRAGILE_SPIKE, 0)} isolated spike). "
+                          f"No best_params file is written,\n"
+                          f"               so nothing here can reach Stage 3.")
+                    dest = []
+                else:
+                    dest = write_best_params(
+                        scan, strat_name, sym, tf, args.start, args.end,
+                        base_params, out_dir, timeframes=timeframes,
+                        variants_all_timeframes=(scan["evaluated"]
+                                                 * len(timeframes)),
+                        entry_filters=filters_record,
+                        stage1_pair=(scope or None))
                 for d in dest:
                     print(f"  winner     → {d}")
                 wm = (scan["winner"] or {}).get("metrics") or {}
                 wp = (scan["winner"] or {}).get("plateau") or {}
                 rows.append({"symbol": sym, "timeframe": tf,
+                             # OPTIMIZED or PRUNED_FRAGILE. Written on the row
+                             # rather than derived downstream from an absent
+                             # winner: "no candidate cleared the robustness
+                             # bars" and "the grid produced no measurable
+                             # Sharpe" both leave `winner` None and are
+                             # different findings.
+                             "status": (STAGE2_PRUNED_FRAGILE
+                                        if scan.get("pruned_fragile")
+                                        else "OPTIMIZED"),
+                             "fragile_counts": scan.get("fragile_counts") or {},
                              # The Stage 1 scope, travelling with the result so
                              # the leaderboard, the summary matrix and the
                              # Discord card all name the same quadrant without
@@ -2904,8 +3203,11 @@ def main(argv: list[str] | None = None) -> int:
 
     W = 78
     print("\n" + "=" * W)
-    print(f"STAGE 2 RESULT · {len(rows)}/{len(targets)} configuration(s) "
-          f"optimised")
+    pruned = [r for r in rows if r.get("status") == STAGE2_PRUNED_FRAGILE]
+    optimised = [r for r in rows if r.get("status") != STAGE2_PRUNED_FRAGILE]
+    print(f"STAGE 2 RESULT · {len(optimised)}/{len(targets)} configuration(s) "
+          f"optimised"
+          + (f", {len(pruned)} PRUNED_FRAGILE" if pruned else ""))
     print("=" * W)
     print(winners_leaderboard(rows))
     for r in rows:
@@ -2921,16 +3223,32 @@ def main(argv: list[str] | None = None) -> int:
     for e in errors:
         print(f"  ERROR {e['symbol']:<6}{e.get('timeframe', ''):<5}{e['error']}")
 
-    spiky = [r for r in rows if r.get("is_spike")]
-    if spiky:
-        print(f"\n  {len(spiky)} of {len(rows)} winner(s) are isolated SPIKES: "
-              f"the parameters one step\n  away on the grid keep under "
-              f"{PLATEAU_SPIKE_RATIO:.0%} of the winning Sharpe. Nothing is "
-              f"dropped for it —\n  it is a warning about how much of that "
-              f"Sharpe is a property of this sample.")
-        for r in spiky:
+    # A winner can no longer BE a spike - `_select_best_row` will not select
+    # one - so what is worth printing is how much of each grid the two
+    # robustness bars removed. A pair whose winner survived a grid that was 90%
+    # ruinous is a different result from one whose grid was clean, and the
+    # winner's own row looks identical in both.
+    ruled_out = [r for r in rows if sum((r.get("fragile_counts") or {})
+                                        .values())]
+    if ruled_out:
+        print(f"\n  minimum robustness bars removed cells from "
+              f"{len(ruled_out)} of {len(rows)} grid(s):\n"
+              f"    an isolated SPIKE keeps under {PLATEAU_SPIKE_RATIO:.0%} of "
+              f"its Sharpe one step away on the grid;\n"
+              f"    a RUINOUS cell drew down to "
+              f"{RUIN_MIN_DRAWDOWN_PCT:.0f}% or past it on the very bars it "
+              f"was selected on.")
+        for r in ruled_out:
+            counts = r.get("fragile_counts") or {}
             print(f"    {r['symbol']:<6}{r['timeframe']:<5}"
-                  f"Sharpe {r.get('sharpe')}  plateau {r.get('plateau_score')}")
+                  f"{counts.get(FRAGILE_RUIN, 0):>4} ruinous  "
+                  f"{counts.get(FRAGILE_SPIKE, 0):>4} spike   "
+                  f"of {r.get('variants_tested')} evaluated"
+                  + ("   → PRUNED_FRAGILE"
+                     if r.get("status") == STAGE2_PRUNED_FRAGILE else ""))
+    for r in pruned:
+        print(f"  [!] {r['symbol']} {r['timeframe']}: PRUNED_FRAGILE — no "
+              f"best_params file, so Stage 3 cannot certify it.")
 
     # The handoff and the matrix, written even when every sweep failed: a
     # summary of a run that produced nothing is the summary that matters most,
