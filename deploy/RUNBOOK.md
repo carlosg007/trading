@@ -43,6 +43,32 @@ Stop and investigate if any of these is true:
   outcome nobody has confirmed. Reconcile in NinjaTrader before trading.
 * the kill switch is armed and you do not know who armed it
 * the newest bar is older than about two bars
+* the spool holds a MICRO's tape instead of the full-size contract's — see below
+
+### The spool must carry the FULL-SIZE tape
+
+```bash
+ls /mnt/backtest/artifacts/nt8_bars/     # expect NQ_1m.csv, not MNQ_1m.csv
+```
+
+The NT8 push writes one file per instrument it is attached to, named for that
+instrument. The alias table is one-directional on purpose (`realtime/
+contract_alias.py`): a micro resolves to its parent, never the reverse. So a
+spool holding `MNQ_1m.csv` answers the LOOP, which asks for the basket's micro
+— and does not answer the DAEMON, which asks for the certification symbol NQ.
+
+That split is close to invisible. Every component reports correctly:
+
+    watchdog     ok   feed    newest MNQ 1h bar closed 73 min ago
+    daemon       NQ 1h: FAILED — the feed returned no 1h bars
+    watchdog     FAIL regime  daemon wrote 292 min ago
+
+The watchdog's feed check passes, because there IS a fresh bar in the spool —
+it is just not the one anything is gated on. The only line naming the cause is
+the daemon's, and the failure reaches the operator as regime STALENESS two
+checks downstream. Attach the NT8 indicator to **NQ**: the daemon then matches
+it exactly and the loop's MNQ request aliases onto the same file, so the gate
+and the trade read one tape rather than two that can drift apart.
 
 ## During the session
 
