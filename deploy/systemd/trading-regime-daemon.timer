@@ -3,9 +3,15 @@
 # A TIMER rather than a loop inside the daemon: the classifier is a pure
 # function of the newest bars, so a run that dies is a run that is simply
 # repeated, and there is no long-lived process holding a stale reading in
-# memory. Persistent=true republishes once after a reboot rather than waiting
-# for the next boundary with the loop reading a state file from before the
-# outage.
+# memory.
+#
+# The republish-after-reboot that this timer needs comes from OnBootSec=, NOT
+# from Persistent=. Persistent= stores the last trigger time on disk to catch
+# up a run missed while the machine was off, and systemd applies it ONLY to
+# timers configured with OnCalendar=. On an OnBootSec=/OnUnitActiveSec= timer
+# like this one it is inert — it is kept because it costs nothing and states
+# the intent, but the behaviour is OnBootSec=2min's and reading it the other
+# way would leave somebody trusting a catch-up that never runs.
 
 [Unit]
 Description=Republish the live regime every 5 minutes
