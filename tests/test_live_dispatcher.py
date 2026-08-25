@@ -992,11 +992,17 @@ def test_asking_for_both_modes_is_refused_rather_than_resolved():
 
 def test_bars_for_a_micro_are_read_from_its_full_size_parent(monkeypatch):
     """
-    The four baskets hold micros; the lake holds only the full-size contracts.
+    The four baskets hold micros; the tape is the full-size contract's.
     Without the alias this loop reads nothing and no-ops forever - and it would
     look exactly like a market with no signals.
+
+    The feed is passed EXPLICITLY. `load_symbol_bars` now delegates to
+    `realtime/feed.py`, whose default resolves to the live vendor when one is
+    configured - so a case that means "read the lake" has to say so, or it
+    silently tests the network instead.
     """
     import master_live
+    from realtime.feed import LakeFeed
 
     captured = {}
 
@@ -1007,7 +1013,7 @@ def test_bars_for_a_micro_are_read_from_its_full_size_parent(monkeypatch):
 
     monkeypatch.setattr("mdlib.lake.iter_bars", fake_iter_bars)
     bars, sources = master_live.load_symbol_bars(
-        ["MNQ", "MES", "MCL", "MGC"], "15m", 50)
+        ["MNQ", "MES", "MCL", "MGC"], "15m", 50, feed=LakeFeed())
 
     # It asked the lake for the PARENTS...
     assert captured["symbols"] == ["CL", "ES", "GC", "NQ"]
@@ -1019,6 +1025,7 @@ def test_bars_for_a_micro_are_read_from_its_full_size_parent(monkeypatch):
 
 def test_a_symbol_with_no_bars_is_absent_rather_than_empty(monkeypatch):
     import master_live
+    from realtime.feed import LakeFeed
 
     def only_nq(symbols, tf, start, end):
         for s in symbols:
@@ -1026,7 +1033,8 @@ def test_a_symbol_with_no_bars_is_absent_rather_than_empty(monkeypatch):
                 yield s, make_bars(80, s)
 
     monkeypatch.setattr("mdlib.lake.iter_bars", only_nq)
-    bars, sources = master_live.load_symbol_bars(["MNQ", "MES"], "15m", 50)
+    bars, sources = master_live.load_symbol_bars(["MNQ", "MES"], "15m", 50,
+                                                 feed=LakeFeed())
     assert sorted(bars) == ["MNQ"]
     assert sources == {"MNQ": "NQ"}
 

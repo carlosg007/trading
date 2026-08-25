@@ -81,6 +81,8 @@ import sys
 import time
 from pathlib import Path
 
+import pandas as pd
+
 REPO_ROOT = Path(__file__).resolve().parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -93,6 +95,7 @@ from realtime.live_dispatcher import (DEFAULT_ENV_FILE,          # noqa: E402
                                       DEFAULT_TIMEOUT_S,
                                       LiveDispatchError,
                                       LiveExecutionDispatcher)
+from realtime.feed import FeedError, resolve_feed                # noqa: E402
 from realtime.regime_reader import DEFAULT_STATE_FILE            # noqa: E402
 
 DEFAULT_INTERVAL_S = 60
@@ -134,58 +137,42 @@ class ShutdownFlag:
             time.sleep(min(step, max(0.0, deadline - time.monotonic())))
 
 
-def load_symbol_bars(symbols, tf: str,
-                     lookback_bars: int) -> tuple[dict, dict]:
+def load_symbol_bars(symbols, tf: str, lookback_bars: int,
+                     feed=None) -> tuple[dict, dict]:
     """
     `({basket_symbol: bars}, {basket_symbol: which contract supplied them})`.
 
-    THE LAKE IS A HISTORICAL STORE AND THIS IS THE SEAM WHERE A REAL FEED GOES.
-    It is enough to exercise the whole pipeline against real bars and it is not
-    a live feed: the newest bar it can return is the newest bar that has been
-    ingested, which in this repository is a batch process. Everything
-    downstream takes `{symbol: DataFrame}` and does not care where the frames
-    came from, so replacing this one function is the whole integration.
+    THE SEAM, NOW WITH SOMETHING BEHIND IT. This used to be a lake read inlined
+    here, which is why the loop could poll every sixty seconds against a tape
+    that stopped weeks ago and report nothing wrong: the newest bar the lake
+    can return is the newest bar somebody ingested. `realtime/feed.py` owns the
+    choice now - a live vendor feed when one is configured, the lake otherwise -
+    and this function is the adapter between it and the loop.
 
     **The bars MUST be closed bars.** The engine fills at the next bar's open,
-    so acting on the last closed bar with a market order now is that fill;
-    acting on a bar still forming is lookahead. A real feed handed in here has
-    to drop its forming bar - the lake has no partial bar to drop, so nothing
-    is dropped, and the signal bar's timestamp travels onto every signal so the
-    assumption is auditable rather than implicit.
+    so acting on the last CLOSED bar with a market order now is that fill;
+    acting on a bar still forming is lookahead, and it is lookahead that
+    produces a live equity curve worse than the backtest for reasons nobody can
+    find afterwards. A live feed always has a forming bar - the one the market
+    is printing into right now - and `realtime.feed.drop_forming_bar` removes
+    it before any of these frames reach a strategy. That rule is written once,
+    there, and every feed passes through it.
 
-    THE MICRO ALIAS, AND WHY IT IS NEEDED HERE AT ALL. The four baskets hold
-    MNQ/MES/MCL/MGC; the lake holds only the full-size contracts. They quote
-    the SAME price series at the SAME tick size - only the multiplier differs,
-    and a multiplier appears in no indicator - so a micro's bars are read from
-    its parent. The table is `realtime/contract_alias.py`, shared with the
-    regime reader (which answers a micro's quadrant from the parent's record)
-    and the dispatcher (which accepts a certification on NQ as covering MNQ),
-    and its tick sizes are reconciled against `backtest/specs.py` on every
-    daemon construction. One table, so bars, regime and certification can
-    never disagree about which contract a symbol means.
+    THE MICRO ALIAS. The four baskets hold MNQ/MES/MCL/MGC and the tape is the
+    full-size contract's - same price series, same tick size, only the
+    multiplier differs, and a multiplier appears in no indicator - so a micro's
+    bars are read from its parent through `realtime/contract_alias.py`, the one
+    table the regime reader and the dispatcher also resolve through. The
+    substitution is REPORTED rather than silent: the order is still for the
+    micro and still sized on the micro's own point value.
 
-    The substitution is REPORTED rather than silent: the order is still for the
-    micro, sized on the micro's own point value, and an operator has to be able
-    to see that its signal came from the full-size tape.
+    `feed` is injected so the loop can be tested without a vendor and so the
+    mode is decided once, at startup, rather than re-resolved every cycle.
     """
-    from mdlib.lake import iter_bars
-    from realtime.contract_alias import resolve_parent
+    from realtime.feed import resolve_feed
 
-    wanted = {sym: resolve_parent(sym) for sym in symbols}
-    frames = {}
-    for source_symbol, df in iter_bars(sorted(set(wanted.values())), tf,
-                                       None, None):
-        if df is not None and not df.empty:
-            frames[source_symbol] = df
-
-    bars, sources = {}, {}
-    for symbol, source_symbol in wanted.items():
-        df = frames.get(source_symbol)
-        if df is None:
-            continue
-        bars[symbol] = df.tail(int(lookback_bars)).reset_index(drop=True)
-        sources[symbol] = source_symbol
-    return bars, sources
+    return (feed or resolve_feed("auto")).closed_bars(
+        symbols, tf, lookback_bars)
 
 
 def basket_symbols(dispatcher: LiveExecutionDispatcher) -> list[str]:
@@ -221,6 +208,13 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--once", action="store_true",
                     help="run a single cycle and exit")
     ap.add_argument("--tf", default="15m", help="bar timeframe to read")
+    ap.add_argument("--feed", default="auto", choices=("auto", "live", "lake"),
+                    help="where bars come from. auto: the live vendor feed "
+                         "when one is configured, the lake otherwise. live: "
+                         "REFUSES to start without one, rather than falling "
+                         "back to historical bars that read exactly like a "
+                         "quiet market. lake: the historical store, as current "
+                         "as the last ingest")
     ap.add_argument("--lookback-bars", type=int, default=500,
                     help="bars handed to each strategy per cycle")
     ap.add_argument("--max-regime-age-sec", type=float, default=None,
@@ -279,7 +273,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[master_live] REFUSING TO START: {exc}", file=sys.stderr)
         return 2
 
+    # The feed is resolved ONCE, here, and reported before the first cycle.
+    # Resolved per cycle it could change under the loop; unreported, an
+    # operator reading "no signal" on every line has no way to tell a quiet
+    # market from a feed that fell back to bars from a fortnight ago.
+    try:
+        feed = resolve_feed(args.feed)
+    except FeedError as exc:
+        print(f"[master_live] REFUSING TO START: {exc}", file=sys.stderr)
+        return 2
+
     print(dispatcher.describe(), flush=True)
+    print(f"[master_live] bar feed: {feed.describe()}", flush=True)
     if not dry_run:
         print("[master_live] LIVE MODE — orders will be sent.", flush=True)
 
@@ -292,7 +297,31 @@ def main(argv: list[str] | None = None) -> int:
         cycles += 1
         try:
             bars, sources = load_symbol_bars(symbols, args.tf,
-                                             args.lookback_bars)
+                                             args.lookback_bars, feed=feed)
+            # HOW OLD IS THE NEWEST BAR. Printed every cycle, because the
+            # whole failure this feed exists to end was a loop reporting "no
+            # signal" against a tape that had stopped. A vendor publishing on
+            # a lag, a feed that fell back to the lake and a market that is
+            # simply closed all produce the same quiet console otherwise.
+            newest = max((f["ts"].iloc[-1] for f in bars.values() if len(f)),
+                         default=None)
+            if newest is not None:
+                from realtime.feed import tf_delta
+                width = tf_delta(args.tf)
+                # Measured from when the bar CLOSED, not when it opened. A bar
+                # is stamped at its open, so an hourly bar is always at least
+                # an hour "old" by that reading and a warning drawn on it would
+                # fire on every healthy cycle - which is how an operator learns
+                # to ignore the one line that matters.
+                since_close = (pd.Timestamp.now(tz="UTC")
+                               - (newest + width)).total_seconds()
+                behind = since_close > width.total_seconds()
+                print(f"[master_live] newest closed bar {newest} — closed "
+                      f"{since_close / 60:.1f} min ago ({args.tf} bar = "
+                      f"{width.total_seconds() / 60:.0f} min)"
+                      + ("  <-- A WHOLE BAR BEHIND: feed lagging, stale, or "
+                         "the market is shut" if behind else ""), flush=True)
+
             aliased = {k: v for k, v in sources.items() if k != v}
             if aliased:
                 print(f"[master_live] bars sourced from the full-size tape: "

@@ -1642,6 +1642,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--bars", type=int, default=400,
                     help="how many trailing bars to classify over "
                          f"(minimum {MIN_BARS_FOR_REGIME})")
+    ap.add_argument("--feed", default="auto",
+                    choices=("auto", "live", "lake"),
+                    help="where --publish reads bars from. auto: the live "
+                         "vendor feed when one is configured, the lake "
+                         "otherwise. A quadrant published from the lake "
+                         "describes the newest bar somebody INGESTED, which "
+                         "is not the market")
     args = ap.parse_args(argv)
 
     daemon = MasterRegimeDaemon(config_path=args.config,
@@ -1655,13 +1662,20 @@ def main(argv: list[str] | None = None) -> int:
     if not args.publish:
         return 1 if daemon.missing_anchors or daemon.model_errors else 0
 
-    # THE LAKE IS READ HERE AND NOWHERE ELSE IN THIS MODULE. `MasterRegimeDaemon`
+    # BARS ARE READ HERE AND NOWHERE ELSE IN THIS MODULE. `MasterRegimeDaemon`
     # owns no feed - the live loop hands it frames - and the import is inside
-    # `main()` so that stays true: a class that could read the lake would grow
-    # a code path where a live permission was drawn on historical bars.
-    # This is the OPERATOR BOOTSTRAP: it fills the state file from the lake so
-    # the switchboard has something to publish before a live feed exists.
-    from mdlib import lake                                        # noqa: PLC0415
+    # `main()` so that stays true: a class that could read a feed would grow a
+    # code path where a live permission was drawn on historical bars.
+    #
+    # The feed is `realtime/feed.py`'s, the same seam `master_live.py` uses, so
+    # the quadrant this publishes and the bars the loop trades on come from one
+    # source. Published from the lake while the loop reads a live feed, the
+    # switchboard would gate today's signals on a fortnight-old regime and
+    # every log line would look right.
+    from realtime.feed import resolve_feed                        # noqa: PLC0415
+
+    feed = resolve_feed(args.feed)
+    print(f"\nbar feed: {feed.describe()}")
 
     published, failed = 0, 0
     targets = sorted({(e["symbol"], e["timeframe"])
@@ -1672,12 +1686,14 @@ def main(argv: list[str] | None = None) -> int:
               "symbol and a timeframe.")
         return 1
     print()
+    depth = max(int(args.bars), MIN_BARS_FOR_REGIME)
     for symbol, tf in targets:
         try:
-            bars = lake.get_bars(symbol, tf=tf)
+            frames, _ = feed.closed_bars([symbol], tf, depth)
+            bars = frames.get(str(symbol).upper())
             if bars is None or not len(bars):
-                raise RegimeDaemonError(f"the lake returned no {tf} bars")
-            tail = bars.tail(max(int(args.bars), MIN_BARS_FOR_REGIME))
+                raise RegimeDaemonError(f"the feed returned no {tf} bars")
+            tail = bars.tail(depth)
             data = daemon.refresh(symbol, tail, tf=tf)
         except Exception as exc:
             failed += 1
