@@ -15,6 +15,9 @@ courses/
 # /mnt/backtest/artifacts/<strat>_<timestamp>/, which is timestamped and never
 # overwritten. A 2.9 MB stdout capture in git history is not that.
 *.log
+# The units split their streams: StandardError=append: writes .err beside the
+# .log, and logrotate rotates both. Same rule, same reason.
+*.err
 
 # Live regime state. `realtime/regime_daemon.py` rewrites this every bar, so
 # it is a running process's scratch space rather than source — committing it
