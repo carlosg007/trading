@@ -1,0 +1,25 @@
+# Rotation for the units' append: targets. Install to /etc/logrotate.d/trading.
+#
+#   sudo cp deploy/systemd/trading.logrotate /etc/logrotate.d/trading
+#   sudo logrotate --debug /etc/logrotate.d/trading    # dry run, prints its plan
+#
+# This lived only as a heredoc in DEPLOY.md and was never actually installed:
+# the loop appends every 60s, forever, to a file nothing truncates.
+
+/home/cgrullon/src/trading/logs/*.log
+/home/cgrullon/src/trading/logs/*.err {
+    daily
+    rotate 30
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 cgrullon cgrullon
+    # COPYTRUNCATE, because the units append to these files with an open
+    # handle. Renaming underneath a running process leaves it writing to an
+    # unlinked inode: the log looks empty while the loop is trading.
+    copytruncate
+    # Required: the directory is not root-owned, so logrotate refuses to act
+    # on it without being told whose files these are.
+    su cgrullon cgrullon
+}
