@@ -61,6 +61,17 @@ sudo systemctl daemon-reload
 sudo systemd-analyze verify /etc/systemd/system/trading-*.service \
                             /etc/systemd/system/trading-*.timer
 
+# The feed FIRST: the regime daemon and the loop both read what it spools, and
+# a daemon started against an empty spool publishes nothing and exits 1.
+#
+# It binds :8000. If a listener was started by hand in a terminal it still
+# holds that port and this fails with EADDRINUSE — stop it first, and know
+# that the gap is a LIVE FEED INTERRUPTION: bars posted while nothing is
+# listening are refused, and nothing interpolates a missing bar.
+ss -ltnp 'sport = :8000'                  # who holds it, if anyone
+sudo systemctl enable --now trading-nt8-listener
+curl -s localhost:8000/health | python3 -m json.tool
+
 # Health checks and the regime publisher first. They place no orders.
 sudo systemctl enable --now trading-regime-daemon.timer
 sudo systemctl enable --now trading-watchdog.timer

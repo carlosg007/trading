@@ -29,7 +29,13 @@ else is done by hand in NinjaTrader.
 
 ```bash
 cd ~/src/trading
-systemctl status trading-master-live trading-regime-daemon.timer trading-watchdog.timer --no-pager
+systemctl status trading-master-live trading-regime-daemon.timer \
+                 trading-watchdog.timer trading-nt8-listener --no-pager
+# The receiver's own view. STARVED means it is up and nothing has arrived —
+# which is NT8's end, not this one; STALE means bars stopped. `counters`
+# rising with `rejected` is a publisher sending malformed bars, and each
+# rejection carries its reason in the journal.
+curl -s localhost:8000/health | python3 -m json.tool
 .venv/bin/python3 scripts/watchdog.py --tf 1h        # expect exit 0
 .venv/bin/python3 realtime/regime_reader.py          # bar age < ~2 bars
 .venv/bin/python3 -c "from realtime.lifecycle import EngineState, startup_report; \
