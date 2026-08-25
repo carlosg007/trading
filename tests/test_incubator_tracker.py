@@ -650,9 +650,10 @@ def test_the_card_announces_a_promotion_and_says_so_when_it_did_not_act(
 
 
 def test_the_table_groups_the_two_incubator_accounts() -> None:
-    """Sim101's board and Sim102's are separate risk envelopes and are read
-    separately; ledger order interleaves them and makes an operator scan the
-    account column to answer "how is Sim101 doing"."""
+    """`SimIncubator1`'s board and `SimIncubator2`'s are separate risk
+    envelopes and are read separately; ledger order interleaves them and makes
+    an operator scan the account column to answer "how is SimIncubator1
+    doing"."""
     tracker = _tracker()
     rows = [{"strategy_id": "b_even", "account": "Incubator-Even",
              "status": "HOLD", "note": "", "report": None},

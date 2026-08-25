@@ -74,7 +74,7 @@ means the row is UNATTRIBUTED and is reported, never split, never assigned to
 the first. A trade filed under the wrong strategy is a promotion decided on
 somebody else's P&L.
 
-The account column is NT8's (`Sim101`), the routing table's is
+The account column is NT8's (`SimIncubator1`), the routing table's is
 `Incubator-Odd`, and `NT8_ACCOUNT_ALIASES` is the only place the two are tied
 together. Portfolio ids and `target_account` values are accepted as
 themselves, so a log that already speaks in routing-table names needs no map.
@@ -119,16 +119,30 @@ from portfolio.promotion_daemon import (                           # noqa: E402
     write_ledger,
 )
 
-# NT8's account names against the routing table's. Spelled out rather than
-# derived, for the same reason `PROMOTION_ROUTES` is: a rule that mapped
-# `Sim1NN` by position would file a third simulation account's fills onto
-# whichever portfolio the arithmetic landed on, and the trades would look
-# real. Case-insensitive on lookup; a portfolio id or a `target_account`
-# resolves to itself, so a log already written in routing-table names needs no
-# entry here.
+# NT8's account names against the routing table's. NinjaTrader prefixes a
+# simulation account with `Sim`, so the four execution accounts are
+# `SimIncubator1`/`SimIncubator2`/`SimProp1`/`SimProp2` and the portfolios they
+# execute keep the Odd/Even ids that encode the basket split.
+#
+# Spelled out rather than derived, for the same reason `PROMOTION_ROUTES` is: a
+# rule that stripped `Sim` and matched a digit by position would file a fifth
+# simulation account's fills onto whichever portfolio the arithmetic landed on,
+# and the trades would look real. Keys are UPPER-CASE because the lookup
+# upper-cases the token; a portfolio id or a `target_account` resolves to
+# itself first, so a log already written in routing-table names needs no entry
+# here.
+#
+# These are the same four names `config/portfolios.json` carries as
+# `target_account` — the field the live loop sends as the CrossTrade `account`
+# — and `tests/test_incubator_recorder.py` reconciles the two on every run. A
+# fill recorded under an account no portfolio claims is unattributed; an order
+# sent to one NinjaTrader does not have is rejected. The two failures are at
+# opposite ends of the same day.
 NT8_ACCOUNT_ALIASES: dict[str, str] = {
-    "SIM101": "Incubator-Odd",
-    "SIM102": "Incubator-Even",
+    "SIMINCUBATOR1": "Incubator-Odd",
+    "SIMINCUBATOR2": "Incubator-Even",
+    "SIMPROP1": "Prop-Odd",
+    "SIMPROP2": "Prop-Even",
 }
 
 # Recorder-only column spellings. The seven shared with

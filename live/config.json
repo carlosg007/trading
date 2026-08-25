@@ -1,6 +1,6 @@
 {
   "crosstrade_webhook_url": "https://api.crosstrade.io/webhook/placeholder",
-  "account_id": "Sim101",
+  "account_id": "SimIncubator1",
   "environment": "incubator_sim",
   "timeout_seconds": 2.0
 }

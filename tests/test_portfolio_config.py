@@ -74,6 +74,18 @@ CONFIG_PATH = REPO / DEFAULT_CONFIG_PATH
 # file. This is the one place the suite compares the CONFIG against the
 # SPECIFICATION instead of against itself; a case that read them out of the
 # config would pass whatever they were changed to.
+# The NinjaTrader account each portfolio EXECUTES on, retyped from the
+# specification for the same reason. `target_account` is not the portfolio id:
+# NT8 prefixes a simulation account with `Sim`, and the ids keep the Odd/Even
+# spelling that encodes the basket split (Odd = MNQ/MCL, Even = MES/MGC). Read
+# off the file instead, this case would pass whatever the accounts were
+# renamed to — and an order sent to an account NinjaTrader does not have is
+# rejected on a config that loads perfectly.
+EXECUTION_ACCOUNTS = {"Incubator-Odd": "SimIncubator1",
+                      "Incubator-Even": "SimIncubator2",
+                      "Prop-Odd": "SimProp1",
+                      "Prop-Even": "SimProp2"}
+
 REQUESTED_POINT_VALUES = {"MNQ": 2.0, "MES": 5.0, "MCL": 100.0, "MGC": 10.0}
 REQUESTED_TICK_SIZES = {"MNQ": 0.25, "MES": 0.25, "MCL": 0.01, "MGC": 0.10}
 
@@ -138,7 +150,8 @@ def test_all_four_target_accounts_exist_and_are_well_formed() -> None:
     for pid in REQUIRED_PORTFOLIOS:
         p = cfg["portfolios"][pid]
         assert p["portfolio_id"] == pid, p["portfolio_id"]
-        assert p["target_account"] == pid, p["target_account"]
+        assert p["target_account"] == EXECUTION_ACCOUNTS[pid], (
+            p["target_account"])
         assert p["account_type"] in ACCOUNT_TYPES, p["account_type"]
         assert p["default_account_size"] == 50000, p["default_account_size"]
 
@@ -270,7 +283,8 @@ def test_two_portfolios_cannot_claim_one_account() -> None:
     the two baskets would net against each other.
     """
     def collide(raw):
-        raw["portfolios"]["Prop-Even"]["target_account"] = "Prop-Odd"
+        raw["portfolios"]["Prop-Even"]["target_account"] = \
+            EXECUTION_ACCOUNTS["Prop-Odd"]
     msg = raises(load_portfolio_config, str(write_temp_config(collide)),
                  use_cache=False)
     assert "target the account" in msg, msg
@@ -569,10 +583,15 @@ def test_an_account_resolves_to_its_portfolio_and_nothing_else_does() -> None:
     """
     cfg = config()
     for pid in REQUIRED_PORTFOLIOS:
-        got = get_portfolio_by_account(pid, config=cfg)
+        got = get_portfolio_by_account(EXECUTION_ACCOUNTS[pid], config=cfg)
         assert got["portfolio_id"] == pid
-        assert got["target_account"] == pid
-    assert get_portfolio_by_account("Prop-Even", config=cfg)["basket"][
+        assert got["target_account"] == EXECUTION_ACCOUNTS[pid]
+    # The PORTFOLIO ID is not an account and must not resolve as one. The two
+    # were the same string until the NT8 accounts were renamed, which is
+    # exactly when a lookup that quietly accepted either would stop being
+    # tested and start being a guess.
+    assert raises(get_portfolio_by_account, "Incubator-Odd", config=cfg)
+    assert get_portfolio_by_account("SimProp2", config=cfg)["basket"][
         "assets"] == ["MES", "MGC"]
 
     msg = raises(get_portfolio_by_account, "Prop-Sideways", config=cfg)
@@ -652,7 +671,7 @@ def test_the_accessors_hand_out_copies_and_not_the_cache() -> None:
         "a mutation leaked into the cached config")
     assert second["asset_metadata"]["MNQ"]["point_value"] == 2.0
 
-    p = get_portfolio_by_account("Prop-Odd", config=second)
+    p = get_portfolio_by_account(EXECUTION_ACCOUNTS["Prop-Odd"], config=second)
     p["basket"]["assets"].append("SPY")
     assert second["portfolios"]["Prop-Odd"]["basket"]["assets"] == \
         ["MNQ", "MCL"], "get_portfolio_by_account returned a live reference"

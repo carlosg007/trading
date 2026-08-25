@@ -852,23 +852,36 @@ NOT_RESOLVED = "NOT RESOLVED"
 # partition with a hole in it routes some strategy nowhere"), so writing only
 # the incubator half would produce a file this module could read back and that
 # loader could not.
+# `execution_account` is the NinjaTrader account the portfolio's orders are
+# SENT to, and it is not the portfolio id: NT8 prefixes a simulation account
+# with `Sim`, so `Incubator-Odd` executes on `SimIncubator1`. It has to be
+# spelled here as well as in `portfolio/incubator_recorder.py` because this
+# module may not import that package - see the layering rule at the top of
+# `.claude/rules/portfolio-routing.md`. The two are RECONCILED by
+# `tests/test_portfolio_config.py` against the shipped table rather than
+# trusted to stay equal: a bootstrap that wrote an account NinjaTrader does not
+# have would have every order rejected, on a config that loads perfectly.
 INCUBATOR_TRACK_TEMPLATE: dict[str, dict[str, Any]] = {
     "Incubator-Odd":  {"account_type": "incubator_sim",
+                       "execution_account": "SimIncubator1",
                        "assets": ["MNQ", "MCL"],
                        "correlation_group": "Index_Energy_Uncorrelated",
                        "regime_quadrants": ["Q3_LOW_VOL_TREND",
                                             "Q4_LOW_VOL_MEAN_REVERSION"]},
     "Incubator-Even": {"account_type": "incubator_sim",
+                       "execution_account": "SimIncubator2",
                        "assets": ["MES", "MGC"],
                        "correlation_group": "Index_Metals_Uncorrelated",
                        "regime_quadrants": ["Q1_HIGH_VOL_TREND",
                                             "Q2_HIGH_VOL_CHOP"]},
     "Prop-Odd":       {"account_type": "prop_eval",
+                       "execution_account": "SimProp1",
                        "assets": ["MNQ", "MCL"],
                        "correlation_group": "Index_Energy_Uncorrelated",
                        "regime_quadrants": ["Q3_LOW_VOL_TREND",
                                             "Q4_LOW_VOL_MEAN_REVERSION"]},
     "Prop-Even":      {"account_type": "prop_eval",
+                       "execution_account": "SimProp2",
                        "assets": ["MES", "MGC"],
                        "correlation_group": "Index_Metals_Uncorrelated",
                        "regime_quadrants": ["Q1_HIGH_VOL_TREND",
@@ -918,7 +931,7 @@ def _template_portfolio(pid: str) -> dict[str, Any]:
     return {
         "portfolio_id": pid,
         "account_type": tpl["account_type"],
-        "target_account": pid,
+        "target_account": tpl["execution_account"],
         "default_account_size": BOOTSTRAP_ACCOUNT_SIZE,
         "risk_profile": json.loads(json.dumps(BOOTSTRAP_RISK_PROFILE)),
         "basket": {"assets": list(tpl["assets"]),

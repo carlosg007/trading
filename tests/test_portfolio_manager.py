@@ -430,8 +430,19 @@ def test_each_basket_routes_to_its_own_account() -> None:
     THE REQUEST'S THIRD CLAUSE. MNQ and MCL reach an Odd account; MES and MGC
     reach an Even one; and the `account` field on the payload is what decides
     where money actually moves.
+
+    That field carries the portfolio's `target_account` — NinjaTrader's name
+    for the account, which is not the portfolio id: NT8 prefixes a simulation
+    account with `Sim`, so `Incubator-Odd` executes on `SimIncubator1`. The
+    names are READ from the routing table here rather than retyped, because
+    what this case is about is which BASKET reaches which account;
+    `tests/test_portfolio_config.py` is where the four names are checked
+    against the specification, and a second copy would fail there twice for
+    one rename.
     """
     pm = manager()
+    accounts = {pid: portfolio["target_account"]
+                for pid, portfolio in load_portfolio_config()["portfolios"].items()}
     net = pm.aggregate_signals([
         signal("MNQ", LONG, "Incubator-Odd"),
         signal("MCL", LONG, "Prop-Odd"),
@@ -440,12 +451,16 @@ def test_each_basket_routes_to_its_own_account() -> None:
     ])
     payloads = pm.build_order_payloads(net, regimes())
     routed = {p["symbol"]: p["account"] for p in payloads}
-    assert routed == {"MNQ": "Incubator-Odd", "MCL": "Prop-Odd",
-                      "MES": "Incubator-Even", "MGC": "Prop-Even"}, routed
+    assert routed == {"MNQ": accounts["Incubator-Odd"],
+                      "MCL": accounts["Prop-Odd"],
+                      "MES": accounts["Incubator-Even"],
+                      "MGC": accounts["Prop-Even"]}, routed
 
+    odd_accounts = {accounts["Incubator-Odd"], accounts["Prop-Odd"]}
+    even_accounts = {accounts["Incubator-Even"], accounts["Prop-Even"]}
     for p in payloads:
-        assert (p["symbol"] in ODD_ASSETS) == p["account"].endswith("-Odd"), p
-        assert (p["symbol"] in EVEN_ASSETS) == p["account"].endswith("-Even"), p
+        assert (p["symbol"] in ODD_ASSETS) == (p["account"] in odd_accounts), p
+        assert (p["symbol"] in EVEN_ASSETS) == (p["account"] in even_accounts), p
 
 
 def test_the_payload_is_the_dispatchers_own_shape() -> None:

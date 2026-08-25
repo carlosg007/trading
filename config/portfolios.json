@@ -5,7 +5,7 @@
     "Incubator-Odd": {
       "portfolio_id": "Incubator-Odd",
       "account_type": "incubator_sim",
-      "target_account": "Incubator-Odd",
+      "target_account": "SimIncubator1",
       "default_account_size": 50000,
       "risk_profile": {
         "fixed_risk_budget_usd": 250.0,
@@ -46,9 +46,9 @@
           "regime_filter": "Q2",
           "status": "incubating",
           "path": "strategies/approved_incubator/t3_braid_scalp_20260823_NQ_1h/strat.py",
-          "registered_utc": "2026-08-24T20:39:49+00:00",
+          "registered_utc": "2026-08-24T23:10:20+00:00",
           "registered_by": "backtest/promote.py",
-          "routing_basis": "routed by CERTIFIED CONTRACT: Incubator-Odd is the incubator account whose basket carries MNQ",
+          "routing_basis": "already registered on Incubator-Odd; a re-promotion does not move an account",
           "resolved_from": {
             "symbol": "--symbol",
             "timeframe": "--timeframe",
@@ -64,9 +64,9 @@
               "regime_filter": "Q2",
               "status": "incubating",
               "path": "strategies/approved_incubator/t3_braid_scalp_20260823_NQ_1h/strat.py",
-              "registered_utc": "2026-08-24T20:39:49+00:00",
+              "registered_utc": "2026-08-24T23:10:20+00:00",
               "registered_by": "backtest/promote.py",
-              "routing_basis": "routed by CERTIFIED CONTRACT: Incubator-Odd is the incubator account whose basket carries MNQ",
+              "routing_basis": "already registered on Incubator-Odd; a re-promotion does not move an account",
               "resolved_from": {
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
@@ -80,7 +80,7 @@
     "Incubator-Even": {
       "portfolio_id": "Incubator-Even",
       "account_type": "incubator_sim",
-      "target_account": "Incubator-Even",
+      "target_account": "SimIncubator2",
       "default_account_size": 50000,
       "risk_profile": {
         "fixed_risk_budget_usd": 250.0,
@@ -112,7 +112,7 @@
     "Prop-Odd": {
       "portfolio_id": "Prop-Odd",
       "account_type": "prop_eval",
-      "target_account": "Prop-Odd",
+      "target_account": "SimProp1",
       "default_account_size": 50000,
       "risk_profile": {
         "fixed_risk_budget_usd": 250.0,
@@ -145,7 +145,7 @@
     "Prop-Even": {
       "portfolio_id": "Prop-Even",
       "account_type": "prop_eval",
-      "target_account": "Prop-Even",
+      "target_account": "SimProp2",
       "default_account_size": 50000,
       "risk_profile": {
         "fixed_risk_budget_usd": 250.0,

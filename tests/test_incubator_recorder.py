@@ -95,7 +95,7 @@ ROUND_TURN = float(MNQ.round_turn_cost)
 CONFIG = {"portfolios": {
     "Incubator-Odd": {
         "portfolio_id": "Incubator-Odd",
-        "target_account": "Incubator-Odd",
+        "target_account": "SimIncubator1",
         "account_type": "incubator_sim",
         "active_strategies": ["alpha"],
         "strategy_allocations": {"alpha": {"symbol": "NQ"}},
@@ -103,7 +103,7 @@ CONFIG = {"portfolios": {
     },
     "Incubator-Even": {
         "portfolio_id": "Incubator-Even",
-        "target_account": "Incubator-Even",
+        "target_account": "SimIncubator2",
         "account_type": "incubator_sim",
         "active_strategies": [],
         "strategy_allocations": {},
@@ -123,7 +123,7 @@ def write_exec_log(directory: Path, name: str, rows: list[str]) -> Path:
 
 
 def fill(ts: str, action: str, qty: int, price: float,
-         instrument: str = "MNQ 12-26", account: str = "Sim101") -> str:
+         instrument: str = "MNQ 12-26", account: str = "SimIncubator1") -> str:
     return f"{ts},{instrument},{account},{action},{qty},{price}\n"
 
 
@@ -167,10 +167,10 @@ def test_a_json_export_reads_the_same_as_a_csv_one(tmp_path: Path) -> None:
     json_log = tmp_path / "b.json"
     json_log.write_text(json.dumps([
         {"Time": "2026-08-01 14:30:00", "Instrument": "MNQ 12-26",
-         "Account": "Sim101", "Action": "Buy", "Quantity": 1,
+         "Account": "SimIncubator1", "Action": "Buy", "Quantity": 1,
          "Price": 20000.0},
         {"Time": "2026-08-01 15:30:00", "Instrument": "MNQ 12-26",
-         "Account": "Sim101", "Action": "Sell", "Quantity": 1,
+         "Account": "SimIncubator1", "Action": "Sell", "Quantity": 1,
          "Price": 20010.0}]), encoding="utf-8")
 
     from_csv = built_for(csv_log)["trades"]["alpha"]
@@ -243,9 +243,9 @@ def test_a_rejected_fill_is_not_a_trade(tmp_path: Path) -> None:
     path = tmp_path / "exec.csv"
     path.write_text(
         "Time,Instrument,Account,Action,Quantity,Price,Status\n"
-        "2026-08-01 14:30:00,MNQ 12-26,Sim101,Buy,1,20000.0,Filled\n"
-        "2026-08-01 15:00:00,MNQ 12-26,Sim101,Sell,1,20005.0,Rejected\n"
-        "2026-08-01 15:30:00,MNQ 12-26,Sim101,Sell,1,20010.0,Filled\n",
+        "2026-08-01 14:30:00,MNQ 12-26,SimIncubator1,Buy,1,20000.0,Filled\n"
+        "2026-08-01 15:00:00,MNQ 12-26,SimIncubator1,Sell,1,20005.0,Rejected\n"
+        "2026-08-01 15:30:00,MNQ 12-26,SimIncubator1,Sell,1,20010.0,Filled\n",
         encoding="utf-8")
     trades = built_for(path)["trades"]["alpha"]
 
@@ -260,9 +260,9 @@ def test_an_unpairable_row_is_counted_rather_than_dropped(
     path = tmp_path / "exec.csv"
     path.write_text(
         "Time,Instrument,Account,Action,Quantity,Price\n"
-        "2026-08-01 14:30:00,MNQ 12-26,Sim101,Buy,1,20000.0\n"
-        "2026-08-01 15:00:00,MNQ 12-26,Sim101,Adjust,1,20005.0\n"
-        "2026-08-01 15:30:00,MNQ 12-26,Sim101,Sell,1,20010.0\n",
+        "2026-08-01 14:30:00,MNQ 12-26,SimIncubator1,Buy,1,20000.0\n"
+        "2026-08-01 15:00:00,MNQ 12-26,SimIncubator1,Adjust,1,20005.0\n"
+        "2026-08-01 15:30:00,MNQ 12-26,SimIncubator1,Sell,1,20010.0\n",
         encoding="utf-8")
     built = built_for(path)
 
@@ -314,9 +314,9 @@ def test_the_logs_own_commission_is_preferred_and_prorated(
     path = tmp_path / "exec.csv"
     path.write_text(
         "Time,Instrument,Account,Action,Quantity,Price,Commission\n"
-        "2026-08-01 14:30:00,MNQ 12-26,Sim101,Buy,2,20000.0,1.00\n"
-        "2026-08-01 15:30:00,MNQ 12-26,Sim101,Sell,1,20010.0,0.50\n"
-        "2026-08-01 16:30:00,MNQ 12-26,Sim101,Sell,1,20020.0,0.50\n",
+        "2026-08-01 14:30:00,MNQ 12-26,SimIncubator1,Buy,2,20000.0,1.00\n"
+        "2026-08-01 15:30:00,MNQ 12-26,SimIncubator1,Sell,1,20010.0,0.50\n"
+        "2026-08-01 16:30:00,MNQ 12-26,SimIncubator1,Sell,1,20020.0,0.50\n",
         encoding="utf-8")
     trades = built_for(path)["trades"]["alpha"]
 
@@ -365,20 +365,49 @@ def test_a_symbol_with_no_contract_spec_is_skipped_and_reported(
 # --------------------------------------------------------------------------
 
 def test_the_nt8_account_resolves_to_its_portfolio() -> None:
-    """Sim101 is the routing table's Incubator-Odd, and the map is the only
-    place the two are tied together."""
-    assert NT8_ACCOUNT_ALIASES["SIM101"] == "Incubator-Odd"
-    assert portfolio_for_account("Sim101", CONFIG) == "Incubator-Odd"
-    assert portfolio_for_account("sim102", CONFIG) == "Incubator-Even"
+    """
+    `SimIncubator1` is the routing table's `Incubator-Odd`, and the map is the
+    only place the two are tied together.
+
+    NinjaTrader prefixes a simulation account with `Sim`; the portfolio keeps
+    the Odd/Even id, which encodes the basket split. Matched case-insensitively
+    because an export's capitalisation is NT8's business, and an id or a
+    `target_account` resolves to itself so a log already written in
+    routing-table names needs no entry in the map at all.
+    """
+    assert NT8_ACCOUNT_ALIASES["SIMINCUBATOR1"] == "Incubator-Odd"
+    assert NT8_ACCOUNT_ALIASES["SIMPROP2"] == "Prop-Even"
+    assert portfolio_for_account("SimIncubator1", CONFIG) == "Incubator-Odd"
+    assert portfolio_for_account("simincubator2", CONFIG) == "Incubator-Even"
     assert portfolio_for_account("Incubator-Odd", CONFIG) == "Incubator-Odd"
-    assert portfolio_for_account("Sim999", CONFIG) is None
+    assert portfolio_for_account("SimNotOurs", CONFIG) is None
     assert portfolio_for_account("", CONFIG) is None
+
+
+def test_the_alias_map_and_the_routing_table_name_the_same_accounts() -> None:
+    """
+    THE TWO HALVES OF ONE ROUND TRIP, RECONCILED.
+
+    `target_account` is what the live loop SENDS an order to; the alias map is
+    what the recorder reads a fill BACK through. They are written in two files
+    and nothing but this makes them agree. An order sent to an account
+    NinjaTrader does not have is rejected at one end of the day; a fill
+    recorded under an account no portfolio claims is unattributed at the
+    other, and neither failure mentions the other file.
+    """
+    portfolios = config_loader.load_portfolio_config()["portfolios"]
+    for pid, portfolio in portfolios.items():
+        account = portfolio["target_account"]
+        assert NT8_ACCOUNT_ALIASES.get(account.upper()) == pid, (
+            f"{pid} executes on {account!r}, which the alias map resolves to "
+            f"{NT8_ACCOUNT_ALIASES.get(account.upper())!r}")
+    assert set(NT8_ACCOUNT_ALIASES.values()) == set(portfolios)
 
 
 def test_the_strategy_the_log_names_wins() -> None:
     """`format_crosstrade_json` already sends `strategy_tag`; when the export
     carries it back, nothing has to be inferred."""
-    row = {"symbol": "MNQ 12-26", "account": "Sim101", "strategy": "named_one"}
+    row = {"symbol": "MNQ 12-26", "account": "SimIncubator1", "strategy": "named_one"}
     strategy, portfolio, why = attribute(row, CONFIG)
     assert (strategy, portfolio) == ("named_one", "Incubator-Odd")
     assert why == "named by the log"
@@ -389,7 +418,7 @@ def test_a_row_naming_no_strategy_is_attributed_only_when_it_is_unambiguous(
     """One strategy on that account trading that contract is evidence. Two is
     a guess, and a trade filed under the wrong strategy is a promotion decided
     on somebody else's P&L."""
-    row = {"symbol": "MNQ 12-26", "account": "Sim101"}
+    row = {"symbol": "MNQ 12-26", "account": "SimIncubator1"}
     assert attribute(row, CONFIG)[0] == "alpha"
 
     crowded = json.loads(json.dumps(CONFIG))
@@ -407,15 +436,15 @@ def test_a_strategy_registered_on_the_full_size_contract_owns_the_micros_fills(
     """`alpha` is registered on NQ and the account fills MNQ. Same price
     series, and the order was always for the micro — resolved through the one
     table in `realtime/contract_alias.py`."""
-    assert attribute({"symbol": "MNQ 12-26", "account": "Sim101"},
+    assert attribute({"symbol": "MNQ 12-26", "account": "SimIncubator1"},
                      CONFIG)[0] == "alpha"
 
 
 def test_an_unknown_account_is_unattributed_rather_than_assigned(
         tmp_path: Path) -> None:
     log = write_exec_log(tmp_path, "exec.csv", [
-        fill("2026-08-01 14:30:00", "Buy", 1, 20000.0, account="Sim999"),
-        fill("2026-08-01 15:30:00", "Sell", 1, 20010.0, account="Sim999")])
+        fill("2026-08-01 14:30:00", "Buy", 1, 20000.0, account="SimNotOurs"),
+        fill("2026-08-01 15:30:00", "Sell", 1, 20010.0, account="SimNotOurs")])
     built = built_for(log)
 
     assert built["trades"] == {}
@@ -435,7 +464,7 @@ def test_a_trade_level_export_is_taken_as_the_round_turn_it_is(
     path.write_text(
         "Strategy,Instrument,Account,Entry time,Exit time,Quantity,Profit,"
         "Commission,Action\n"
-        "alpha,MNQ 12-26,Sim101,2026-08-01 14:30:00,2026-08-01 15:30:00,"
+        "alpha,MNQ 12-26,SimIncubator1,2026-08-01 14:30:00,2026-08-01 15:30:00,"
         "1,40.00,1.40,Buy\n",
         encoding="utf-8")
     trades = built_for(path)["trades"]["alpha"]
@@ -450,7 +479,7 @@ def test_a_declared_net_figure_is_not_charged_again(tmp_path: Path) -> None:
     path = tmp_path / "trades.csv"
     path.write_text(
         "Strategy,Instrument,Account,Exit time,Quantity,Net_pnl\n"
-        "alpha,MNQ 12-26,Sim101,2026-08-01 15:30:00,1,38.60\n",
+        "alpha,MNQ 12-26,SimIncubator1,2026-08-01 15:30:00,1,38.60\n",
         encoding="utf-8")
     trade = built_for(path)["trades"]["alpha"][0]
 
@@ -648,7 +677,7 @@ def test_cli_exits_2_when_rows_could_not_be_used(cli_workspace) -> None:
     trades on the board and nobody asking why."""
     config_path, ledger_path, logs = cli_workspace
     write_exec_log(logs, "orphan.csv", [
-        fill("2026-08-02 14:30:00", "Buy", 1, 20000.0, account="Sim999")])
+        fill("2026-08-02 14:30:00", "Buy", 1, 20000.0, account="SimNotOurs")])
     proc = _run_cli("--logs", str(logs), "--config", str(config_path),
                     "--ledger", str(ledger_path))
 

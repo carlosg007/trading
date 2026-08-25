@@ -592,8 +592,12 @@ class PortfolioManager:
         Exactly the five keys `live.dispatcher.format_crosstrade_payload`
         produces — `account`, `action`, `symbol`, `orderType`, `quantity` — and
         nothing else, so the result can be POSTed as it stands. `account` is
-        the portfolio's `target_account`: `Incubator-Odd`, `Incubator-Even`,
-        `Prop-Odd` or `Prop-Even`.
+        the portfolio's `target_account` - NinjaTrader's name for the account
+        and NOT the portfolio id: `SimIncubator1`, `SimIncubator2`, `SimProp1`
+        or `SimProp2`, for `Incubator-Odd`, `Incubator-Even`, `Prop-Odd` and
+        `Prop-Even` respectively. The field is read from the routing table, so
+        renaming an account there is the whole change; an order addressed to a
+        portfolio id would be rejected by a broker that has no such account.
 
         A DECLINED POSITION IS SIMPLY ABSENT, which is why `build_order_plan`
         exists: an empty list here cannot distinguish a basket standing down

@@ -109,19 +109,19 @@ def restore(original):
 
 def test_payload_shape():
     print("\nPAYLOAD STRUCTURE")
-    p = format_crosstrade_payload("es", "buy", 2, account_id="Sim101")
+    p = format_crosstrade_payload("es", "buy", 2, account_id="SimIncubator1")
     check("exact schema and key order",
           list(p.keys()) == ["account", "action", "symbol", "orderType", "quantity"],
           str(list(p.keys())))
     check("values upper-cased, quantity int",
-          p == {"account": "Sim101", "action": "BUY", "symbol": "ES",
+          p == {"account": "SimIncubator1", "action": "BUY", "symbol": "ES",
                 "orderType": "MARKET", "quantity": 2}, json.dumps(p))
     check("quantity is a real int, not a str",
           isinstance(p["quantity"], int) and not isinstance(p["quantity"], bool))
     check("payload is JSON-serialisable", json.loads(json.dumps(p)) == p)
 
     p2 = format_crosstrade_payload("  nq  ", "SeLl", "3", order_type="market",
-                                   account_id="Sim101")
+                                   account_id="SimIncubator1")
     check("whitespace stripped, mixed case normalised, numeric string coerced",
           p2["symbol"] == "NQ" and p2["action"] == "SELL" and p2["quantity"] == 3,
           json.dumps(p2))
@@ -150,7 +150,7 @@ def test_payload_rejections():
         ("STOP without a price", ("ES", "BUY", 1), {"order_type": "STOP"}),
     ]
     for name, args, kw in bad:
-        kw = dict(kw, account_id="Sim101")
+        kw = dict(kw, account_id="SimIncubator1")
         try:
             format_crosstrade_payload(*args, **kw)
             check(f"rejects {name}", False, "no exception raised")
@@ -167,7 +167,7 @@ def test_payload_rejections():
 def test_send_success():
     print("\nDISPATCH - 200")
     original = dispatcher._urlopen
-    payload = format_crosstrade_payload("ES", "BUY", 1, account_id="Sim101")
+    payload = format_crosstrade_payload("ES", "BUY", 1, account_id="SimIncubator1")
     opener = with_opener(_FakeResponse(200, b'{"status":"accepted"}'))
     try:
         res = send_execution_signal(payload, webhook_url=LIVE_URL, timeout_seconds=2.0)
@@ -195,7 +195,7 @@ def test_send_http_error():
                                  io.BytesIO(b"upstream exploded"))
     with_opener(err)
     try:
-        res = send_execution_signal({"account": "Sim101", "action": "BUY"},
+        res = send_execution_signal({"account": "SimIncubator1", "action": "BUY"},
                                     webhook_url=LIVE_URL, timeout_seconds=2.0)
     finally:
         restore(original)
@@ -268,7 +268,8 @@ def test_placeholder_is_not_dispatchable():
 
     cfg = load_config()
     check("shipped config still carries the required keys and a 2.0s timeout",
-          float(cfg["timeout_seconds"]) == 2.0 and cfg["account_id"] == "Sim101"
+          float(cfg["timeout_seconds"]) == 2.0
+          and cfg["account_id"] == "SimIncubator1"
           and cfg["environment"] == "incubator_sim")
 
 

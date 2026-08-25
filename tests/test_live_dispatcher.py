@@ -64,6 +64,14 @@ REAL_CONFIG = REPO_ROOT / "config" / "portfolios.json"
 PERMITTED_QUADRANT = "Q4"
 PERMITTED_LABEL = "Q4_LOW_VOL_MEAN_REVERSION"
 
+# The NT8 account `Incubator-Odd` executes on, READ from the routing table
+# rather than retyped. This suite asserts that the wire carries whatever
+# `target_account` says; `tests/test_portfolio_config.py` is where that field
+# is checked against the specification. Retyped here, this suite would fail a
+# second time for the same rename, and one of the two failures would be noise.
+ODD_EXECUTION_ACCOUNT = json.loads(REAL_CONFIG.read_text())[
+    "portfolios"]["Incubator-Odd"]["target_account"]
+
 # The stand-down cases therefore run on the EVEN track, which still declares
 # two. MGC rather than MES because the sizing constants above are MNQ's and
 # these cases assert a DECLINE - no contract count is reached at all.
@@ -292,7 +300,11 @@ def test_the_same_strategy_trades_once_its_quadrant_is_permitted(tmp_path):
 
     assert len(report["payloads"]) == 1
     assert report["payloads"][0]["action"] == "BUY"
-    assert report["payloads"][0]["account"] == "Incubator-Odd"
+    # The ACCOUNT on the wire is the portfolio's `target_account`, which is
+    # NinjaTrader's name for it and not the portfolio id: NT8 prefixes a
+    # simulation account with `Sim`. An order addressed to the id would be
+    # rejected by a broker that has no such account.
+    assert report["payloads"][0]["account"] == ODD_EXECUTION_ACCOUNT
     assert report["declines"] == []
 
 
@@ -638,7 +650,7 @@ def test_dry_run_formats_both_wire_forms_and_sends_nothing(tmp_path):
     # The plain-text form, field for field.
     assert attempt["command"].startswith("key=")
     assert "command=place;" in attempt["command"]
-    assert "account=Incubator-Odd;" in attempt["command"]
+    assert f"account={ODD_EXECUTION_ACCOUNT};" in attempt["command"]
     assert "instrument=MNQ;" in attempt["command"]
     assert "action=BUY;" in attempt["command"]
     assert "order_type=MARKET;" in attempt["command"]
@@ -1144,7 +1156,7 @@ def test_a_muted_strategy_still_flattens_a_position_this_process_opened(tmp_path
     assert len(sender.calls) == 1
     body = sender.calls[0]["payload"]
     assert body["command"] == "flatten"
-    assert body["account"] == "Incubator-Odd"
+    assert body["account"] == ODD_EXECUTION_ACCOUNT
     assert body["instrument"] == "MNQ"
     assert "action" not in body and "qty" not in body
 
