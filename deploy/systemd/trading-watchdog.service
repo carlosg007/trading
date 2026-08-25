@@ -37,6 +37,9 @@ PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=/home/cgrullon/src/trading/data /home/cgrullon/src/trading/logs
+# Numba's cache — see NUMBA_CACHE_DIR in trading.env. Without it the
+# read-only home makes pandas_ta's @njit(cache=True) RAISE on import.
+ReadWritePaths=/home/cgrullon/src/trading/.cache
 RestrictSUIDSGID=yes
 LockPersonality=yes
 

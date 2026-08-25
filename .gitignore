@@ -31,3 +31,6 @@ data/live_regime_state.json
 models/*.pkl
 models/*.joblib
 models/*.onnx
+
+# Numba on-disk cache — see NUMBA_CACHE_DIR in deploy/systemd/trading.env.
+.cache/
