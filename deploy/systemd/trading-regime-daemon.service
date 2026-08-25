@@ -1,0 +1,47 @@
+# The regime classifier. Publishes data/live_regime_state.json, which the
+# execution loop READS and never writes.
+#
+# Two processes, one direction: a slow indicator pass can never stall a
+# dispatch, and the loop's view of the market is a file somebody can inspect
+# after the fact rather than a value that existed for one millisecond inside a
+# process that has since exited.
+
+[Unit]
+Description=Trading regime daemon (publishes the live quadrant)
+Documentation=file:///home/cgrullon/src/trading/deploy/RUNBOOK.md
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=/mnt/backtest
+
+[Service]
+Type=oneshot
+User=cgrullon
+Group=cgrullon
+WorkingDirectory=/home/cgrullon/src/trading
+EnvironmentFile=-/home/cgrullon/src/trading/deploy/systemd/trading.env
+
+# --publish is what reads bars and writes the state file. Without it the
+# command reports what is wired up and touches nothing.
+ExecStart=/home/cgrullon/src/trading/.venv/bin/python3 \
+    /home/cgrullon/src/trading/realtime/regime_daemon.py \
+    --publish --feed auto --tf 1h --bars 400
+
+TimeoutStopSec=60
+LimitNOFILE=65536
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/cgrullon/src/trading/data /home/cgrullon/src/trading/logs
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+StandardOutput=append:/home/cgrullon/src/trading/logs/regime_daemon.log
+StandardError=append:/home/cgrullon/src/trading/logs/regime_daemon.err
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,22 @@
+# Republish the regime every five minutes.
+#
+# A TIMER rather than a loop inside the daemon: the classifier is a pure
+# function of the newest bars, so a run that dies is a run that is simply
+# repeated, and there is no long-lived process holding a stale reading in
+# memory. Persistent=true republishes once after a reboot rather than waiting
+# for the next boundary with the loop reading a state file from before the
+# outage.
+
+[Unit]
+Description=Republish the live regime every 5 minutes
+Documentation=file:///home/cgrullon/src/trading/deploy/RUNBOOK.md
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Persistent=true
+Unit=trading-regime-daemon.service
+
+[Install]
+WantedBy=timers.target

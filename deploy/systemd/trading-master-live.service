@@ -1,0 +1,96 @@
+# The execution loop. Signals -> gates -> risk firewall -> CrossTrade.
+#
+# INSTALL
+#   sudo cp deploy/systemd/*.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now trading-master-live
+#
+# THIS UNIT SHIPS IN DRY RUN. `--live` is the only flag that arms the socket,
+# and arming it is an edit somebody makes on purpose, on the box, with the
+# runbook open. A unit file that shipped live would arm real money on a
+# `systemctl enable` typed from memory.
+
+[Unit]
+Description=Trading execution loop (master_live)
+Documentation=file:///home/cgrullon/src/trading/deploy/RUNBOOK.md
+# The regime daemon publishes the state file this loop READS. Wanted, not
+# Requires: a loop with no regime state declines every signal and says so on
+# every line, which is the correct behaviour and is better than not starting.
+Wants=trading-regime-daemon.service
+After=network-online.target trading-regime-daemon.service
+Wants=network-online.target
+# The lake and the NT8 spool both live on the NFS mount. Starting before it is
+# mounted gives a loop that reads nothing and reports a quiet market.
+RequiresMountsFor=/mnt/backtest
+
+# Five restarts inside five minutes is not a transient fault, it is a broken
+# deploy: stop and stay stopped so somebody looks, rather than crash-looping
+# against a broker all night. These live in [Unit], NOT [Service] — systemd
+# silently IGNORES them under [Service] and the rate limit then does nothing
+# while looking configured. `systemd-analyze verify` is what says so.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=cgrullon
+Group=cgrullon
+WorkingDirectory=/home/cgrullon/src/trading
+
+# Credentials come from the .env FILE, read directly by resolve_credentials and
+# deliberately never placed in the environment - everything in the environment
+# is inherited by every subprocess, which is how a broker key reaches an
+# unrelated tool's debug output. EnvironmentFile carries only non-secret paths.
+EnvironmentFile=-/home/cgrullon/src/trading/deploy/systemd/trading.env
+
+ExecStart=/home/cgrullon/src/trading/.venv/bin/python3 \
+    /home/cgrullon/src/trading/master_live.py \
+    --dry-run \
+    --tf 1h \
+    --feed auto \
+    --interval-sec 60 \
+    --session-cutoff-utc 20:55 \
+    --max-session-loss-usd 1000
+
+# SIGTERM, then time to finish the cycle it is in. A cycle is signals -> gates
+# -> sizing -> dispatch, and killing it between the send and the record leaves
+# an order on a broker with nothing on disk saying so. 90s is generous against
+# a 60s interval plus a 2s socket timeout.
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStopSec=90
+# A second signal is what the code treats as "stop now"; systemd sends SIGKILL
+# only after the timeout above.
+SendSIGKILL=yes
+
+Restart=always
+RestartSec=10s
+
+LimitNOFILE=65536
+# Never restart into a busy market on a schedule nobody chose.
+RestartPreventExitStatus=2
+
+# --- sandboxing -----------------------------------------------------------
+# The loop reads the repo and the NFS mount and writes state, logs and the
+# ledger. It has no business anywhere else on the filesystem.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/cgrullon/src/trading/data /home/cgrullon/src/trading/logs
+ReadWritePaths=/mnt/backtest/artifacts
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=no
+# numpy/numba need it; denying it breaks the numeric stack rather than hardening it.
+
+StandardOutput=append:/home/cgrullon/src/trading/logs/master_live.log
+StandardError=append:/home/cgrullon/src/trading/logs/master_live.err
+
+[Install]
+WantedBy=multi-user.target

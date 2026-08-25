@@ -96,6 +96,10 @@ from realtime.live_dispatcher import (DEFAULT_ENV_FILE,          # noqa: E402
                                       LiveDispatchError,
                                       LiveExecutionDispatcher)
 from realtime.feed import FeedError, resolve_feed                # noqa: E402
+from realtime.lifecycle import (EngineState,                     # noqa: E402
+                                emergency_halt,
+                                startup_report)
+from realtime.risk_firewall import RiskFirewall                  # noqa: E402
 from realtime.regime_reader import DEFAULT_STATE_FILE            # noqa: E402
 
 DEFAULT_INTERVAL_S = 60
@@ -231,6 +235,22 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--max-attempts", type=int, default=DEFAULT_MAX_ATTEMPTS,
                     help="attempts for failures that PROVE nothing was sent. "
                          "A timeout is never retried")
+    ap.add_argument("--state-path", default=None,
+                    help="durable record of what this process has SENT "
+                         "(default data/engine_state.json, $BT_ENGINE_STATE). "
+                         "It is what stops a restart re-sending an order for "
+                         "a bar it already acted on")
+    ap.add_argument("--session-cutoff-utc", default=None,
+                    help="HH:MM UTC after which no NEW entry is sent, e.g. "
+                         "20:55. Exits are unaffected")
+    ap.add_argument("--max-session-loss-usd", type=float, default=None,
+                    help="halt new orders once THIS LOOP has booked this much "
+                         "realised loss today. A local circuit breaker, not "
+                         "the funding program's rule — CrossTrade NAM enforces "
+                         "that against the live balance")
+    ap.add_argument("--no-risk-firewall", action="store_true",
+                    help="DISABLE the pre-trade risk gate. There is no good "
+                         "reason to pass this against a live account")
     ap.add_argument("--no-verify-hash", action="store_true",
                     help="skip the meta.json SHA-256 check on strategy code. "
                          "Do not use this to trade an edited module")
@@ -260,8 +280,30 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         parser.error(str(exc))
 
+    # The durable record and the pre-trade gate, built BEFORE the dispatcher
+    # so an unreadable state file stops the process here rather than at the
+    # first order. `EngineState` refuses to start on a corrupt file precisely
+    # because "this process has sent nothing" is the belief that re-sends an
+    # order it already placed.
+    try:
+        engine_state = EngineState(args.state_path)
+    except RuntimeError as exc:
+        print(f"[master_live] REFUSING TO START: {exc}", file=sys.stderr)
+        return 2
+
+    firewall = None
+    if not args.no_risk_firewall:
+        limits = {}
+        if args.session_cutoff_utc:
+            limits["session_cutoff_utc"] = args.session_cutoff_utc
+        if args.max_session_loss_usd is not None:
+            limits["max_session_loss_usd"] = args.max_session_loss_usd
+        firewall = RiskFirewall(limits=limits or None, state=engine_state)
+
     try:
         dispatcher = LiveExecutionDispatcher(
+            firewall=firewall,
+            state=engine_state,
             config_path=args.config,
             state_file=args.state_file,
             dry_run=dry_run,
@@ -288,6 +330,13 @@ def main(argv: list[str] | None = None) -> int:
 
     print(dispatcher.describe(), flush=True)
     print(f"[master_live] bar feed: {feed.describe()}", flush=True)
+    print(startup_report(engine_state), flush=True)
+    if firewall is not None:
+        print(firewall.describe(), flush=True)
+    else:
+        print("[master_live] RISK FIREWALL DISABLED (--no-risk-firewall). "
+              "Nothing checks an order between the sizer and the socket.",
+              flush=True)
     if not dry_run:
         print("[master_live] LIVE MODE — orders will be sent.", flush=True)
 
@@ -341,8 +390,16 @@ def main(argv: list[str] | None = None) -> int:
             bars = {}
 
         if bars:
+            before = len(dispatcher.risk_refusals)
             report = dispatcher.process_bar_cycle(bars)
             print(dispatcher.describe_cycle(report), flush=True)
+            for refusal in dispatcher.risk_refusals[before:]:
+                # A risk refusal is not a decline and not an error: the
+                # strategy asked, the gate said no, and the reason is the
+                # thing an operator needs on the console rather than in a file.
+                print(f"       RISK BLOCKED {refusal['symbol']} "
+                      f"[{refusal['rule']}] {refusal['detail']}", flush=True)
+                failures += 1
             if not report.get("ok", True):
                 failures += 1
         else:

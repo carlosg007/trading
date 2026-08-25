@@ -1,0 +1,47 @@
+# The watchdog. Answers one question the execution loop cannot answer about
+# itself: is it still seeing the market?
+#
+# A loop that is UP and reading a dead feed prints "no signal" on every line
+# and looks exactly like a quiet Tuesday. The watchdog checks the facts that
+# reveal that - the age of the published regime bar, the age of the newest
+# spooled bar, whether the loop's own state file is advancing - and alerts.
+#
+# It never places or cancels an order. Escalation is: alert, and on a hard
+# condition arm the kill switch. Flattening is a human decision made with the
+# runbook open.
+
+[Unit]
+Description=Trading watchdog (feed staleness and process health)
+Documentation=file:///home/cgrullon/src/trading/deploy/RUNBOOK.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=cgrullon
+Group=cgrullon
+WorkingDirectory=/home/cgrullon/src/trading
+EnvironmentFile=-/home/cgrullon/src/trading/deploy/systemd/trading.env
+
+ExecStart=/home/cgrullon/src/trading/.venv/bin/python3 \
+    /home/cgrullon/src/trading/scripts/watchdog.py \
+    --max-regime-write-age-sec 1800 \
+    --max-bar-age-multiple 2.0 \
+    --tf 1h
+
+TimeoutStopSec=30
+LimitNOFILE=4096
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/cgrullon/src/trading/data /home/cgrullon/src/trading/logs
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+StandardOutput=append:/home/cgrullon/src/trading/logs/watchdog.log
+StandardError=append:/home/cgrullon/src/trading/logs/watchdog.err
+
+[Install]
+WantedBy=multi-user.target

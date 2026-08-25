@@ -1,0 +1,13 @@
+[Unit]
+Description=Run the trading watchdog every 2 minutes
+Documentation=file:///home/cgrullon/src/trading/deploy/RUNBOOK.md
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=2min
+AccuracySec=15s
+Persistent=false
+Unit=trading-watchdog.service
+
+[Install]
+WantedBy=timers.target

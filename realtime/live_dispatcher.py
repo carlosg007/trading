@@ -139,6 +139,7 @@ from realtime.contract_alias import resolve_parent                 # noqa: E402
 from realtime.regime_daemon import (MasterRegimeDaemon,            # noqa: E402
                                     MLGateError)
 from realtime import regime_reader                                # noqa: E402
+from realtime.risk_firewall import RiskViolation                   # noqa: E402
 from realtime.regime_reader import (DEFAULT_STATE_FILE,            # noqa: E402
                                     RegimeStateError,
                                     get_current_regime)
@@ -364,7 +365,9 @@ class LiveExecutionDispatcher:
                  timeout_seconds: float = DEFAULT_TIMEOUT_S,
                  max_attempts: int = DEFAULT_MAX_ATTEMPTS,
                  sender: Callable | None = None,
-                 verify_code_hash: bool = True) -> None:
+                 verify_code_hash: bool = True,
+                 firewall: Any | None = None,
+                 state: Any | None = None) -> None:
         self.config_path = config_path
         self.state_file = state_file
         self.dry_run = bool(dry_run)
@@ -375,6 +378,14 @@ class LiveExecutionDispatcher:
         # The default IS `live.dispatcher`. An injected sender is how the tests
         # stay off the network; it is not an alternative transport.
         self._sender = sender or send_execution_signal
+
+        # The pre-trade gate and the durable record. Both default to None so a
+        # test or a one-off script constructs a dispatcher exactly as before;
+        # `master_live.py` supplies them, and that is the path that sends
+        # orders.
+        self.firewall = firewall
+        self.state = state
+        self.risk_refusals: list[dict[str, Any]] = []
 
         self.config = load_portfolio_config(config_path)
         self.portfolios = self.config["portfolios"]
@@ -672,8 +683,10 @@ class LiveExecutionDispatcher:
         # byte-comparable with what the manager produces for the same input.
         for record in report["plan"]:
             if record["payload"] is not None:
-                attempt = self.dispatch_order(record["payload"],
-                                              strategy_tag=_strategy_tag(record))
+                attempt = self.dispatch_order(
+                    record["payload"],
+                    strategy_tag=_strategy_tag(record),
+                    bar_ts=str(record.get("bar_ts") or ""))
                 report["dispatches"].append(attempt)
                 # The book records a position only on a send that SUCCEEDED,
                 # and only for a real side and size. Recording on intent would
@@ -1105,7 +1118,8 @@ class LiveExecutionDispatcher:
         return reading
 
     # -- dispatch ---------------------------------------------------------
-    def dispatch_order(self, payload: dict, strategy_tag: str = "") -> dict:
+    def dispatch_order(self, payload: dict, strategy_tag: str = "",
+                       bar_ts: str = "") -> dict:
         """
         Format one `PortfolioManager` payload for CrossTrade and send it.
 
@@ -1136,6 +1150,32 @@ class LiveExecutionDispatcher:
             "action": payload.get("action"), "quantity": payload.get("quantity"),
             "attempts": 0, "ok": False, "error": None,
         }
+
+        # THE PRE-TRADE GATE, INSIDE THE SEND PATH. Every order this repository
+        # places goes through this method, so the firewall sits here rather
+        # than in the caller: a gate a caller can forget is a gate that will be
+        # forgotten the day somebody adds a second dispatch path in a hurry. A
+        # refusal is a RECORD, not an exception thrown at the loop - one
+        # blocked order must not end a cycle that has others to place, and the
+        # record is the evidence that it was blocked and why.
+        if self.firewall is not None:
+            try:
+                self.firewall.check_order(payload, strategy_tag=strategy_tag,
+                                          bar_ts=bar_ts)
+            except RiskViolation as exc:
+                record.update({"ok": False, "blocked_by": exc.rule,
+                               "error": f"RISK REFUSED [{exc.rule}] {exc.detail}",
+                               "elapsed_ms": round(
+                                   (time.perf_counter() - started) * 1000, 1)})
+                self.risk_refusals.append(record)
+                return record
+
+        if self.state is not None and strategy_tag and bar_ts:
+            # Recorded BEFORE the socket. If the process dies between the two,
+            # the restart declines to re-send: a missed entry is a trade not
+            # taken, a double entry is a position nothing here can unwind.
+            self.state.record_dispatch(strategy_tag, payload.get("symbol", ""),
+                                       bar_ts, payload)
 
         try:
             command = format_crosstrade_command(
@@ -1188,6 +1228,10 @@ class LiveExecutionDispatcher:
                 "not retried: the failure does not prove the order never "
                 "reached the broker, and a retried market order is a duplicate "
                 "position this process cannot undo")
+
+        if self.state is not None and strategy_tag and bar_ts:
+            self.state.record_order(record, strategy=strategy_tag,
+                                    bar_ts=bar_ts)
 
         record["elapsed_ms"] = round((time.perf_counter() - started) * 1000, 1)
         return record
