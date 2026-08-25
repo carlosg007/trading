@@ -1,0 +1,78 @@
+# The push receiver. NT8 POSTs one closed bar; this appends it to the spool.
+#
+# INSTALL
+#   sudo cp deploy/systemd/trading-nt8-listener.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now trading-nt8-listener
+#
+# THIS UNIT SENDS NOTHING. It receives, validates and appends. `live/
+# dispatcher.py` remains the only module in this repository that puts an order
+# on the wire.
+
+[Unit]
+Description=NT8 Live Bar HTTP Listener & Spooler
+Documentation=file:///home/cgrullon/src/trading/deploy/RUNBOOK.md
+After=network.target
+# The spool is on the NFS mount. Without this the listener can start BEFORE
+# /mnt/backtest is mounted, create the spool directory on the local root
+# filesystem underneath the mountpoint, and write every bar there — where the
+# mount then HIDES them. The feed reads an empty directory, the listener
+# reports bars accepted, and both are telling the truth.
+RequiresMountsFor=/mnt/backtest
+
+[Service]
+Type=simple
+User=cgrullon
+Group=cgrullon
+WorkingDirectory=/home/cgrullon/src/trading
+
+# BT_NT8_SPOOL lives here, and is what points this at the same directory
+# realtime/nt8_feed.py reads. PYTHONUNBUFFERED is set here too; it is repeated
+# below because a receiver whose output is a buffered pipe shows an operator
+# nothing for 4KB, and the journal is the only view this unit has.
+EnvironmentFile=-/home/cgrullon/src/trading/deploy/systemd/trading.env
+Environment=PYTHONUNBUFFERED=1
+
+ExecStart=/home/cgrullon/src/trading/.venv/bin/python3 \
+    /home/cgrullon/src/trading/realtime/nt8_bar_listener.py \
+    --port 8000
+
+# Always. A receiver that stays down is a feed that goes quiet, and a quiet
+# feed reads exactly like a quiet market — see the watchdog. RestartSec=5 is
+# under systemd's DefaultStartLimitIntervalSec=10s/Burst=5 only in the sense
+# that five restarts take 25s, so a genuine crash loop does NOT latch the unit
+# off. That is deliberate: for this unit, retrying forever beats staying down.
+Restart=always
+RestartSec=5
+
+KillSignal=SIGTERM
+TimeoutStopSec=20
+LimitNOFILE=65536
+
+# --- sandboxing -----------------------------------------------------------
+# It reads the repo and writes exactly one directory: the spool.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/mnt/backtest/artifacts
+# See NUMBA_CACHE_DIR in trading.env — the read-only home makes pandas_ta's
+# @njit(cache=True) RAISE on import for anything that pulls the numeric stack.
+ReadWritePaths=/home/cgrullon/src/trading/.cache
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+# The JOURNAL, not append: files like the sibling units. uvicorn logs a line
+# per request and the journal already rotates and rate-limits; `journalctl -u
+# trading-nt8-listener` is also the only place a bind failure shows up, since
+# a process that dies before opening its log file writes nothing to it.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
