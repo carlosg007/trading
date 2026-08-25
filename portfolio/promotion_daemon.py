@@ -224,6 +224,21 @@ def load_ledger(ledger_path: str | Path = DEFAULT_LEDGER_PATH) -> dict:
     return blob
 
 
+def write_ledger(blob: dict, ledger_path: str | Path = DEFAULT_LEDGER_PATH) -> Path:
+    """
+    Write the incubator ledger atomically, and return where it went.
+
+    The public half of `_atomic_write_json`, because `portfolio/
+    incubator_recorder.py` also writes this file and a second writer that
+    rolled its own would be the one that leaves a truncated ledger behind: a
+    process killed mid-write would take every recorded trade with it, and the
+    next run would read the short file as a strategy that has barely traded.
+    """
+    path = _resolve(ledger_path)
+    _atomic_write_json(path, blob)
+    return path
+
+
 def load_raw_config(config_path: str | Path = DEFAULT_CONFIG_PATH) -> dict:
     """
     The routing table exactly as written, with no `derived` or `reconciliation`

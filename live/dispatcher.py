@@ -534,3 +534,25 @@ def _reconcile(per_symbol: dict, backtest_trades: Iterable | None) -> dict | Non
         "note": ("count reconciliation only - no per-trade matching, NT8's export "
                  "carries no shared order id"),
     }
+
+
+# --------------------------------------------------------------------------
+# the NT8 log-reading primitives, shared
+# --------------------------------------------------------------------------
+# `portfolio/incubator_recorder.py` turns the SAME rows into ledger trades, so
+# these four stopped being private the moment it existed. Public names rather
+# than a second consumer reaching for the underscored ones, because the alias
+# table and the fill test now have two callers and an edit to either changes
+# both: a spelling this module stops recognising is a fill the recorder stops
+# recording, and the ledger would simply be short a trade with nothing saying
+# so.
+#
+# One reader, one alias table, one definition of "this row was filled". A
+# recorder with its own copy would drift, and the drift shows up as a promotion
+# decision taken on a trade list that disagrees with the sync report printed
+# beside it.
+read_fill_log = _read_log
+normalize_fill_row = _norm_row
+parse_log_number = _as_float
+fill_status = _is_filled
+FILL_ALIASES = _ALIASES
