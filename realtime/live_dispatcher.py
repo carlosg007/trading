@@ -58,10 +58,12 @@ SHA-256 of the file that was backtested, and this module refuses to trade a
 file provably IS the file the metrics describe; a live loop that ignored it
 would be trading an edited strategy under a certified strategy's name.
 
-**The certified symbols are checked too**, through the same micro/full-size
-alias the regime daemon uses (`MNQ`->`NQ`). A strategy certified on ZS routed
-into a basket holding MNQ is refused: same price series is a defensible alias,
-same portfolio is not.
+**The certified symbols are checked too**, through the shared micro/full-size
+table in `realtime/contract_alias.py` (`MNQ`->`NQ`) - the same one the regime
+reader resolves a micro's quadrant with, so a certification and a regime
+reading can never disagree about which contract a symbol means. A strategy
+certified on ZS routed into a basket holding MNQ is refused: same price series
+is a defensible alias, same portfolio is not.
 
 THE STOP MULTIPLIER, WHEN CONTRIBUTORS DISAGREE
 ===============================================
@@ -133,8 +135,8 @@ from realtime.crosstrade_formatter import (                        # noqa: E402
     format_flatten_json,
     redact,
 )
+from realtime.contract_alias import resolve_parent                 # noqa: E402
 from realtime.regime_daemon import (MasterRegimeDaemon,            # noqa: E402
-                                    THETA_ANCHOR_ALIAS,
                                     MLGateError)
 from realtime import regime_reader                                # noqa: E402
 from realtime.regime_reader import (DEFAULT_STATE_FILE,            # noqa: E402
@@ -289,11 +291,13 @@ class StrategyHandle:
         """
         Whether this strategy's certification covers `symbol`.
 
-        Resolved through the same micro/full-size alias the regime daemon uses:
+        Resolved through `realtime/contract_alias.py`, the one micro/full-size
+        table the regime daemon, the reader and the portfolio loader all use:
         MNQ and NQ are the same price series at the same tick size, so a
-        strategy certified on NQ may trade MNQ. Anything else is refused - a
-        strategy certified on soybeans has no evidence about a Nasdaq micro,
-        and the only thing that put them together is a line in a config file.
+        certification on ['NQ'] authorizes trading MNQ, and one on ['MNQ']
+        authorizes NQ. Anything else is refused - a strategy certified on
+        soybeans has no evidence about a Nasdaq micro, and the only thing that
+        put them together is a line in a config file.
 
         A strategy declaring NO symbols is allowed through with a note. Several
         pre-existing modules predate the field, and refusing them would make
@@ -302,12 +306,12 @@ class StrategyHandle:
         if not self.certified_symbols:
             return True, "meta.json declares no `symbols`; certification scope unknown"
         sym = str(symbol).upper()
-        parent = THETA_ANCHOR_ALIAS.get(sym, sym)
+        parent = resolve_parent(sym)
         for certified in self.certified_symbols:
             c = str(certified).upper()
             if c == sym:
                 return True, f"certified on {c}"
-            if THETA_ANCHOR_ALIAS.get(c, c) == parent:
+            if resolve_parent(c) == parent:
                 return True, f"certified on {c}, same price series as {sym}"
         return False, (f"certified on {list(self.certified_symbols)}, which "
                        f"does not cover {sym} (nor as a micro of it)")
@@ -495,6 +499,12 @@ class LiveExecutionDispatcher:
         cycle is made against ONE snapshot. Re-reading per strategy would let
         the daemon publish mid-cycle and leave two strategies on the same
         symbol gated by different quadrants, with no record that they were.
+
+        Keyed on the BASKET's symbol - the micro that will actually be traded.
+        The reader resolves a micro to its full-size parent (MNQ -> NQ, the
+        contract the daemon publishes) and stamps `resolved_symbol` on the
+        reading, so the mapping is visible on every decline rather than being
+        a lookup the operator has to do in their head.
         """
         readings, missing = {}, {}
         for symbol in sorted(set(symbols)):
@@ -775,8 +785,14 @@ class LiveExecutionDispatcher:
         # ids, and a config edited to hold labels must not silently gate to
         # nothing.
         label = reading.get("regime")
+        # Named as "MNQ (regime read from NQ)" when the alias was used: the
+        # order is still for the micro, and an operator reading a stand-down
+        # has to be able to see which tape the quadrant was measured on.
+        measured = reading.get("resolved_symbol") or symbol
+        named = (symbol if measured == symbol
+                 else f"{symbol} (regime read from {measured})")
         if quadrant not in permitted and label not in permitted:
-            decline(f"{symbol} is in {quadrant} ({label}); "
+            decline(f"{named} is in {quadrant} ({label}); "
                     f"{handle.portfolio_id} trades {permitted}. Standing down "
                     f"rather than trading the environment nobody certified.",
                     quadrant=quadrant)

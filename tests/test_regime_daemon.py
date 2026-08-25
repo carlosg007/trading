@@ -1286,6 +1286,88 @@ def test_the_reader_answers_the_switchboard_without_importing_the_daemon(tmp_pat
     assert list(regime_reader.get_all_strategy_statuses(sf)) == [SWITCH_ID]
 
 
+# -- the reader's micro -> full-size resolution ------------------------------
+# The execution tier trades MNQ/MES/MCL/MGC and the daemon publishes NQ/ES/CL/
+# GC, so without this the dispatcher declined every basket symbol with "no live
+# regime reading" on a state file that held the answer - the same stand-down a
+# dead daemon produces, and indistinguishable from it on a console.
+def test_the_reader_answers_a_micro_from_its_full_size_parent(tmp_path):
+    daemon = make_switchboard_daemon(tmp_path, theta=0.5)
+    daemon.refresh("NQ", make_bars(120, "chop", tf_minutes=60), tf="1h")
+    sf = daemon.state_file
+
+    parent = regime_reader.get_current_regime("NQ", state_file=sf)
+    micro = regime_reader.get_current_regime("MNQ", state_file=sf)
+
+    assert micro["quadrant"] == parent["quadrant"]
+    assert micro["theta_vol"] == parent["theta_vol"]
+    # The substitution is ON THE RECORD, not inferred. `symbol` stays the
+    # contract the daemon MEASURED; overwriting it with the micro would claim
+    # a reading nobody took.
+    assert micro["requested_symbol"] == "MNQ"
+    assert micro["resolved_symbol"] == "NQ"
+    assert micro["symbol_aliased"] is True
+    assert micro["symbol"] == "NQ"
+    assert parent["symbol_aliased"] is False
+    assert parent["resolved_symbol"] == "NQ"
+
+    # And through every read path a gate uses.
+    assert regime_reader.get_current_regime(
+        "MNQ", state_file=sf, tf="1h")["quadrant"] == parent["quadrant"]
+    assert regime_reader.is_regime_permitted(
+        "MNQ", [parent["quadrant"]], state_file=sf) is True
+    assert regime_reader.is_regime_permitted(
+        " mnq ", [parent["quadrant"]], state_file=sf) is True
+
+
+def test_an_exact_micro_reading_is_never_displaced_by_its_parent(tmp_path):
+    """
+    The alias covers a symbol nobody measured. It must not override one
+    somebody did: if the daemon is ever pointed at the micro's own tape, that
+    reading is the better answer.
+    """
+    sf = tmp_path / "state.json"
+    sf.write_text(json.dumps({"symbols": {
+        "NQ": {"symbol": "NQ", "tf": "1h", "quadrant": "Q1",
+               "regime": "Q1_HIGH_VOL_TREND"},
+        "MNQ": {"symbol": "MNQ", "tf": "1h", "quadrant": "Q4",
+                "regime": "Q4_LOW_VOL_MEAN_REVERSION"}}}))
+    record = regime_reader.get_current_regime("MNQ", state_file=sf)
+    assert record["quadrant"] == "Q4"
+    assert record["resolved_symbol"] == "MNQ"
+    assert record["symbol_aliased"] is False
+
+
+def test_a_micro_whose_parent_is_unpublished_still_raises(tmp_path):
+    """
+    Resolution is not a default. An unwatched market must not become a
+    permission, and the refusal has to name what was asked for.
+    """
+    sf = tmp_path / "state.json"
+    sf.write_text(json.dumps({"symbols": {
+        "NQ": {"symbol": "NQ", "tf": "1h", "quadrant": "Q1",
+               "regime": "Q1_HIGH_VOL_TREND"}}}))
+    with pytest.raises(RegimeStateError, match="MCL"):
+        regime_reader.get_current_regime("MCL", state_file=sf)
+    with pytest.raises(RegimeStateError, match="parent CL is not published"):
+        regime_reader.get_current_regime("MCL", state_file=sf)
+    assert regime_reader.is_regime_permitted(
+        "MNQ", ["Q1"], state_file=sf) is True
+
+
+def test_the_readers_alias_table_is_the_daemons(tmp_path):
+    """
+    Two copies would be free to disagree, and a disagreement about whether MNQ
+    means NQ routes a live order into a market nobody certified for it while
+    every log line reads correctly.
+    """
+    from realtime.contract_alias import MICRO_TO_PARENT
+    from realtime.regime_daemon import THETA_ANCHOR_ALIAS
+    assert THETA_ANCHOR_ALIAS is MICRO_TO_PARENT
+    assert MICRO_TO_PARENT["M2K"] == "RTY"
+    assert MICRO_TO_PARENT["MYM"] == "YM"
+
+
 def test_the_reader_reports_a_muted_strategy_and_still_permits_its_exit(tmp_path):
     daemon = make_switchboard_daemon(tmp_path, theta=2.0)
     daemon.refresh("NQ", make_bars(120, "trend", tf_minutes=60), tf="1h")

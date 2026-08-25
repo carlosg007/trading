@@ -1,12 +1,14 @@
 """
 realtime.regime_reader - the read side of the live regime cache.
 
-Deliberately tiny, and deliberately dependency-light: `json`, `pathlib` and
-`datetime`. It does NOT import pandas, pandas_ta, the portfolio config loader
-or `realtime.regime_daemon`. An execution script asking "what quadrant is NQ
-in" should pay for a 4 KB file read, not for a config validation pass and a
-numeric stack - and a reader that imported the writer would fail to answer
-whenever the writer's dependencies were the thing that was broken.
+Deliberately tiny, and deliberately dependency-light: `json`, `pathlib`,
+`datetime` and `realtime.contract_alias`, which is a dict and four functions
+over the standard library. It does NOT import pandas, pandas_ta, the portfolio
+config loader or `realtime.regime_daemon`. An execution script asking "what
+quadrant is NQ in" should pay for a 4 KB file read, not for a config
+validation pass and a numeric stack - and a reader that imported the writer
+would fail to answer whenever the writer's dependencies were the thing that
+was broken.
 
 Non-blocking means no locks
 ---------------------------
@@ -32,6 +34,19 @@ Three things this reader will not do
   else. Whether Q2 is close enough to Q1 to trade is a decision for whoever
   wrote the portfolio's `regime_quadrants` list, not for a file reader.
 
+One thing it DOES do: resolve a micro
+-------------------------------------
+The execution tier trades MNQ/MES/MCL/MGC; the daemon publishes NQ/ES/CL/GC,
+because that is where the history and the pinned theta_vol anchor are. A
+lookup for a micro therefore falls back to its full-size parent through
+`realtime/contract_alias.py` - the same one table the daemon, the dispatcher
+and the portfolio loader use. It is a resolution, not a default: the parent's
+record has to BE published, the exact symbol always wins if it is there, and
+the answer carries `requested_symbol`/`resolved_symbol` so a substitution is
+visible rather than assumed. Without it `get_current_regime("MNQ")` raised on
+a full state file and every downstream gate read that as "the market is
+unknown, stand down" - indistinguishable from a market that had moved.
+
 `Q0_UNDEFINED_WARMUP` is not a quadrant. It is what the daemon publishes when
 the indicators are inside their 14-bar warm-up, and it is never permitted by
 `is_regime_permitted` - a permission granted on a regime nobody measured is the
@@ -41,11 +56,21 @@ exact failure the quadrant-0 sentinel exists to prevent.
 from __future__ import annotations
 
 import json
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# `python3 realtime/regime_reader.py` puts `realtime/` on sys.path and not the
+# repository root, so the one absolute import below needs the root put back -
+# the same bootstrap `master_live.py` and the daemon do, for the same reason.
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from realtime.contract_alias import (parent_of,            # noqa: E402
+                                     resolve_published)
 
 DEFAULT_STATE_FILE = "data/live_regime_state.json"
 
@@ -109,6 +134,13 @@ def _age_seconds(stamp: Any) -> float | None:
     return (datetime.now(timezone.utc) - when).total_seconds()
 
 
+def _named(requested: str, resolved: str) -> str:
+    """`'MNQ'`, or `'MNQ (read from NQ)'` when the alias was used."""
+    if requested == resolved:
+        return requested
+    return f"{requested} (read from {resolved})"
+
+
 def get_current_regime(symbol: str,
                        state_file: str | Path = DEFAULT_STATE_FILE,
                        max_age_s: float | None = None,
@@ -121,6 +153,19 @@ def get_current_regime(symbol: str,
         `age_seconds`      since the daemon last WROTE this symbol
         `bar_age_seconds`  since the timestamp of the BAR it describes
         `state_file`       which file answered, fully resolved
+        `requested_symbol` the contract that was ASKED about
+        `resolved_symbol`  the contract that was MEASURED
+        `symbol_aliased`   True when those two differ
+
+    A MICRO RESOLVES TO ITS FULL-SIZE PARENT. `get_current_regime("MNQ")`
+    answers from NQ's record when MNQ is not itself published, through
+    `realtime/contract_alias.py` - the same table the daemon anchors theta_vol
+    with, the dispatcher checks certifications against and `master_live.py`
+    reads bars through. The two quote the same price series at the same tick
+    size and only the multiplier differs, which appears in no ADX and no ATR.
+    An exact reading always wins over the alias, and the parent's record has
+    to exist: nothing is invented, and the substitution is reported on the
+    three keys above rather than being left for the caller to infer.
 
     `max_age_s` refuses a record older than that many seconds, measured on
     whichever of the two ages is LARGER - a fresh write over a frozen feed is
@@ -140,18 +185,26 @@ def get_current_regime(symbol: str,
     roughly a third of the session with nothing to show for it. Omitted, the
     latest reading for the symbol is returned whatever its timeframe.
 
-    Raises `RegimeStateError` for a missing file, an unknown symbol, a
-    timeframe that is not published, or a record refused by `max_age_s`. It
-    never returns a placeholder.
+    Raises `RegimeStateError` for a missing file, a symbol that resolves to
+    nothing published, a timeframe that is not published, or a record refused
+    by `max_age_s`. It never returns a placeholder.
     """
     blob, path = _load(state_file)
-    sym = str(symbol).strip().upper()
+    requested = str(symbol).strip().upper()
     symbols = blob.get("symbols") or {}
+    # The micro/full-size resolution, and the ONLY place it happens on the read
+    # side. `resolve_published` returns `requested` untouched when neither it
+    # nor its parent is in the file, so the raise below still names what was
+    # actually asked for.
+    sym = resolve_published(requested, symbols)
     if sym not in symbols:
+        parent = parent_of(requested)
+        via = (f" Its full-size parent {parent} is not published either."
+               if parent else "")
         raise RegimeStateError(
-            f"no regime published for {sym!r} in {path}. Published: "
-            f"{sorted(symbols)}. An unpublished symbol is not a symbol in an "
-            f"unknown regime - it is one the daemon is not watching.")
+            f"no regime published for {requested!r} in {path}. Published: "
+            f"{sorted(symbols)}.{via} An unpublished symbol is not a symbol in "
+            f"an unknown regime - it is one the daemon is not watching.")
 
     if tf is not None:
         want = str(tf).strip()
@@ -162,13 +215,21 @@ def get_current_regime(symbol: str,
             record = dict(symbols[sym])
         else:
             raise RegimeStateError(
-                f"no regime published for {sym} at {want!r} in {path}. "
+                f"no regime published for {_named(requested, sym)} at "
+                f"{want!r} in {path}. "
                 f"Published for {sym}: {sorted(per_tf) or [symbols[sym].get('tf')]}. "
                 f"Refusing to answer with another timeframe's label: theta_vol "
                 f"is per (symbol, TIMEFRAME), so the boundaries differ and the "
                 f"substitution would be invisible.")
     else:
         record = dict(symbols[sym])
+    # Both spellings travel with the answer. `symbol` inside the record is the
+    # daemon's - the contract it MEASURED - and overwriting it with the micro
+    # would claim a reading nobody took. A caller printing a decline needs to
+    # be able to say "MNQ, read from NQ" without inferring it from a table.
+    record["requested_symbol"] = requested
+    record["resolved_symbol"] = sym
+    record["symbol_aliased"] = sym != requested
     record["age_seconds"] = _age_seconds(record.get("written_at")
                                          or record.get("updated_at"))
     record["bar_age_seconds"] = _age_seconds(record.get("bar_ts"))
@@ -180,11 +241,11 @@ def get_current_regime(symbol: str,
         worst = max(ages) if ages else None
         if worst is None:
             raise RegimeStateError(
-                f"{sym} carries no readable timestamp, so its age cannot be "
-                f"checked against max_age_s={max_age_s}.")
+                f"{_named(requested, sym)} carries no readable timestamp, so "
+                f"its age cannot be checked against max_age_s={max_age_s}.")
         if worst > max_age_s:
             raise RegimeStateError(
-                f"{sym} regime is {worst:.0f}s old (write "
+                f"{_named(requested, sym)} regime is {worst:.0f}s old (write "
                 f"{record['age_seconds']}, bar {record['bar_age_seconds']}), "
                 f"past max_age_s={max_age_s}. Refusing to hand back a stale "
                 f"quadrant: a permission granted on it is a permission for a "

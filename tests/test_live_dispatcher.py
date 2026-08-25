@@ -825,6 +825,55 @@ def test_a_micro_is_covered_by_its_full_size_certification(tmp_path):
     assert len(report["payloads"]) == 1
 
 
+def test_a_micro_basket_is_gated_on_its_parents_published_regime(tmp_path):
+    """
+    THE STATE FILE IS KEYED ON THE PARENT, AND THE BASKET ON THE MICRO.
+
+    Every other case here publishes the regime under the basket's own symbol,
+    so none of them exercised the seam that actually runs: the daemon
+    publishes NQ, because that is where the history and the pinned theta_vol
+    anchor live, and the basket holds MNQ. Before the reader resolved the
+    alias this declined with "no live regime reading" on a state file that
+    held the answer - which on a console is the same line a dead daemon
+    produces.
+    """
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["nasdaq"]},
+              state={"NQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"nasdaq": dict(side="long", symbols=("NQ",))})
+    report = d.process_bar_cycle({"MNQ": make_bars()})
+
+    assert report["regime_missing"] == {}
+    reading = report["regime_readings"]["MNQ"]
+    assert reading["resolved_symbol"] == "NQ"
+    assert reading["symbol_aliased"] is True
+    assert reading["quadrant"] == PERMITTED_QUADRANT
+    assert len(report["payloads"]) == 1
+    assert report["payloads"][0]["symbol"] == "MNQ"
+
+
+def test_a_stand_down_names_the_contract_the_quadrant_was_measured_on(tmp_path):
+    """
+    The order is for the micro and the reading is the parent's. An operator
+    reading a stand-down has to be able to see both without going to the
+    alias table themselves.
+    """
+    # On the EVEN track, for the reason at the top of this file: it is the one
+    # that declares two quadrants, so FORBIDDEN_QUADRANT actually stands down.
+    d = build(tmp_path,
+              assignments={GATED_PORTFOLIO: ["gold"]},
+              state={"GC": {"quadrant": FORBIDDEN_QUADRANT}},
+              strategies={"gold": dict(side="long", symbols=GATED_CERTIFIED)})
+    report = d.process_bar_cycle({GATED_SYMBOL: make_bars()})
+
+    assert report["payloads"] == []
+    reasons = [x["reason"] for x in report["declines"]
+               if x["symbol"] == GATED_SYMBOL]
+    assert len(reasons) == 1
+    assert f"{GATED_SYMBOL} (regime read from GC)" in reasons[0]
+    assert FORBIDDEN_QUADRANT in reasons[0]
+
+
 def test_a_missing_strategy_directory_is_an_error_not_a_skip(tmp_path):
     """A loop quietly running three of the four strategies somebody assigned is
     the failure that gets noticed at the end of the month."""

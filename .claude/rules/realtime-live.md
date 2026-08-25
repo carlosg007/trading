@@ -18,6 +18,8 @@ here**, for the same reason nothing there may import from `portfolio/` — a
 research number that depended on live account or feed state would be tuned to a
 broker rather than to a market. Three modules, split by what they do: the
 daemon WRITES, the reader READS, the formatter FORMATS and sends nothing.
+`contract_alias.py` is a fourth, and holds only data: the micro -> full-size
+table every tier resolves symbols through.
 
 - **`regime_daemon.py`** — `MasterRegimeDaemon`. `calculate_regime(symbol,
   bars)` labels the last bar into `Q1_HIGH_VOL_TREND` / `Q2_HIGH_VOL_CHOP` /
@@ -62,8 +64,8 @@ daemon WRITES, the reader READS, the formatter FORMATS and sends nothing.
     it, because an uncached pair falls back to a live median rather than the
     pinned anchor.
   - **Micros resolve to their full-size parent** (`MNQ`→`NQ`, `MES`→`ES`,
-    `MCL`→`CL`, `MGC`→`GC`) because they quote the same price series at the
-    same tick size — only the multiplier differs, and a multiplier appears
+    `MCL`→`CL`, `MGC`→`GC`, `M2K`→`RTY`, `MYM`→`YM`) because they quote the
+    same price series at the same tick size — only the multiplier differs, and a multiplier appears
     nowhere in an ADX or an ATR. The tick sizes are RECONCILED against
     `backtest/specs.py` on every construction rather than asserted in a
     comment: were they ever to differ, every ATR comparison for that contract
@@ -88,14 +90,23 @@ daemon WRITES, the reader READS, the formatter FORMATS and sends nothing.
     those apart is the job.
 
 - **`regime_reader.py`** — `get_current_regime(symbol)`, and deliberately
-  dependency-light: `json`, `os`, `pathlib`, `datetime`, and nothing else. It
-  imports neither pandas nor the daemon, so it keeps answering when the
-  daemon's numeric stack is what is broken. Non-blocking with no locks, because
+  dependency-light: `json`, `os`, `pathlib`, `datetime`, and
+  `realtime.contract_alias`, which is a dict and four functions over the
+  standard library. It imports neither pandas nor the daemon, so it keeps
+  answering when the daemon's numeric stack is what is broken. Non-blocking with no locks, because
   the daemon publishes through `os.replace` and a reader sees the previous
   complete document or the new one. **It returns no defaults**: a missing file
   or an unpublished symbol RAISES, since `{"regime": None}` becomes "not in the
   permitted quadrant" downstream and stands a strategy down for a missing file
-  in a way that looks exactly like a market that moved. `age_seconds` and
+  in a way that looks exactly like a market that moved. **A micro resolves to
+  its full-size parent** through the shared table — `get_current_regime("MNQ")`
+  answers from NQ's record, since the daemon publishes the contract the history
+  and the pinned anchor belong to. The exact symbol always wins if it is
+  published, the parent's record has to exist, and the answer carries
+  `requested_symbol` / `resolved_symbol` / `symbol_aliased` so the substitution
+  is on the record rather than inferred. Without it every micro-denominated
+  basket read as "no live regime reading" on a full state file, which is the
+  same stand-down a missing daemon produces. `age_seconds` and
   `bar_age_seconds` are reported on every read and `max_age_s` turns either
   into a refusal; `is_regime_permitted` accepts an id or a schema label and
   never permits Q0.
@@ -162,8 +173,9 @@ that produced no entry and is never counted as an approval.
   that hash exists so a promoted file provably IS the file the metrics
   describe, and a live loop that ignored it would trade an edited module under
   a certified name. The certified `symbols` are checked too, through the same
-  micro/full-size alias: a strategy certified on ZS cannot trade MNQ because a
-  config line put them in one basket.
+  micro/full-size alias — a certification on `['NQ']` authorizes MNQ and the
+  reverse — but a strategy certified on ZS cannot trade MNQ because a config
+  line put them in one basket.
 - **The bar feed resolves micros to their parent.** The baskets hold
   MNQ/MES/MCL/MGC and the lake holds only the full-size contracts, so without
   the alias this loop reads nothing and no-ops forever — looking exactly like a
