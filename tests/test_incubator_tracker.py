@@ -64,6 +64,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from portfolio import config_loader                                # noqa: E402
 from portfolio.promotion_daemon import (                           # noqa: E402
+    MIN_DAYS_ACTIVE,
     MIN_PROFIT_FACTOR,
     MIN_TRADE_COUNT,
     STATUS_GRADUATED,
@@ -231,6 +232,42 @@ def test_a_drawdown_recorded_negative_is_compared_on_magnitude() -> None:
                                          PORTFOLIO)
     assert report["passed"] is False
     assert report["failed"] == ["drawdown"]
+
+
+# -- the three fixtures the objective names, at its own figures -------------
+# `test_failing_window` breaks the horizon by ONE day and this breaks it by
+# nine; both are the same verdict and they are not the same evidence. A
+# strategy nine days short is one nobody should be looking at yet, and a table
+# that showed it as PROMOTE would be read as "ready" by whoever is on the
+# other end of `--auto-promote`.
+def test_a_strategy_five_days_into_incubation_fails_the_horizon() -> None:
+    """Day 5 of 14, with the other three criteria comfortably clear."""
+    report = evaluate_strategy_promotion("day_five", entry(5, 30, 1.60, 200.0),
+                                         PORTFOLIO)
+    assert report["passed"] is False
+    assert report["failed"] == ["window"]
+    window = next(c for c in report["criteria"] if c["id"] == "window")
+    assert "5 calendar days" in window["detail"]
+    assert f"{MIN_DAYS_ACTIVE}" in window["detail"]
+
+
+def test_a_twelve_hundred_dollar_drawdown_fails_the_risk_gate() -> None:
+    """
+    $1,200 against the $1,000 the account allows — a PROFITABLE strategy,
+    refused.
+
+    The bar is the account's, not the strategy's: a prop evaluation is lost on
+    the drawdown and not on the profit factor, so an edge that ran $1,200
+    underwater to earn it is not one this account can carry.
+    """
+    report = evaluate_strategy_promotion("too_deep_1200",
+                                         entry(20, 30, 1.55, 1200.0),
+                                         PORTFOLIO)
+    assert report["passed"] is False
+    assert report["failed"] == ["drawdown"]
+    assert ALLOWABLE_DD == 1000.0, ALLOWABLE_DD
+    reason = next(r for r in report["reasons"] if r.startswith("FAIL drawdown"))
+    assert "1,200" in reason and "1,000" in reason
 
 
 def test_a_missing_metric_fails_rather_than_defaulting_to_zero() -> None:
@@ -526,6 +563,110 @@ def test_the_route_is_a_table_not_a_name() -> None:
 # --------------------------------------------------------------------------
 # the CLI
 # --------------------------------------------------------------------------
+
+def _tracker():
+    """
+    The CLI's own module, imported from the script path.
+
+    `scripts/` is not a package, so there is no `import scripts.
+    incubator_tracker`. The alternative — asserting on the table through
+    `subprocess` stdout — would test the same strings through a pipe and could
+    not reach `build_embed` at all, and the card is the half of Module D
+    nobody sees until it is posted.
+    """
+    import importlib.util as _util
+    path = REPO_ROOT / "scripts" / "incubator_tracker.py"
+    spec = _util.spec_from_file_location("incubator_tracker_under_test", path)
+    module = _util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_table_shows_progress_against_each_bar() -> None:
+    """
+    `8/14`, not `8`. The bare number is what a strategy HAS; the pair is what
+    it has against what it needs, and the second is the question anybody
+    reading this table is asking.
+
+    The threshold is transcribed from the report the daemon produced, so a
+    table cell and the criterion that promotes cannot show different bars.
+    """
+    tracker = _tracker()
+    config = config_loader.load_portfolio_config()
+    ledger = {"strategies": {"partway": entry(8, 12, 1.45, 350.0)}}
+    config = json.loads(json.dumps(config))
+    config["portfolios"]["Incubator-Odd"]["active_strategies"] = ["partway"]
+
+    rows = tracker.evaluate_all(ledger, config)
+    table = tracker.format_table(rows)
+
+    assert f"8/{MIN_DAYS_ACTIVE}" in table
+    assert f"12/{MIN_TRADE_COUNT}" in table
+    assert "1.45" in table
+    assert f"$350 / ${ALLOWABLE_DD:,.0f}" in table
+    assert "HOLD" in table
+
+
+def test_the_card_carries_one_line_per_incubating_strategy() -> None:
+    """
+    The four criteria in the compact form, because a Discord embed clips a
+    wide code block on a phone and the table is the half that gets clipped.
+    Every figure is transcribed from the same report the table renders.
+    """
+    tracker = _tracker()
+    config = json.loads(json.dumps(config_loader.load_portfolio_config()))
+    config["portfolios"]["Incubator-Odd"]["active_strategies"] = ["partway"]
+    ledger = {"strategies": {"partway": entry(8, 12, 1.45, 350.0)}}
+
+    rows = tracker.evaluate_all(ledger, config)
+    embed = tracker.build_embed(rows, acted=False)
+    field = next(f for f in embed["fields"]
+                 if f["name"].startswith("Incubating"))
+
+    assert field["value"].startswith("`partway`")
+    assert f"Day 8/{MIN_DAYS_ACTIVE}" in field["value"]
+    assert f"12/{MIN_TRADE_COUNT} trades" in field["value"]
+    assert "PF 1.45" in field["value"]
+    assert "DD $350" in field["value"]
+
+
+def test_the_card_announces_a_promotion_and_says_so_when_it_did_not_act(
+) -> None:
+    """An empty promotion section read the morning after has two readings —
+    "nothing qualified" and "nobody passed --auto-promote" — and only one of
+    them is a reason to go and look."""
+    tracker = _tracker()
+    quiet = tracker.build_embed([{"strategy_id": "x", "account": "Incubator-Odd",
+                                  "status": "HOLD", "note": "", "report": None}],
+                                acted=False)
+    assert any("--auto-promote" in f["value"] for f in quiet["fields"])
+
+    promoted = tracker.build_embed(
+        [{"strategy_id": "x", "account": "Prop-Odd", "status": "PROMOTED",
+          "note": "Incubator-Odd -> Prop-Odd", "promoted_to": "Prop-Odd",
+          "report": None}], acted=True)
+    field = next(f for f in promoted["fields"] if f["name"] == "Promoted to prop")
+    assert "`x`" in field["value"] and "Prop-Odd" in field["value"]
+
+
+def test_the_table_groups_the_two_incubator_accounts() -> None:
+    """Sim101's board and Sim102's are separate risk envelopes and are read
+    separately; ledger order interleaves them and makes an operator scan the
+    account column to answer "how is Sim101 doing"."""
+    tracker = _tracker()
+    rows = [{"strategy_id": "b_even", "account": "Incubator-Even",
+             "status": "HOLD", "note": "", "report": None},
+            {"strategy_id": "a_odd", "account": "Incubator-Odd",
+             "status": "HOLD", "note": "", "report": None},
+            {"strategy_id": "a_even", "account": "Incubator-Even",
+             "status": "HOLD", "note": "", "report": None}]
+
+    assert [r["strategy_id"] for r in tracker.group_by_account(rows)] == [
+        "a_even", "b_even", "a_odd"]
+    # and the audit itself is untouched: `evaluate_all` returns ledger order,
+    # because an audit that reorders its input has to be diffed rather than read
+    assert [r["strategy_id"] for r in rows] == ["b_even", "a_odd", "a_even"]
+
 
 def _run_cli(*args: str) -> subprocess.CompletedProcess:
     """--no-discord on every invocation: a test suite must not post to a real

@@ -255,13 +255,29 @@ HEADER = ["STRATEGY", "ACCOUNT", "DAYS", "TRADES", "REAL PF",
           "MAX DD / LIMIT", "STATUS"]
 
 
-def _cell_metric(report: dict | None, key: str, decimals: int = 0) -> str:
+def _cell_metric(report: dict | None, key: str, decimals: int = 0,
+                 threshold_key: str | None = None) -> str:
+    """
+    One metric cell, as PROGRESS against its bar when there is one: `8/14`.
+
+    The bare number is what a strategy has; the pair is what it has against
+    what it needs, and the second is the question anybody reading this table
+    is actually asking. The threshold is READ from the report the daemon
+    already produced (`metrics.thresholds`) rather than restated here — a
+    table printing its own idea of the bar would be free to disagree with the
+    gate that promotes, and the disagreement would be invisible because both
+    numbers would look plausible.
+    """
     if report is None:
         return "—"
     value = report["metrics"].get(key)
     if value is None:
         return "n/r"          # NOT RECORDED, which is not zero
-    return f"{value:,.{decimals}f}"
+    cell = f"{value:,.{decimals}f}"
+    if threshold_key is None:
+        return cell
+    bar = (report["metrics"].get("thresholds") or {}).get(threshold_key)
+    return cell if bar is None else f"{cell}/{bar:,.{decimals}f}"
 
 
 def _cell_dd(report: dict | None) -> str:
@@ -288,6 +304,24 @@ def _cell_pf(report: dict | None) -> str:
     return f"{metrics['realized_pf']:,.2f}"
 
 
+def group_by_account(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    The rows sorted by ACCOUNT, then strategy.
+
+    The two incubator accounts are separate risk envelopes with separate
+    baskets, and they are read separately: `Incubator-Odd` is Sim101's board
+    and `Incubator-Even` is Sim102's. Interleaving them in ledger order makes
+    an operator scan the account column to answer "how is Sim101 doing".
+
+    Presentation only — `evaluate_all` still returns every entry in ledger
+    order, because that is the audit, and an audit that reorders its input has
+    to be diffed rather than read. Applied before the embed's row cap too, so
+    the card truncates a grouped table rather than a shuffled one.
+    """
+    return sorted(rows, key=lambda r: (str(r.get("account") or "~"),
+                                       str(r.get("strategy_id") or "")))
+
+
 def format_table(rows: list[dict[str, Any]]) -> str:
     """
     The ASCII status table. Columns size to their widest CELL, so a long
@@ -301,13 +335,15 @@ def format_table(rows: list[dict[str, Any]]) -> str:
                 "  the ledger holds no strategies — nothing to evaluate.")
 
     body = []
-    for row in rows:
+    for row in group_by_account(rows):
         report = row.get("report")
         body.append([
             row["strategy_id"],
             str(row["account"]),
-            _cell_metric(report, "days_active"),
-            _cell_metric(report, "trade_count"),
+            _cell_metric(report, "days_active",
+                         threshold_key="min_days_active"),
+            _cell_metric(report, "trade_count",
+                         threshold_key="min_trade_count"),
             _cell_pf(report),
             _cell_dd(report),
             row["status"],
@@ -405,7 +441,7 @@ def build_embed(rows: list[dict[str, Any]], acted: bool) -> dict[str, Any]:
     promoted = [r for r in rows if r["status"] == "PROMOTED"]
     failed = [r for r in rows if r["status"] in ("FAILED", "ERROR")]
 
-    shown = rows[:MAX_EMBED_ROWS]
+    shown = group_by_account(rows)[:MAX_EMBED_ROWS]
     table = format_table(shown).split("\n", 2)[2] if shown else "no strategies"
     hidden = len(rows) - len(shown)
     description = f"```\n{table}\n```"
@@ -420,6 +456,22 @@ def build_embed(rows: list[dict[str, Any]], acted: bool) -> dict[str, Any]:
                   + " · ".join(f"{k} {v}" for k, v in sorted(counts.items()))),
         "inline": False,
     }]
+    incubating = [r for r in group_by_account(rows)
+                  if r.get("report") is not None]
+    if incubating:
+        # The four criteria, per strategy, in the compact form. Capped at the
+        # same row bound as the table and COUNTED when it bites, because a
+        # card that quietly lists nine of eleven strategies reads as a
+        # complete board.
+        lines = [progress_line(r) for r in incubating[:MAX_EMBED_ROWS]]
+        over = len(incubating) - len(lines)
+        if over > 0:
+            lines.append(f"…and {over} more")
+        fields.append({
+            "name": f"Incubating ({len(incubating)})",
+            "value": "\n".join(lines)[:1024],
+            "inline": False,
+        })
     if promoted:
         fields.append({
             "name": "Promoted to prop",
@@ -456,6 +508,29 @@ def build_embed(rows: list[dict[str, Any]], acted: bool) -> dict[str, Any]:
             f"forward DD within the account envelope · "
             f"{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")},
     }
+
+
+def progress_line(row: dict[str, Any]) -> str:
+    """
+    One incubating strategy's standing, in one line:
+
+        `Day 8/14 | 12/14 trades | PF 1.45 | DD $350/$1,000`
+
+    The card carries this as well as the table because a Discord embed clips a
+    wide code block on a phone, and the four numbers this line holds ARE the
+    four criteria. Every figure is transcribed from the report the daemon
+    produced — the same cell builders the table uses, so the two can never
+    show different numbers for the same strategy.
+    """
+    report = row.get("report")
+    if report is None:
+        return f"`{row['strategy_id']}` — {row['status']}: {row['note']}"
+    days = _cell_metric(report, "days_active",
+                        threshold_key="min_days_active")
+    trades = _cell_metric(report, "trade_count",
+                          threshold_key="min_trade_count")
+    return (f"`{row['strategy_id']}` — Day {days} | {trades} trades"
+            f" | PF {_cell_pf(report)} | DD {_cell_dd(report)}")
 
 
 def post_summary(rows: list[dict[str, Any]], acted: bool,
