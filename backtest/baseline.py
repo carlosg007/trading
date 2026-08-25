@@ -173,7 +173,9 @@ import argparse                                                   # noqa: E402
 import math                                                       # noqa: E402
 import sys                                                        # noqa: E402
 import time                                                       # noqa: E402
+import gc                                                         # noqa: E402
 import traceback                                                  # noqa: E402
+from typing import NamedTuple                                     # noqa: E402
 from datetime import datetime, timezone                           # noqa: E402
 from pathlib import Path                                          # noqa: E402
 
@@ -191,6 +193,8 @@ from backtest.engine import BacktestConfig                         # noqa: E402
 from backtest.memory_guard import (DEFAULT_GUARD,                  # noqa: E402
                                    MEMORY_HALT_EXIT_CODE,
                                    MemorySafetyException)
+from backtest.parallel import (describe_plan, map_units,            # noqa: E402
+                               resolve_jobs)
 from backtest.pipeline import (BASELINE_REPORT_FILE,               # noqa: E402
                                CHARTER_IS_END, CHARTER_IS_START,
                                SURVIVORS_FILE, leaderboard, next_step,
@@ -1021,6 +1025,43 @@ def profile_versions(bars: pd.DataFrame, out: dict, symbol: str, tf: str,
     return profiles
 
 
+class ScreenUnit(NamedTuple):
+    """
+    One configuration, packaged so it can cross a process boundary.
+
+    A NamedTuple rather than a closure because `--jobs > 1` pickles this to a
+    worker, and a closure over `args` is not picklable. Everything in it is
+    already a plain value: `args` is an argparse.Namespace of scalars, `path`
+    a Path, `params` and `cfg_kwargs` dicts the CLI built.
+    """
+    symbol: str
+    timeframe: str
+    path: Path
+    params: dict
+    args: argparse.Namespace
+    cfg_kwargs: dict
+    tag: str
+    out_dir: Path | None
+
+
+def screen_unit(unit: ScreenUnit) -> dict:
+    """
+    The worker body: guard, then one configuration.
+
+    The memory check is INSIDE the unit, so it runs in whichever process is
+    about to allocate. Serially that is this process and the semantics are
+    exactly what they were; under a pool it is the worker, which is the only
+    place that can decline to allocate before it does. `MemorySafetyException`
+    is left to propagate — `map_units` is told to treat it as a halt, so it
+    stops the screen rather than marking one configuration bad.
+    """
+    DEFAULT_GUARD.enforce(f"baseline.screen{unit.tag} "
+                          f"{_pair_label(unit.symbol, unit.timeframe)}")
+    return run_symbol(unit.symbol, unit.path, unit.timeframe, unit.params,
+                      unit.args, unit.cfg_kwargs, unit.tag,
+                      out_dir=unit.out_dir)
+
+
 def run_symbol(symbol: str, path: Path, tf: str, params: dict,
                args: argparse.Namespace, cfg_kwargs: dict,
                tag: str = "", out_dir: Path | None = None) -> dict:
@@ -1252,6 +1293,15 @@ def build_parser() -> argparse.ArgumentParser:
                         f"{STAGE1_MIN_TRADE_FRACTION * 100:.0f}%%). 0 reduces "
                         f"the floor to the flat --min-trades count, which is "
                         f"the pre-2026-08-21 behaviour.")
+    p.add_argument("--jobs", default="1",
+                   help="configurations to screen in parallel: an integer, or "
+                        "'auto' to size from cores and AVAILABLE memory "
+                        "(default 1, serial). Each configuration is an "
+                        "independent simulation on its own contract specs, so "
+                        "this parallelises the loop and changes no number; "
+                        "--jobs 1 stays bit-identical to the serial screen. "
+                        "'auto' is usually memory-bound rather than "
+                        "core-bound on this box and the banner says which.")
     p.add_argument("--ml-refit-growth", type=float, default=None,
                    help="How often Version B refits: the closed-trade pool "
                         "must grow by this FRACTION before the next fit "
@@ -1468,6 +1518,12 @@ def main(argv: list[str] | None = None) -> int:
     # it: one contract taken through every timeframe before the next starts.
     pairs = [(sym, tf) for sym in symbols for tf in timeframes]
 
+    try:
+        jobs, jobs_reason = resolve_jobs(args.jobs, len(pairs))
+    except ValueError as e:
+        print(f"REFUSED: {e}", file=sys.stderr)
+        return 2
+
     charter_window = (args.start == CHARTER_IS_START
                       and args.end == CHARTER_IS_END)
     window_source = ("charter default (holdout untouched)" if charter_window
@@ -1519,56 +1575,18 @@ def main(argv: list[str] | None = None) -> int:
           f"median = High Volatility")
     print(f"  Version B  : {'evaluated' if args.ml else 'NOT RUN (--no-ml)'}")
     print(f"  report     : {report_path}")
+    print(describe_plan(len(pairs), jobs, jobs_reason))
     print()
 
     rows, errors = [], []
     total = len(pairs)
-    for i, (sym, tf) in enumerate(pairs, 1):
-        tag = f"[{i}/{total}]"
-        try:
-            # BEFORE the configuration, not after: a full-lake screen is 27
-            # contracts x 4 timeframes, each reading its own bars and running
-            # two versions, and the peak arrives INSIDE `run_symbol`. Checking
-            # here is the last point at which the run can decline to start one
-            # more of them.
-            #
-            # Stage 1 rewrites `stage1_baseline_report.md` from scratch after
-            # every configuration, so the partial results this halt preserves
-            # are already on disk — a screen stopped at 14 of 108 leaves a
-            # complete report of 14. That is why this site needs no flush of
-            # its own, unlike Stage 2's.
-            DEFAULT_GUARD.enforce(f"baseline.screen{tag} "
-                                  f"{_pair_label(sym, tf)}")
-            row = run_symbol(sym, path, tf, params, args, cfg_kwargs, tag,
-                             out_dir=out_dir)
-            rows.append(row)
-            print(_evaluated_line(tag, row), flush=True)
-        except MemorySafetyException as e:
-            # RE-RAISED PAST THE HANDLER BELOW, and the ordering is the point.
-            # `except Exception` records a bad configuration and moves to the
-            # next one, which is right for a missing spec or an empty slice of
-            # the lake and exactly wrong here: the next configuration allocates
-            # as much as this one on a machine that is no emptier. Caught at
-            # the bottom of `main`, where it becomes an exit code.
-            print(f"\n[!] MEMORY HALT {tag} {_pair_label(sym, tf)}: {e}",
-                  file=sys.stderr)
-            print(f"    {len(rows)} of {total} configuration(s) completed and "
-                  f"are already in {report_path}", file=sys.stderr)
-            print(f"    exiting {MEMORY_HALT_EXIT_CODE} (EX_TEMPFAIL) rather "
-                  f"than 137: this process was NOT killed, it stopped itself.",
-                  file=sys.stderr)
-            return MEMORY_HALT_EXIT_CODE
-        except Exception as e:                                # noqa: BLE001
-            # One bad configuration does not end the screen. Recorded as an
-            # ERROR row rather than as one that produced nothing: those read
-            # identically in a survivor list and mean opposite things.
-            errors.append({"symbol": sym, "timeframe": tf,
-                           "error": f"{type(e).__name__}: {e}"})
-            print(f"{tag} ERROR     {_pair_label(sym, tf)} -> "
-                  f"{type(e).__name__}: {e}", flush=True)
-            traceback.print_exc(file=sys.stderr)
-        # Rewritten from scratch after every configuration, so a screen killed
-        # at 14 of 108 leaves a complete report of 14.
+
+    def _flush_report() -> None:
+        # Rewritten from scratch after EVERY completion, so a screen killed at
+        # 14 of 108 leaves a complete report of 14. Under a pool the
+        # completions arrive out of order, so this runs in the parent on each
+        # one rather than at the end - the property only holds if the partial
+        # state is on disk before the next unit finishes.
         try:
             write_markdown_report(
                 report_path,
@@ -1576,6 +1594,73 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as e:                                # noqa: BLE001
             print(f"[!] the markdown report was not written: "
                   f"{type(e).__name__}: {e}", file=sys.stderr)
+
+    def _on_result(idx: int, row: dict, prog) -> None:
+        rows.append(row)
+        print(_evaluated_line(f"[{idx + 1}/{total}]", row), flush=True)
+        if jobs > 1:
+            print(f"  {prog.line()}", flush=True)
+        _flush_report()
+
+    def _on_error(idx: int, exc: BaseException, prog) -> None:
+        # One bad configuration does not end the screen. Recorded as an ERROR
+        # row rather than as one that produced nothing: those read identically
+        # in a survivor list and mean opposite things.
+        sym, tf = pairs[idx]
+        errors.append({"symbol": sym, "timeframe": tf,
+                       "error": f"{type(exc).__name__}: {exc}"})
+        print(f"[{idx + 1}/{total}] ERROR     {_pair_label(sym, tf)} -> "
+              f"{type(exc).__name__}: {exc}", flush=True)
+        if jobs > 1:
+            print(f"  {prog.line()}", flush=True)
+        else:
+            traceback.print_exception(type(exc), exc, exc.__traceback__,
+                                      file=sys.stderr)
+        _flush_report()
+
+    units = [ScreenUnit(sym, tf, path, params, args, cfg_kwargs,
+                        f"[{i}/{total}]", out_dir)
+             for i, (sym, tf) in enumerate(pairs, 1)]
+
+    outcome = map_units(screen_unit, units, jobs=jobs,
+                        halt_exceptions=(MemorySafetyException,),
+                        on_result=_on_result, on_error=_on_error)
+
+    if outcome.halted:
+        # RE-RAISED PAST THE PER-UNIT HANDLER, and the ordering is the point.
+        # An `except Exception` records a bad configuration and moves to the
+        # next one, which is right for a missing spec or an empty slice of the
+        # lake and exactly wrong here: the next configuration allocates as much
+        # as this one on a machine that is no emptier. Under a pool the halt
+        # also cancels every unit that had not been submitted, which is the
+        # difference between stopping a screen and merely failing the rest of
+        # it one at a time.
+        print(f"\n[!] MEMORY HALT: {outcome.halt_error}", file=sys.stderr)
+        print(f"    {len(rows)} of {total} configuration(s) completed and "
+              f"are already in {report_path}", file=sys.stderr)
+        if outcome.unsubmitted:
+            print(f"    {len(outcome.unsubmitted)} configuration(s) were "
+                  f"never started: "
+                  f"{', '.join(_pair_label(*pairs[i]) for i in outcome.unsubmitted[:6])}"
+                  f"{' ...' if len(outcome.unsubmitted) > 6 else ''}",
+                  file=sys.stderr)
+        print(f"    exiting {MEMORY_HALT_EXIT_CODE} (EX_TEMPFAIL) rather "
+              f"than 137: this process was NOT killed, it stopped itself.",
+              file=sys.stderr)
+        _flush_report()
+        return MEMORY_HALT_EXIT_CODE
+
+    # Submission order, not completion order. A leaderboard whose rows arrive
+    # in whichever order the scheduler finished them is a different table on
+    # every run of the same screen.
+    rows[:] = outcome.ordered()
+    if outcome.progress:
+        print(f"\n  screen complete · {outcome.progress.line()}", flush=True)
+    # The bars and mask arrays every unit allocated are unreachable now; the
+    # report writing and the handoff below are the parent's last allocations,
+    # and a full-lake screen has just held tens of GiB across the pool.
+    gc.collect()
+    _flush_report()
 
     by_tf = {}
     for tf in timeframes:

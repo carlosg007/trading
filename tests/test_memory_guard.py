@@ -482,7 +482,8 @@ def test_the_runners_re_raise_a_halt_past_their_broad_handlers() -> None:
     Checked at the SOURCE, because the behaviour only shows up on a box that is
     actually out of memory, and a test that waited for that would never run.
     """
-    for name in ("baseline.py", "scan.py"):
+    # scan.py still catches it inline, in its own loop.
+    for name in ("scan.py",):
         src = (REPO / "backtest" / name).read_text()
         assert "except MemorySafetyException" in src, (
             f"{name} does not catch MemorySafetyException explicitly, so its "
@@ -494,6 +495,37 @@ def test_the_runners_re_raise_a_halt_past_their_broad_handlers() -> None:
             f"broad handler wins and the halt is swallowed")
         assert "MEMORY_HALT_EXIT_CODE" in src, (
             f"{name} does not exit with the memory-halt code")
+
+    # baseline.py delegates its configuration loop to `backtest/parallel.py`
+    # so it can run several at once, so the broad handler that could swallow a
+    # halt now lives THERE. The invariant is unchanged and is checked in both
+    # places: baseline must declare the halt type to the executor and act on
+    # the halt it reports, and the executor must catch that type BEFORE its own
+    # `except Exception`. Checking only baseline would pass a version that
+    # declared the type to an executor which then filed it as an ordinary
+    # per-unit error, which is precisely the swallow this test exists to catch.
+    src = (REPO / "backtest" / "baseline.py").read_text()
+    assert "halt_exceptions=(MemorySafetyException,)" in src, (
+        "baseline.py does not declare MemorySafetyException as a halt to "
+        "backtest/parallel.py, so a halt will be recorded as one bad "
+        "configuration and the screen will continue allocating")
+    assert "outcome.halted" in src, (
+        "baseline.py never acts on the executor's halt flag")
+    assert "MEMORY_HALT_EXIT_CODE" in src, (
+        "baseline.py does not exit with the memory-halt code")
+
+    src = (REPO / "backtest" / "parallel.py").read_text()
+    assert src.count("except halt_exceptions") == 2, (
+        "backtest/parallel.py must catch the declared halt types in BOTH its "
+        "serial and pooled paths; a path that misses it swallows the halt for "
+        "whichever --jobs value takes it")
+    for halt_at in [i for i in range(len(src))
+                    if src.startswith("except halt_exceptions", i)]:
+        broad_at = src.index("except Exception", halt_at)
+        assert halt_at < broad_at, (
+            "backtest/parallel.py catches Exception before the declared halt "
+            "types; the broad handler wins and the halt becomes a per-unit "
+            "error")
 
 
 def test_a_mid_run_halt_carries_the_work_already_done() -> None:

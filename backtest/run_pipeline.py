@@ -122,6 +122,7 @@ REPO = Path(__file__).resolve().parent.parent
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+from backtest.run import TF_GROUPS  # noqa: E402
 from backtest.pipeline import (  # noqa: E402
     CHARTER_IS_START,
     CHARTER_IS_END,
@@ -172,7 +173,18 @@ def _py() -> list[str]:
 # ---------------------------------------------------------------------------
 
 def parse_timeframes(raw: str | None) -> list[str]:
-    """Split a comma-separated --tf into an ordered, de-duplicated list."""
+    """
+    Split a comma-separated --tf into an ordered, de-duplicated list.
+
+    A named group (`ALL_DAY_TRADING`) expands here to the same tuple
+    `backtest.run.TF_GROUPS` gives every other stage, imported rather than
+    restated: two spellings of "the day-trading ladder" that could drift apart
+    would put Stage 1 and Stage 3 on different timeframe sets with every log
+    line reading correctly.
+    """
+    text = str(raw or "").strip()
+    if text.upper() in TF_GROUPS:
+        return list(TF_GROUPS[text.upper()])
     seen: list[str] = []
     for part in str(raw or "").split(","):
         tf = part.strip()

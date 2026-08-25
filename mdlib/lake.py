@@ -78,6 +78,14 @@ NATIVE_TFS = {"1m", "1d"}
 # Which native timeframe each derived timeframe is built from, and the pandas
 # resample rule to use.
 DERIVED = {
+    # 2m and 3m are day-trading resolutions and derive from 1m exactly as the
+    # rest do. They have NO pre-computed regime cache (`scripts/precompute_
+    # regimes.py` has only ever been run for 5m/15m/30m/1h), so a profiler run
+    # at either falls back to `recomputed_live` — a DIFFERENT volatility
+    # boundary from the cached timeframes beside it. Run the cache builder for
+    # a timeframe before screening on it, or the quadrants are not comparable.
+    "2m":  ("1m", "2min"),
+    "3m":  ("1m", "3min"),
     "5m":  ("1m", "5min"),
     "15m": ("1m", "15min"),
     "30m": ("1m", "30min"),

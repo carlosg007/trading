@@ -339,6 +339,29 @@ def parse_symbols(text: str | None, module_symbols: list | None) -> list[str]:
     return ordered
 
 
+#: Named timeframe sets, expanded by `parse_timeframes`.
+#:
+#: ALL_DAY_TRADING is the intraday ladder an equity-index or energy day trade
+#: is actually taken on. It stops at 1h deliberately: 2h and 4h exist in the
+#: lake and are swept by naming them, but a 4-hour bar is two RTH sessions and
+#: a strategy screened on one is not being screened as a day trade.
+#:
+#: **A period is not a horizon.** `trend_period=200` is 3.3 hours on 1m and
+#: four sessions on 30m, so sweeping this set tests SEVEN STRATEGIES, not one
+#: strategy at seven resolutions — the claim a survivor supports is the
+#: `(tf, params)` pair, never the parameters alone.
+#:
+#: **Only 5m/15m/30m/1h have a pre-computed regime cache on this box.** 1m, 2m
+#: and 3m fall back to `recomputed_live`, whose volatility boundary is the
+#: median of whatever window was requested rather than the pinned in-sample
+#: anchor — so their quadrants are not comparable with the cached timeframes
+#: on the same leaderboard. Run `scripts/precompute_regimes.py` for the whole
+#: set before screening across it.
+TF_GROUPS: dict[str, tuple[str, ...]] = {
+    "ALL_DAY_TRADING": ("1m", "2m", "3m", "5m", "15m", "30m", "1h"),
+}
+
+
 def parse_timeframes(text: str | None, module_tf: str | None,
                      fallback: str = "15m") -> list[str]:
     """
@@ -369,6 +392,8 @@ def parse_timeframes(text: str | None, module_tf: str | None,
     raw = (text or "").strip()
     if not raw:
         return [module_tf or fallback]
+    if raw.upper() in TF_GROUPS:
+        return list(TF_GROUPS[raw.upper()])
 
     known = set(NATIVE_TFS) | set(DERIVED)
     out: list[str] = []
