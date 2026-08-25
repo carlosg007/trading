@@ -498,11 +498,16 @@ def test_a_bar_signalling_both_sides_takes_neither(tmp_path):
     assert report["payloads"] == []
 
 
-def test_an_exit_is_reported_and_never_becomes_an_order(tmp_path):
+def test_an_exit_with_no_tracked_position_is_reported_and_sends_nothing(tmp_path):
     """
-    THE PIPELINE OPENS AND CANNOT CLOSE. An exit must be visible in the report
-    - silently discarding it would hide the fact that a live loop run without
-    position reconciliation accumulates entries and never leaves.
+    AN EXIT IS NOT A LICENCE TO FLATTEN AN ACCOUNT.
+
+    The loop flattens only a position it has a record of OPENING. With an
+    empty `PositionBook` - a fresh process, or a position opened by hand in
+    NT8, by a previous run, or by another tool on the same account - the exit
+    is reported with its reason and nothing reaches the wire. A blind flatten
+    here closes whatever happens to be on the account, silently and
+    unrecoverably.
     """
     d = build(tmp_path,
               assignments={"Incubator-Odd": ["fixture_exit"]},
@@ -1045,3 +1050,83 @@ def test_the_webhook_url_never_survives_into_the_attempt_record(tmp_path):
     assert "SECRET-PATH-TOKEN" not in blob
     assert "K" not in report["dispatches"][0]["command"].split("key=")[1][:20]
     assert report["dispatches"][0]["result"]["url"] == "crosstrade.invalid"
+
+
+# --------------------------------------------------------------------------
+# 9. The exit actuator: muting blocks entries and never an exit
+# --------------------------------------------------------------------------
+def test_a_muted_strategy_still_flattens_a_position_this_process_opened(tmp_path):
+    """
+    THE GAP THIS CLOSES. A position is opened in the certified quadrant, the
+    market leaves it, and the strategy is MUTED. Before the actuator existed
+    the loop returned at the regime decline BEFORE the exit was even computed,
+    so the position was stranded: entries correctly blocked, and no way out.
+
+    Muting exists to stop new ENTRIES. An open position must still be
+    closeable, so the exit is evaluated ahead of every regime check and becomes
+    a real FLATTEN on the account the entry was opened on.
+    """
+    sender = RecordingSender()
+    d = build(tmp_path, dry_run=False, sender=sender,
+              assignments={"Incubator-Odd": ["fixture_exit"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"fixture_exit": dict(side="flat", exit_on_last=True)})
+
+    # This process opened it, so this process may close it.
+    d.positions.record_fill("Incubator-Odd", "MNQ", "long", 2,
+                            ["fixture_exit"])
+    # ...and the market has left the quadrant the basket trades.
+    write_state(tmp_path, {"MNQ": {"quadrant": FORBIDDEN_QUADRANT}})
+
+    report = d.process_bar_cycle({"MNQ": make_bars()})
+
+    # The exit was SEEN despite the mute - that is the fix.
+    assert len(report["exit_signals"]) == 1, report["declines"]
+    assert report["exit_signals"][0]["exit_permitted"] is True
+
+    emitted = [e for e in report["exit_orders"] if e["emitted"]]
+    assert len(emitted) == 1, report["exit_orders"]
+    assert emitted[0]["action"] == "FLATTEN"
+    assert emitted[0]["symbol"] == "MNQ"
+    assert emitted[0]["ok"] is True
+
+    # It reached the wire, on the account the entries use, with no side and no
+    # quantity - a flatten that guessed either would open the opposite position.
+    assert len(sender.calls) == 1
+    body = sender.calls[0]["payload"]
+    assert body["command"] == "flatten"
+    assert body["account"] == "Incubator-Odd"
+    assert body["instrument"] == "MNQ"
+    assert "action" not in body and "qty" not in body
+
+    # And the book no longer claims it, so a repeat exit does not re-flatten.
+    assert d.positions.direction("Incubator-Odd", "MNQ") == "flat"
+
+
+def test_entries_stay_blocked_while_muted_even_though_exits_are_not(tmp_path):
+    """
+    The other half of the same rule. Moving the exit ahead of the regime gate
+    must not let an ENTRY past it: the mute is what stops a strategy trading
+    the environment nobody certified it in, and an exit path that also opened
+    positions would be worse than the stranding it fixed.
+    """
+    sender = RecordingSender()
+    d = build(tmp_path, dry_run=False, sender=sender,
+              assignments={GATED_PORTFOLIO: ["fixture_long"]},
+              state={GATED_SYMBOL: {"quadrant": FORBIDDEN_QUADRANT}},
+              strategies={"fixture_long": dict(side="long",
+                                               symbols=GATED_CERTIFIED)})
+    d.positions.record_fill(GATED_PORTFOLIO, GATED_SYMBOL, "long", 1,
+                            ["fixture_long"])
+
+    report = d.process_bar_cycle({GATED_SYMBOL: make_bars()})
+
+    assert report["signals"] == [], "a muted strategy produced an entry signal"
+    assert report["payloads"] == []
+    assert report["dispatches"] == []
+    assert not sender.calls, "a muted strategy reached the wire"
+    declines = [x for x in report["declines"] if x["symbol"] == GATED_SYMBOL]
+    assert declines and "Standing down" in declines[0]["reason"]
+    # The position it already held is untouched: this strategy signalled no
+    # exit, and a mute is not itself an instruction to close.
+    assert d.positions.direction(GATED_PORTFOLIO, GATED_SYMBOL) == "long"

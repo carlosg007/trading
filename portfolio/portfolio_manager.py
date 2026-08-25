@@ -110,6 +110,164 @@ _SIGN = {LONG: 1, SHORT: -1, FLAT: 0}
 _ACTION = {1: "BUY", -1: "SELL"}
 
 
+#: What a flatten intent looks like. FLATTEN carries no side and no quantity -
+#: see `realtime.crosstrade_formatter.format_flatten_command` for why a guessed
+#: side does not close a position, it opens the opposite one.
+FLATTEN = "FLATTEN"
+
+
+class PositionBook:
+    """
+    What THIS PROCESS opened, and nothing else.
+
+    THE NARROWNESS IS THE SAFETY PROPERTY, NOT A LIMITATION
+    =======================================================
+    `PortfolioManager` still does not know what is open at the broker, and this
+    class does not pretend to. It records only the fills this process
+    dispatched, so a FLATTEN can be emitted for a position we can point at
+    having opened - and never for one we merely infer. An account is shared: a
+    blind flatten closes whatever is on it, including a position placed by
+    NinjaTrader by hand, by a previous run of this loop, or by another tool.
+    Closing someone else's position is silent, immediate and unrecoverable.
+
+    **It is deliberately NOT persisted.** A restart therefore begins believing
+    it holds nothing, which is the safe direction to be wrong in: the loop
+    declines to flatten a position it cannot vouch for and says so, rather than
+    flattening one it has no record of opening. The reconciliation that WOULD
+    make persistence safe - reading real positions back from CrossTrade -
+    does not exist yet, and a file that looks like position state would be
+    trusted as though it did.
+
+    WHY THE KEY IS (portfolio, symbol) AND NOT (strategy, symbol)
+    =============================================================
+    `aggregate_signals` nets many strategies into ONE position per
+    (portfolio, symbol). Two strategies long NQ hold one position between them,
+    so an exit from one of them is not a flatten - it is a smaller net. Keying
+    the book by strategy would let the first exit close a position the second
+    strategy is still in, which reads on the console as an orderly exit and is
+    a silent liquidation of somebody else's trade.
+    """
+
+    def __init__(self) -> None:
+        self._open: dict[tuple[str, str], dict] = {}
+
+    @staticmethod
+    def _key(portfolio_id: str, symbol: str) -> tuple[str, str]:
+        return (str(portfolio_id), str(symbol).upper())
+
+    def record_fill(self, portfolio_id: str, symbol: str, direction: str,
+                    quantity: int, strategies: list[str] | None = None) -> dict:
+        """
+        Record an order this process dispatched.
+
+        Called AFTER a successful dispatch, never before: a book updated on
+        intent believes it holds a position that a refused or failed order
+        never opened, and the next exit then flattens an account that is
+        already flat - which on a shared account is not a no-op.
+        """
+        if direction not in (LONG, SHORT):
+            raise PortfolioError(
+                f"record_fill got direction {direction!r}; only {LONG} and "
+                f"{SHORT} open a position. FLAT closes one - use record_flat.")
+        if int(quantity) <= 0:
+            raise PortfolioError(
+                f"record_fill got quantity {quantity!r}; an order that moved "
+                f"no contracts did not open a position")
+        record = {"portfolio_id": str(portfolio_id),
+                  "symbol": str(symbol).upper(),
+                  "direction": direction, "quantity": int(quantity),
+                  "strategies": sorted(set(strategies or []))}
+        self._open[self._key(portfolio_id, symbol)] = record
+        return dict(record)
+
+    def record_flat(self, portfolio_id: str, symbol: str) -> dict | None:
+        """Forget a position, after a flatten this process dispatched."""
+        return self._open.pop(self._key(portfolio_id, symbol), None)
+
+    def is_open(self, portfolio_id: str, symbol: str) -> bool:
+        return self._key(portfolio_id, symbol) in self._open
+
+    def direction(self, portfolio_id: str, symbol: str) -> str:
+        """`LONG`, `SHORT`, or `FLAT` when this process holds no record."""
+        rec = self._open.get(self._key(portfolio_id, symbol))
+        return rec["direction"] if rec else FLAT
+
+    def get(self, portfolio_id: str, symbol: str) -> dict | None:
+        rec = self._open.get(self._key(portfolio_id, symbol))
+        return dict(rec) if rec else None
+
+    def open_positions(self) -> list[dict]:
+        """Every tracked position, portfolio-major, for the cycle report."""
+        return [dict(v) for _, v in sorted(self._open.items())]
+
+    # ------------------------------------------------------------------
+    def plan_exits(self, exit_signals: list[dict],
+                   net_positions: dict | None = None) -> list[dict]:
+        """
+        Turn exit signals into FLATTEN intents, and refuse the rest.
+
+        An intent is emitted only when BOTH hold:
+
+          1. this process has a recorded open position for that
+             (portfolio, symbol), and
+          2. no strategy still wants one there this cycle.
+
+        The second condition is what stops one strategy's exit closing a
+        position another is still in. `net_positions` is
+        `aggregate_signals`' output; a (portfolio, symbol) with a non-FLAT net
+        in it has a live claim, so the exit reduces that claim and the netting
+        will size it - it is not a flatten. With no `net_positions` supplied
+        nothing is assumed to be claimed, because the alternative is assuming a
+        claim exists and never flattening at all.
+
+        Every refusal is RETURNED with its reason rather than dropped. "no
+        tracked position" and "another strategy still holds it" are different
+        facts about an account, and an exit that produced no order must never
+        be indistinguishable from an exit that was never signalled.
+        """
+        claimed: set[tuple[str, str]] = set()
+        for pid, symbols in (net_positions or {}).items():
+            for symbol, record in (symbols or {}).items():
+                direction = (record or {}).get("direction", FLAT) \
+                    if isinstance(record, dict) else record
+                if direction in (LONG, SHORT):
+                    claimed.add(self._key(pid, symbol))
+
+        intents: list[dict] = []
+        seen: set[tuple[str, str]] = set()
+        for signal in exit_signals:
+            pid = str(signal.get("portfolio_id") or "")
+            symbol = str(signal.get("symbol") or "").upper()
+            key = self._key(pid, symbol)
+            base = {"portfolio_id": pid, "symbol": symbol,
+                    "strategy_id": signal.get("strategy_id"),
+                    "action": FLATTEN, "emit": False, "reason": None}
+
+            if not self.is_open(pid, symbol):
+                base["reason"] = (
+                    "no position opened by this process for "
+                    f"{pid}/{symbol}; declining to flatten an account this "
+                    "loop cannot vouch for")
+            elif key in claimed:
+                base["reason"] = (
+                    f"another strategy still holds {pid}/{symbol} this cycle; "
+                    "the exit reduces the net rather than flattening it")
+            elif key in seen:
+                base["reason"] = (
+                    f"{pid}/{symbol} already has a flatten intent this cycle; "
+                    "a flatten closes the whole position once")
+            else:
+                held = self.get(pid, symbol) or {}
+                base.update({"emit": True, "reason": "position tracked open "
+                             f"({held.get('direction')} x"
+                             f"{held.get('quantity')}) and unclaimed",
+                             "held_direction": held.get("direction"),
+                             "held_quantity": held.get("quantity")})
+                seen.add(key)
+            intents.append(base)
+        return intents
+
+
 class PortfolioError(RuntimeError):
     """A signal or a net position that cannot be routed as given."""
 

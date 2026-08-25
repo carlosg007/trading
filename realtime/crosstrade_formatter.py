@@ -291,6 +291,35 @@ def format_crosstrade_json(account: str,
     }
 
 
+def format_flatten_json(account: str,
+                       instrument: str,
+                       strategy_tag: str = "") -> dict[str, Any]:
+    """
+    The structured JSON flatten, the exact analogue of `format_crosstrade_json`.
+
+        {"command": "flatten", "account": ..., "instrument": ...,
+         "strategy_tag": ...}
+
+    It exists because `live.dispatcher.send_execution_signal` POSTs a DICT, and
+    the only flatten this module had was the plain-text form. Wrapping that
+    string in an invented envelope would put a payload shape on the wire that
+    no endpoint schema declares, so the JSON form is spelled out here beside
+    the place order it mirrors - same lower-casing, same `strategy_tag`, same
+    absence of a key.
+
+    NO `action` AND NO `qty`, exactly as in the plain-text flatten. A flatten
+    closes whatever is open; expressing it as a side and a size requires
+    guessing the position, and a wrong guess does not close a position - it
+    opens the opposite one. Their absence here is the contract, not an omission.
+    """
+    return {
+        "command": "flatten",
+        "account": _clean_account(account),
+        "instrument": _clean_instrument(instrument),
+        "strategy_tag": str(strategy_tag).strip(),
+    }
+
+
 def format_flatten_command(account: str,
                            instrument: str,
                            key: str = "") -> str:

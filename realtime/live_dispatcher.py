@@ -121,18 +121,22 @@ from live.dispatcher import send_execution_signal                  # noqa: E402
 from portfolio.config_loader import (DEFAULT_CONFIG_PATH,          # noqa: E402
                                      PortfolioConfigError,
                                      load_portfolio_config)
-from portfolio.portfolio_manager import (LONG, SHORT, FLAT,        # noqa: E402
+from portfolio.portfolio_manager import (PositionBook,             # noqa: E402
+                                        LONG, SHORT, FLAT,
                                          PortfolioError,
                                          PortfolioManager)
 from realtime.crosstrade_formatter import (                        # noqa: E402
     CrossTradeFormatError,
     format_crosstrade_command,
     format_crosstrade_json,
+    format_flatten_command,
+    format_flatten_json,
     redact,
 )
 from realtime.regime_daemon import (MasterRegimeDaemon,            # noqa: E402
                                     THETA_ANCHOR_ALIAS,
                                     MLGateError)
+from realtime import regime_reader                                # noqa: E402
 from realtime.regime_reader import (DEFAULT_STATE_FILE,            # noqa: E402
                                     RegimeStateError,
                                     get_current_regime)
@@ -371,6 +375,11 @@ class LiveExecutionDispatcher:
         self.config = load_portfolio_config(config_path)
         self.portfolios = self.config["portfolios"]
         self.manager = PortfolioManager(config_path, config=self.config)
+        # What THIS PROCESS opened. Not persisted: a restart begins believing
+        # it holds nothing, which is the safe direction to be wrong in - the
+        # loop then declines to flatten a position it cannot vouch for rather
+        # than flattening one it has no record of opening. See PositionBook.
+        self.positions = PositionBook()
 
         self.strategy_root = (Path(strategy_root) if Path(strategy_root).is_absolute()
                               else REPO_ROOT / strategy_root)
@@ -608,7 +617,7 @@ class LiveExecutionDispatcher:
             "dry_run": self.dry_run,
             "symbols": sorted(symbol_bar_map),
             "signals": [], "declines": [], "ml_vetoes": [],
-            "exit_signals": [], "errors": [],
+            "exit_signals": [], "exit_orders": [], "errors": [],
             "regime_readings": {}, "regime_missing": {},
             "plan": [], "payloads": [], "dispatches": [],
         }
@@ -653,11 +662,44 @@ class LiveExecutionDispatcher:
         # byte-comparable with what the manager produces for the same input.
         for record in report["plan"]:
             if record["payload"] is not None:
-                report["dispatches"].append(
-                    self.dispatch_order(record["payload"],
-                                        strategy_tag=_strategy_tag(record)))
+                attempt = self.dispatch_order(record["payload"],
+                                              strategy_tag=_strategy_tag(record))
+                report["dispatches"].append(attempt)
+                # The book records a position only on a send that SUCCEEDED,
+                # and only for a real side and size. Recording on intent would
+                # leave this process believing it holds a position a refused
+                # order never opened, and the next exit would then flatten an
+                # account that is already flat - which on a shared account is
+                # not a no-op.
+                if attempt.get("ok"):
+                    direction = (LONG if record["payload"]["action"] == "BUY"
+                                 else SHORT)
+                    try:
+                        self.positions.record_fill(
+                            record["portfolio_id"], record["symbol"],
+                            direction, int(record["payload"]["quantity"]),
+                            strategies=record.get("strategies"))
+                    except PortfolioError as exc:
+                        report["errors"].append({
+                            "stage": "position_book",
+                            "error": f"{type(exc).__name__}: {exc}"})
 
-        report["ok"] = all(d.get("ok") for d in report["dispatches"])
+        # ---- 6: the exit actuator ---------------------------------------
+        # AFTER the entries, and after the netting that produced them: an exit
+        # is a flatten only when no strategy still claims that (portfolio,
+        # symbol) this cycle, and `report["plan"]` is where that claim is
+        # visible. Running this first would flatten a position another
+        # strategy was about to be sized into.
+        try:
+            self.dispatch_exits(report, self._claims(report["plan"]))
+        except Exception as exc:                                  # noqa: BLE001
+            report["errors"].append({
+                "stage": "dispatch_exits",
+                "error": f"{type(exc).__name__}: {exc}"})
+
+        report["ok"] = (all(d.get("ok") for d in report["dispatches"])
+                        and all(e.get("ok", True) for e in report["exit_orders"]
+                                if e.get("emitted")))
         report["elapsed_ms"] = round((time.perf_counter() - cycle_started) * 1000, 1)
         report["finished_at"] = _utcnow()
 
@@ -703,6 +745,25 @@ class LiveExecutionDispatcher:
             decline(f"certification does not cover this contract: {why}")
             return
 
+        # BARS AND THE EXIT COME FIRST, BEFORE EVERY REGIME CHECK BELOW.
+        # A muted strategy used to return at the regime decline, so its exit
+        # was never computed - which is the whole reason a position could be
+        # opened in a certified quadrant and then stranded the moment the
+        # market left it. Muting exists to stop new ENTRIES; an open position
+        # still has to be closeable, and a regime reading that is missing or
+        # unfavourable is not a reason to keep holding one.
+        if bars is None or len(bars) == 0:
+            decline("no bars for this symbol in this cycle")
+            return
+
+        direction, exit_signalled, detail = self.direction_on_last_bar(
+            handle.signal_fn, bars)
+        bar_ts = str(pd.to_datetime(bars["ts"].iloc[-1], utc=True)
+                     if "ts" in bars.columns else bars.index[-1])
+
+        if exit_signalled:
+            self._record_exit(handle, symbol, bar_ts, report)
+
         if symbol in missing:
             decline(f"no live regime reading: {missing[symbol]}")
             return
@@ -720,23 +781,6 @@ class LiveExecutionDispatcher:
                     f"rather than trading the environment nobody certified.",
                     quadrant=quadrant)
             return
-
-        if bars is None or len(bars) == 0:
-            decline("no bars for this symbol in this cycle")
-            return
-
-        direction, exit_signalled, detail = self.direction_on_last_bar(
-            handle.signal_fn, bars)
-        bar_ts = str(pd.to_datetime(bars["ts"].iloc[-1], utc=True)
-                     if "ts" in bars.columns else bars.index[-1])
-
-        if exit_signalled:
-            # Reported, never acted on. See the module docstring.
-            report["exit_signals"].append({
-                "strategy_id": handle.strategy_id, "symbol": symbol,
-                "portfolio_id": handle.portfolio_id, "bar_ts": bar_ts,
-                "note": ("exit signalled; no FLATTEN is emitted because the "
-                         "position state is not known in this process")})
 
         if direction in (LONG, SHORT):
             features = self._ml_features(handle, bars)
@@ -770,6 +814,206 @@ class LiveExecutionDispatcher:
             "units": 1,
             "detail": detail,
         })
+
+    @staticmethod
+    def _claims(plan: list[dict]) -> dict:
+        """
+        Which (portfolio, symbol) pairs a strategy still wants a position in.
+
+        Built from the PLAN rather than from the raw signals, because the plan
+        is what survived netting, sizing and the regime gate. A signal that was
+        declined is not a claim on the account, and treating it as one would
+        block a flatten for a position nothing is going to hold.
+        """
+        claims: dict[str, dict] = {}
+        for record in plan:
+            if record.get("payload") is None:
+                continue
+            direction = (LONG if record["payload"]["action"] == "BUY"
+                         else SHORT)
+            claims.setdefault(record["portfolio_id"], {})[record["symbol"]] = {
+                "direction": direction}
+        return claims
+
+    def _account_for(self, portfolio_id: str) -> str:
+        """
+        The broker account a portfolio's orders go to.
+
+        `target_account` from the routing table - the SAME field
+        `PortfolioManager.build_order_payloads` puts on every entry. Exits must
+        land on the account the entries opened, and reading a different field
+        here is how a flatten reaches the wrong account and leaves the position
+        it was meant to close still open.
+        """
+        record = (self.config.get("portfolios") or {}).get(portfolio_id) or {}
+        account = str(record.get("target_account") or "").strip()
+        if not account:
+            raise PortfolioError(
+                f"portfolio {portfolio_id!r} declares no target_account, so "
+                f"there is no account to flatten on")
+        return account
+
+    def _send_with_retry(self, record: dict, command: str,
+                         started: float) -> dict:
+        """
+        The send loop, shared with `dispatch_order` so both obey ONE retry rule.
+
+        A retried market order is a duplicate position this process cannot
+        undo, so a retry happens only where the error proves nothing reached
+        the broker. A flatten is idempotent and could bear a looser rule, but
+        it does not get one: `_is_safe_to_retry` stays the single predicate,
+        because two retry policies is how the stricter one quietly stops
+        applying to the path that needed it.
+        """
+        body = format_flatten_json(account=record["account"],
+                                   instrument=record["symbol"],
+                                   strategy_tag=record.get("strategy_id") or "")
+        for attempt in range(1, self.max_attempts + 1):
+            record["attempts"] = attempt
+            result = self._sender(body, webhook_url=self.crosstrade_url,
+                                  timeout_seconds=self.timeout_seconds)
+            record["result"] = {**result,
+                                "url": _host_only(result.get("url", ""))}
+            record["ok"] = bool(result.get("ok"))
+            record["error"] = result.get("error")
+            record["http_status"] = result.get("http_status")
+            if record["ok"] or not _is_safe_to_retry(result):
+                break
+            if attempt < self.max_attempts:
+                time.sleep(RETRY_BACKOFF_S * attempt)
+        if not record["ok"] and record["attempts"] == 1 and record["error"]:
+            record["retry_note"] = (
+                "not retried: the failure does not prove the flatten never "
+                "reached the broker, and this process cannot see whether the "
+                "position is still open")
+        record["elapsed_ms"] = round((time.perf_counter() - started) * 1000, 1)
+        return record
+
+    def _record_exit(self, handle, symbol: str, bar_ts: str,
+                     report: dict) -> None:
+        """
+        Record one exit, gated by the switchboard's own exit permission.
+
+        `is_exit_permitted` is asked rather than assumed. It answers True for a
+        MUTED strategy - muting blocks entries and never an exit - and the one
+        case it refuses is a strategy the switchboard does not know, where
+        "permitted" would be a guess about an account. The verdict travels on
+        the record so a cycle report says WHY an exit did or did not become an
+        order.
+        """
+        permitted, why = True, "switchboard not consulted"
+        try:
+            permitted = bool(regime_reader.is_exit_permitted(
+                handle.strategy_id, state_file=self.state_file))
+            why = ("switchboard permits exits"
+                   if permitted else "switchboard refused the exit")
+        except Exception as exc:                                  # noqa: BLE001
+            # An unreadable switchboard must not strand an open position. The
+            # refusal to invent state applies to OPENING, not to closing: the
+            # position book below is what decides whether a flatten is real,
+            # and it is this process's own record rather than a guess.
+            permitted, why = True, (f"switchboard unreadable ({type(exc).__name__}"
+                                    f": {exc}); exits are permitted by default")
+        report["exit_signals"].append({
+            "strategy_id": handle.strategy_id, "symbol": symbol,
+            "portfolio_id": handle.portfolio_id, "bar_ts": bar_ts,
+            "exit_permitted": permitted, "permission_reason": why})
+
+    # -- the exit actuator --------------------------------------------------
+    def dispatch_exits(self, report: dict, net_positions: dict | None = None
+                       ) -> list[dict]:
+        """
+        Turn this cycle's exits into FLATTEN orders, and send them.
+
+        THE ORDER OF THE THREE GATES IS THE SAFETY PROPERTY. An exit becomes an
+        order only when the switchboard permitted it, this process has a
+        RECORDED open position for that (portfolio, symbol), and no strategy
+        still claims one there. `PositionBook.plan_exits` owns the last two;
+        this method owns the first and the wire.
+
+        Every refusal is reported with its reason. "no position this process
+        opened" and "another strategy still holds it" are different facts about
+        an account, and an exit that produced no order must never be
+        indistinguishable from an exit that was never signalled.
+
+        A FLATTEN carries no side and no quantity - see
+        `crosstrade_formatter.format_flatten_command`. That is also why it is
+        IDEMPOTENT in a way an entry is not: flattening an already-flat account
+        is a no-op, while a duplicated entry is a second position this process
+        cannot see. The retry rule is unchanged regardless, because a duplicate
+        is not the only failure a retry can cause.
+        """
+        allowed = [e for e in report.get("exit_signals", [])
+                   if e.get("exit_permitted")]
+        for blocked in (e for e in report.get("exit_signals", [])
+                        if not e.get("exit_permitted")):
+            report["exit_orders"].append({
+                **{k: blocked[k] for k in ("strategy_id", "symbol",
+                                           "portfolio_id")},
+                "emitted": False,
+                "reason": blocked.get("permission_reason",
+                                      "switchboard refused the exit")})
+
+        intents = self.positions.plan_exits(allowed, net_positions)
+        sent: list[dict] = []
+        for intent in intents:
+            if not intent["emit"]:
+                report["exit_orders"].append({
+                    "strategy_id": intent.get("strategy_id"),
+                    "symbol": intent["symbol"],
+                    "portfolio_id": intent["portfolio_id"],
+                    "emitted": False, "reason": intent["reason"]})
+                continue
+            account = self._account_for(intent["portfolio_id"])
+            record = self.dispatch_flatten(account, intent["symbol"],
+                                           intent["portfolio_id"])
+            record.update({"strategy_id": intent.get("strategy_id"),
+                           "portfolio_id": intent["portfolio_id"],
+                           "emitted": True, "reason": intent["reason"],
+                           "held_direction": intent.get("held_direction"),
+                           "held_quantity": intent.get("held_quantity")})
+            # The book is cleared only on a SEND THAT SUCCEEDED. Clearing on
+            # intent would leave this process believing it is flat while the
+            # position is still open, and the next exit would then decline to
+            # flatten the thing it failed to flatten.
+            if record.get("ok"):
+                self.positions.record_flat(intent["portfolio_id"],
+                                           intent["symbol"])
+            report["exit_orders"].append(record)
+            sent.append(record)
+        return sent
+
+    def dispatch_flatten(self, account: str, symbol: str,
+                         portfolio_id: str = "") -> dict:
+        """
+        Format one FLATTEN and put it on the wire.
+
+        Built by `crosstrade_formatter.format_flatten_command`, sent by
+        `live.dispatcher.send_execution_signal` - the same and only sender
+        every entry goes through. `dry_run` formats and validates everything
+        and opens no socket; the logged command is REDACTED, because the key is
+        a bearer credential for a live account.
+        """
+        started = time.perf_counter()
+        record: dict[str, Any] = {
+            "timestamp": _utcnow(), "dry_run": self.dry_run,
+            "account": account, "symbol": symbol, "action": "FLATTEN",
+            "quantity": None, "attempts": 0, "ok": False, "error": None,
+        }
+        try:
+            command = format_flatten_command(account=account,
+                                             instrument=symbol,
+                                             key=self.crosstrade_key)
+        except Exception as exc:                                  # noqa: BLE001
+            record["error"] = f"{type(exc).__name__}: {exc}"
+            return record
+        record["command"] = redact(command)
+
+        if self.dry_run:
+            record.update({"ok": True, "attempts": 0,
+                           "note": "dry run — formatted, validated, not sent"})
+            return record
+        return self._send_with_retry(record, command, started)
 
     # -- netting and sizing ------------------------------------------------
     def _build_plan(self, signals: list[dict], readings: dict,

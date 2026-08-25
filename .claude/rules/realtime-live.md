@@ -53,10 +53,14 @@ daemon WRITES, the reader READS, the formatter FORMATS and sends nothing.
     30m — the same tape, a 43% different boundary — so an anchor applied at the
     wrong timeframe silently relabels roughly a third of the session. The
     timeframe is part of the key, part of the state file and part of every
-    error message. **ES and CL have no regime cache on this box**, so they
-    cannot be classified until `scripts/precompute_regimes.py` has run for
-    them; the daemon says so on stderr at construction rather than at the first
-    signal.
+    error message. **CL, ES, GC and NQ all load pinned anchors from
+    the regime cache** over the in-sample window 2013-01-01..2022-12-31 -
+    verified 2026-08-25 at 15m and 1h, and the 1m/2m/5m/30m caches exist too.
+    A symbol with no cache still cannot be classified and the daemon says so on
+    stderr at construction rather than at the first signal; run
+    `scripts/precompute_regimes.py` for any (symbol, timeframe) before trading
+    it, because an uncached pair falls back to a live median rather than the
+    pinned anchor.
   - **Micros resolve to their full-size parent** (`MNQ`→`NQ`, `MES`→`ES`,
     `MCL`→`CL`, `MGC`→`GC`) because they quote the same price series at the
     same tick size — only the multiplier differs, and a multiplier appears
