@@ -125,9 +125,16 @@ a funding program rather than to a market.
     Without one, a row is attributed only when the account holds exactly ONE
     strategy trading that contract; two candidates is UNATTRIBUTED and
     reported. A trade filed under the wrong strategy is a promotion decided on
-    somebody else's P&L. `NT8_ACCOUNT_ALIASES` (`Sim101` -> `Incubator-Odd`) is
-    the only place NT8's account names and the routing table's are tied
-    together, and portfolio ids resolve to themselves.
+    somebody else's P&L. `NT8_ACCOUNT_ALIASES` (`SimIncubator1` ->
+    `Incubator-Odd`, `SimProp2` -> `Prop-Even`) is the only place NT8's account
+    names and the routing table's are tied together, and portfolio ids resolve
+    to themselves. **`target_account` is NOT the portfolio id** — NinjaTrader
+    prefixes a simulation account with `Sim`, the ids keep the Odd/Even
+    spelling that encodes the basket split, and the two files are reconciled
+    by `tests/test_incubator_recorder.py`: an order sent to an account NT8 does
+    not have is rejected at one end of the day, a fill recorded under an
+    account no portfolio claims is unattributed at the other, and neither
+    failure mentions the other file.
   - **Re-reading the same export changes nothing.** Every trade carries a
     `trade_id` derived from what it IS, so an evening cron over a growing file
     adds what is new — duplicates would make a strategy look like it cleared

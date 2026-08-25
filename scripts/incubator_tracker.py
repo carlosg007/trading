@@ -309,9 +309,10 @@ def group_by_account(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     The rows sorted by ACCOUNT, then strategy.
 
     The two incubator accounts are separate risk envelopes with separate
-    baskets, and they are read separately: `Incubator-Odd` is Sim101's board
-    and `Incubator-Even` is Sim102's. Interleaving them in ledger order makes
-    an operator scan the account column to answer "how is Sim101 doing".
+    baskets, and they are read separately: `Incubator-Odd` executes on
+    `SimIncubator1` and `Incubator-Even` on `SimIncubator2`. Interleaving them
+    in ledger order makes an operator scan the account column to answer "how
+    is SimIncubator1 doing".
 
     Presentation only — `evaluate_all` still returns every entry in ledger
     order, because that is the audit, and an audit that reorders its input has

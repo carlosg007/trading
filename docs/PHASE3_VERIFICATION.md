@@ -124,7 +124,10 @@ Recorded so no one reads a green board as more than it is.
 - **The dispatcher has never sent a real request.** All 63 checks run against a
   fake opener. `live/config.json` still holds the placeholder webhook, which
   `send_execution_signal` refuses by design — the first live dispatch against
-  `Sim101` still has to be done by hand.
+  the sim account still has to be done by hand. *(2026-08-25: that account was
+  `Sim101` when this sweep ran; NinjaTrader has since renamed the four to
+  `SimIncubator1`/`SimIncubator2`/`SimProp1`/`SimProp2`, which is what
+  `target_account` now carries. The finding stands — nothing has been sent.)*
 - **`evaluate_incubator_sync` has not run on a real NT8 export.** It is tested
   on synthetic CSV/JSON fixtures only; `/mnt/backtest/artifacts/incubator_logs/`
   has no data yet.
