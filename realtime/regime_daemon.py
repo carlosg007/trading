@@ -1643,9 +1643,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="how many trailing bars to classify over "
                          f"(minimum {MIN_BARS_FOR_REGIME})")
     ap.add_argument("--feed", default="auto",
-                    choices=("auto", "live", "lake"),
-                    help="where --publish reads bars from. auto: the live "
-                         "vendor feed when one is configured, the lake "
+                    choices=("auto", "nt8", "live", "lake"),
+                    help="where --publish reads bars from. auto: the NT8 "
+                         "broker feed when it is publishing, the lake "
                          "otherwise. A quadrant published from the lake "
                          "describes the newest bar somebody INGESTED, which "
                          "is not the market")

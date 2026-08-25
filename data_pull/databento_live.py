@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
 """
-data_pull.databento_live - the newest 1-minute bars, from the vendor.
+data_pull.databento_live - recent 1-minute bars from Databento. NOT LIVE.
 
-This is the only module in the live path that talks to Databento, because
-`data_pull/` is the only layer in this repository that touches a vendor API.
-`realtime/feed.py` consumes it through a one-method contract and never imports
-`databento` itself.
+**This module is not part of the live execution path and must not become one
+again.** Live market data comes from the BROKER - NinjaTrader 8, through
+`realtime/nt8_feed.py` - so that the bars a strategy decides on are the bars
+its orders execute against. Databento is historical: backtests, model training
+datasets, and topping the lake up to the present when an ingest has fallen
+behind. A research vendor and a broker fill that disagree about a bar's close
+produce slippage nobody can source, which is the whole reason for the split.
+
+What it is still good for: gap-filling and verification. `--symbol NQ
+--minutes 120` answers "what did the tape actually do", against which an NT8
+spool can be checked - see `realtime/nt8_feed.py` for the live contract.
 
     from data_pull.databento_live import DatabentoBarClient
     client.minute_bars("NQ", 900)     # -> DataFrame of 1m bars, UTC

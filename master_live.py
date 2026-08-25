@@ -208,13 +208,16 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--once", action="store_true",
                     help="run a single cycle and exit")
     ap.add_argument("--tf", default="15m", help="bar timeframe to read")
-    ap.add_argument("--feed", default="auto", choices=("auto", "live", "lake"),
-                    help="where bars come from. auto: the live vendor feed "
-                         "when one is configured, the lake otherwise. live: "
-                         "REFUSES to start without one, rather than falling "
-                         "back to historical bars that read exactly like a "
-                         "quiet market. lake: the historical store, as current "
-                         "as the last ingest")
+    ap.add_argument("--feed", default="auto",
+                    choices=("auto", "nt8", "live", "lake"),
+                    help="where bars come from. auto: the NT8 broker feed when "
+                         "it is publishing, the lake otherwise. nt8 (or its "
+                         "alias live): REFUSES to start when NT8 is not "
+                         "publishing, rather than falling back to historical "
+                         "bars that read exactly like a quiet market. lake: "
+                         "the historical store, as current as the last ingest. "
+                         "Live data is the BROKER's; Databento is historical "
+                         "only")
     ap.add_argument("--lookback-bars", type=int, default=500,
                     help="bars handed to each strategy per cycle")
     ap.add_argument("--max-regime-age-sec", type=float, default=None,

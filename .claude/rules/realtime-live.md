@@ -10,6 +10,7 @@ paths:
   - "tests/test_dispatcher.py"
   - "tests/test_live_feed.py"
   - "data_pull/databento_live.py"
+  - "tests/test_nt8_feed.py"
 ---
 
 # The live regime service and the execution loop
@@ -214,29 +215,50 @@ that produced no entry and is never counted as an approval.
   - **The choice is NOT tied to `--dry-run`.** Dry-run is about whether a
     socket opens; a dry run against stale bars cannot rehearse a decision the
     loop would make now.
-- **`data_pull/databento_live.py` is the only module in the live path that
-  touches a vendor**, because `data_pull/` is the layer that does that.
-  `GLBX.MDP3`, `ohlcv-1m`, continuous symbols on the volume roll (`NQ.v.0`) —
-  the constants IMPORTED from `pull_futures.py`, because a second opinion about
-  the dataset or the roll rule is a second price series that jumps at different
-  dates than the one the certification was computed on.
-  - **The lag was measured, not assumed: GLBX.MDP3 publishes `ohlcv-1m` in
-    TEN-MINUTE CHUNKS**, so the newest bar is 4–14 minutes old depending on
-    where in the cycle you ask (sampled 2026-08-25, 17:08–17:14 UTC). That
-    makes this transport fine for **1h**, marginal for 15m (a 14-minute lag on
-    a 15-minute bar means acting almost a full bar late), and unusable at 5m
-    and below. `databento.Live` — a streaming session, deliberately not
-    implemented — is the transport for anything faster.
-  - **The request must not ask past the dataset's published availability**:
-    Databento returns 422 rather than clamping, so a poll stamped `now` fails
-    every cycle. `available_end()` reads it (a free metadata call, cached 20s)
-    and the window ends there.
-  - **History is cached and topped up.** A strategy on 400 hourly bars needs
-    ~24,000 minute bars behind it; re-requesting that every 60 seconds would
-    pull ~100,000 rows a minute across four symbols on an endpoint billed by
-    bytes. The first call per symbol warms up, every call after asks only for
-    the minutes since the last bar held, and `requests` / `rows_fetched` on the
-    client say what a session actually spent.
+- **LIVE MARKET DATA COMES FROM THE BROKER, and Databento is historical
+  only.** `realtime/nt8_feed.py`, 2026-08-25. The bars a strategy decides on
+  are then the bars its orders execute against — same feed, same session
+  template, same clock — and a research vendor that disagreed with a broker
+  fill about a bar's close would produce slippage nobody could source. Nothing
+  in `realtime/` or `master_live.py` imports `databento`, and
+  `tests/test_nt8_feed.py` asserts that on the source rather than trusting it.
+  `data_pull/databento_live.py` survives as a gap-fill and verification tool
+  and is explicitly not the live path.
+  - **The transport is a SPOOL DIRECTORY**, `/mnt/backtest/artifacts/nt8_bars/`
+    or `$BT_NT8_SPOOL` — the same shared-folder channel NT8 already uses to
+    deliver fill logs. A NinjaScript add-on appends one line per closed bar;
+    this reads the tail. Chosen over an HTTP listener deliberately: a listener
+    is a port, a process to supervise and a silent hole when it dies, while a
+    file that stops growing is visible to `ls`, survives a restart on either
+    side and replays after an outage. A push transport added later should
+    WRITE this spool rather than bypass it.
+  - **`ts` IS THE BAR'S CLOSE TIME, and this repository stamps the OPEN.**
+    NinjaTrader stamps the bar that ran 16:00–17:00 as `17:00`; the lake
+    resamples `label="left"` and every certification was computed that way.
+    Ingested as-is, every bar shifts one period, every indicator is computed on
+    misaligned data, and nothing raises. One subtraction on ingest, driven by
+    the timeframe. A file may DECLARE the other convention with a `# stamp=open`
+    header — in the file, because the NinjaScript is what knows, and an
+    operator who changes it should not have to remember a flag on the other
+    side of the mount.
+  - **A naive timestamp is REFUSED, not assumed to be UTC.** NT8 writes in the
+    instrument's or the workstation's timezone unless the script converts, so a
+    stamp with no offset is as likely to be New York as UTC — and guessed wrong
+    the series shifts by hours while still looking like a market: bars in order,
+    prices sane, sessions the wrong length.
+  - **A written bar is not trusted to be a closed bar.** The publisher is meant
+    to append on close; every frame still goes through the one forming-bar
+    rule, because a script switched to `Calculate.OnEachTick` would otherwise
+    start appending live bars and nothing downstream would notice.
+  - **A missing spool RAISES.** No publisher is not a quiet market. A directory
+    that exists but holds no file for a symbol leaves that symbol absent, which
+    the loop reports as "no bars" rather than as "no signal".
+  - **THE NINJASCRIPT PUBLISHER IS NOT IN THIS REPOSITORY** and does not exist
+    yet. It runs on the Windows workstation and must honour the contract in
+    `realtime/nt8_feed.py`: one file per (symbol, timeframe) named
+    `{SYMBOL}_{TF}.csv`, header `ts,open,high,low,close,volume`, appended on
+    bar close, ISO-8601 timestamps carrying `Z` or an explicit offset. Until it
+    runs, `--feed nt8` refuses and `auto` falls back to the lake.
 - **The bar feed resolves micros to their parent.** The baskets hold
   MNQ/MES/MCL/MGC and the tape is the full-size contract's, so without the
   alias this loop reads nothing and no-ops forever — looking exactly like a
@@ -320,9 +342,11 @@ python3 realtime/regime_reader.py --symbol NQ
 # does NOT classify. A dry run is the DEFAULT and runs every gate and formats
 # every payload but opens no socket; --live is the only flag that arms it.
 python3 master_live.py --dry-run --once            # one cycle, nothing sent
-python3 master_live.py --dry-run --once --tf 1h --feed live   # against the vendor
+python3 master_live.py --dry-run --once --tf 1h --feed nt8    # the broker feed
 python3 master_live.py --dry-run --once --feed lake           # against history
-python3 data_pull/databento_live.py --symbol NQ --minutes 120 # probe the feed
+BT_NT8_SPOOL=/path/to/spool python3 master_live.py --feed nt8 --dry-run --once
+# Databento is HISTORICAL: gap-fill and verification, never the live path.
+python3 data_pull/databento_live.py --symbol NQ --minutes 120
 python3 master_live.py --dry-run --interval-sec 30
 python3 master_live.py --interval-sec 60           # ALSO A DRY RUN
 python3 master_live.py --live --interval-sec 60    # LIVE. SENDS REAL ORDERS.

@@ -46,13 +46,23 @@ through `realtime/contract_alias.py` and REPORTS the substitution in the
 `sources` map. The order is still for the micro and still sized on the micro's
 point value; only the bars come from the parent.
 
-CHOOSING A FEED
-===============
-`resolve_feed("auto")` returns the live feed when one is configured and the
-lake otherwise, and says which in `describe()`. The choice is deliberately NOT
-tied to `--dry-run`: dry-run is about whether a socket opens, and a dry run
-against 18-day-old bars cannot rehearse a decision the loop would make now.
-Pass `--feed lake` to force the historical path when you mean it.
+WHERE LIVE BARS COME FROM, AND WHERE THEY DO NOT
+================================================
+The live feed is the BROKER's: NinjaTrader 8, through `realtime/nt8_feed.py`.
+The bars a strategy decides on are then the bars its orders execute against -
+same feed, same session template, same clock - and a research vendor that
+disagreed with a broker fill about a bar's close would produce slippage nobody
+could source.
+
+**Databento is historical only**, for backtests and model training, through
+`data_pull/pull_futures.py` and the lake. Nothing in this module and nothing in
+the live path imports it.
+
+`resolve_feed("auto")` returns the NT8 feed when it is publishing and the lake
+otherwise, and says which in `describe()`. The choice is deliberately NOT tied
+to `--dry-run`: dry-run is about whether a socket opens, and a dry run against
+stale bars cannot rehearse a decision the loop would make now. Pass
+`--feed lake` to force the historical path when you mean it.
 """
 
 from __future__ import annotations
@@ -74,7 +84,9 @@ from realtime.contract_alias import resolve_parent                 # noqa: E402
 
 BAR_COLUMNS = tuple(LONG_COLUMNS)     # ts, symbol, open, high, low, close, volume
 
-FEED_MODES = ("auto", "live", "lake")
+# `live` is kept as a spelling of `nt8` so existing commands and documented
+# runbooks keep working; there is only one live feed and it is the broker's.
+FEED_MODES = ("auto", "nt8", "live", "lake")
 
 
 class FeedError(RuntimeError):
@@ -436,11 +448,20 @@ class LiveFeed(BarFeed):
 # --------------------------------------------------------------------------
 
 def live_feed_available() -> tuple[bool, str]:
-    """`(is_available, why not)` for the configured live vendor."""
+    """
+    `(is_available, why not)` for the live feed — which is NT8's, and only
+    NT8's.
+
+    Live market data comes from the BROKER. Databento is historical data for
+    backtests and model training, and nothing in the live path imports it: the
+    bars a strategy decides on should be the bars its orders execute against,
+    and a research vendor and a broker fill that disagree about a bar's close
+    produce slippage nobody can source.
+    """
     try:
-        from data_pull.databento_live import availability          # noqa: PLC0415
+        from realtime.nt8_feed import availability                 # noqa: PLC0415
     except Exception as exc:                                       # noqa: BLE001
-        return False, f"data_pull.databento_live is unimportable ({exc})"
+        return False, f"realtime.nt8_feed is unimportable ({exc})"
     return availability()
 
 
@@ -459,14 +480,15 @@ def resolve_feed(mode: str = "auto", **kwargs) -> BarFeed:
     if choice == "lake":
         return LakeFeed(**kwargs)
 
+    from realtime.nt8_feed import NT8BarFeed                       # noqa: PLC0415
+
     ok, why = live_feed_available()
-    if choice == "live" and not ok:
+    if choice in ("nt8", "live") and not ok:
         raise FeedError(
-            f"--feed live was requested and no live feed is configured: {why}. "
-            f"Refusing to fall back to the lake: a rehearsal against stale "
-            f"bars reads exactly like a live session that found no signal.")
+            f"--feed {choice} was requested and the NT8 feed is not "
+            f"publishing: {why}. Refusing to fall back to the lake: a "
+            f"rehearsal against stale bars reads exactly like a live session "
+            f"that found no signal.")
     if not ok:
         return LakeFeed(**kwargs)
-
-    from data_pull.databento_live import DatabentoBarClient        # noqa: PLC0415
-    return LiveFeed(DatabentoBarClient(), label="Databento GLBX.MDP3 ohlcv-1m")
+    return NT8BarFeed(**kwargs)
