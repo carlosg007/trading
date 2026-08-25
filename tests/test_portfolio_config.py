@@ -86,6 +86,21 @@ EXECUTION_ACCOUNTS = {"Incubator-Odd": "SimIncubator1",
                       "Prop-Odd": "SimProp1",
                       "Prop-Even": "SimProp2"}
 
+# The strategies the shipped routing table is EXPECTED to hold, named one by
+# one. This list used to be "nothing, anywhere", which was true until
+# `backtest/promote.py` registered its first promotion — but the check was
+# never really about emptiness. It is about a strategy appearing in
+# `active_strategies` that nobody put there ON PURPOSE, because that list is
+# what routes an order to an account. Naming the expected ones keeps the guard
+# and lets a deliberate promotion through: promote a strategy, add it here in
+# the same commit, and an assignment that arrives any other way still fails.
+EXPECTED_ASSIGNMENTS = {
+    "Incubator-Odd":  ["t3_braid_scalp_20260823_NQ_1h"],
+    "Incubator-Even": [],
+    "Prop-Odd":       [],
+    "Prop-Even":      [],
+}
+
 REQUESTED_POINT_VALUES = {"MNQ": 2.0, "MES": 5.0, "MCL": 100.0, "MGC": 10.0}
 REQUESTED_TICK_SIZES = {"MNQ": 0.25, "MES": 0.25, "MCL": 0.01, "MGC": 0.10}
 
@@ -170,9 +185,12 @@ def test_all_four_target_accounts_exist_and_are_well_formed() -> None:
                 f"{pid}: {symbol} has no metadata, so nothing can size it")
         assert p["basket"]["correlation_group"]
         assert p["basket"]["structures"]
-        assert p["active_strategies"] == [], (
-            "the file ships with nothing assigned; a strategy appearing here "
-            "unannounced would be routed to a live account")
+        assert p["active_strategies"] == EXPECTED_ASSIGNMENTS[pid], (
+            f"{pid} holds {p['active_strategies']}, and the deliberate "
+            f"assignments are {EXPECTED_ASSIGNMENTS[pid]}. A strategy "
+            f"appearing here unannounced is routed to a live account; one "
+            f"promoted on purpose belongs in EXPECTED_ASSIGNMENTS in the same "
+            f"commit that registers it.")
 
 
 def test_the_two_tracks_hold_the_same_baskets_and_are_orthogonal_within() -> None:
