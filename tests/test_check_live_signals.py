@@ -426,10 +426,13 @@ def test_unwatched_symbols_come_from_the_spool_not_the_regime_file(tmp_path):
     file compares a set against itself and reports nothing, every time - as
     wrong as it is quiet, and it is what the first version of this did.
     """
+    # Deliberately NO declared-not-traded symbol here: this case is about
+    # where the set comes from, and mixing in FDAX would couple it to the
+    # NOT_TRADED list, which its own cases cover.
     card = _card(tmp_path, regime=_regime(), portfolios=_portfolios(),
-                 spool=("NQ_1m.csv", "MNQ_1m.csv", "ES_1m.csv", "FDAX_1m.csv"))
+                 spool=("NQ_1m.csv", "MNQ_1m.csv", "ES_1m.csv", "GC_1m.csv"))
     assert "Feed symbols no allocated strategy watches (2)" in card
-    assert "ES, FDAX" in card
+    assert "ES, GC" in card
     # NQ is allocated and MNQ is its execution micro; neither is unwatched.
     assert "MNQ" not in card.split("no allocated strategy watches")[1]
 
@@ -533,3 +536,120 @@ def test_it_writes_nothing(tmp_path):
         assert sorted(p.name for p in (tmp_path / "data").iterdir()) == before
     finally:
         _unwire()
+
+#: A cycle carrying indicator telemetry, captured from a real
+#: `master_live.py --dry-run --once` run on 2026-08-26 after
+#: `describe_cycle` learned to log readings.
+CYCLE_WITH_INDICATORS = '''[2026-08-26T16:16:19+00:00] cycle DRY RUN  symbols=3  strategies=1  383.2ms
+       HOLD demo_NQ_1h MNQ — standing down; Q0 is not certified.
+       IND  demo_NQ_1h MNQ flat  t3_slope=3.9512  braid_hist=0.3381  stiffness=55  atr_norm=0.0032  hour_et=11
+'''
+
+
+def test_readings_render_under_the_verdict_not_beside_it(tmp_path):
+    """
+    A reading is not a decision. Rendered in the same list, one HOLD and
+    five indicator columns would read as the loop having decided six
+    things when it decided one - so `IND` is split into its own block
+    below the verdict it explains.
+    """
+    card = _card(tmp_path, regime=_regime(), portfolios=_portfolios(),
+                 cycle_log=CYCLE_WITH_INDICATORS)
+    lines = card.splitlines()
+
+    hold = next(i for i, ln in enumerate(lines) if ln.startswith('  HOLD'))
+    ind = next(i for i, ln in enumerate(lines) if ln.startswith('  IND'))
+    assert ind > hold, 'the decision reads first'
+    assert 'What the strategy was looking at' in card
+    assert 't3_slope=3.9512' in card
+    assert 'stiffness=55' in card
+
+
+def test_telemetry_is_not_counted_as_a_decision(tmp_path):
+    """
+    The decisions block must hold the verdict alone. An `IND` line leaking
+    into it would inflate what the cycle is reported to have resolved.
+    """
+    card = _card(tmp_path, regime=_regime(), portfolios=_portfolios(),
+                 cycle_log=CYCLE_WITH_INDICATORS)
+    decisions = card.split('Last cycle\'s decisions')[1].split(
+        'What the strategy was looking at')[0]
+    assert 'HOLD' in decisions
+    assert 'IND' not in decisions
+    assert 't3_slope' not in decisions
+
+
+def test_the_parser_knows_every_verdict_describe_cycle_can_emit():
+    """
+    `IND` and `IND?` were added to `describe_cycle` after this parser was
+    written. An unknown kind is filed as NOTE and loses its label, so the
+    two vocabularies are compared rather than assumed to agree.
+    """
+    assert set(cs.CYCLE_TELEMETRY) <= set(cs.CYCLE_VERDICTS)
+    for kind in ('OK', 'FAIL', 'SKIP', 'VETO', 'HOLD', 'ERROR', 'EXIT',
+                 'IND', 'IND?'):
+        assert kind in cs.CYCLE_VERDICTS, kind
+
+
+# ==========================================================================
+# Symbols that are deliberately not traded
+# ==========================================================================
+
+def test_a_declared_symbol_is_reclassified_not_suppressed(tmp_path):
+    """
+    THE POINT OF THE LIST. FDAX reaches the spool and nothing can size it. A
+    list that made it VANISH from the card would be worse than the noise it
+    was added to silence - the next operator would have no way to learn the
+    symbol is arriving at all. It moves from "unaccounted for" to "declared,
+    and here is why".
+    """
+    card = _card(tmp_path, regime=_regime(), portfolios=_portfolios(),
+                 spool=("NQ_1m.csv", "ES_1m.csv", "FDAX_1m.csv"))
+    assert "FDAX" in card, "a declared symbol must still be visible"
+    assert "Declared NOT TRADED (1)" in card
+    assert "EUR 25/point" in card, "with the reason, not just the label"
+
+    unaccounted = card.split("no allocated strategy watches")[1].split(
+        "Declared NOT TRADED")[0]
+    assert "ES" in unaccounted
+    assert "FDAX" not in unaccounted, "it is declared, so not unaccounted for"
+
+
+def test_nothing_unaccounted_says_so(tmp_path):
+    card = _card(tmp_path, regime=_regime(), portfolios=_portfolios(),
+                 spool=("NQ_1m.csv", "MNQ_1m.csv", "FDAX_1m.csv"))
+    assert "Nothing is unaccounted for." in card
+    assert "Declared NOT TRADED" in card
+
+
+def test_the_reason_lookup_normalises_and_refuses_the_unknown():
+    from realtime.contract_alias import not_traded_reason      # noqa: PLC0415
+    assert not_traded_reason(" fdax ") == not_traded_reason("FDAX")
+    assert not_traded_reason("FDAX")
+    assert not_traded_reason("NQ") is None
+    assert not_traded_reason("") is None
+    assert not_traded_reason(None) is None
+
+
+def test_a_declared_symbol_still_has_no_contract_spec():
+    """
+    THE SAFETY PROPERTY, pinned so a later "just add the spec" cannot pass
+    quietly. `ContractSpec.multiplier` is dollars per point and FDAX settles
+    in EUR 25/point on a tree with no currency conversion, so a spec for it
+    would be a dollar figure that is not one - and a wrong multiplier does not
+    fail, it scales every position and every P&L by a constant with every log
+    line reading correctly. `get_spec` raising is what keeps it un-tradeable.
+    """
+    from backtest.specs import SPECS, get_spec                 # noqa: PLC0415
+    from realtime.contract_alias import NOT_TRADED             # noqa: PLC0415
+
+    for symbol in NOT_TRADED:
+        assert symbol not in SPECS, (
+            f"{symbol} is declared NOT TRADED and yet has a ContractSpec. "
+            f"One of the two is wrong and the sizing path believes the spec.")
+        try:
+            get_spec(symbol)
+        except KeyError:
+            pass
+        else:
+            raise AssertionError(f"get_spec({symbol!r}) must refuse")

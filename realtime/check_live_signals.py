@@ -123,7 +123,8 @@ REPO = PROJECT_ROOT
 # first time somebody raises a limit.
 from realtime.risk_firewall import DEFAULT_LIMITS, kill_switch_path  # noqa: E402
 from realtime.lifecycle import state_path                          # noqa: E402
-from realtime.contract_alias import micros_of                      # noqa: E402
+from realtime.contract_alias import (                              # noqa: E402
+    micros_of, not_traded_reason)
 # The spool's location and filename shape, from the tool that already owns
 # them. Importing a sibling status card rather than restating two constants:
 # it is 32ms, pulls nothing heavy, and `nt8-check` and `signal-check`
@@ -306,7 +307,15 @@ def engine_process() -> dict[str, Any]:
 CYCLE_HEADER_RE = re.compile(
     r"^\[([^\]]+)\]\s+cycle\s+(DRY RUN|LIVE)\s+symbols=(\d+)\s+"
     r"strategies=(\d+)\s+([\d.]+)ms\s*$")
-CYCLE_VERDICTS = ("OK", "FAIL", "SKIP", "VETO", "HOLD", "ERROR", "EXIT")
+#: `IND` and `IND?` are indicator TELEMETRY, not decisions: the readings the
+#: strategy was looking at, and a note when its feature matrix would not
+#: build. They are listed here so the parser recognises them, and separated
+#: below so they render under the verdict rather than beside it - a reading is
+#: not a decision and a card that mixed them would say the loop decided five
+#: things when it decided one.
+CYCLE_VERDICTS = ("OK", "FAIL", "SKIP", "VETO", "HOLD", "ERROR", "EXIT",
+                  "IND", "IND?")
+CYCLE_TELEMETRY = ("IND", "IND?")
 
 
 def last_cycle() -> dict[str, Any]:
@@ -683,11 +692,24 @@ def render(snap: dict[str, Any]) -> str:
                  f"{age_text(now - cyc['started_at'])} ago):"
                  if cyc["started_at"] else "  Last cycle's decisions:")
         for v in cyc["verdicts"]:
+            if v["kind"] in CYCLE_TELEMETRY:
+                continue
             head = f"  {v['kind']:<6}" if v["kind"] != "NOTE" else "        "
             body = wrap(v["text"], indent=10)
             L.append(f"{head}{body[0] if body else ''}")
             for ln in body[1:]:
                 L.append(f"{'':<8}{ln}")
+
+        telemetry = [v for v in cyc["verdicts"] if v["kind"] in CYCLE_TELEMETRY]
+        if telemetry:
+            L.append("")
+            L.append("  What the strategy was looking at on that bar "
+                     "(its own declared features):")
+            for v in telemetry:
+                body = wrap(v["text"], indent=10)
+                L.append(f"  {v['kind']:<6}{body[0] if body else ''}")
+                for ln in body[1:]:
+                    L.append(f"{'':<8}{ln}")
         L.append("")
         L.append("  The gate's current view (what would be permitted on the "
                  "latest published bar):")
@@ -712,11 +734,29 @@ def render(snap: dict[str, Any]) -> str:
                  f"no longer current.")
 
     if snap["unwatched"]:
+        declared = [(s_, not_traded_reason(s_)) for s_ in snap["unwatched"]]
+        known = [(s_, why) for s_, why in declared if why]
+        unaccounted = [s_ for s_, why in declared if not why]
+
         L.append("")
-        L.append(f"  Feed symbols no allocated strategy watches "
-                 f"({len(snap['unwatched'])}):")
-        for ln in wrap(", ".join(snap["unwatched"]), indent=6):
-            L.append(f"      {ln}")
+        if unaccounted:
+            L.append(f"  Feed symbols no allocated strategy watches "
+                     f"({len(unaccounted)}):")
+            for ln in wrap(", ".join(unaccounted), indent=6):
+                L.append(f"      {ln}")
+        if known:
+            # NOT suppressed. A symbol that vanished from the report the moment
+            # somebody added it to a list would be worse than the noise the
+            # list was added to silence; it is reclassified, with its reason.
+            L.append(f"  Declared NOT TRADED ({len(known)}) — recorded in "
+                     f"realtime/contract_alias.py:")
+            for sym, why in known:
+                body = wrap(why, indent=12)
+                L.append(f"      {sym:<6} {body[0] if body else ''}")
+                for ln in body[1:]:
+                    L.append(f"{'':<13}{ln}")
+        if not unaccounted:
+            L.append("  Nothing is unaccounted for.")
         # NOT "classified". The daemon classifies only its REGISTERED targets,
         # so these are ingested to the spool and nothing more - no quadrant is
         # computed for them and no gate is drawn. Saying "classified" would
