@@ -99,7 +99,8 @@ REPO = PROJECT_ROOT
 # `contract_alias` is 0.3ms and stdlib-only; `pipeline` is 16ms and pulls
 # dotenv. Both are cheap enough that ONE spelling of their rules beats a local
 # copy. `backtest.specs` is NOT imported - it pulls numpy and pandas.
-from realtime.contract_alias import micros_of, resolve_parent      # noqa: E402
+from realtime.contract_alias import (                              # noqa: E402
+    micros_of, not_traded_reason, resolve_parent)
 from backtest.pipeline import split_strategy_id                    # noqa: E402
 
 W = 80
@@ -814,6 +815,15 @@ def render(snap: dict[str, Any]) -> str:
             L.append(f"{'':<19}  {f['name']:<16} "
                      f"{size_text(f['bytes']):>9}  "
                      f"written {age_text(now - f['mtime'])} ago")
+        declared = [(f["symbol"], not_traded_reason(f["symbol"]))
+                    for f in spool["files"]]
+        known = sorted({s_ for s_, why in declared if why})
+        if known:
+            # Declared in realtime/contract_alias.NOT_TRADED. Named here so a
+            # stream that is deliberately un-tradeable does not read as one
+            # nobody has noticed - the two look identical on a spool listing.
+            L.append(f"{'':<19}  declared NOT TRADED: {', '.join(known)} "
+                     f"(no ContractSpec on purpose)")
         if spool["unparsed"]:
             # See the RUNBOOK's rollover section: a name that is not
             # <ROOT>_<TF>.csv is how a publisher rolled onto a physical

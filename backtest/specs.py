@@ -157,6 +157,20 @@ class ContractSpec:
 _NON_MICRO = 1.29 + 1.00
 _MICRO = 0.35 + 0.35
 
+# EVERY SPEC BELOW IS A US EXCHANGE AND A DOLLAR MULTIPLIER, AND THAT IS LOAD
+# BEARING. `multiplier` is dollars per full point, `commission` is dollars per
+# side, and `config/portfolios.json` declares `base_currency: USD`. There is no
+# currency conversion anywhere in this repository, so a non-USD contract has
+# nothing to pass through and its multiplier would be a dollar figure that is
+# not one.
+#
+# That is why FDAX (Eurex DAX, EUR 25/point) is NOT here even though the NT8
+# publisher spools it: the decision, and what it would take to reverse it, are
+# recorded in `realtime.contract_alias.NOT_TRADED`. `get_spec` raising for an
+# unknown symbol is what keeps it un-tradeable in the meantime, and that raise
+# is the feature - a fabricated multiplier would not fail, it would scale every
+# position and every P&L by a constant with every log line reading correctly.
+
 SPECS: dict[str, ContractSpec] = {
     # Equity index
     "ES":  ContractSpec("ES",  "E-mini S&P 500",        "CME",   50,     0.25,      _NON_MICRO),

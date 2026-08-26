@@ -122,3 +122,51 @@ def micros_of(symbol) -> list[str]:
     """Every micro that resolves to `symbol`, sorted. Empty for a micro."""
     sym = normalize(symbol)
     return sorted(m for m, full in MICRO_TO_PARENT.items() if full == sym)
+
+
+# ---------------------------------------------------------------------------
+# Symbols that reach the spool and are DELIBERATELY not traded
+# ---------------------------------------------------------------------------
+# The NT8 publisher sends whatever it is attached to, and the listener keys on
+# whatever it is sent, so contracts arrive that nothing in this repository can
+# size. This is where that decision is recorded, once, with its reason.
+#
+# It does NOT suppress anything. The status cards read it to move a symbol
+# from "unaccounted for" to "declared, and here is why" - a symbol that
+# disappeared from a report the moment somebody added it to a list would be a
+# worse outcome than the noise it was added to silence.
+#
+# WHY FDAX IS HERE RATHER THAN IN `backtest/specs.py`, stated plainly, because
+# "just add the spec" is the obvious move and it is the wrong one:
+#
+#   * `ContractSpec.multiplier` is documented as DOLLARS PER FULL POINT. FDAX
+#     is Eurex and settles at EUR 25 per point. Recording 25.0 there states a
+#     dollar multiplier for a euro contract.
+#   * `config/portfolios.json` declares `base_currency: USD`, and all 33
+#     existing specs are CME, CBOT, NYMEX or COMEX. There is no currency
+#     conversion anywhere in this tree, so there is nothing for a non-USD
+#     multiplier to pass through.
+#   * The commission would be invented. CLAUDE.md's rule for the symbols that
+#     are already UNVERIFIED is to pull the definition before backtesting
+#     them, not to estimate it.
+#
+# A wrong multiplier does not fail. It sizes every position and prices every
+# backtest by a constant factor, silently, and every log line reads correctly.
+# `backtest.specs.get_spec` already raises for an unknown symbol, so FDAX
+# cannot be sized or simulated by accident today; adding a fabricated spec is
+# the only thing that would make it possible.
+#
+# To actually trade it: pull the Eurex contract definition, decide how EUR
+# P&L reaches a USD account, and add the spec on that basis. To stop the bars
+# arriving at all, detach the instrument in the NT8 Market Analyzer - the
+# publisher is what chooses, and nothing on this box can decline it.
+NOT_TRADED: dict[str, str] = {
+    "FDAX": ("Eurex DAX. EUR 25/point on a tree whose multipliers are dollars "
+             "and whose base_currency is USD, with no FX conversion anywhere. "
+             "No ContractSpec on purpose - see the note above. Spooled only."),
+}
+
+
+def not_traded_reason(symbol) -> str | None:
+    """Why this symbol is deliberately not traded, or None if it is not one."""
+    return NOT_TRADED.get(normalize(symbol))
