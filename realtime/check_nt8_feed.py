@@ -91,8 +91,6 @@ import os                                                          # noqa: E402
 import re                                                          # noqa: E402
 import subprocess                                                  # noqa: E402
 import time                                                        # noqa: E402
-import urllib.error                                                # noqa: E402
-import urllib.request                                              # noqa: E402
 from datetime import datetime, timezone                            # noqa: E402
 from typing import Any                                             # noqa: E402
 
@@ -208,6 +206,21 @@ def truncated(items, keep: int = 11) -> str:
     return ", ".join(items[:keep]) + f", ... (+{len(items) - keep} more)"
 
 
+def short(path: Path) -> str:
+    """
+    A path relative to the repo when it is inside it, absolute otherwise.
+
+    `Path.relative_to` RAISES for anything outside the tree, and these paths
+    are overridable: `$BT_ENGINE_STATE` and `$BT_KILL_SWITCH` may point at
+    /var/lib or anywhere else. A bare `.relative_to(REPO)` therefore turns a
+    supported configuration into a traceback from a status card.
+    """
+    try:
+        return str(path.relative_to(REPO))
+    except ValueError:
+        return str(path)
+
+
 def row(label: str, value: str) -> str:
     return f"{label:<19}: {value}"
 
@@ -231,7 +244,16 @@ def fetch_health(url: str = DEFAULT_URL,
     Connection refused, DNS failure and timeout are reported by NAME rather
     than as a traceback: "the listener is not running" and "the listener did
     not answer in 4s" send you to different places.
+
+    `urllib` is imported HERE rather than at module scope. It costs 24ms and
+    drags in `http.client`, and `realtime/check_live_signals.py` imports this
+    module for `resolve_spool`/`spool_stats` alone - two filesystem helpers
+    that have no business pulling in an HTTP stack. This tool pays the 24ms on
+    every run either way, so nothing is lost by paying it here.
     """
+    import urllib.error                                       # noqa: PLC0415
+    import urllib.request                                     # noqa: PLC0415
+
     out: dict[str, Any] = {"ok": False, "code": None, "payload": None,
                            "error": None, "url": url}
     req = urllib.request.Request(url, headers={"Accept": "application/json"})
@@ -760,7 +782,7 @@ def render(snap: dict[str, Any]) -> str:
         stamp = reg.get("updated_at") or reg.get("mtime")
         L.append(row("Regime State File",
                      f"updated {age_text(now - stamp)} ago "
-                     f"({reg['path'].relative_to(REPO)})"
+                     f"({short(reg['path'])})"
                      if stamp else f"unreadable ({reg.get('error')})"))
         for sid, st in sorted((reg.get("strategies") or {}).items()):
             L.append(f"{'':<19}  {sid}: {st}")
