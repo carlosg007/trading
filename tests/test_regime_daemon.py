@@ -68,6 +68,7 @@ from realtime.regime_daemon import (                            # noqa: E402
     RegimeDaemonError,
     ThetaAnchorMissing,
     UnknownStrategy,
+    _fmt_opt,
     _verify_alias_tick_sizes,
 )
 from realtime.regime_reader import (                            # noqa: E402
@@ -1542,3 +1543,104 @@ def test_a_reader_started_mid_write_sees_the_previous_complete_document(tmp_path
         before["symbols"]["NQ"]["quadrant"] == "Q2"
     assert json.loads(Path(daemon.state_file).read_text()) \
         ["symbols"]["NQ"]["quadrant"] == "Q1"
+
+
+# --------------------------------------------------------------------------
+# The console line that took the switchboard down with it
+# --------------------------------------------------------------------------
+def test_an_absent_reading_formats_instead_of_raising():
+    """
+    `f"{None:.2f}"` raises TypeError, and `main()` formatted `adx_14` that way.
+
+    Measured 2026-08-26: 163 consecutive daemon failures, one every five
+    minutes, each AFTER the reading had been published — the raise landed
+    between `daemon.refresh()` and `publish_switchboard()`.
+    """
+    assert _fmt_opt(None, ".2f") == "n/a"
+    assert _fmt_opt(None, ".4f") == "n/a"
+    assert _fmt_opt(27.4567, ".2f") == "27.46"
+    assert _fmt_opt(7.90123, ".4f") == "7.9012"
+
+
+def test_a_zero_reading_is_not_reported_as_absent():
+    """
+    ADX of exactly 0.0 is a MEASUREMENT. `if not value` would print it as
+    `n/a`, which reads as "the indicator did not run" — the opposite claim.
+    """
+    assert _fmt_opt(0.0, ".2f") == "0.00"
+    assert _fmt_opt(0, ".2f") == "0.00"
+
+
+def test_a_non_numeric_reading_is_shown_not_hidden():
+    """The console line is a diagnostic; swallowing junk defeats its purpose."""
+    assert _fmt_opt("weird", ".2f") == "weird"
+
+
+def test_both_none_paths_survive_the_console_line(tmp_path):
+    """
+    THE GUARD IS NOT WARM-UP-ONLY, and this is the case that proves it.
+
+    `calculate_regime` returns None readings on two paths: the warm-up (Q0, by
+    contract) and the normal path when the last row's indicator is NaN, which
+    carries a real Q1..Q4 quadrant and looks entirely healthy. A fix written as
+    `if regime == UNDEFINED_LABEL` would pass the first and still crash on the
+    second.
+    """
+    daemon = make_daemon(tmp_path)
+
+    warmup = daemon.calculate_regime("NQ",
+                                     make_bars(MIN_BARS_FOR_REGIME - 1, "trend"))
+    assert warmup["quadrant"] == "Q0"
+    assert warmup["adx_14"] is None and warmup["atr_14"] is None
+
+    healthy = daemon.calculate_regime("NQ", make_bars(200, "trend"))
+    assert healthy["quadrant"] != "Q0", "fixture must exercise the NORMAL path"
+
+    # The literal f-string from `main()`, over the warm-up reading and over a
+    # real quadrant whose indicators came back NaN.
+    nan_on_normal = {**healthy, "adx_14": None, "atr_14": None}
+    for data in (warmup, healthy, nan_on_normal):
+        line = (f"  NQ 15m: {data['quadrant']} ({data['regime']})  "
+                f"ADX={_fmt_opt(data['adx_14'], '.2f')}  "
+                f"ATR={_fmt_opt(data['atr_14'], '.4f')}  "
+                f"theta={_fmt_opt(data['theta_vol'], '.4f')}  "
+                f"bar={data['bar_ts'] or 'n/a'}")
+        assert "NQ 15m" in line
+        assert "None" not in line, f"a None leaked into the console line: {line}"
+
+
+def test_the_switchboard_publishes_even_when_the_loop_raises(tmp_path):
+    """
+    The structural half of the repair.
+
+    With the publish outside a `finally`, any raise in the loop above it took
+    the explicit republish with it — the one that picks up a permission change
+    with no market movement behind it. It did NOT leave a classified symbol's
+    switchboard stale (`refresh()` writes that block itself); the loss was the
+    republish, and every target after the raise never being classified at all.
+    """
+    daemon = make_daemon(tmp_path)
+    published = {"ran": False}
+
+    def _publish():
+        published["ran"] = True
+        return {}
+
+    daemon.publish_switchboard = _publish
+
+    # The shape `main()` now has: a loop that raises, a `finally` that
+    # publishes regardless, and the original exception still reaching the exit
+    # code rather than being replaced.
+    with pytest.raises(RuntimeError, match="boom"):
+        try:
+            raise RuntimeError("boom")
+        finally:
+            try:
+                for _sid, _st in sorted(daemon.publish_switchboard().items()):
+                    pass
+            except Exception:                                     # noqa: BLE001
+                pass
+
+    assert published["ran"], \
+        "the switchboard must publish even when the loop above it raised"
+

@@ -319,6 +319,36 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _fmt_opt(value: Any, spec: str = ".2f", missing: str = "n/a") -> str:
+    """
+    Format a reading that is allowed to be absent.
+
+    `calculate_regime` returns `adx_14`/`atr_14` as None on TWO paths, and a
+    console line that applies `:.2f` to either of them raises
+    `TypeError: unsupported format string passed to NoneType.__format__`:
+
+      * the WARM-UP path - fewer than MIN_BARS_FOR_REGIME bars, which returns
+        Q0/`Q0_UNDEFINED_WARMUP` with both readings None by contract;
+      * the NORMAL path - enough bars, a real quadrant, but the last row's
+        indicator is NaN, which is mapped to None a few lines above the return.
+
+    So this is not a warm-up-only guard and must not be written as one. A
+    `regime == UNDEFINED_LABEL` test would still crash on the second path,
+    where the quadrant is Q1..Q4 and looks entirely healthy.
+
+    Absence prints as `n/a` rather than as `0` or `None`: the reading did not
+    happen, and a zero in a log of ADX values reads as a measured zero.
+    """
+    if value is None:
+        return missing
+    try:
+        return format(float(value), spec)
+    except (TypeError, ValueError):
+        # Something that is neither None nor a number reached a numeric field.
+        # Printing it beats hiding it - the console line is a diagnostic.
+        return str(value)
+
+
 # --------------------------------------------------------------------------
 # theta_vol anchors
 # --------------------------------------------------------------------------
@@ -1687,33 +1717,85 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     print()
     depth = max(int(args.bars), MIN_BARS_FOR_REGIME)
-    for symbol, tf in targets:
-        try:
-            frames, _ = feed.closed_bars([symbol], tf, depth)
-            bars = frames.get(str(symbol).upper())
-            if bars is None or not len(bars):
-                raise RegimeDaemonError(f"the feed returned no {tf} bars")
-            tail = bars.tail(depth)
-            data = daemon.refresh(symbol, tail, tf=tf)
-        except Exception as exc:
-            failed += 1
-            print(f"  {symbol} {tf}: FAILED - {type(exc).__name__}: {exc}")
-            continue
-        published += 1
-        print(f"  {symbol} {tf}: {data['quadrant']} ({data['regime']})  "
-              f"ADX={data['adx_14']:.2f}  ATR={data['atr_14']:.4f}  "
-              f"theta={data['theta_vol']:.4f}  bar={data['bar_ts']}")
+    switchboard_error: str | None = None
 
-    # Republish the switchboard even when nothing classified, so the file
-    # always carries a status for every registered strategy rather than an
-    # absence a reader would have to interpret.
-    for sid, st in sorted(daemon.publish_switchboard().items()):
-        print(f"  {sid}: {st['status']} ({st['reason']}) - entries "
-              f"{'ALLOWED' if st['entries_allowed'] else 'BLOCKED'}, exits "
-              f"{'ALLOWED' if st['exits_allowed'] else 'BLOCKED'}")
+    # The publishing loop is wrapped so the SWITCHBOARD below runs whatever
+    # happens in it. That is not defensive tidiness - it is the repair of a
+    # measured outage. `daemon.refresh()` publishes the reading and then the
+    # console line below formatted `adx_14` with `:.2f`; on a warm-up bar that
+    # value is None, the f-string raised TypeError, and the raise landed
+    # BETWEEN the reading being published and the loop reaching its next
+    # target. Measured 2026-08-26: 163 consecutive unit failures, one every
+    # five minutes, publishing readings the whole time.
+    #
+    # WHAT THAT COST, stated exactly, because the obvious reading is worse
+    # than the truth and the truth is bad enough:
+    #
+    #   * every target AFTER the first one with a None reading was never
+    #     classified at all - the raise leaves the loop. `targets` is sorted,
+    #     so one warm-up symbol early in the alphabet silently withholds the
+    #     regime for every symbol after it. THIS is the serious one, and it
+    #     grows with the number of registered strategies.
+    #   * the explicit `publish_switchboard()` republish never ran, so a
+    #     permission change with no market movement - an id added to
+    #     `active_strategies`, a promotion rewriting a certified quadrant -
+    #     was not picked up until some symbol happened to tick.
+    #   * the unit exited 1 every five minutes, so `systemctl is-active` and
+    #     anything alerting on unit state read permanently red.
+    #
+    # It did NOT leave the switchboard stale for a symbol that was classified:
+    # `refresh()` -> `update_state()` -> `_stamp()` recomputes and writes the
+    # strategies block on every successful reading, so a symbol reached before
+    # the raise had a current switchboard entry. The watchdog reading `ok`
+    # while systemd read `Failed` was both of them telling the truth.
+    try:
+        for symbol, tf in targets:
+            try:
+                frames, _ = feed.closed_bars([symbol], tf, depth)
+                bars = frames.get(str(symbol).upper())
+                if bars is None or not len(bars):
+                    raise RegimeDaemonError(f"the feed returned no {tf} bars")
+                tail = bars.tail(depth)
+                data = daemon.refresh(symbol, tail, tf=tf)
+            except Exception as exc:
+                failed += 1
+                print(f"  {symbol} {tf}: FAILED - {type(exc).__name__}: {exc}")
+                continue
+            published += 1
+            # `_fmt_opt` on every numeric field, not only the two that were
+            # observed to be None. theta_vol is a float today because
+            # `theta_for` casts it, and the cast is one edit away from being
+            # the thing that is absent.
+            print(f"  {symbol} {tf}: {data['quadrant']} ({data['regime']})  "
+                  f"ADX={_fmt_opt(data['adx_14'], '.2f')}  "
+                  f"ATR={_fmt_opt(data['atr_14'], '.4f')}  "
+                  f"theta={_fmt_opt(data['theta_vol'], '.4f')}  "
+                  f"bar={data['bar_ts'] or 'n/a'}")
+    finally:
+        # Republish the switchboard even when nothing classified, so the file
+        # always carries a status for every registered strategy rather than an
+        # absence a reader would have to interpret.
+        #
+        # Its own failure is caught rather than raised: inside a `finally` a
+        # new exception REPLACES the one already propagating, so a switchboard
+        # error here would erase the traceback that says why the loop died.
+        # It is recorded and folded into the exit code instead.
+        try:
+            for sid, st in sorted(daemon.publish_switchboard().items()):
+                print(f"  {sid}: {st['status']} ({st['reason']}) - entries "
+                      f"{'ALLOWED' if st['entries_allowed'] else 'BLOCKED'}, "
+                      f"exits "
+                      f"{'ALLOWED' if st['exits_allowed'] else 'BLOCKED'}")
+        except Exception as exc:                                  # noqa: BLE001
+            switchboard_error = f"{type(exc).__name__}: {exc}"
+            print(f"\n[!] switchboard NOT published: {switchboard_error}",
+                  file=sys.stderr, flush=True)
+
     print(f"\npublished {published} reading(s) to {daemon.state_file}"
-          + (f", {failed} failed" if failed else ""))
-    return 1 if failed else 0
+          + (f", {failed} failed" if failed else "")
+          + (f", switchboard FAILED ({switchboard_error})"
+             if switchboard_error else ""))
+    return 1 if (failed or switchboard_error) else 0
 
 
 if __name__ == "__main__":
