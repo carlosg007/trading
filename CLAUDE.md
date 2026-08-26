@@ -177,7 +177,10 @@ task.
 bt-run     # = .venv/bin/python3 ~/src/trading/backtest/run.py
 bt-status  # = .venv/bin/python3 ~/src/trading/backtest/status.py
 bt-check   # = .venv/bin/python3 ~/src/trading/backtest/check_progress.py
-bt-progress  # the same tool  (both from deploy/shell/trading_helpers.sh)
+bt-progress  # the same tool
+nt8-check  # = .venv/bin/python3 ~/src/trading/realtime/check_nt8_feed.py
+feed-status  # the same tool
+             # (all four from deploy/shell/trading_helpers.sh)
 ```
 
 ## Working style

@@ -101,3 +101,24 @@ alias bt-check="${_TRADING_PY} ${_TRADING_REPO}/backtest/check_progress.py"
 # along is it" rather than "is it alive". One implementation, two spellings —
 # a second script would be one more thing to keep in step with the stages.
 alias bt-progress='bt-check'
+
+# 4. The live feed: is NinjaTrader still sending bars?
+#
+# Same shape as bt-check above and safe for the same reasons — it reads
+# /health, the spool, the routing table and the two files downstream of the
+# feed. It opens no bar, imports no engine, writes nothing, and finishes in
+# under a tenth of a second, so it is not run under nice/ionice either.
+#
+# Deliberately NOT `curl localhost:8000/health | jq`, which the runbook's
+# pre-flight already gives you. That is the RECEIVER's view and it cannot see
+# the three things you actually need: whether the process is there at all (a
+# refused connection and a STARVED listener look identical through curl),
+# whether the streams arriving are the ones config/portfolios.json needs, and
+# whether the regime file and watchdog downstream of the feed have moved.
+#
+# Exits non-zero when the listener cannot be reached, so it chains:
+#     nt8-check && systemctl restart trading-master-live
+alias nt8-check="${_TRADING_PY} ${_TRADING_REPO}/realtime/check_nt8_feed.py"
+# The name people reach for when the question is "is the feed up" rather than
+# "what is the listener doing". One implementation, two spellings.
+alias feed-status='nt8-check'
