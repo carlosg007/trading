@@ -641,6 +641,10 @@ class LiveExecutionDispatcher:
             "exit_signals": [], "exit_orders": [], "errors": [],
             "regime_readings": {}, "regime_missing": {},
             "plan": [], "payloads": [], "dispatches": [],
+            # Declared here rather than grown by `setdefault` in the evaluator,
+            # so a reader of this dict sees the full shape in one place and an
+            # empty cycle carries the keys rather than omitting them.
+            "indicators": [], "indicator_errors": [],
         }
 
         if not self.strategies:
@@ -753,6 +757,55 @@ class LiveExecutionDispatcher:
         report["orders"] = report["payloads"]
         return report
 
+    def _record_telemetry(self, handle: StrategyHandle, symbol: str, bars,
+                          bar_ts: str, direction: str, report: dict) -> None:
+        """
+        The strategy's OWN declared feature row, recorded for the operator.
+
+        THE STRATEGY'S OWN, and that is the design rather than an
+        implementation detail. There is no universal indicator set here:
+        `double_rsi_macd_scalp` declares `rsi_fast`/`rsi_slow`/`macd_hist`,
+        while `t3_braid_scalp` - the only strategy currently allocated -
+        declares `t3_slope`/`braid_hist`/`stiffness`. A hardcoded "fast RSI and
+        MACD histogram" line would print nothing at all for the one strategy
+        actually running, so what is logged is whatever the module declares
+        through `ml_features`.
+
+        `indicators()` is deliberately NOT used: that hook returns the
+        PRICE-SCALE series for the tear sheet, and its own docstring says the
+        RSIs and the histogram are excluded on purpose because they cannot be
+        drawn on a price axis. `ml_features` is where the module says those
+        reach a reader.
+
+        BEST EFFORT, AND THAT IS NOT LAZINESS. The strict `_ml_features` call
+        in the gate path below must keep raising - a model asked to judge a
+        signal on features that will not build has to refuse. This call is
+        telemetry, and telemetry that can abort a cycle would trade a real
+        decision for a log line. Failures are recorded and the cycle continues.
+
+        Cost, measured on 400 bars of the allocated strategy: 2.4ms against the
+        25.4ms `signal_fn` already spends per evaluation, so this is ~10% on a
+        step that runs anyway. Not gated behind a flag at that price.
+        """
+        fn = handle.module_info.get("ml_feature_fn")
+        if fn is None:
+            # A module declaring no feature matrix has no indicators to
+            # publish. Silence here is correct and is not an error.
+            return
+        try:
+            frame = fn(bars)
+            values = {str(k): v for k, v in frame.iloc[-1].to_dict().items()}
+        except Exception as exc:                                  # noqa: BLE001
+            report.setdefault("indicator_errors", []).append({
+                "strategy_id": handle.strategy_id, "symbol": symbol,
+                "error": f"{type(exc).__name__}: {exc}"})
+            return
+        report.setdefault("indicators", []).append({
+            "strategy_id": handle.strategy_id,
+            "portfolio_id": handle.portfolio_id,
+            "symbol": symbol, "bar_ts": bar_ts, "direction": direction,
+            "values": values})
+
     def _evaluate(self, handle: StrategyHandle, symbol: str, bars,
                   readings: dict, missing: dict, permitted: list,
                   report: dict) -> None:
@@ -786,6 +839,12 @@ class LiveExecutionDispatcher:
 
         if exit_signalled:
             self._record_exit(handle, symbol, bar_ts, report)
+
+        # BEFORE the regime gate, so a stood-down strategy still reports what
+        # it was looking at. The whole value of this line is on the bars where
+        # nothing traded: "flat" and "flat because the fast RSI sat at 48 all
+        # session" send an operator to different places.
+        self._record_telemetry(handle, symbol, bars, bar_ts, direction, report)
 
         if symbol in missing:
             decline(f"no live regime reading: {missing[symbol]}")
@@ -1262,6 +1321,20 @@ class LiveExecutionDispatcher:
         for d in report["declines"]:
             lines.append(f"       HOLD {d.get('strategy_id')} "
                          f"{d.get('symbol')} — {d['reason']}")
+        # AFTER the verdicts, so the decision reads first and the numbers
+        # behind it read second. One line per (strategy, symbol) evaluated,
+        # carrying whatever that module declares - see `_record_telemetry`.
+        for ind in report.get("indicators") or []:
+            lines.append(f"       IND  {ind['strategy_id']} {ind['symbol']} "
+                         f"{ind['direction']}  "
+                         + "  ".join(f"{k}={_fmt_reading(v)}"
+                                     for k, v in ind["values"].items()))
+        for e in report.get("indicator_errors") or []:
+            # Reported, never fatal. A feature matrix that will not build is a
+            # real finding about the module and says nothing about the cycle,
+            # which completed.
+            lines.append(f"       IND? {e['strategy_id']} {e['symbol']} — "
+                         f"indicators unavailable: {e['error']}")
         for e in report["errors"]:
             lines.append(f"       ERROR {e}")
         for s in report["exit_signals"]:
@@ -1329,6 +1402,48 @@ def _is_safe_to_retry(result: dict) -> bool:
     if not error:
         return False
     return any(marker in error for marker in _NEVER_SENT_MARKERS)
+
+
+def _fmt_reading(value: Any) -> str:
+    """
+    One indicator value, compactly, and WITHOUT EVER RAISING.
+
+    A feature matrix can carry None, NaN, a bool or a numpy scalar, and this
+    runs inside a console line. `f"{None:.2f}"` raises TypeError - that exact
+    expression took `realtime/regime_daemon.py` down 163 times on 2026-08-26,
+    publishing correctly and then dying while formatting its own log. A cycle
+    summary is not going to repeat it, so every branch here ends in a string.
+
+    Absence prints `n/a` rather than `0`: a zero RSI is a measurement, and a
+    zero in a column of readings reads as one.
+    """
+    if value is None:
+        return "n/a"
+    if isinstance(value, bool):
+        return "T" if value else "F"
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if f != f:                       # NaN, without importing math for it
+        return "nan"
+    if f in (float("inf"), float("-inf")):
+        return "inf" if f > 0 else "-inf"
+    if f == int(f) and abs(f) < 1e6:
+        # hour_et=6.0 and day_of_week=1.0 are counts; a trailing .00 on them
+        # is noise in a line already carrying five columns.
+        return str(int(f))
+    if abs(f) < 0.001:
+        # `atr_norm` lands here. Scientific is the readable form for a value
+        # whose leading digit is four places down; a fixed format would print
+        # 0.0000 and lose it entirely.
+        return f"{f:.4g}"
+    if abs(f) >= 1000:
+        # A price-scale reading. Plain decimals, because `1.523e+04` is harder
+        # to compare against a chart than `15234.57` at exactly the moment
+        # somebody is doing that.
+        return f"{f:.2f}"
+    return f"{f:.4f}".rstrip("0").rstrip(".")
 
 
 def _host_only(url: str) -> str:

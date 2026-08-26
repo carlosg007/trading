@@ -124,14 +124,41 @@ def make_signal_fn(side="long", sl_atr_mult=1.5, tp_atr_mult=2.0,
 '''
 
 
+#: The same fixture, plus the `ml_features` hook the indicator telemetry
+#: reads. A SEPARATE source rather than a flag on the one above, because
+#: the default fixture declaring NO feature matrix is itself a case under
+#: test: a module with no indicators to publish must record nothing AND
+#: no error.
+STRATEGY_SRC_WITH_FEATURES = STRATEGY_SRC + '''
+
+def ml_features(bars, **_ignored):
+    n = len(bars)
+    return pd.DataFrame({
+        "fast_rsi": np.linspace(10.0, 48.25, n),
+        "macd_hist": np.linspace(-1.0, -0.5, n),
+        "flag": np.zeros(n, dtype=bool),
+    })
+'''
+
+#: A feature matrix that will not build. Telemetry must record the failure
+#: and let the cycle finish - the strict `_ml_features` call in the ML gate
+#: path is the one that has to raise, and only when a model is judging.
+STRATEGY_SRC_BROKEN_FEATURES = STRATEGY_SRC + '''
+
+def ml_features(bars, **_ignored):
+    raise RuntimeError("this matrix will not build")
+'''
+
+
 def write_strategy(root: Path, strategy_id: str, *, side="long",
                    symbols=("NQ",), sl_atr_mult=SL_ATR_MULT, tp_atr_mult=2.0,
-                   exit_on_last=False, corrupt_hash=False) -> Path:
+                   exit_on_last=False, corrupt_hash=False,
+                   src: str | None = None) -> Path:
     """A promoted-strategy directory: strat.py, meta.json, honest SHA-256."""
     directory = root / strategy_id
     directory.mkdir(parents=True, exist_ok=True)
     module = directory / "strat.py"
-    module.write_text(STRATEGY_SRC)
+    module.write_text(src or STRATEGY_SRC)
     digest = hashlib.sha256(module.read_bytes()).hexdigest()
     if corrupt_hash:
         digest = "0" * 64
@@ -1199,3 +1226,168 @@ def test_entries_stay_blocked_while_muted_even_though_exits_are_not(tmp_path):
     # The position it already held is untouched: this strategy signalled no
     # exit, and a mute is not itself an instruction to close.
     assert d.positions.direction(GATED_PORTFOLIO, GATED_SYMBOL) == "long"
+
+
+# ==========================================================================
+# Indicator telemetry
+#
+# `describe_cycle` logs the readings each strategy was looking at, so a bar
+# that traded nothing says WHY in indicator terms and not only in gate terms.
+# The three things worth pinning are that it survives a decline, that it
+# cannot break a cycle, and that it publishes the MODULE's own columns.
+# ==========================================================================
+
+def test_indicators_are_recorded_even_when_the_strategy_stands_down(tmp_path):
+    """
+    THE CASE THE FEATURE EXISTS FOR. A signal that fires is already visible in
+    the payload; a bar that traded nothing is the one nobody can explain later,
+    and it is exactly the bar the regime gate returns early on.
+    """
+    d = build(tmp_path,
+              assignments={GATED_PORTFOLIO: ["fixture_long"]},
+              state={GATED_SYMBOL: {"quadrant": FORBIDDEN_QUADRANT}},
+              strategies={"fixture_long": dict(
+                  side="long", symbols=GATED_CERTIFIED,
+                  src=STRATEGY_SRC_WITH_FEATURES)})
+    report = d.process_bar_cycle({GATED_SYMBOL: make_bars()})
+
+    assert report["payloads"] == [], "the quadrant is forbidden; nothing trades"
+    assert report["declines"], "and it declined"
+    readings = [i for i in report["indicators"] if i["symbol"] == GATED_SYMBOL]
+    assert len(readings) == 1, "the stood-down bar still reports its readings"
+    assert readings[0]["strategy_id"] == "fixture_long"
+    assert set(readings[0]["values"]) == {"fast_rsi", "macd_hist", "flag"}
+    assert readings[0]["values"]["fast_rsi"] == 48.25
+    assert report["indicator_errors"] == []
+
+
+def test_the_columns_are_the_modules_own_not_a_fixed_list(tmp_path):
+    """
+    There is no universal indicator set. `double_rsi_macd_scalp` declares
+    rsi_fast/macd_hist; `t3_braid_scalp` - the only strategy actually
+    allocated on this box - declares t3_slope/braid_hist/stiffness. A hardcoded
+    "fast RSI and MACD" line would print nothing for the one that is running.
+    """
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["fixture_long"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"fixture_long": dict(
+                  side="long", src=STRATEGY_SRC_WITH_FEATURES)})
+    report = d.process_bar_cycle({"MNQ": make_bars()})
+    values = report["indicators"][0]["values"]
+    # Whatever the module declared, verbatim - including a non-float column.
+    assert list(values) == ["fast_rsi", "macd_hist", "flag"]
+
+
+def test_a_module_with_no_feature_matrix_records_nothing_and_no_error(tmp_path):
+    """
+    Silence is correct here and is NOT a failure: a module that declares no
+    `ml_features` has no indicators to publish. Recording an error would put a
+    permanent complaint in the log of every cycle of a working strategy.
+    """
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["fixture_long"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"fixture_long": dict(side="long")})
+    report = d.process_bar_cycle({"MNQ": make_bars()})
+    assert report["indicators"] == []
+    assert report["indicator_errors"] == []
+    assert report["payloads"], "and the cycle still traded normally"
+
+
+def test_broken_indicators_do_not_break_a_cycle_they_are_only_watching(tmp_path):
+    """
+    TELEMETRY MUST NEVER COST A DECISION.
+
+    The gated portfolio declines on the regime BEFORE the ML path, so the only
+    thing touching `ml_features` here is the telemetry call. A matrix that
+    will not build is recorded and the cycle finishes.
+    """
+    d = build(tmp_path,
+              assignments={GATED_PORTFOLIO: ["fixture_long"]},
+              state={GATED_SYMBOL: {"quadrant": FORBIDDEN_QUADRANT}},
+              strategies={"fixture_long": dict(
+                  side="long", symbols=GATED_CERTIFIED,
+                  src=STRATEGY_SRC_BROKEN_FEATURES)})
+    report = d.process_bar_cycle({GATED_SYMBOL: make_bars()})
+
+    assert report["indicators"] == []
+    assert len(report["indicator_errors"]) == 1
+    assert "will not build" in report["indicator_errors"][0]["error"]
+    # The cycle completed and reached its normal verdict. A telemetry failure
+    # is NOT an evaluation error.
+    assert report["errors"] == []
+    assert report["declines"], "the regime decline still happened"
+    assert d.describe_cycle(report), "and the summary still renders"
+
+
+def test_a_broken_matrix_still_stops_the_ML_GATE_and_that_is_not_telemetry(
+        tmp_path):
+    """
+    THE OTHER HALF, PINNED SO THE TWO ARE NEVER CONFUSED.
+
+    On a bar that actually signals, `_evaluate` calls `_ml_features` STRICTLY
+    for the ML gate, and that call must keep raising: a model asked to judge a
+    signal on features that will not build has to refuse rather than guess.
+    The trade is stopped there, in behaviour that predates the telemetry, and
+    it surfaces as an evaluation ERROR rather than as an indicator one.
+
+    Written down because the obvious reading of "broken indicators stopped my
+    trade" is that the telemetry did it. It did not; both records appear, and
+    they mean different things.
+    """
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["fixture_long"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"fixture_long": dict(
+                  side="long", src=STRATEGY_SRC_BROKEN_FEATURES)})
+    report = d.process_bar_cycle({"MNQ": make_bars()})
+
+    assert report["payloads"] == [], "the ML gate could not be evaluated"
+    assert len(report["errors"]) == 1
+    assert "will not build" in report["errors"][0]["error"]
+    # ...and the telemetry recorded its own, separately.
+    assert len(report["indicator_errors"]) == 1
+
+
+def test_the_cycle_summary_shows_the_readings_under_the_verdict(tmp_path):
+    """
+    `IND` lines render after the decision, so the verdict reads first and the
+    numbers behind it read second. `realtime/check_live_signals.py` parses
+    these back and separates them for the same reason.
+    """
+    d = build(tmp_path,
+              assignments={GATED_PORTFOLIO: ["fixture_long"]},
+              state={GATED_SYMBOL: {"quadrant": FORBIDDEN_QUADRANT}},
+              strategies={"fixture_long": dict(
+                  side="long", symbols=GATED_CERTIFIED,
+                  src=STRATEGY_SRC_WITH_FEATURES)})
+    text = d.describe_cycle(d.process_bar_cycle({GATED_SYMBOL: make_bars()}))
+    lines = text.splitlines()
+
+    hold = next(i for i, ln in enumerate(lines) if "HOLD" in ln)
+    ind = next(i for i, ln in enumerate(lines) if "IND " in ln)
+    assert ind > hold, "the decision is printed before the readings"
+    assert "fast_rsi=48.25" in lines[ind]
+    assert "macd_hist=" in lines[ind]
+
+
+def test_a_reading_that_cannot_be_formatted_does_not_raise():
+    """
+    `f"{None:.2f}"` raises TypeError, and this runs inside a console line.
+    That exact expression took `realtime/regime_daemon.py` down 163 times on
+    2026-08-26 - publishing correctly, then dying while formatting its own log.
+    Every branch of the formatter ends in a string.
+    """
+    from realtime.live_dispatcher import _fmt_reading         # noqa: PLC0415
+
+    assert _fmt_reading(None) == "n/a"
+    assert _fmt_reading(0.0) == "0", "a measured zero is not an absence"
+    assert _fmt_reading(float("nan")) == "nan"
+    assert _fmt_reading(float("inf")) == "inf"
+    assert _fmt_reading(True) == "T"
+    assert _fmt_reading(48.25) == "48.25"
+    assert _fmt_reading(6.0) == "6", "counts lose the trailing .00"
+    assert _fmt_reading(0.00097) == "0.00097", "small values keep their digits"
+    assert _fmt_reading(15234.567) == "15234.57", "no scientific on price scale"
+    assert _fmt_reading("weird") == "weird"
