@@ -35,6 +35,15 @@ systemctl status trading-master-live trading-regime-daemon.timer \
 # which is NT8's end, not this one; STALE means bars stopped. `counters`
 # rising with `rejected` is a publisher sending malformed bars, and each
 # rejection carries its reason in the journal.
+#
+# /health answers 503 while STARVED and 200 while HEALTHY or STALE. The ring
+# buffer is in memory and is re-seeded lazily, on the first post per symbol,
+# so EVERY restart shows STARVED/503 until the next bar arrives — up to one
+# bar width. That is not an outage: measured on a SIGKILL test, the process
+# was back in 5s and the spool shows no missing bar. Point an external uptime
+# monitor at `status`, not at the HTTP code, or it will page once a restart.
+# trading-watchdog is unaffected — it reads the spool directory, not this
+# endpoint.
 curl -s localhost:8000/health | python3 -m json.tool
 .venv/bin/python3 scripts/watchdog.py --tf 1h        # expect exit 0
 .venv/bin/python3 realtime/regime_reader.py          # bar age < ~2 bars
