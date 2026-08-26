@@ -142,3 +142,43 @@ alias signal-check="${_TRADING_PY} ${_TRADING_REPO}/realtime/check_live_signals.
 # The name for "show me what the strategies are doing" rather than "is the
 # engine up". One implementation, two spellings.
 alias live-signals='signal-check'
+
+# 6. Why is nothing trading?
+#
+# The third of the three cards, and the one to reach for when the other two
+# look fine and no order has gone out. `nt8-check` says bars arrive,
+# `signal-check` says what the loop decided, this says which layer is stopping
+# an entry — interlock, kill switch, session caps, execution bridge, regime
+# gate, feed — and ends with the blockers listed in the order the stack
+# applies them.
+#
+# IT NEVER PROBES THE ORDER ENDPOINT. "Reachable" for CrossTrade means POSTing
+# to the thing that places orders on a funded account; configuration is
+# checked and the first real request is left to the loop, under the interlock
+# and the kill switch where it belongs.
+#
+# Exit code answers "would an entry go through": 1 while anything blocks. On
+# this box, in dry run, that is deliberately non-zero.
+alias firewall-check="${_TRADING_PY} ${_TRADING_REPO}/realtime/check_trade_firewall.py"
+# The name for "why did my trade not fire" rather than "is the firewall up".
+alias trade-gate='firewall-check'
+
+# 7. Is the order bridge actually reachable from this box?
+#
+# `firewall-check` reports the bridge as configured or not. This one connects:
+# DNS, TCP, and a real TLS handshake with certificate verification — and sends
+# ZERO bytes of HTTP. A completed handshake proves the name resolves, the route
+# works, something is listening and it presents a certificate this box trusts.
+# No path is requested, so no endpoint can act on it.
+#
+# The webhook URL's path IS the credential and the key IS the account, so
+# neither is ever printed: the origin, a path SEGMENT COUNT, and the key's
+# length plus last four characters. That is enough to tell two keys apart and
+# useless to anyone reading over a shoulder.
+#
+# `--http-probe` adds a GET, and only ever to the bare origin — it refuses a
+# URL carrying a path, query or fragment.
+#
+# Exits 0 when configured AND reachable, 1 otherwise, so it chains.
+alias crosstrade-check="${_TRADING_PY} ${_TRADING_REPO}/realtime/check_crosstrade_connection.py"
+alias ct-check='crosstrade-check'

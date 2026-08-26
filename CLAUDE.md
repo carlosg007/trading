@@ -182,7 +182,11 @@ nt8-check  # = .venv/bin/python3 ~/src/trading/realtime/check_nt8_feed.py
 feed-status  # the same tool
 signal-check # = .venv/bin/python3 ~/src/trading/realtime/check_live_signals.py
 live-signals # the same tool
-             # (all six from deploy/shell/trading_helpers.sh)
+firewall-check # = .venv/bin/python3 ~/src/trading/realtime/check_trade_firewall.py
+trade-gate   # the same tool
+crosstrade-check # = .venv/bin/python3 ~/src/trading/realtime/check_crosstrade_connection.py
+ct-check     # the same tool
+             # (all ten from deploy/shell/trading_helpers.sh)
 ```
 
 ## Working style
