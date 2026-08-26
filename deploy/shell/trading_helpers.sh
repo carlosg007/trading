@@ -80,3 +80,24 @@ run_pipeline_all() {
     )
 }
 alias pipeline-all='run_pipeline_all'
+
+# 3. The status card: where a run has got to, in English.
+#
+# ALIASES, NOT FUNCTIONS, and not run under nice/ionice like the two jobs
+# above. This one reads `ps`, `stat` and a handful of small JSON handoffs — it
+# opens no bar, imports no strategy and finishes in well under a second, so
+# there is nothing here for the live stack to lose a CPU fight with. Yielding
+# it to idle priority would only make the answer arrive late.
+#
+# It is also the ONLY part of the pipeline that is safe to run from inside a
+# Claude Code session: it starts no backtest and takes nobody out of the loop.
+#
+# Aliases pass their arguments through, so `bt-check --watch 10` and
+# `bt-check --strategy <name>` work without a wrapper. The interpreter is
+# spelled absolutely for the same reason `_TRADING_PY` exists: the venv must
+# not depend on which one happens to be active in the calling shell.
+alias bt-check="${_TRADING_PY} ${_TRADING_REPO}/backtest/check_progress.py"
+# The same tool under the name people reach for when the question is "how far
+# along is it" rather than "is it alive". One implementation, two spellings —
+# a second script would be one more thing to keep in step with the stages.
+alias bt-progress='bt-check'
