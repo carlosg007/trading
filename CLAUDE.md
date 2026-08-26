@@ -186,7 +186,9 @@ firewall-check # = .venv/bin/python3 ~/src/trading/realtime/check_trade_firewall
 trade-gate   # the same tool
 crosstrade-check # = .venv/bin/python3 ~/src/trading/realtime/check_crosstrade_connection.py
 ct-check     # the same tool
-             # (all ten from deploy/shell/trading_helpers.sh)
+portfolio-check # = .venv/bin/python3 ~/src/trading/realtime/check_portfolio_assets.py
+assets-check # the same tool
+             # (all twelve from deploy/shell/trading_helpers.sh)
 ```
 
 ## Working style

@@ -182,3 +182,24 @@ alias trade-gate='firewall-check'
 # Exits 0 when configured AND reachable, 1 otherwise, so it chains.
 alias crosstrade-check="${_TRADING_PY} ${_TRADING_REPO}/realtime/check_crosstrade_connection.py"
 alias ct-check='crosstrade-check'
+
+# 8. Who is allowed to trade what, and where does the order go?
+#
+# The other cards ask about MOTION — are bars arriving, what did the loop
+# decide, why is nothing firing. This one asks about CONFIGURATION: which
+# portfolios exist, which account each addresses, what each may trade, and
+# which strategy is allocated to which contract.
+#
+# Four files meet in it and none is authoritative alone — the routing table,
+# the promoted meta.json, the switchboard, and the spool. An id present in one
+# and absent from another is a real and quiet fault, so each is reported as
+# found or missing rather than merged into a row that hides which is empty.
+#
+# Empty portfolios are SHOWN. Three of the four here are empty by design, and
+# filtering them out would make "nothing is allocated" indistinguishable from
+# "this portfolio does not exist".
+#
+# Exits non-zero only when the configuration cannot be READ. An empty
+# portfolio is a legitimate state, not a failure.
+alias portfolio-check="${_TRADING_PY} ${_TRADING_REPO}/realtime/check_portfolio_assets.py"
+alias assets-check='portfolio-check'
