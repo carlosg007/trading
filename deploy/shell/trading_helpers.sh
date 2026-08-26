@@ -122,3 +122,23 @@ alias nt8-check="${_TRADING_PY} ${_TRADING_REPO}/realtime/check_nt8_feed.py"
 # The name people reach for when the question is "is the feed up" rather than
 # "what is the listener doing". One implementation, two spellings.
 alias feed-status='nt8-check'
+
+# 5. The other half of the live question: is anything DECIDING?
+#
+# `nt8-check` says bars are arriving. This says what is being done with them —
+# which strategy is allocated, what quadrant the gate thinks it is in, whether
+# entries are permitted, and what the firewall has counted today.
+#
+# It reads state other processes WROTE and recomputes nothing. That is the
+# whole design: the engine evaluates on the bars IT loaded, with its own
+# warm-up and its own last-closed-bar rule, so a status tool that recomputed
+# an indicator would differ at exactly the boundaries that matter and would
+# carry a status tool's authority while doing it.
+#
+# Exit code answers "is it evaluating", NOT "is something wrong": 1 when the
+# loop is not running, which on this box is the normal resting state — the
+# shipped unit is --dry-run and is not armed.
+alias signal-check="${_TRADING_PY} ${_TRADING_REPO}/realtime/check_live_signals.py"
+# The name for "show me what the strategies are doing" rather than "is the
+# engine up". One implementation, two spellings.
+alias live-signals='signal-check'

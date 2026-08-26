@@ -180,7 +180,9 @@ bt-check   # = .venv/bin/python3 ~/src/trading/backtest/check_progress.py
 bt-progress  # the same tool
 nt8-check  # = .venv/bin/python3 ~/src/trading/realtime/check_nt8_feed.py
 feed-status  # the same tool
-             # (all four from deploy/shell/trading_helpers.sh)
+signal-check # = .venv/bin/python3 ~/src/trading/realtime/check_live_signals.py
+live-signals # the same tool
+             # (all six from deploy/shell/trading_helpers.sh)
 ```
 
 ## Working style
