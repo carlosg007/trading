@@ -248,8 +248,31 @@ def interlock() -> dict[str, Any]:
             return None
         return re.search(r"(?<![\w-])--live(?![\w-])", text) is not None
 
+    def exec_start(unit_text: str) -> str:
+        """
+        The ExecStart DIRECTIVE only, with its line continuations joined.
+
+        Reading the whole file was wrong and wrong in the dangerous direction:
+        this unit's comments explain what `--live` does, so a whole-file match
+        reported the repo unit as ARMED while its ExecStart carried no such
+        flag. A card that mistakes documentation for configuration is the same
+        error as one that mistakes a missing flag for an armed loop.
+        """
+        joined, capture = [], False
+        for raw in unit_text.splitlines():
+            line = raw.strip()
+            if line.startswith("#"):
+                continue
+            if line.startswith("ExecStart"):
+                capture = True
+            if capture:
+                joined.append(line.rstrip("\\").strip())
+                if not line.endswith("\\"):
+                    break
+        return " ".join(joined)
+
     try:
-        out["repo"] = armed(REPO_UNIT.read_text(encoding="utf-8"))
+        out["repo"] = armed(exec_start(REPO_UNIT.read_text(encoding="utf-8")))
     except OSError:
         pass
 

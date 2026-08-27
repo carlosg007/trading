@@ -598,3 +598,48 @@ def test_a_genuinely_armed_loop_reads_as_live(tmp_path):
     assert "LIVE EXECUTION — the running loop WILL send orders" in card
     assert "1. Execution Interlock    : PASS" in card
     assert fw.blockers(snap) == []
+
+
+def test_the_repo_unit_read_ignores_comments(tmp_path):
+    """
+    A unit whose COMMENTS explain `--live` must not read as armed.
+
+    The real unit documents what the flag does, so a whole-file match reported
+    `repo unit: --live PRESENT (armed)` while its ExecStart carried no such
+    flag. Mistaking documentation for configuration is the same error as
+    mistaking a missing `--dry-run` for an armed loop, and in the same
+    direction.
+    """
+    fw.REPO_UNIT = tmp_path / "unit.service"
+    fw.REPO_UNIT.write_text(
+        "# `--live` IS WHAT ARMS THIS. Removing --dry-run does nothing.\n"
+        "[Service]\n"
+        "ExecStart=/x/python3 \\\n"
+        "    /x/master_live.py \\\n"
+        "    --tf 1h \\\n"
+        "    --feed auto\n")
+    assert fw.interlock()["repo"] is False, "comments are not configuration"
+
+    fw.REPO_UNIT.write_text(
+        "# `--live` IS WHAT ARMS THIS.\n"
+        "[Service]\n"
+        "ExecStart=/x/python3 \\\n"
+        "    /x/master_live.py \\\n"
+        "    --live \\\n"
+        "    --tf 1h\n")
+    assert fw.interlock()["repo"] is True, "the directive is configuration"
+
+
+def test_the_real_repo_unit_reads_as_it_actually_is():
+    """
+    Against the unit in the tree, not a fixture — the case that just failed.
+    Whatever it says, the flag and the read must agree.
+    """
+    import re                                                 # noqa: PLC0415
+    text = (REPO / "deploy" / "systemd"
+            / "trading-master-live.service").read_text()
+    directive_has_live = bool(re.search(r"^\s*--live\s*\\?\s*$", text, re.M))
+    import importlib                                          # noqa: PLC0415
+    importlib.reload(fw)
+    assert fw.interlock()["repo"] is directive_has_live, (
+        "the card's reading of the repo unit disagrees with its ExecStart")
