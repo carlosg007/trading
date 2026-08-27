@@ -1,0 +1,113 @@
+{
+  "name": "ema_crossover_20260821_YM_2m",
+  "strategy": "ema_crossover_20260821",
+  "symbol": "YM",
+  "version": "A",
+  "description": "Promoted Version A (rule-based baseline).",
+  "symbols": [
+    "YM"
+  ],
+  "timeframe": "2m",
+  "params": {
+    "fast_period": 20,
+    "slow_period": 21,
+    "sl_atr_mult": 2.5,
+    "tp_atr_mult": null,
+    "trailing": false
+  },
+  "params_source": "locked from dual_metrics_YM.json",
+  "params_conflict": [],
+  "risk": {
+    "sl_atr_mult": 2.5,
+    "tp_atr_mult": null,
+    "trailing": false
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/ema_crossover_20260821.py",
+  "source_sha256": "9c290bc1e02d816f675ee2752d856aac563d8ae4f7563b0452fdac597d31857b",
+  "promoted_sha256": "9c290bc1e02d816f675ee2752d856aac563d8ae4f7563b0452fdac597d31857b",
+  "promoted_utc": "2026-08-27T13:23:54+00:00",
+  "costs_included": true,
+  "variants_tested": null,
+  "metrics_status": "RECORDED \u00b7 locked from dual_metrics_YM.json",
+  "metrics": {
+    "sharpe": -0.09112805959399674,
+    "sortino": -0.14772869703742428,
+    "calmar": -0.05084716014043039,
+    "profit_factor": 0.9629438819942652,
+    "win_rate": 0.30500482263423,
+    "max_drawdown_pct": -59.5844160699188,
+    "total_return_pct": -40.290980000000744,
+    "annualized_return_pct": -3.0296983457811955,
+    "trade_count": 9331,
+    "total_pnl": -40290.97999999892,
+    "total_costs": 136045.979999999,
+    "final_equity": 59709.01999999926,
+    "n_days": 4224,
+    "start": "2013-01-02 11:00:00+00:00",
+    "end": "2026-08-07 20:58:00+00:00",
+    "bars": 2274633,
+    "initial_capital": 100000.0
+  },
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "FAIL",
+    "gate2": "FAIL",
+    "gate3": "PASS",
+    "gate_regime": "PASS",
+    "gate_ruin": "PASS"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/ema_crossover_20260821/gate_audit_YM_2m.json",
+    "audit_sha256": "ffbdad8f4304e404b5ae95f45c8b7894eaf603e2deaf6d50bafcb9f68137e5a6",
+    "audit_symbol": "YM",
+    "audit_timeframe": "2m",
+    "target_quadrant": "Q2",
+    "target_regime": "High Volatility / Ranging",
+    "audit_generated_utc": "2026-08-27T12:52:34+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "fast_period": 20,
+      "slow_period": 21,
+      "sl_atr_mult": 2.5,
+      "tp_atr_mult": null,
+      "trailing": false
+    },
+    "params_source": "stage 2 winner (best_params_YM_2m.json)",
+    "variants_tested": 108,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "FAIL",
+    "agrees_with_snapshot": false
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [],
+  "notes": ""
+}
