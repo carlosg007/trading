@@ -47,6 +47,8 @@ REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+import pytest                                                      # noqa: E402
+
 from realtime import check_trade_firewall as fw                    # noqa: E402
 
 
@@ -99,6 +101,8 @@ def _wire(tmp: Path, *, regime=None, portfolios=None, engine_state=None,
     fw.REPO_UNIT = tmp / "unit.service"
     fw.REPO_UNIT.write_text(
         f"[Service]\nExecStart=/x/python3 /x/master_live.py {repo_unit}\n")
+    fw.MASTER_LOG = tmp / "master_live.log"
+    fw.MASTER_LOG.write_text("")
 
     st = tmp / "data" / "engine_state.json"
     if engine_state is not None:
@@ -122,18 +126,36 @@ def _unwire() -> None:
         os.environ.pop(var, None)
 
 
-def _snap(tmp: Path, *, running=True, effective=True, **kw) -> dict:
-    """A collected snapshot with the process table replaced."""
+def _snap(tmp: Path, *, running=True, effective=True, banner=None,
+          pids=None, **kw) -> dict:
+    """
+    A collected snapshot with the process table replaced.
+
+    `running`/`effective`/`banner` are all ARMED booleans now — True means
+    `--live` is present, or that the loop printed `mode=LIVE`. They were
+    `--dry-run` booleans until 2026-08-27, and inverting them is the whole
+    correction: dry run is the default, so the absence of `--dry-run` says
+    nothing about whether anything is armed.
+
+    `banner` defaults to `running` because on a healthy box the loop's own
+    verdict agrees with its command line; a case that wants them to disagree
+    says so explicitly.
+    """
     _wire(tmp, **kw)
     try:
         snap = fw.collect()
     finally:
         _unwire()
+    if banner is None:
+        banner = running
+    live_pids = pids if pids is not None else ([1] if running is not None
+                                               else [])
     snap["interlock"] = {**snap["interlock"], "running": running,
-                         "effective": effective, "pids": [1] if running else [],
+                         "effective": effective, "banner": banner,
+                         "pids": live_pids,
                          "unit_active": "active", "drop_ins": []}
-    answers = [v for v in (snap["interlock"]["repo"], effective, running)
-               if v is not None]
+    answers = [v for v in (snap["interlock"]["repo"], effective, running,
+                           banner) if v is not None]
     snap["interlock"]["agree"] = len(set(answers)) <= 1
     return snap
 
@@ -235,19 +257,23 @@ def test_a_disagreeing_interlock_is_named_not_averaged(tmp_path):
     them into one verdict is how a card tells an operator they are in dry run
     while a live loop sends orders.
     """
+    # A genuine divergence: the REPO unit is armed, the running loop is not —
+    # which is precisely the state after editing the unit and not deploying,
+    # and the state this box was in on 2026-08-27.
     snap = _snap(tmp_path, regime=_regime(), portfolios=_portfolios(),
-                 running=False, effective=False, repo_unit="--dry-run")
+                 running=False, effective=False, repo_unit="--live",
+                 banner=False)
     assert snap["interlock"]["agree"] is False
     card = fw.render(snap)
-    assert "THE THREE DISAGREE" in card
+    assert "THESE DISAGREE" in card
     assert any("DISAGREES across sources" in b for b in fw.blockers(snap))
 
 
 def test_a_live_running_loop_is_not_reported_as_blocked_by_the_interlock(tmp_path):
     snap = _snap(tmp_path, regime=_regime(n_bars=40, gate=_gate(
         status="LIVE", reason="regime_match", entries=True, live_q="Q2")),
-        portfolios=_portfolios(), running=False, effective=False,
-        repo_unit="")
+        portfolios=_portfolios(), running=True, effective=True,
+        repo_unit="--live")
     assert fw.blockers(snap) == [], "nothing should block this stack"
     card = fw.render(snap)
     assert "ACTIVE — every layer permits an entry" in card
@@ -332,8 +358,8 @@ def test_the_session_loss_cap_blocks_and_says_do_not_raise_it(tmp_path):
 def test_a_healthy_session_does_not_block(tmp_path):
     snap = _snap(tmp_path, regime=_regime(n_bars=40, gate=_gate(
         status="LIVE", reason="regime_match", entries=True, live_q="Q2")),
-        portfolios=_portfolios(), running=False, effective=False,
-        repo_unit="",
+        portfolios=_portfolios(), running=True, effective=True,
+        repo_unit="--live",
         engine_state={"session": "2026-08-26",
                       "orders": [{"ok": True}, {"ok": False}],
                       "fills": [{"pnl": 120.0}], "dispatched": {"a": {}}})
@@ -398,10 +424,14 @@ def test_blockers_are_listed_interlock_first(tmp_path):
     "the regime is wrong" is true and irrelevant until the flag is off. A list
     that led with the regime sends an operator to fix the wrong layer.
     """
+    # Not armed, kill switch on, warm-up incomplete — three layers at once.
+    # `running=False` with a matching banner keeps this about ORDER rather
+    # than about the divergence case above.
     snap = _snap(tmp_path, regime=_regime(n_bars=18),
-                 portfolios=_portfolios(), kill="halt")
+                 portfolios=_portfolios(), kill="halt",
+                 running=False, effective=False, repo_unit="", banner=False)
     reasons = fw.blockers(snap)
-    assert "--dry-run" in reasons[0]
+    assert "DRY RUN" in reasons[0], reasons[0]
     assert any("kill switch" in r for r in reasons)
     assert "warm-up" in reasons[-1]
 
@@ -409,8 +439,8 @@ def test_blockers_are_listed_interlock_first(tmp_path):
 def test_a_clean_stack_says_nothing_is_blocking(tmp_path):
     snap = _snap(tmp_path, regime=_regime(n_bars=40, gate=_gate(
         status="LIVE", reason="regime_match", entries=True, live_q="Q2")),
-        portfolios=_portfolios(), running=False, effective=False,
-        repo_unit="")
+        portfolios=_portfolios(), running=True, effective=True,
+        repo_unit="--live")
     card = fw.render(snap)
     assert "Nothing is blocking an entry" in card
     assert "[BLOCKER]" not in card
@@ -427,9 +457,25 @@ def test_the_card_never_opens_a_socket():
     whether it answers is a status tool that can open a position, so this file
     must not carry an HTTP client at all.
     """
+    import ast                                                # noqa: PLC0415
     src = (REPO / "realtime" / "check_trade_firewall.py").read_text()
-    for banned in ("urllib.request", "http.client", "requests", "socket."):
-        assert banned not in src, f"{banned} has no business in this file"
+    tree = ast.parse(src)
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(a.name.split(".")[0] for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".")[0])
+    # Checked as IMPORTS rather than as substrings: the card's own blocker
+    # text says "opens no socket", and a substring test would fail on the
+    # sentence promising the thing it is verifying.
+    for banned in ("http", "requests", "socket", "ssl"):
+        assert banned not in imported, (
+            f"{banned} has no business in this file — it must not be able to "
+            f"reach the endpoint that places orders")
+    # `urllib.parse` is fine and is how the webhook HOST is read out of a URL;
+    # `urllib.request` is the half that opens connections.
+    assert "urllib.request" not in src, "urllib.request opens sockets"
 
 
 def test_the_tool_does_not_import_pandas():
@@ -470,3 +516,85 @@ def test_it_writes_nothing(tmp_path):
         assert sorted(p.name for p in (tmp_path / "data").iterdir()) == before
     finally:
         _unwire()
+
+
+# ==========================================================================
+# Arming is `--live`, not the absence of `--dry-run`
+#
+# `master_live.resolve_dry_run` returns `not args.live`: dry run is the
+# DEFAULT and a unit carrying NEITHER flag sends no order. The first version
+# of this card inferred "armed" from a missing `--dry-run` and reported
+# `LIVE EXECUTION — the running loop will send orders` about a loop that was
+# formatting payloads into a socket it never opened. On 2026-08-27 that cost a
+# deployment: the operator ran the arming command, the flag was gone, this
+# card agreed, and nothing was armed.
+# ==========================================================================
+
+def test_arming_is_read_from_live_not_from_the_absence_of_dry_run():
+    from master_live import resolve_dry_run                   # noqa: PLC0415
+    import argparse                                           # noqa: PLC0415
+
+    def mode(live, dry):
+        return resolve_dry_run(argparse.Namespace(live=live, dry_run=dry))
+
+    assert mode(False, None) is True, "neither flag = DRY RUN, the default"
+    assert mode(False, True) is True
+    assert mode(True, None) is False, "--live is the only thing that arms it"
+    # Both together are refused rather than resolved: whichever way it went,
+    # half the command would describe a run that did not happen.
+    with pytest.raises(ValueError, match="contradict"):
+        mode(True, True)
+
+
+def test_the_flag_test_does_not_match_master_live_py():
+    """
+    A substring test for `--live` matches `master_live.py` on every command
+    line this reads, and would report every dry run as armed. The guard is a
+    word boundary, and this is the case that catches its removal.
+    """
+    import re                                                 # noqa: PLC0415
+    pattern = r"(?<![\w-])--live(?![\w-])"
+    assert not re.search(pattern, "python3 /repo/master_live.py --dry-run")
+    assert not re.search(pattern, "python3 master_live.py --tf 1h")
+    assert re.search(pattern, "python3 master_live.py --live --tf 1h")
+    assert not re.search(pattern, "python3 master_live.py --live-ish")
+
+
+def test_a_loop_without_live_reads_as_dry_run_not_as_armed(tmp_path):
+    """THE REGRESSION. Absent `--dry-run` must not read as armed."""
+    snap = _snap(tmp_path, regime=_regime(), portfolios=_portfolios(),
+                 running=False, effective=False, repo_unit="",
+                 banner=False)
+    card = fw.render(snap)
+    assert "DRY RUN" in card
+    assert "LIVE EXECUTION" not in card
+    assert "1. Execution Interlock    : BLOCKED" in card
+    assert any("is in DRY RUN" in b for b in fw.blockers(snap))
+    assert any("REMOVING `--dry-run` does nothing" in b
+               for b in fw.blockers(snap))
+
+
+def test_the_loops_own_banner_outranks_the_flags(tmp_path):
+    """
+    The flags are what the loop was ASKED; the banner is what it CONCLUDED,
+    printed after `resolve_dry_run` ran. A unit edited but not restarted makes
+    them disagree, and the banner is the one describing reality.
+    """
+    snap = _snap(tmp_path, regime=_regime(), portfolios=_portfolios(),
+                 running=True, effective=True, repo_unit="--live",
+                 banner=False)  # armed flags, dry-run process
+    card = fw.render(snap)
+    assert "DRY RUN" in card, "the banner wins"
+    assert "believe this one" in card
+    assert snap["interlock"]["banner"] is False
+
+
+def test_a_genuinely_armed_loop_reads_as_live(tmp_path):
+    snap = _snap(tmp_path, regime=_regime(n_bars=40, gate=_gate(
+        status="LIVE", reason="regime_match", entries=True, live_q="Q2")),
+        portfolios=_portfolios(), running=True, effective=True,
+        repo_unit="--live")
+    card = fw.render(snap)
+    assert "LIVE EXECUTION — the running loop WILL send orders" in card
+    assert "1. Execution Interlock    : PASS" in card
+    assert fw.blockers(snap) == []

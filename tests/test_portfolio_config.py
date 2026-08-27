@@ -94,9 +94,31 @@ EXECUTION_ACCOUNTS = {"Incubator-Odd": "SimIncubator1",
 # what routes an order to an account. Naming the expected ones keeps the guard
 # and lets a deliberate promotion through: promote a strategy, add it here in
 # the same commit, and an assignment that arrives any other way still fails.
+# DECLARED IN THE SAME COMMIT THAT REGISTERS THEM, which is the rule this
+# constant exists to enforce and which earned its keep on 2026-08-27: an
+# `--auto-promote` pipeline run wrote NINE strategies into this table
+# unattended, and this assertion is what caught them before a restart could
+# arm any of them.
+#
+# EVERY ENTRY HERE MUST BE ABLE TO TRADE WHERE IT SITS. The dispatcher walks
+# `basket.assets` and asks `trades_symbol` for each, so a strategy certified on
+# a contract the basket cannot reach is refused on every asset and declines
+# forever — visibly running, permanently inert. Incubator-Odd holds MNQ/MCL
+# (NQ, CL) and Incubator-Even holds MES/MGC (ES, GC); an ES strategy on the Odd
+# account is the mistake `backtest/promote.py`'s own routing comment records
+# having made before.
+#
+# NG and RB promotions are deliberately absent: `contract_alias.MICRO_TO_PARENT`
+# has no micro for either, so NO incubator basket can reach them and moving
+# them between accounts cannot help. They need full-size contracts, which is a
+# different risk profile from these sim accounts.
 EXPECTED_ASSIGNMENTS = {
-    "Incubator-Odd":  ["t3_braid_scalp_20260823_NQ_1h"],
-    "Incubator-Even": [],
+    "Incubator-Odd":  ["t3_braid_scalp_20260823_NQ_1h",        # 1h,  NQ
+                       "double_rsi_macd_scalp_20260823_NQ_3m",  # 3m,  NQ
+                       "ema_crossover_20260821_NQ_15m",         # 15m, NQ
+                       "ema_crossover_20260821_CL_15m"],        # 15m, CL
+    "Incubator-Even": ["ema_crossover_20260821_ES_15m",         # 15m, ES
+                       "ema_crossover_20260821_ES_30m"],        # 30m, ES
     "Prop-Odd":       [],
     "Prop-Even":      [],
 }

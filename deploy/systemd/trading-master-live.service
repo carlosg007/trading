@@ -43,9 +43,34 @@ WorkingDirectory=/home/cgrullon/src/trading
 # unrelated tool's debug output. EnvironmentFile carries only non-secret paths.
 EnvironmentFile=-/home/cgrullon/src/trading/deploy/systemd/trading.env
 
+# NOT for journald — this unit writes to FILES (StandardOutput=append: below),
+# and not for stdout either: every print() in master_live.py already passes
+# flush=True, verified by AST, so the cycle log is current to the second
+# without this.
+#
+# It is here for the THREE UNFLUSHED stderr prints — all of them
+# `[master_live] REFUSING TO START: ...`, the messages that say why the loop
+# would not come up. Those are the lines somebody reads at the worst moment,
+# they land in master_live.err, and the process exits immediately after
+# writing them. Python line-buffers stderr and flushes at exit, so they do
+# arrive today; this removes the dependency on that being true of whichever
+# interpreter and redirection the unit runs under next.
+Environment=PYTHONUNBUFFERED=1
+
+# `--live` IS WHAT ARMS THIS. `master_live.resolve_dry_run` returns
+# `not args.live`, so dry run is the DEFAULT and removing `--dry-run` changes
+# NOTHING — a unit carrying neither flag still sends no order. On 2026-08-27 a
+# deployment did exactly that: `--dry-run` was removed, the ExecStart was
+# verified clean, and the loop went on formatting payloads into a socket it
+# never opened while everyone believed it was armed. The flags are separate on
+# purpose, so arming is a word an operator means rather than a double negative
+# typed by habit.
+#
+# To STAND IT DOWN: delete this line. Do NOT add `--dry-run` beside it —
+# passing both is refused outright, which is correct and is not what somebody
+# editing under pressure expects.
 ExecStart=/home/cgrullon/src/trading/.venv/bin/python3 \
     /home/cgrullon/src/trading/master_live.py \
-    --dry-run \
     --tf 1h \
     --feed auto \
     --interval-sec 60 \

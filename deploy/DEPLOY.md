@@ -158,10 +158,27 @@ This is the only step that risks money, and it is deliberately manual.
 # 2. Confirm the loop is healthy in dry run, on the feed you intend to trade:
 journalctl -u trading-master-live -n 50 --no-pager | grep -E "bar feed|newest closed|RISK"
 
-# 3. Edit the unit and remove `--dry-run`, then:
-sudo systemctl edit --full trading-master-live      # delete the --dry-run line
+# 3. ADD `--live` to the unit's ExecStart. Removing `--dry-run` does NOTHING:
+#    `master_live.resolve_dry_run` returns `not args.live`, so dry run is the
+#    DEFAULT and a unit carrying neither flag still sends no order. On
+#    2026-08-27 a deployment removed `--dry-run`, verified the ExecStart was
+#    clean, restarted, and got a loop everybody believed was armed and was not.
+#    Only its own `mode=DRY RUN` banner said otherwise.
+#
+#    Edit deploy/systemd/trading-master-live.service in the REPO, not with
+#    `systemctl edit --full`: that writes an override under
+#    /etc/systemd/system/ which SHADOWS the repo unit, survives
+#    deploy/redeploy.sh, and is invisible to git — so the tracked unit can say
+#    one thing while the running one does another.
+sudo cp ~/src/trading/deploy/systemd/trading-master-live.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl restart trading-master-live
+
+# 3a. CONFIRM IT ACTUALLY ARMED. The flag is not the evidence; the banner is.
+grep -m1 "LiveExecutionDispatcher  mode=" ~/src/trading/logs/master_live.log | tail -1
+#    Expect `mode=LIVE`. `mode=DRY RUN` means it is not armed, whatever the
+#    unit says. `firewall-check` reads the same thing across all three places
+#    the interlock can disagree.
 
 # 4. Watch the first cycle to completion before walking away.
 journalctl -u trading-master-live -f

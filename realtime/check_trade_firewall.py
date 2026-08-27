@@ -107,6 +107,7 @@ W = 80
 UNIT = "trading-master-live.service"
 REPO_UNIT = REPO / "deploy" / "systemd" / "trading-master-live.service"
 REGIME_STATE = REPO / "data" / "live_regime_state.json"
+MASTER_LOG = REPO / "logs" / "master_live.log"
 PORTFOLIO_CONFIG = REPO / "config" / "portfolios.json"
 
 #: Restated from `mdlib.regimes` and `realtime.regime_daemon`, which cost 268ms
@@ -212,19 +213,43 @@ def row(label: str, value: str) -> str:
 
 def interlock() -> dict[str, Any]:
     """
-    Whether `--dry-run` is in force, asked of git, of systemd, and of reality.
+    Whether the loop is ARMED, asked of git, of systemd, of the process, and
+    of the loop's own banner.
 
-    Three answers, deliberately not merged. See the module docstring: they
-    disagree exactly when somebody has edited a unit and not restarted, or has
-    used `systemctl edit --full`, and those are the two moments an operator
-    most needs to be told rather than reassured.
+    IT LOOKS FOR `--live`, NOT FOR THE ABSENCE OF `--dry-run`, and that
+    distinction cost a deployment on 2026-08-27.
+    `master_live.resolve_dry_run` returns `not args.live`: dry run is the
+    DEFAULT, `--live` is the only thing that clears it, and a unit carrying
+    NEITHER flag sends no order. The first version of this function inferred
+    "armed" from a missing `--dry-run` and therefore reported
+    `LIVE EXECUTION — the running loop will send orders` about a loop that was
+    formatting payloads into a socket it never opened. A card built to answer
+    "why is nothing trading" told an operator the opposite of the truth.
+
+    FOUR sources, deliberately not merged. The first three are configuration
+    and can each be edited without the others; the fourth is the loop's OWN
+    verdict, printed by `LiveExecutionDispatcher.describe()` after
+    `resolve_dry_run` has run, and it is the only one that reflects what the
+    process actually decided. Where they disagree, that is the finding.
     """
     out: dict[str, Any] = {"repo": None, "effective": None, "running": None,
+                           "banner": None, "banner_at": None,
                            "drop_ins": None, "pids": [], "unit_active": None,
                            "agree": None}
 
+    def armed(text: str | None) -> bool | None:
+        """
+        `--live` present, as a whole flag.
+
+        A substring test would match `master_live.py` on every command line
+        this reads and report every dry run as armed.
+        """
+        if text is None:
+            return None
+        return re.search(r"(?<![\w-])--live(?![\w-])", text) is not None
+
     try:
-        out["repo"] = "--dry-run" in REPO_UNIT.read_text(encoding="utf-8")
+        out["repo"] = armed(REPO_UNIT.read_text(encoding="utf-8"))
     except OSError:
         pass
 
@@ -235,7 +260,7 @@ def interlock() -> dict[str, Any]:
                               "--value"], capture_output=True, text=True,
                              timeout=8, check=False)
         if res.returncode == 0 and res.stdout.strip():
-            out["effective"] = "--dry-run" in res.stdout
+            out["effective"] = armed(res.stdout)
         drops = subprocess.run(["systemctl", "show", UNIT, "-p", "DropInPaths",
                                 "--value"], capture_output=True, text=True,
                                timeout=8, check=False)
@@ -261,12 +286,30 @@ def interlock() -> dict[str, Any]:
             if "check_trade_firewall" in args:
                 continue
             out["pids"].append(int(pid))
-            out["running"] = "--dry-run" in args
+            out["running"] = armed(args)
     except (OSError, subprocess.SubprocessError, ValueError):
         pass
 
-    answers = [v for v in (out["repo"], out["effective"], out["running"])
-               if v is not None]
+    # THE LOOP'S OWN VERDICT. `describe()` prints `mode=LIVE` or
+    # `mode=DRY RUN` after `resolve_dry_run` has decided, so this is the only
+    # source that reports what the PROCESS concluded rather than what its
+    # command line looks like. When it disagrees with the flags, believe it.
+    try:
+        with MASTER_LOG.open("rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            back = min(fh.tell(), 262144)
+            fh.seek(-back, os.SEEK_END)
+            for line in reversed(fh.read().decode("utf-8", "replace")
+                                 .splitlines()):
+                if "LiveExecutionDispatcher  mode=" in line:
+                    out["banner"] = "DRY RUN" not in line
+                    out["banner_at"] = mtime(MASTER_LOG)
+                    break
+    except OSError:
+        pass
+
+    answers = [v for v in (out["repo"], out["effective"], out["running"],
+                           out["banner"]) if v is not None]
     out["agree"] = (len(set(answers)) <= 1) if answers else None
     return out
 
@@ -481,20 +524,23 @@ def blockers(snap: dict[str, Any]) -> list[str]:
     il, kill, ses, br = (snap["interlock"], snap["kill"], snap["session"],
                          snap["bridge"])
 
-    if il["running"] is True:
-        out.append("The RUNNING loop carries --dry-run: orders are formatted "
-                   "and nothing is sent.")
-    elif il["running"] is None and il["effective"] is True:
-        out.append("No loop is running. The unit systemd would start carries "
-                   "--dry-run.")
-    elif il["running"] is None:
+    armed_now = (il["banner"] if il["banner"] is not None else il["running"])
+    if not il["pids"]:
         out.append("No loop is running, so nothing is being evaluated at all.")
+    elif armed_now is False:
+        out.append("The RUNNING loop is in DRY RUN: it formats payloads and "
+                   "opens no socket. `--live` is what arms it — REMOVING "
+                   "`--dry-run` does nothing, because dry run is the default.")
+    elif armed_now is None:
+        out.append("Could not establish whether the loop is armed: neither "
+                   "its flags nor its banner could be read.")
 
     if il["agree"] is False:
         out.append(f"The interlock DISAGREES across sources — repo="
                    f"{il['repo']}, systemd={il['effective']}, "
-                   f"running={il['running']}. Resolve before trusting any "
-                   f"other line on this card.")
+                   f"running={il['running']}, loop-says={il['banner']}. The "
+                   f"loop's own banner is the one to believe; resolve this "
+                   f"before trusting any other line on this card.")
 
     if kill["armed"]:
         out.append(f"The kill switch is ARMED ({short(kill['path'])}). Every "
@@ -560,14 +606,21 @@ def render(snap: dict[str, Any]) -> str:
         L.append(row("Overall Trading Status",
                      "ACTIVE — every layer permits an entry"))
 
-    if il["running"] is True:
-        mode = "DRY RUN (--dry-run on the running process)"
-    elif il["running"] is False:
-        mode = "LIVE EXECUTION — the running loop will send orders"
-    else:
+    # The BANNER is preferred over the flags: it is what the process concluded,
+    # and the flags are only what it was asked.
+    effective_mode = il["banner"] if il["banner"] is not None else il["running"]
+    if not il["pids"]:
         mode = (f"no loop running (unit: {il['unit_active'] or 'unknown'}); "
                 f"systemd would start it "
-                + ("with --dry-run" if il["effective"] else "LIVE"))
+                + ("LIVE" if il["effective"] else "in DRY RUN — `--live` is "
+                                                 "absent, which is the default"))
+    elif effective_mode is True:
+        mode = "LIVE EXECUTION — the running loop WILL send orders"
+    elif effective_mode is False:
+        mode = ("DRY RUN — the loop formats payloads and opens no socket "
+                "(`--live` absent; that is the default)")
+    else:
+        mode = "UNKNOWN — could not read the flags or the loop's banner"
     L.append(row("Execution Mode", mode))
     L.append(row("Kill Switch State",
                  f"TRIPPED ({short(kill['path'])})" if kill["armed"]
@@ -577,19 +630,25 @@ def render(snap: dict[str, Any]) -> str:
     L.append("")
     L.append("--- Protective Firewall Layers ---")
 
-    verdict = (BLOCKED if il["running"] is True or
-               (il["running"] is None and il["effective"] is True) else PASS)
+    armed_now = (il["banner"] if il["banner"] is not None else il["running"])
+    verdict = PASS if armed_now is True else BLOCKED
     L.append(f"1. Execution Interlock    : {verdict}")
-    for label, val in (("repo unit", il["repo"]), ("systemd (effective)",
-                       il["effective"]), ("running process", il["running"])):
-        text = ("--dry-run PRESENT" if val is True else
-                "--dry-run ABSENT" if val is False else "not readable")
+    for label, val in (("repo unit", il["repo"]),
+                       ("systemd (effective)", il["effective"]),
+                       ("running process", il["running"])):
+        text = ("--live PRESENT (armed)" if val is True else
+                "--live ABSENT (dry run — the default)" if val is False
+                else "not readable")
         L.append(f"   • {label:<22} {text}")
+    banner = ("mode=LIVE" if il["banner"] is True else
+              "mode=DRY RUN" if il["banner"] is False else "not found")
+    L.append(f"   • {'the loop says':<22} {banner}"
+             + ("   <-- believe this one" if il["banner"] is not None else ""))
     if il["drop_ins"]:
         L.append(f"   • drop-in overrides     {', '.join(il['drop_ins'])}")
         L.append("     these SHADOW the repo unit and git does not see them")
     if il["agree"] is False:
-        L.append("   • [!] THE THREE DISAGREE — see the summary below")
+        L.append("   • [!] THESE DISAGREE — see the summary below")
 
     L.append(f"2. Global Kill Switch     : "
              f"{BLOCKED if kill['armed'] else PASS}")

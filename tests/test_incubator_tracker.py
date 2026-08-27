@@ -475,9 +475,19 @@ def test_promotion_updates_both_files(workspace) -> None:
     portfolios = _read(config_path)["portfolios"]
     assert portfolios["Incubator-Odd"]["active_strategies"] == []
     assert portfolios["Prop-Odd"]["active_strategies"] == ["alpha_x"]
-    # The other two accounts are untouched: a promotion moves one strategy.
-    assert portfolios["Incubator-Even"]["active_strategies"] == []
-    assert portfolios["Prop-Even"]["active_strategies"] == []
+    # THE OTHER ACCOUNTS ARE UNTOUCHED: a promotion moves one strategy.
+    #
+    # Compared against what the REAL routing table holds, not against `[]`.
+    # The fixture copies that table and edits only Incubator-Odd, so an empty
+    # expectation here was really an assertion that the operator had allocated
+    # nothing to the other accounts — true until the first one was, and a fact
+    # about the config rather than about `promote_strategy`.
+    live = json.loads(CONFIG_PATH.read_text())["portfolios"]
+    for pid in ("Incubator-Even", "Prop-Even"):
+        assert (portfolios[pid]["active_strategies"]
+                == (live[pid].get("active_strategies") or [])), (
+            f"{pid} changed; a promotion moves one strategy and leaves every "
+            f"other account exactly as it was")
 
     record = _read(ledger_path)["strategies"]["alpha_x"]
     assert record["status"] == STATUS_GRADUATED
