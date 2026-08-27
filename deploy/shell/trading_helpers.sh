@@ -50,6 +50,14 @@ precompute_all_regimes() {
 alias precompute-all='precompute_all_regimes'
 
 # 2. The pipeline, prompting for the strategy when none is given.
+#
+# --tf names the GROUP, not the seven timeframes. `ALL_DAY_TRADING` is
+# `backtest.run.TF_GROUPS`'s own tuple — 1m, 2m, 3m, 5m, 15m, 30m, 1h — and
+# `run_pipeline.parse_timeframes` expands it to exactly what every other stage
+# gets from that same constant. Spelling the list out here worked and was one
+# edit away from not: two spellings of "the day-trading ladder" drifting apart
+# would put Stage 1 and Stage 3 on different timeframe sets with every log
+# line reading correctly. Adding 1h to the ladder is now a change to ONE tuple.
 run_pipeline_all() {
     _trading_preflight || return 1
 
@@ -60,10 +68,11 @@ run_pipeline_all() {
     fi
     [ -n "$strat_name" ] || { echo "Error: strategy name cannot be empty." >&2; return 1; }
 
-    echo "==> pipeline: ${strat_name}  |  24 contracts x 6 timeframes  |  2013-01-01..2022-12-31"
+    echo "==> pipeline: ${strat_name}  |  24 contracts x 7 timeframes  |  2013-01-01..2022-12-31"
     # Said out loud every time, because it is the one flag here that CHANGES
     # STATE somebody has to live with: Stage 5 runs for every configuration
-    # Stage 3 certified, up to 144 of them, without a human seeing a card
+    # Stage 3 certified, up to 168 of them (24 contracts x 7 timeframes),
+    # without a human seeing a card
     # first. It never overrides a gate. To look before registering, pass
     # --promote-only later, or --dry-run now to print the plan and run nothing.
     echo "    --auto-promote IS ON: every certified configuration registers unattended."
@@ -72,7 +81,7 @@ run_pipeline_all() {
         nice -n 19 ionice -c 3 "$_TRADING_PY" backtest/run_pipeline.py \
             --strat "$strat_name" \
             --symbols "$_TRADING_UNIVERSE" \
-            --tf 1m,2m,3m,5m,15m,30m \
+            --tf ALL_DAY_TRADING \
             --start 2013-01-01 \
             --end 2022-12-31 \
             --report-discord \
