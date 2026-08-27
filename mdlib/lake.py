@@ -77,13 +77,28 @@ NATIVE_TFS = {"1m", "1d"}
 
 # Which native timeframe each derived timeframe is built from, and the pandas
 # resample rule to use.
+#
+# ON THE REGIME CACHE. A (symbol, timeframe) with no cached regime parquet
+# falls back to `recomputed_live` — a DIFFERENT volatility boundary from the
+# cached timeframes beside it, because `theta_vol` is LOADED from the pinned
+# 2013-01-01..2022-12-31 anchor rather than recomputed, and an anchor is per
+# (symbol, TIMEFRAME). Quadrants either side of that line are not comparable.
+#
+# `scripts/precompute_regimes.py` covers ten timeframes — 1m, 2m, 3m, 5m, 15m,
+# 30m, 1h, 2h, 4h, 1d — and the cache is built for all ten. This comment used
+# to say 2m/3m had no cache and that the builder had only ever run for
+# 5m/15m/30m/1h; that stopped being true and the note outlived it, which is the
+# worse failure of the two: it reads as authority for skipping a timeframe that
+# is in fact screened as safely as any other.
+#
+# 1w is the exception below — it is NOT in the builder's timeframe list, so it
+# has no cache at any symbol. Coverage is a directory listing, not a belief:
+#
+#     ls /mnt/backtest/lake/regimes/ | sed 's/_regime.parquet//'
+#
+# Check it rather than trusting this paragraph, and run the builder for a
+# (symbol, timeframe) before screening on it.
 DERIVED = {
-    # 2m and 3m are day-trading resolutions and derive from 1m exactly as the
-    # rest do. They have NO pre-computed regime cache (`scripts/precompute_
-    # regimes.py` has only ever been run for 5m/15m/30m/1h), so a profiler run
-    # at either falls back to `recomputed_live` — a DIFFERENT volatility
-    # boundary from the cached timeframes beside it. Run the cache builder for
-    # a timeframe before screening on it, or the quadrants are not comparable.
     "2m":  ("1m", "2min"),
     "3m":  ("1m", "3min"),
     "5m":  ("1m", "5min"),
@@ -92,6 +107,7 @@ DERIVED = {
     "1h":  ("1m", "1h"),
     "2h":  ("1m", "2h"),
     "4h":  ("1m", "4h"),
+    # No regime cache: 1w is not in precompute_regimes.py's timeframe list.
     "1w":  ("1d", "W-MON"),
 }
 
