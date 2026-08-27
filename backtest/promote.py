@@ -1118,7 +1118,8 @@ def resolve_portfolio(portfolios: dict,
                       requested: str | None = None,
                       strat: str | None = None,
                       quadrant: str | None = None,
-                      symbol: str | None = None) -> tuple[str, str]:
+                      symbol: str | None = None,
+                      timeframe: str | None = None) -> tuple[str, str]:
     """
     Which incubator portfolio this promotion is registered onto, and why.
 
@@ -1264,8 +1265,31 @@ def resolve_portfolio(portfolios: dict,
               for pid in pool}
     pid = sorted(pool, key=lambda p: (counts[p], p))[0]
     tally = ", ".join(f"{p}={counts[p]}" for p in pool)
+
+    # THE TIMEFRAME IS RECORDED, NOT FILTERED ON, and the distinction is
+    # deliberate.
+    #
+    # Routing narrows by symbol and then by quadrant because a portfolio
+    # DECLARES both - `basket.assets` and `basket.regime_quadrants` - so there
+    # is something to match against. Nothing in the config declares which bar
+    # widths the loop serving an account reads: that came from the systemd
+    # unit's `--tf`, which this process cannot see.
+    #
+    # On 2026-08-27 a 3m certification was auto-registered onto an account
+    # served by a 1h loop and was evaluated on hourly bars. The fix for that
+    # is in the LOOP, which now reads every width its roster names and refuses
+    # any strategy handed the wrong one - so the destination no longer has a
+    # single timeframe for this function to validate against.
+    #
+    # What was missing and IS fixable here is the record: the basis said which
+    # symbol and which quadrant decided the account and never which bar width
+    # was being registered, so the one fact that turned out to matter was the
+    # one nobody could read back afterwards.
+    tf_note = ""
+    if timeframe and str(timeframe).strip() and timeframe != NOT_RESOLVED:
+        tf_note = f"; certified on {str(timeframe).strip()} bars"
     return pid, (f"{scope_note}fewest active strategies ({tally}), ties "
-                 f"alphabetical")
+                 f"alphabetical{tf_note}")
 
 
 def certified_scope(certification: Any,
@@ -1473,7 +1497,8 @@ def register_portfolio(strat: str,
 
     pid, basis = resolve_portfolio(portfolios, portfolio, strat,
                                    scope.get("regime_filter"),
-                                   scope.get("symbol"))
+                                   scope.get("symbol"),
+                                   scope.get("timeframe"))
     target = portfolios[pid]
     active = target.get("active_strategies")
     if not isinstance(active, list):

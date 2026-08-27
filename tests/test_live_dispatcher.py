@@ -153,7 +153,7 @@ def ml_features(bars, **_ignored):
 def write_strategy(root: Path, strategy_id: str, *, side="long",
                    symbols=("NQ",), sl_atr_mult=SL_ATR_MULT, tp_atr_mult=2.0,
                    exit_on_last=False, corrupt_hash=False,
-                   src: str | None = None) -> Path:
+                   src: str | None = None, timeframe: str = "15m") -> Path:
     """A promoted-strategy directory: strat.py, meta.json, honest SHA-256."""
     directory = root / strategy_id
     directory.mkdir(parents=True, exist_ok=True)
@@ -166,7 +166,7 @@ def write_strategy(root: Path, strategy_id: str, *, side="long",
         "name": strategy_id,
         "version": "A",
         "symbols": list(symbols),
-        "timeframe": "15m",
+        "timeframe": timeframe,
         "params": {"side": side, "sl_atr_mult": sl_atr_mult,
                    "tp_atr_mult": tp_atr_mult, "exit_on_last": exit_on_last},
         "risk": {"sl_atr_mult": sl_atr_mult, "tp_atr_mult": tp_atr_mult,
@@ -237,8 +237,9 @@ def write_state(tmp_path: Path, per_symbol: dict) -> Path:
     return path
 
 
-def make_bars(n: int = 60, symbol: str = "MNQ") -> pd.DataFrame:
-    ts = pd.date_range("2026-08-20", periods=n, freq="15min", tz="UTC")
+def make_bars(n: int = 60, symbol: str = "MNQ",
+              freq: str = "15min") -> pd.DataFrame:
+    ts = pd.date_range("2026-08-20", periods=n, freq=freq, tz="UTC")
     close = 15000.0 + np.arange(n) * 1.0
     return pd.DataFrame({"ts": ts, "open": close, "high": close + 2.0,
                          "low": close - 2.0, "close": close, "volume": 100})
@@ -1391,3 +1392,158 @@ def test_a_reading_that_cannot_be_formatted_does_not_raise():
     assert _fmt_reading(0.00097) == "0.00097", "small values keep their digits"
     assert _fmt_reading(15234.567) == "15234.57", "no scientific on price scale"
     assert _fmt_reading("weird") == "weird"
+
+
+# ==========================================================================
+# Multi-timeframe dispatch
+#
+# THE BUG THESE EXIST FOR, stated once: until 2026-08-27 `master_live.py`
+# loaded ONE timeframe and handed those bars to every strategy, and
+# `trades_symbol` checked only the symbol. A strategy swept, plateau-selected
+# and Gate-R certified on 3m bars was therefore evaluated on 1h bars —
+# producing real signals, against a certification describing a different tape,
+# with every log line reading correctly. It was caught during pre-live arming
+# and before any order went out.
+# ==========================================================================
+
+def test_the_handle_records_the_timeframe_it_was_certified_on(tmp_path):
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["fixture_long"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"fixture_long": dict(side="long", timeframe="3m")})
+    assert d.strategies[0].certified_timeframe == "3m"
+
+
+def test_a_handle_falls_back_to_the_id_suffix(tmp_path):
+    """
+    A meta.json written before `timeframe` existed carries no claim, and
+    stranding it would regress every strategy promoted before the guard. The
+    id is split with `pipeline.split_strategy_id`, not by counting
+    underscores — `ma_anchoring_spread_20260820` would otherwise split to a
+    symbol of `spread` at a timeframe of `20260820`.
+    """
+    from realtime.live_dispatcher import StrategyHandle       # noqa: PLC0415
+    resolve = StrategyHandle._resolve_timeframe
+    assert resolve("demo_NQ_1h", {}) == "1h"
+    assert resolve("demo_NQ_1h", {"timeframe": "3m"}) == "3m", "meta wins"
+    assert resolve("ma_anchoring_spread_20260820", {}) is None
+    assert resolve("bare_name", {}) is None
+
+
+def test_strategy_handle_timeframe_mismatch(tmp_path):
+    """
+    SPEC TEST 1. Hourly bars into a 3m strategy must raise, not decline.
+
+    It raises rather than declining because `process_bar_cycle` has already
+    filtered the roster to this bucket — a mismatched pair reaching `_evaluate`
+    is a bug in the dispatch above it, not a configuration a strategy can be
+    quietly stood down for. A decline would be one more silent HOLD in a stack
+    whose entire failure mode is a silent HOLD that reads correctly.
+    """
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["fixture_long"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"fixture_long": dict(side="long", timeframe="3m")})
+    handle = d.strategies[0]
+
+    with pytest.raises(ValueError, match="TIMEFRAME_MISMATCH"):
+        d._evaluate(handle, "MNQ", make_bars(freq="1h"),
+                    {"MNQ": {"quadrant": PERMITTED_QUADRANT}}, {},
+                    [PERMITTED_QUADRANT],
+                    {"declines": [], "signals": [], "exit_signals": [],
+                     "ml_vetoes": [], "errors": [], "indicators": [],
+                     "indicator_errors": []},
+                    bar_timeframe="1h")
+
+    # ...and the message names BOTH widths, because "mismatch" alone sends an
+    # operator to look up which one the strategy wanted.
+    try:
+        d._evaluate(handle, "MNQ", make_bars(freq="1h"),
+                    {"MNQ": {"quadrant": PERMITTED_QUADRANT}}, {},
+                    [PERMITTED_QUADRANT],
+                    {"declines": [], "signals": [], "exit_signals": [],
+                     "ml_vetoes": [], "errors": [], "indicators": [],
+                     "indicator_errors": []},
+                    bar_timeframe="1h")
+    except ValueError as e:
+        assert "expects 3m" in str(e) and "received 1h" in str(e)
+
+
+def test_a_bucket_evaluates_only_the_strategies_certified_on_it(tmp_path):
+    """
+    A strategy belonging to another bucket is SKIPPED, not declined and not
+    errored. Under multi-timeframe dispatch most of the roster legitimately
+    belongs elsewhere every cycle; recording each as a refusal would bury the
+    ones that were actually refused.
+    """
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["fast", "slow"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"fast": dict(side="long", timeframe="3m"),
+                          "slow": dict(side="long", timeframe="1h")})
+
+    report = d.process_bar_cycle({"MNQ": make_bars(freq="3min")},
+                                 timeframe="3m")
+    assert report["timeframe"] == "3m"
+    skipped = {s["strategy_id"] for s in report["timeframe_skipped"]}
+    assert skipped == {"slow"}, "the 1h strategy sits this bucket out"
+    assert report["declines"] == [], "and it is not a decline"
+    assert report["errors"] == [], "nor an error"
+    assert report["payloads"], "the 3m strategy still traded"
+
+
+def test_multi_timeframe_resampling_dispatch(tmp_path):
+    """
+    SPEC TEST 2. A 3m strategy and a 1h strategy, both evaluated in one cycle,
+    each on its OWN bar width — which is the whole point of the change.
+    """
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["fast", "slow"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"fast": dict(side="long", timeframe="3m"),
+                          "slow": dict(side="long", timeframe="1h")})
+
+    seen = {}
+    for tf, freq in (("3m", "3min"), ("1h", "1h")):
+        report = d.process_bar_cycle({"MNQ": make_bars(freq=freq)},
+                                     timeframe=tf)
+        traded = {s["strategy_id"] for s in report["signals"]}
+        seen[tf] = traded
+        assert report["errors"] == [], f"{tf} bucket errored: {report['errors']}"
+
+    assert seen["3m"] == {"fast"}, seen
+    assert seen["1h"] == {"slow"}, seen
+    # Neither ever saw the other's bars: that is the defect, closed.
+    assert "slow" not in seen["3m"] and "fast" not in seen["1h"]
+
+
+def test_the_timeframe_is_inferred_when_a_caller_does_not_declare_it(tmp_path):
+    """
+    Backward compatibility that is NOT an exemption. A caller predating the
+    parameter is still guarded — the width is measured off the frames — so the
+    hole cannot reopen through an un-updated call site.
+    """
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["fast", "slow"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"fast": dict(side="long", timeframe="3m"),
+                          "slow": dict(side="long", timeframe="1h")})
+    report = d.process_bar_cycle({"MNQ": make_bars(freq="3min")})
+    assert report["timeframe"] == "3m", "measured, not assumed"
+    assert {s["strategy_id"] for s in report["timeframe_skipped"]} == {"slow"}
+
+
+def test_a_strategy_declaring_no_timeframe_is_still_evaluated(tmp_path):
+    """
+    A meta.json written before the key existed makes no claim to contradict.
+    Refusing it would strand every strategy promoted before this guard.
+    """
+    from realtime.live_dispatcher import StrategyHandle       # noqa: PLC0415
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["fixture_long"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"fixture_long": dict(side="long")})
+    d.strategies[0].certified_timeframe = None                # pre-guard meta
+    report = d.process_bar_cycle({"MNQ": make_bars(freq="1h")}, timeframe="1h")
+    assert report["timeframe_skipped"] == []
+    assert report["payloads"], "it trades, as it did before the guard"

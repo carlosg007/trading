@@ -287,6 +287,63 @@ class StrategyHandle:
         self.sl_atr_mult = _risk_value(risk.get("sl_atr_mult"))
         self.tp_atr_mult = _risk_value(risk.get("tp_atr_mult"))
         self.certified_symbols = tuple(meta.get("symbols") or ())
+        # THE TIMEFRAME THE CERTIFICATION WAS MEASURED ON.
+        #
+        # Absent until 2026-08-27, and its absence was a live defect rather
+        # than an omission: `master_live.py` loaded ONE timeframe and handed
+        # those bars to every strategy, `trades_symbol` checked only the
+        # symbol, and nothing else compared anything. A strategy swept,
+        # plateau-selected and Gate-R certified on 3m bars was therefore
+        # evaluated on 1h bars, producing signals no backtest ever simulated
+        # against a certification describing a different tape - with every log
+        # line reading correctly.
+        #
+        # `meta["timeframe"]` is written by `backtest/promote.py` and is the
+        # authority. The id suffix is a FALLBACK for a meta.json written
+        # before that key existed, and it is split with
+        # `backtest.pipeline.split_strategy_id` rather than by counting
+        # underscores: strategy names carry underscores and a date suffix, so
+        # `ma_anchoring_spread_20260820` splits to a symbol of `spread` at a
+        # timeframe of `20260820` under any left-to-right rule.
+        self.certified_timeframe = self._resolve_timeframe(strategy_id, meta)
+
+    @staticmethod
+    def _resolve_timeframe(strategy_id: str, meta: dict) -> str | None:
+        declared = str(meta.get("timeframe") or "").strip().lower()
+        if declared:
+            return declared
+        from backtest.pipeline import split_strategy_id          # noqa: PLC0415
+        _strategy, _symbol, tf = split_strategy_id(strategy_id)
+        return tf
+
+    def trades_timeframe(self, timeframe: str | None) -> tuple[bool, str]:
+        """
+        Whether this strategy's certification covers `timeframe`.
+
+        The timeframe twin of `trades_symbol`, and refused for the same
+        reason: a certification is evidence about ONE contract at ONE bar
+        width. Parameters fitted to 3m bars and a holdout measured on 3m bars
+        say nothing about how the same rules behave hourly.
+
+        A handle that declares NO timeframe is allowed through with a note,
+        exactly as an undeclared symbol is - a meta.json written before the
+        key existed is a legitimate state, and refusing it would strand every
+        strategy promoted before this guard.
+
+        An UNKNOWN incoming timeframe is also allowed through: the caller
+        could not measure the bars, which is a fact about the frame rather
+        than evidence of a mismatch, and refusing on it would stand a
+        strategy down whenever a cycle delivered a single bar.
+        """
+        if not self.certified_timeframe:
+            return True, ("meta.json declares no `timeframe`; certification "
+                          "scope unknown")
+        if not timeframe:
+            return True, "the incoming bars have no measurable timeframe"
+        if str(timeframe).strip().lower() == self.certified_timeframe:
+            return True, ""
+        return False, (f"certified on {self.certified_timeframe} bars, which "
+                       f"does not cover {timeframe}")
 
     def trades_symbol(self, symbol: str) -> tuple[bool, str]:
         """
@@ -597,7 +654,8 @@ class LiveExecutionDispatcher:
         return {str(k): v for k, v in frame.iloc[-1].to_dict().items()}
 
     # -- the cycle --------------------------------------------------------
-    def process_bar_cycle(self, symbol_bar_map: dict) -> dict:
+    def process_bar_cycle(self, symbol_bar_map: dict,
+                          timeframe: str | None = None) -> dict:
         """
         One full pass: signals -> regime gate -> ML gate -> netting -> sizing
         -> dispatch.
@@ -633,9 +691,22 @@ class LiveExecutionDispatcher:
         input.
         """
         cycle_started = time.perf_counter()
+
+        # WHICH BAR WIDTH THESE ARE. Declared by the caller when it knows -
+        # `master_live.py` loads one timeframe per bucket and says so - and
+        # otherwise measured off the frames themselves, so a caller that
+        # predates the parameter is still guarded rather than exempt.
+        if timeframe is None:
+            from realtime.feed import infer_timeframe              # noqa: PLC0415
+            for frame in symbol_bar_map.values():
+                timeframe = infer_timeframe(frame)
+                if timeframe:
+                    break
+
         report: dict[str, Any] = {
             "started_at": _utcnow(),
             "dry_run": self.dry_run,
+            "timeframe": timeframe,
             "symbols": sorted(symbol_bar_map),
             "signals": [], "declines": [], "ml_vetoes": [],
             "exit_signals": [], "exit_orders": [], "errors": [],
@@ -645,6 +716,7 @@ class LiveExecutionDispatcher:
             # so a reader of this dict sees the full shape in one place and an
             # empty cycle carries the keys rather than omitting them.
             "indicators": [], "indicator_errors": [],
+            "timeframe_skipped": [],
         }
 
         if not self.strategies:
@@ -660,7 +732,20 @@ class LiveExecutionDispatcher:
         report["regime_missing"] = missing
 
         # ---- 1-3: signals, regime gate, ML gate -------------------------
+        # A strategy certified on ANOTHER bar width is not evaluated in this
+        # bucket, and that is a SKIP rather than a decline or an error: under
+        # multi-timeframe dispatch most of the roster legitimately belongs to
+        # a different bucket every cycle, and recording each as a refusal
+        # would bury the ones that were actually refused.
         for handle in self.strategies:
+            covers_tf, tf_why = handle.trades_timeframe(timeframe)
+            if not covers_tf:
+                report["timeframe_skipped"].append({
+                    "strategy_id": handle.strategy_id,
+                    "portfolio_id": handle.portfolio_id,
+                    "certified_timeframe": handle.certified_timeframe,
+                    "cycle_timeframe": timeframe, "reason": tf_why})
+                continue
             portfolio = self.portfolios[handle.portfolio_id]
             permitted = list(portfolio["derived"]["canonical_quadrants"])
             for symbol in portfolio["basket"]["assets"]:
@@ -668,7 +753,8 @@ class LiveExecutionDispatcher:
                     continue
                 try:
                     self._evaluate(handle, symbol, symbol_bar_map[symbol],
-                                   readings, missing, permitted, report)
+                                   readings, missing, permitted, report,
+                                   bar_timeframe=timeframe)
                 except Exception as exc:
                     report["errors"].append({
                         "strategy_id": handle.strategy_id,
@@ -808,7 +894,7 @@ class LiveExecutionDispatcher:
 
     def _evaluate(self, handle: StrategyHandle, symbol: str, bars,
                   readings: dict, missing: dict, permitted: list,
-                  report: dict) -> None:
+                  report: dict, bar_timeframe: str | None = None) -> None:
         """One (strategy, symbol): gate it, run it, gate it again, emit it."""
         def decline(reason: str, **extra) -> None:
             report["declines"].append({"strategy_id": handle.strategy_id,
@@ -820,6 +906,22 @@ class LiveExecutionDispatcher:
         if not covered:
             decline(f"certification does not cover this contract: {why}")
             return
+
+        # THE BACKSTOP, AND IT RAISES ON PURPOSE.
+        #
+        # `process_bar_cycle` already filtered the roster to this bucket, so
+        # a mismatched pair reaching here is a BUG in the dispatch above, not
+        # a configuration a strategy can be stood down for. Declining would
+        # log one more quiet HOLD in a stack whose whole failure mode is a
+        # quiet HOLD that reads correctly; raising surfaces it as an error row
+        # naming both timeframes, and the outer handler keeps the rest of the
+        # cycle running.
+        covers_tf, tf_why = handle.trades_timeframe(bar_timeframe)
+        if not covers_tf:
+            raise ValueError(
+                f"[TIMEFRAME_MISMATCH] {handle.strategy_id} expects "
+                f"{handle.certified_timeframe} bars, received "
+                f"{bar_timeframe} ({tf_why})")
 
         # BARS AND THE EXIT COME FIRST, BEFORE EVERY REGIME CHECK BELOW.
         # A muted strategy used to return at the regime decline, so its exit

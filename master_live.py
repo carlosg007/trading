@@ -193,6 +193,42 @@ def load_symbol_bars(symbols, tf: str, lookback_bars: int,
     return feed.closed_bars(symbols, tf, lookback_bars)
 
 
+def required_timeframes(dispatcher: LiveExecutionDispatcher,
+                        fallback: str) -> list[str]:
+    """
+    The bar widths this roster actually needs, one bucket each.
+
+    Until 2026-08-27 the loop read ONE timeframe and handed it to every
+    strategy. A 3m certification was therefore evaluated on 1h bars: real
+    signals, correct log lines, and a certification describing a different
+    tape. `StrategyHandle.certified_timeframe` is what that bug cost, and this
+    is what spends it - the loop now reads each width the roster names and
+    gives each strategy only its own.
+
+    A handle declaring NO timeframe falls back to `--tf`, which is the old
+    behaviour and is correct for it: a meta.json written before the key
+    existed carries no claim to contradict, and stranding it would be a
+    regression for every strategy promoted before the guard.
+
+    Sorted by WIDTH, narrowest first, so the console reads 3m before 1h and a
+    reader can see the cheap buckets complete before the expensive ones.
+    """
+    from realtime.feed import tf_delta                              # noqa: PLC0415
+
+    wanted = {h.certified_timeframe or fallback for h in dispatcher.strategies}
+    wanted = {str(tf).strip().lower() for tf in wanted if tf}
+    if not wanted:
+        return [fallback]
+
+    def width(tf: str):
+        try:
+            return tf_delta(tf)
+        except Exception:                                      # noqa: BLE001
+            # An unmeasurable width sorts last rather than killing the sort.
+            return pd.Timedelta.max
+    return sorted(wanted, key=width)
+
+
 def basket_symbols(dispatcher: LiveExecutionDispatcher) -> list[str]:
     """Every contract the four baskets hold, deduplicated."""
     return sorted({asset
@@ -361,51 +397,70 @@ def main(argv: list[str] | None = None) -> int:
     cycles = failures = 0
     while True:
         cycles += 1
-        try:
-            bars, sources = load_symbol_bars(symbols, args.tf,
-                                             args.lookback_bars, feed=feed)
+        # ONE BUCKET PER BAR WIDTH THE ROSTER NEEDS, resolved every cycle
+        # rather than once at startup: `active_strategies` can be edited under
+        # a running loop, and a bucket list fixed at boot would keep feeding a
+        # newly-promoted 3m strategy the hourly bars its certification says
+        # nothing about.
+        buckets = required_timeframes(dispatcher, args.tf)
+        if len(buckets) > 1:
+            print(f"[master_live] cycle {cycles}: {len(buckets)} timeframe "
+                  f"bucket(s) — {', '.join(buckets)}", flush=True)
+        cycle_bars = 0
+        for bucket_tf in buckets:
+            try:
+                bars, sources = load_symbol_bars(symbols, bucket_tf,
+                                                 args.lookback_bars, feed=feed)
             # HOW OLD IS THE NEWEST BAR. Printed every cycle, because the
             # whole failure this feed exists to end was a loop reporting "no
             # signal" against a tape that had stopped. A vendor publishing on
             # a lag, a feed that fell back to the lake and a market that is
             # simply closed all produce the same quiet console otherwise.
-            newest = max((f["ts"].iloc[-1] for f in bars.values() if len(f)),
-                         default=None)
-            if newest is not None:
-                from realtime.feed import tf_delta
-                width = tf_delta(args.tf)
+                newest = max((f["ts"].iloc[-1] for f in bars.values()
+                               if len(f)), default=None)
+                if newest is not None:
+                    from realtime.feed import tf_delta
+                    width = tf_delta(bucket_tf)
                 # Measured from when the bar CLOSED, not when it opened. A bar
                 # is stamped at its open, so an hourly bar is always at least
                 # an hour "old" by that reading and a warning drawn on it would
                 # fire on every healthy cycle - which is how an operator learns
                 # to ignore the one line that matters.
-                since_close = (pd.Timestamp.now(tz="UTC")
-                               - (newest + width)).total_seconds()
-                behind = since_close > width.total_seconds()
-                print(f"[master_live] newest closed bar {newest} — closed "
-                      f"{since_close / 60:.1f} min ago ({args.tf} bar = "
-                      f"{width.total_seconds() / 60:.0f} min)"
-                      + ("  <-- A WHOLE BAR BEHIND: feed lagging, stale, or "
-                         "the market is shut" if behind else ""), flush=True)
+                    since_close = (pd.Timestamp.now(tz="UTC")
+                                   - (newest + width)).total_seconds()
+                    behind = since_close > width.total_seconds()
+                    print(f"[master_live] newest closed bar {newest} — closed "
+                          f"{since_close / 60:.1f} min ago ({bucket_tf} bar = "
+                          f"{width.total_seconds() / 60:.0f} min)"
+                          + ("  <-- A WHOLE BAR BEHIND: feed lagging, stale, "
+                             "or the market is shut" if behind else ""),
+                          flush=True)
 
-            aliased = {k: v for k, v in sources.items() if k != v}
-            if aliased:
-                print(f"[master_live] bars sourced from the full-size tape: "
-                      f"{aliased} (same price series, same tick size; orders "
-                      f"are still for the micro and sized on its point value)",
-                      flush=True)
-        except Exception as exc:
+                aliased = {k: v for k, v in sources.items() if k != v}
+                if aliased:
+                    print(f"[master_live] bars sourced from the full-size "
+                          f"tape: {aliased} (same price series, same tick "
+                          f"size; orders are still for the micro and sized on "
+                          f"its point value)", flush=True)
+            except Exception as exc:
             # A feed failure must not end the loop: the next cycle may read
             # cleanly, and a process that exits on one bad read needs a
             # supervisor to do what a `continue` does here.
-            failures += 1
-            print(f"[master_live] bar load failed: {type(exc).__name__}: {exc}",
-                  file=sys.stderr, flush=True)
-            bars = {}
+                failures += 1
+                print(f"[master_live] {bucket_tf} bar load failed: "
+                      f"{type(exc).__name__}: {exc}", file=sys.stderr,
+                      flush=True)
+                bars = {}
 
-        if bars:
+            if not bars:
+                continue
+            cycle_bars += 1
             before = len(dispatcher.risk_refusals)
-            report = dispatcher.process_bar_cycle(bars)
+            # The bucket's width travels WITH its bars. `process_bar_cycle`
+            # evaluates only the strategies certified on it and refuses any
+            # that reach the gate anyway, so a 3m strategy can no longer be
+            # handed hourly bars by a loop that loaded one width for everyone.
+            report = dispatcher.process_bar_cycle(bars, timeframe=bucket_tf)
             print(dispatcher.describe_cycle(report), flush=True)
             for refusal in dispatcher.risk_refusals[before:]:
                 # A risk refusal is not a decline and not an error: the
@@ -416,9 +471,10 @@ def main(argv: list[str] | None = None) -> int:
                 failures += 1
             if not report.get("ok", True):
                 failures += 1
-        else:
-            print(f"[master_live] no bars for {symbols}; nothing evaluated.",
-                  flush=True)
+
+        if not cycle_bars:
+            print(f"[master_live] no bars for {symbols} at "
+                  f"{', '.join(buckets)}; nothing evaluated.", flush=True)
 
         if args.once or shutdown.requested:
             break

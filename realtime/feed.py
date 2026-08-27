@@ -114,6 +114,62 @@ def tf_delta(tf: str) -> pd.Timedelta:
         f"unknown timeframe {tf!r}. Known: {sorted(set(DERIVED) | NATIVE_TFS)}")
 
 
+def infer_timeframe(bars, default: str | None = None) -> str | None:
+    """
+    A frame's bar WIDTH, read back as a timeframe token.
+
+    The inverse of `tf_delta`, and it exists so a mismatch between a strategy's
+    certified timeframe and the bars it is handed can be CAUGHT rather than
+    trusted. Until 2026-08-27 `master_live.py` loaded one timeframe and gave it
+    to every strategy, so a 3m certification was evaluated on 1h bars with
+    nothing in the stack noticing — the signals were real, the log lines were
+    correct, and the certification described a different tape.
+
+    THE MODE, NOT THE MEAN OR THE MEDIAN. A session break is a six-hour gap
+    between two adjacent rows and a holiday is longer; both drag an average and
+    can drag a median on a short frame. The most COMMON spacing is the bar
+    width by construction, because every bar inside a session sits one width
+    from its neighbour.
+
+    Returns `default` when the frame is too short to have a spacing (fewer than
+    two rows) or when the modal spacing matches no timeframe this repository
+    can build. Guessing there would defeat the point: an unrecognised width has
+    to reach the caller as "unknown", not as the nearest token.
+    """
+    import pandas as pd                                            # noqa: PLC0415
+
+    if bars is None or len(bars) < 2:
+        return default
+    try:
+        ts = bars["ts"] if "ts" in getattr(bars, "columns", ()) else bars.index
+        stamps = pd.to_datetime(pd.Series(list(ts)), utc=True).sort_values()
+        deltas = stamps.diff().dropna()
+        if deltas.empty:
+            return default
+        modal = deltas.mode()
+        if modal.empty:
+            return default
+        width = pd.Timedelta(modal.iloc[0])
+    except (KeyError, TypeError, ValueError):
+        return default
+    if width <= pd.Timedelta(0):
+        return default
+
+    for token in sorted(set(DERIVED) | NATIVE_TFS):
+        try:
+            if tf_delta(token) == width:
+                return token
+        except Exception:                                     # noqa: BLE001
+            # Broad on purpose. `tf_delta` raises FeedError for an unknown
+            # token, but `1w` is a KNOWN one whose rule is the anchored offset
+            # `W-MON` rather than a Timedelta string, so pandas raises a bare
+            # ValueError inside it. A token this loop cannot measure is simply
+            # not the answer; letting that decide the whole lookup would make
+            # one unmeasurable entry hide every token after it alphabetically.
+            continue
+    return default
+
+
 def source_tf(tf: str) -> str:
     """The NATIVE timeframe `tf` is built from — 1m for everything intraday."""
     key = str(tf).strip()
