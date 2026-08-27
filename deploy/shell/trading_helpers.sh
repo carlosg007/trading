@@ -47,17 +47,29 @@ precompute_all_regimes() {
             --tf 1m,2m,3m,5m,15m,30m,1h,2h,4h,1d "$@"
     )
 }
-alias precompute-all='precompute_all_regimes'
+# A FUNCTION, not an alias: bash does not expand aliases in a
+# non-interactive shell, so `precompute-all` in a script was "command not
+# found" while the function it points at worked. The two job launchers
+# and the bt-tf family are functions for this reason; the read-only
+# status cards below are left as aliases.
+precompute-all() { precompute_all_regimes "$@"; }
 
 # 2. The pipeline, prompting for the strategy when none is given.
 #
-# --tf names the GROUP, not the seven timeframes. `ALL_DAY_TRADING` is
-# `backtest.run.TF_GROUPS`'s own tuple — 1m, 2m, 3m, 5m, 15m, 30m, 1h — and
+# --tf names the GROUP, not the four timeframes. `CORE_DAY_TRADING` is
+# `backtest.run.TF_GROUPS`'s own tuple — 5m, 15m, 30m, 1h — and
 # `run_pipeline.parse_timeframes` expands it to exactly what every other stage
 # gets from that same constant. Spelling the list out here worked and was one
 # edit away from not: two spellings of "the day-trading ladder" drifting apart
 # would put Stage 1 and Stage 3 on different timeframe sets with every log
-# line reading correctly. Adding 1h to the ladder is now a change to ONE tuple.
+# line reading correctly. Changing the ladder is a change to ONE tuple.
+#
+# It was ALL_DAY_TRADING until 2026-08-27, which added 1m/2m/3m. Those are
+# excluded by default on FRICTION — a sub-5m bar spends much of its own range
+# on a tick of slippage each way plus commission, so the screen largely
+# measures the cost model — and because they tripled the search for the
+# resolutions least likely to survive it. `pipeline-all ... --tf
+# ALL_DAY_TRADING` overrides this in one word; the later --tf wins.
 run_pipeline_all() {
     _trading_preflight || return 1
 
@@ -68,7 +80,7 @@ run_pipeline_all() {
     fi
     [ -n "$strat_name" ] || { echo "Error: strategy name cannot be empty." >&2; return 1; }
 
-    echo "==> pipeline: ${strat_name}  |  24 contracts x 7 timeframes  |  2013-01-01..2022-12-31"
+    echo "==> pipeline: ${strat_name}  |  24 contracts x 4 timeframes [5m,15m,30m,1h]  |  2013-01-01..2022-12-31"
     # Said out loud every time, because it is the one flag here that CHANGES
     # STATE somebody has to live with: Stage 5 runs for every configuration
     # Stage 3 certified, up to 168 of them (24 contracts x 7 timeframes),
@@ -81,14 +93,19 @@ run_pipeline_all() {
         nice -n 19 ionice -c 3 "$_TRADING_PY" backtest/run_pipeline.py \
             --strat "$strat_name" \
             --symbols "$_TRADING_UNIVERSE" \
-            --tf ALL_DAY_TRADING \
+            --tf CORE_DAY_TRADING \
             --start 2013-01-01 \
             --end 2022-12-31 \
             --report-discord \
             --auto-promote "${@:2}"
     )
 }
-alias pipeline-all='run_pipeline_all'
+# A FUNCTION, not an alias: bash does not expand aliases in a
+# non-interactive shell, so `pipeline-all` in a script was "command not
+# found" while the function it points at worked. The two job launchers
+# and the bt-tf family are functions for this reason; the read-only
+# status cards below are left as aliases.
+pipeline-all() { run_pipeline_all "$@"; }
 
 # 2b. The same pipeline on a CHOSEN SUBSET of timeframes.
 #
