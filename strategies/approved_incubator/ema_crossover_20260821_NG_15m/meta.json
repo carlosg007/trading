@@ -1,0 +1,113 @@
+{
+  "name": "ema_crossover_20260821_NG_15m",
+  "strategy": "ema_crossover_20260821",
+  "symbol": "NG",
+  "version": "A",
+  "description": "Promoted Version A (rule-based baseline).",
+  "symbols": [
+    "NG"
+  ],
+  "timeframe": "15m",
+  "params": {
+    "fast_period": 20,
+    "slow_period": 89,
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": null,
+    "trailing": false
+  },
+  "params_source": "locked from dual_metrics_NG.json",
+  "params_conflict": [],
+  "risk": {
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": null,
+    "trailing": false
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/ema_crossover_20260821.py",
+  "source_sha256": "9c290bc1e02d816f675ee2752d856aac563d8ae4f7563b0452fdac597d31857b",
+  "promoted_sha256": "9c290bc1e02d816f675ee2752d856aac563d8ae4f7563b0452fdac597d31857b",
+  "promoted_utc": "2026-08-27T13:23:38+00:00",
+  "costs_included": true,
+  "variants_tested": null,
+  "metrics_status": "RECORDED \u00b7 locked from dual_metrics_NG.json",
+  "metrics": {
+    "sharpe": 0.0039039683635144276,
+    "sortino": 0.006940491916527929,
+    "calmar": -0.003024137424701335,
+    "profit_factor": 0.9927500080154209,
+    "win_rate": 0.42158273381294964,
+    "max_drawdown_pct": -16.31644339377354,
+    "total_return_pct": -0.8230999999999433,
+    "annualized_return_pct": -0.049343167105131425,
+    "trade_count": 695,
+    "total_pnl": -823.0999999999731,
+    "total_costs": 17083.099999999926,
+    "final_equity": 99176.90000000005,
+    "n_days": 4220,
+    "start": "2013-01-01 23:00:00+00:00",
+    "end": "2026-08-07 20:45:00+00:00",
+    "bars": 304875,
+    "initial_capital": 100000.0
+  },
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "FAIL",
+    "gate2": "FAIL",
+    "gate3": "FAIL",
+    "gate_regime": "PASS",
+    "gate_ruin": "PASS"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/ema_crossover_20260821/gate_audit_NG_15m.json",
+    "audit_sha256": "c9a2583db8aab9e0f103c79d149eb3531298cb86953a55363d563494d5c928e7",
+    "audit_symbol": "NG",
+    "audit_timeframe": "15m",
+    "target_quadrant": "Q2",
+    "target_regime": "High Volatility / Ranging",
+    "audit_generated_utc": "2026-08-27T13:02:28+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "fast_period": 20,
+      "slow_period": 89,
+      "sl_atr_mult": 2.0,
+      "tp_atr_mult": null,
+      "trailing": false
+    },
+    "params_source": "stage 2 winner (best_params_NG_15m.json)",
+    "variants_tested": 108,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "FAIL",
+    "agrees_with_snapshot": false
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [],
+  "notes": ""
+}
