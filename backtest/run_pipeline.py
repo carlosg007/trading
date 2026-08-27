@@ -122,7 +122,7 @@ REPO = Path(__file__).resolve().parent.parent
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from backtest.run import TF_GROUPS  # noqa: E402
+from backtest.run import DEFAULT_TFS, TF_GROUPS  # noqa: E402
 from backtest.pipeline import (  # noqa: E402
     CHARTER_IS_START,
     CHARTER_IS_END,
@@ -784,9 +784,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--strat", required=True, help="Strategy module name")
     p.add_argument("--symbols", default="ALL",
                    help="Stage 1 universe: NQ, NQ,ES or ALL (default ALL)")
-    p.add_argument("--tf", default="15m",
-                   help="Timeframe(s) for Stage 1, comma-separated. Stages 3 "
-                        "and 4 run once per timeframe Stage 2 optimised.")
+    # `--timeframes` is the same option, not a second one: argparse folds both
+    # spellings onto one dest, so they cannot drift the way two constants can.
+    # It exists because it is the name people reach for and type.
+    #
+    # The default is CORE_DAY_TRADING, NOT a single 15m and NOT the full
+    # ladder. Omitting --tf used to mean 15m alone, which quietly made the
+    # unflagged run a one-timeframe run; ALL_DAY_TRADING remains one word away
+    # for anyone who wants 1m/2m/3m back.
+    p.add_argument("--tf", "--timeframes", dest="tf",
+                   default=",".join(DEFAULT_TFS),
+                   help=f"Timeframe(s) for Stage 1, comma-separated, or a "
+                        f"group name ({', '.join(sorted(TF_GROUPS))}). "
+                        f"Default {','.join(DEFAULT_TFS)}. Stages 3 and 4 run "
+                        f"once per timeframe Stage 2 optimised.")
     p.add_argument("--start", default=CHARTER_IS_START,
                    help=f"In-sample start (default {CHARTER_IS_START})")
     p.add_argument("--end", default=CHARTER_IS_END,

@@ -351,15 +351,37 @@ def parse_symbols(text: str | None, module_symbols: list | None) -> list[str]:
 #: strategy at seven resolutions — the claim a survivor supports is the
 #: `(tf, params)` pair, never the parameters alone.
 #:
-#: **Only 5m/15m/30m/1h have a pre-computed regime cache on this box.** 1m, 2m
-#: and 3m fall back to `recomputed_live`, whose volatility boundary is the
-#: median of whatever window was requested rather than the pinned in-sample
-#: anchor — so their quadrants are not comparable with the cached timeframes
-#: on the same leaderboard. Run `scripts/precompute_regimes.py` for the whole
-#: set before screening across it.
+#: An uncached (symbol, timeframe) falls back to `recomputed_live`, whose
+#: volatility boundary is the median of whatever window was requested rather
+#: than the pinned in-sample anchor — so its quadrants are not comparable with
+#: the cached timeframes on the same leaderboard. This comment used to assert
+#: that only 5m/15m/30m/1h were cached; `scripts/precompute_regimes.py` builds
+#: ten timeframes (1m through 1d) and the cache holds all ten. Verify coverage
+#: with a listing of /mnt/backtest/lake/regimes rather than from this note —
+#: that claim is exactly what went stale before.
+#:
+#: CORE_DAY_TRADING is the DEFAULT set, and the difference from ALL_DAY_TRADING
+#: is 1m/2m/3m. They are excluded by default on FRICTION, not on cache
+#: coverage: at a tick of slippage each way plus commission, a sub-5m bar
+#: spends a large fraction of its own range on costs, so the screen mostly
+#: measures the cost model. They also triple the search — and `variants_tested`
+#: is what a Sharpe has to be read against — for the resolutions least likely
+#: to survive it.
+#:
+#: Both groups remain available. Naming ALL_DAY_TRADING, or naming 1m/2m/3m
+#: directly, is the explicit opt-in; nothing here removes the capability.
+#: ALL_DAY_TRADING is NOT redefined to drop them: it is the name for the full
+#: intraday ladder, every cached handoff and certified result was drawn against
+#: that tuple, and quietly changing what the name means would rewrite the
+#: history of runs nobody re-executed.
 TF_GROUPS: dict[str, tuple[str, ...]] = {
     "ALL_DAY_TRADING": ("1m", "2m", "3m", "5m", "15m", "30m", "1h"),
+    "CORE_DAY_TRADING": ("5m", "15m", "30m", "1h"),
 }
+
+#: The default timeframe set when `--tf` is omitted. Spelled once, here, so a
+#: stage cannot disagree with the orchestrator about what "the default" is.
+DEFAULT_TFS: tuple[str, ...] = TF_GROUPS["CORE_DAY_TRADING"]
 
 
 def parse_timeframes(text: str | None, module_tf: str | None,
