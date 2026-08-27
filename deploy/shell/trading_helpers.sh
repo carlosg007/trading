@@ -90,6 +90,151 @@ run_pipeline_all() {
 }
 alias pipeline-all='run_pipeline_all'
 
+# 2b. The same pipeline on a CHOSEN SUBSET of timeframes.
+#
+# `run_pipeline_all` runs the whole day-trading ladder and takes the strategy
+# as its first argument. This one inverts that: the TIMEFRAMES come first,
+# because they are what varies when you are iterating on one strategy. It is a
+# SEPARATE function rather than an extra flag on `run_pipeline_all` — that
+# helper's signature is `run_pipeline_all <strategy>` and is in muscle memory
+# and in the runbook; giving it a new first argument would silently reinterpret
+# every invocation anyone already types.
+#
+# The name is NOT `bt-run`. That is already the alias for `backtest/run.py` —
+# the single-symbol runner — in ~/.bashrc and in CLAUDE.md's helper table.
+# Rebinding it here would repoint a documented command from one entry point to
+# a different one, and the failure would look like a backtest behaving oddly
+# rather than like the wrong program running.
+#
+# --auto-promote IS DELIBERATELY OFF HERE, unlike `run_pipeline_all`. This is
+# the wrapper for a narrow, exploratory sweep — "what does this look like at
+# 1h" — and that is exactly the run whose output you have not read yet.
+# Auto-promotion registers certified configurations and COMMITS THEM TO GIT
+# without a human seeing a card. Pass --auto-promote explicitly when you mean
+# it; it is forwarded like any other flag.
+_TRADING_TF_KNOWN="1m 2m 3m 5m 15m 30m 1h 2h 4h 1d 1w"
+
+# A MIRROR of `mdlib.lake.NATIVE_TFS | DERIVED`, which is the authority. It is
+# restated here because the check has to happen before a Python process
+# starts — the point is to fail on a typo in the shell, in a millisecond,
+# rather than after the interpreter, the imports and the first lake read.
+#
+# It earns its keep: `run_pipeline.parse_timeframes` does NOT validate. It
+# splits on commas and returns whatever it was handed, so `--tf 1hr` reaches
+# Stage 1 as a timeframe nobody serves. Add a timeframe to lake.py's DERIVED
+# and add it here too.
+_trading_check_tf() {
+    local raw="$1" tf out="" seen
+    [ -n "$raw" ] || { echo "Error: no timeframe given." >&2; return 1; }
+    local IFS=,
+    for tf in $raw; do
+        # Strip surrounding whitespace so `5m, 15m` is not a typo.
+        tf="${tf#"${tf%%[![:space:]]*}"}"
+        tf="${tf%"${tf##*[![:space:]]}"}"
+        [ -n "$tf" ] || continue
+        case " $_TRADING_TF_KNOWN " in
+            *" $tf "*) ;;
+            *) echo "Error: unknown timeframe '$tf'." >&2
+               echo "       The lake serves: $_TRADING_TF_KNOWN" >&2
+               return 1 ;;
+        esac
+        # De-duplicate, preserving the order given.
+        case " $out " in *" $tf "*) continue ;; esac
+        out="${out:+$out,}$tf"
+    done
+    [ -n "$out" ] || { echo "Error: '$raw' names no timeframe." >&2; return 1; }
+    printf '%s' "$out"
+}
+
+run_pipeline_tf() {
+    _trading_preflight || return 1
+
+    local a
+    for a in "$@"; do
+        case "$a" in
+            -h|--help)
+                cat <<'USAGE'
+bt-tf <timeframes> [strategy] [extra flags...]
+
+  <timeframes>  one or a comma-separated list: 1m 2m 3m 5m 15m 30m 1h 2h 4h 1d 1w
+  [strategy]    module name; prompted for when omitted
+  extra flags   forwarded verbatim to backtest/run_pipeline.py
+
+  Runs 24 contracts over 2013-01-01..2022-12-31 at nice 19 / ionice idle.
+  --auto-promote is OFF unless you pass it. --dry-run prints the plan only.
+
+  bt-tf 1h double_rsi_macd_scalp_20260823
+  bt-tf 5m,15m,30m my_strat --dry-run
+  bt-1h my_strat     bt-30m     bt-15m     bt-5m     bt-swing
+USAGE
+                return 0 ;;
+        esac
+    done
+
+    local tf_list
+    tf_list="$(_trading_check_tf "$1")" || return 1
+    shift
+
+    # A leading flag means the strategy was omitted, not that it is named
+    # "--dry-run". Without this, `bt-tf 1h --dry-run` would run a strategy
+    # module by that name and fail on the import instead of prompting.
+    local strat_name=""
+    case "$1" in
+        -*|"") ;;
+        *) strat_name="$1"; shift ;;
+    esac
+    # The prompt runs OUTSIDE the subshell below, so it reads from the terminal.
+    if [ -z "$strat_name" ]; then
+        read -rp "Strategy to run (e.g. double_rsi_macd_scalp_20260823): " strat_name
+    fi
+    [ -n "$strat_name" ] || { echo "Error: strategy name cannot be empty." >&2; return 1; }
+
+    # awk counts FIELDS. `printf | tr ',' '\n' | wc -l` counted NEWLINES, which
+    # is one fewer than the number of timeframes — a single-tf run announced
+    # itself as "0 timeframe(s)".
+    local n_tf; n_tf="$(printf '%s' "$tf_list" | awk -F, '{print NF}')"
+    echo "==> pipeline: ${strat_name}  |  24 contracts x ${n_tf} timeframe(s) [${tf_list}]  |  2013-01-01..2022-12-31"
+    case " $* " in
+        *" --auto-promote "*)
+            echo "    --auto-promote IS ON: every certified configuration registers unattended." ;;
+        *)  echo "    --auto-promote is off: nothing is promoted or committed." ;;
+    esac
+    (
+        cd "$_TRADING_REPO" || exit 1
+        nice -n 19 ionice -c 3 "$_TRADING_PY" backtest/run_pipeline.py \
+            --strat "$strat_name" \
+            --symbols "$_TRADING_UNIVERSE" \
+            --tf "$tf_list" \
+            --start 2013-01-01 \
+            --end 2022-12-31 \
+            --report-discord "$@"
+    )
+}
+# FUNCTIONS, not aliases. Bash does not expand aliases in a non-interactive
+# shell, so an aliased `bt-tf` works when typed and is "command not found" the
+# moment anyone puts it in a script — while the bt-1h family beside it keeps
+# working. Two spellings of the same helper should not differ in where they
+# are available.
+bt-tf()  { run_pipeline_tf "$@"; }
+# The spelling to reach for when the sentence in your head is "run the
+# backtest" rather than "pick the timeframes". One implementation, two names —
+# and NOT `bt-run`, which is the single-symbol runner.
+run-bt() { run_pipeline_tf "$@"; }
+
+# The single-timeframe shortcuts. Functions, not aliases, because an alias
+# cannot put its arguments BEFORE the fixed timeframe — `alias bt-1h='bt-tf 1h'`
+# would build `bt-tf 1h` and then append, which happens to work, but breaks the
+# moment a shortcut needs anything after the strategy.
+bt-1h()    { run_pipeline_tf 1h  "$@"; }
+bt-30m()   { run_pipeline_tf 30m "$@"; }
+bt-15m()   { run_pipeline_tf 15m "$@"; }
+bt-5m()    { run_pipeline_tf 5m  "$@"; }
+# The swing ladder: the four timeframes a multi-hour hold is actually screened
+# on. Deliberately NOT ALL_DAY_TRADING — 1m/2m/3m are scalping resolutions and
+# carry the most friction per unit of edge, so including them in a "swing" run
+# would spend hours on configurations the name says you are not looking for.
+bt-swing() { run_pipeline_tf 5m,15m,30m,1h "$@"; }
+
 # 3. The status card: where a run has got to, in English.
 #
 # ALIASES, NOT FUNCTIONS, and not run under nice/ionice like the two jobs
