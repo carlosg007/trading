@@ -1,0 +1,113 @@
+{
+  "name": "ema_crossover_20260821_RB_2m",
+  "strategy": "ema_crossover_20260821",
+  "symbol": "RB",
+  "version": "A",
+  "description": "Promoted Version A (rule-based baseline).",
+  "symbols": [
+    "RB"
+  ],
+  "timeframe": "2m",
+  "params": {
+    "fast_period": 20,
+    "slow_period": 89,
+    "sl_atr_mult": 2.5,
+    "tp_atr_mult": null,
+    "trailing": false
+  },
+  "params_source": "locked from dual_metrics_RB.json",
+  "params_conflict": [],
+  "risk": {
+    "sl_atr_mult": 2.5,
+    "tp_atr_mult": null,
+    "trailing": false
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/ema_crossover_20260821.py",
+  "source_sha256": "9c290bc1e02d816f675ee2752d856aac563d8ae4f7563b0452fdac597d31857b",
+  "promoted_sha256": "9c290bc1e02d816f675ee2752d856aac563d8ae4f7563b0452fdac597d31857b",
+  "promoted_utc": "2026-08-27T13:23:58+00:00",
+  "costs_included": true,
+  "variants_tested": null,
+  "metrics_status": "RECORDED \u00b7 locked from dual_metrics_RB.json",
+  "metrics": {
+    "sharpe": 0.4325212608139659,
+    "sortino": 0.8043598552384675,
+    "calmar": 0.12362222228305939,
+    "profit_factor": 1.0872668146862479,
+    "win_rate": 0.3281443044230294,
+    "max_drawdown_pct": -24.34330736101056,
+    "total_return_pct": 64.31813999999937,
+    "annualized_return_pct": 3.009373753687683,
+    "trade_count": 4047,
+    "total_pnl": 64318.140000000894,
+    "total_costs": 52530.059999998935,
+    "final_equity": 164318.13999999937,
+    "n_days": 4221,
+    "start": "2013-01-01 23:00:00+00:00",
+    "end": "2026-08-07 20:58:00+00:00",
+    "bars": 1753432,
+    "initial_capital": 100000.0
+  },
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "FAIL",
+    "gate2": "FAIL",
+    "gate3": "PASS",
+    "gate_regime": "PASS",
+    "gate_ruin": "PASS"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/ema_crossover_20260821/gate_audit_RB_2m.json",
+    "audit_sha256": "d435336f29743fb24866a97cf4babd16ed4467330770cbf261edfaf96d62ed32",
+    "audit_symbol": "RB",
+    "audit_timeframe": "2m",
+    "target_quadrant": "Q1",
+    "target_regime": "High Volatility / Trending",
+    "audit_generated_utc": "2026-08-27T12:54:20+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "fast_period": 20,
+      "slow_period": 89,
+      "sl_atr_mult": 2.5,
+      "tp_atr_mult": null,
+      "trailing": false
+    },
+    "params_source": "stage 2 winner (best_params_RB_2m.json)",
+    "variants_tested": 108,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "FAIL",
+    "agrees_with_snapshot": false
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [],
+  "notes": ""
+}
