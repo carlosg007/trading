@@ -267,11 +267,37 @@ bt-swing() { run_pipeline_tf 5m,15m,30m,1h "$@"; }
 # `bt-check --strategy <name>` work without a wrapper. The interpreter is
 # spelled absolutely for the same reason `_TRADING_PY` exists: the venv must
 # not depend on which one happens to be active in the calling shell.
-alias bt-check="${_TRADING_PY} ${_TRADING_REPO}/backtest/check_progress.py"
+# FUNCTIONS rather than aliases, unlike the cards below. Two reasons specific
+# to this one: `complete -F` attaches to a function reliably, and an alias is
+# not expanded in a non-interactive shell, so `bt-check` in a script was
+# "command not found". "$@" is forwarded, so `bt-check <strategy>`,
+# `bt-check --all`, `bt-check -l` and `bt-check --watch 10` all reach argparse.
+bt-check()    { "$_TRADING_PY" "${_TRADING_REPO}/backtest/check_progress.py" "$@"; }
 # The same tool under the name people reach for when the question is "how far
 # along is it" rather than "is it alive". One implementation, two spellings —
 # a second script would be one more thing to keep in step with the stages.
-alias bt-progress='bt-check'
+bt-progress() { bt-check "$@"; }
+
+# Completion: the campaign directories, which are the only valid values for
+# the positional argument. $BT_ARTIFACTS is honoured because `pipeline.
+# artifacts_root()` honours it - completion offering names from a tree the
+# tool will not read is worse than no completion.
+_bt_check_complete() {
+    local cur root
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    if [[ "$cur" == -* ]]; then
+        COMPREPLY=($(compgen -W "-h --help -a --all -l --list --strategy \
+                                 --strat --out-dir --watch" -- "$cur"))
+        return
+    fi
+    root="${BT_ARTIFACTS:-/mnt/backtest/artifacts}/pipeline"
+    # -maxdepth/-mindepth 1 so this lists campaigns, not the tree under them,
+    # and 2>/dev/null so an unmounted NFS completes to nothing instead of
+    # printing a find error over the prompt.
+    COMPREPLY=($(compgen -W "$(find "$root" -mindepth 1 -maxdepth 1 -type d \
+                              -printf '%f\n' 2>/dev/null)" -- "$cur"))
+}
+complete -F _bt_check_complete bt-check bt-progress
 
 # 4. The live feed: is NinjaTrader still sending bars?
 #
