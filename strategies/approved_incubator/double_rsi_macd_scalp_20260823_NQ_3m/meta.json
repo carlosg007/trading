@@ -37,7 +37,7 @@
   "source": "/home/cgrullon/src/trading/strategies/experimental/double_rsi_macd_scalp_20260823.py",
   "source_sha256": "8d27fd47d519798ca6ff52d540aba46c363fdbc74271a1d0601e9cfcaf10e4bd",
   "promoted_sha256": "8d27fd47d519798ca6ff52d540aba46c363fdbc74271a1d0601e9cfcaf10e4bd",
-  "promoted_utc": "2026-08-27T00:50:42+00:00",
+  "promoted_utc": "2026-08-28T04:22:30+00:00",
   "costs_included": true,
   "variants_tested": null,
   "metrics_status": "RECORDED \u00b7 locked from dual_metrics_NQ.json",
