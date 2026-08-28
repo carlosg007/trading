@@ -96,6 +96,12 @@ CHARTER_IS_END = "2022-12-31"
 HOLDOUT_START = "2023-01-01"
 
 SURVIVORS_FILE = "surviving_assets.json"
+#: The same screen as a spreadsheet: every configuration evaluated, promoted
+#: and dropped alike, one row each. Named beside the JSON handoff rather than
+#: derived from it at read time so the Discord card can point somebody at a
+#: file that exists, and so a reader who wants the leaderboard does not have to
+#: parse a 128 KB nested document to get thirteen columns.
+SURVIVORS_CSV = "stage1_survivors.csv"
 
 # An account cannot lose more than it holds. The engine's equity is
 # `initial_capital + cumsum(net P&L)` with NO ruin barrier, so a strategy whose

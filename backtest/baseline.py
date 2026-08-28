@@ -197,7 +197,7 @@ from backtest.parallel import (describe_plan, map_units,            # noqa: E402
                                resolve_jobs)
 from backtest.pipeline import (BASELINE_REPORT_FILE,               # noqa: E402
                                CHARTER_IS_END, CHARTER_IS_START,
-                               SURVIVORS_FILE, leaderboard, next_step,
+                               SURVIVORS_CSV, SURVIVORS_FILE, leaderboard, next_step,
                                pipeline_dir, stage_banner, write_stage)
 from backtest.profiler import (DESIGNATION_MIN_TRADE_FRACTION,       # noqa: E402
                                DESIGNATION_MIN_TRADES, DESIGNATION_RULE,
@@ -1477,6 +1477,75 @@ def screen_results_from(rows: list[dict]) -> list[dict]:
             for r in rows]
 
 
+#: The CSV's columns, in order. A fixed tuple rather than whatever keys the
+#: rows happen to carry: a spreadsheet whose columns move when a metric is
+#: added is one nobody can diff between two runs.
+SURVIVORS_CSV_COLUMNS = (
+    "symbol", "timeframe", "status", "version_selected",
+    "optimal_regime", "optimal_regime_pf", "optimal_regime_trades",
+    "baseline_pf_va", "baseline_pf_vb",
+    "sharpe_va", "sharpe_vb", "max_dd_va", "reason",
+)
+
+
+def survivors_csv_rows(rows: list[dict]) -> list[dict]:
+    """
+    Every configuration EVALUATED as one flat CSV row, promoted and dropped
+    alike.
+
+    Dropped configurations are INCLUDED, and that is the point of the file. A
+    survivors-only sheet answers "what won" and cannot answer "what was tried",
+    which is the question `variants_tested` exists for - a profit factor read
+    without the count of configurations it was chosen from is not a
+    measurement.
+
+    Values are copied from the row VERBATIM, never re-derived. `status` is
+    PROMOTED/DROPPED because that is what the JSON handoff says; renaming it to
+    SURVIVES here would make the CSV and `surviving_assets.json` disagree about
+    the same configuration, and whichever one a reader had open would look
+    authoritative. `version_selected` is the raw A/B for the same reason.
+
+    A dropped pair has no designated quadrant, so `version_selected`,
+    `optimal_regime` and the three optimal_regime_* columns are EMPTY rather
+    than zero - a 0.0 profit factor reads as a measurement that was taken and
+    came back bad, which is a different finding from one that was never taken.
+    """
+    out: list[dict] = []
+    for r in rows:
+        out.append({
+            "symbol": r.get("symbol"),
+            "timeframe": r.get("timeframe"),
+            "status": r.get("status"),
+            "version_selected": r.get("regime_version"),
+            "optimal_regime": r.get("optimal_regime"),
+            "optimal_regime_pf": r.get("regime_pf"),
+            "optimal_regime_trades": r.get("regime_trade_count"),
+            "baseline_pf_va": r.get("profit_factor_a"),
+            "baseline_pf_vb": r.get("profit_factor_b"),
+            "sharpe_va": r.get("sharpe_a"),
+            "sharpe_vb": r.get("sharpe_b"),
+            # Version A only. There is no max_drawdown_pct_b on these rows, and
+            # a column silently filled from A would be read as B's.
+            "max_dd_va": r.get("max_drawdown_pct_a"),
+            "reason": r.get("reason"),
+        })
+    return out
+
+
+def write_survivors_csv(path: Path, rows: list[dict]) -> Path:
+    """Write the Stage 1 leaderboard beside the JSON handoff."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frame = pd.DataFrame(survivors_csv_rows(rows),
+                         columns=list(SURVIVORS_CSV_COLUMNS))
+    # A trade COUNT is an integer. One dropped pair leaves the column with a
+    # gap, and plain float64 then renders every surviving row as "922.0" -
+    # pandas' nullable Int64 keeps the gap empty and the counts whole.
+    frame["optimal_regime_trades"] = (
+        frame["optimal_regime_trades"].astype("Int64"))
+    frame.to_csv(path, index=False)
+    return path
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
@@ -1795,6 +1864,12 @@ def main(argv: list[str] | None = None) -> int:
         "assets": rows,
     })
 
+    # Beside the handoff, never instead of it. The JSON is what Stage 2 reads;
+    # this is for a human with a spreadsheet, and it is written on every run -
+    # including one where nothing survived, which is exactly the run somebody
+    # opens a leaderboard to understand.
+    csv_dest = write_survivors_csv(out_dir / SURVIVORS_CSV, rows)
+
     W = 78
     print("\n" + "=" * W)
     print(f"STAGE 1 RESULT · {len(surviving_pairs)}/{total} configuration(s) "
@@ -1829,6 +1904,9 @@ def main(argv: list[str] | None = None) -> int:
           f"its reason and its full four-quadrant matrix in the report.")
     print(f"  report    → {report_path}")
     print(f"  survivors → {dest}")
+    # Announced on every run. A file written but never named is one
+    # nobody opens, and the Stage 1 Discord card points at it.
+    print(f"  leaderboard → {csv_dest}")
     print(f"  profiles  → {out_dir}/regime_profile_<SYMBOL>_<TF>_version_"
           f"<a|b>.json")
 

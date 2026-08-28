@@ -1658,14 +1658,28 @@ def build_stage1_embed(strat: str, blob: dict[str, Any],
     """
     Stage 1's card. Pure - sends nothing, and every number on it is read off
     the handoff rather than derived from it.
+
+    NO LEADERBOARD TABLE. It used to carry a monospace table of the surviving
+    configurations, which is a wide fixed-width block inside a container that
+    reflows: on a narrow client every row wrapped and the columns stopped
+    lining up, so the one thing the table existed to give - a scannable
+    alignment - was the first thing lost. The card now answers "did the screen
+    run, and what came out of it" in five numbers, and points at the two files
+    that answer everything else.
+
+    THE PER-PAIR DETAIL IS NOT ON THE CARD ANY MORE. `stage1_survivors.csv`
+    carries every configuration with its designated quadrant and both versions'
+    metrics; the card names it rather than reproducing a truncated version of
+    it. A card that showed the first N rows had to also say how many it hid,
+    which is a truncated leaderboard reading as a complete one.
+
+    `max_rows` is accepted and IGNORED. It is still a live flag for Stage 2's
+    card, and one shared `--max-rows` that silently did nothing here is better
+    than a CLI that rejects a flag it used to take.
     """
     rows = stage1_rows(blob)
     promoted = [r for r in rows
                 if str(r.get("status") or "").upper() == PROMOTED]
-    # The legend is not rendered: `OPTIMAL REGIME` spells the
-    # designated quadrant out in full on every row, so a legend under
-    # the table would restate it.
-    table, hidden, _legend = format_stage1_table(rows, max_rows)
 
     window = blob.get("in_sample_window") or {}
     start = window.get("start") or blob.get("start") or "lake start"
@@ -1674,51 +1688,29 @@ def build_stage1_embed(strat: str, blob: dict[str, Any],
         [blob["timeframe"]] if blob.get("timeframe") else [])
     ml = blob.get("ml_evaluated")
 
-    description = [
-        f"**In-sample window** `{start} → {end}`",
-        # The screen in the two bars a reader checks a row against, and
-        # nothing else. Stage 1's own `criterion` string is the full
-        # designation rule - the net-P&L clause, the alpha score, the
-        # tie-break - which is 200 characters of mathematics above a table
-        # whose columns are a profit factor and a trade count, and the
-        # reliable effect of printing it is that the window above it stops
-        # being read. The full rule stays on the handoff, which is where it is
-        # checked. Both numbers are TRANSCRIBED from the thresholds the screen
-        # recorded, never restated as literals here: a card that hardcoded
-        # 1.00 would keep saying 1.00 after a `--min-profit-factor` run.
+    description = "\n".join([
+        f"**Strategy** `{strat}`",
+        f"**Window** `{start} \u2192 {end}`",
+        # KEPT, though the table it qualified is gone. The counts below are
+        # meaningless without the bar they were counted against, and both
+        # numbers are TRANSCRIBED from the thresholds the screen recorded,
+        # never restated as literals: a card that hardcoded 1.00 would keep
+        # saying 1.00 after a `--min-profit-factor` run.
         f"**Screen** Regime PF `>= "
-        f"{_fmt_metric(blob.get('min_profit_factor'))}` · Regime Trades "
+        f"{_fmt_metric(blob.get('min_profit_factor'))}` \u00b7 Regime Trades "
         f"`>= {_stage1_trade_floor(blob)}`",
-        "```text",
-        table if table.strip() else STAGE1_NO_ROWS_NOTE,
-        "```",
-        # The table is filtered and says so. The counts in the fields below
-        # are NOT: they describe every configuration the screen evaluated, so
-        # a short table can never read as a short screen.
-        "_The table lists SURVIVING configurations only — the counts "
-        "below cover every configuration screened, and each drop keeps its "
-        "reason in the handoff and in stage1_baseline_report.md._",
-    ]
-    if hidden:
-        description.append(
-            f"_{hidden} further SURVIVING configuration(s) are not shown "
-            f"— the full screen is in the handoff._")
-
-    text = "\n".join(description)
-    if len(text) > MAX_EMBED_DESCRIPTION:
-        # Trim the TABLE, never the header lines: the window and the screening
-        # rule are what make the numbers readable at all, and a card that lost
-        # them to a truncation is a leaderboard of unlabelled figures.
-        keep = MAX_EMBED_DESCRIPTION - 64
-        text = text[:keep] + "\n```\n_truncated — see the handoff._"
+        "",
+        "_Detailed metrics and quadrant breakdowns saved to "
+        "`stage1_survivors.csv` and `stage1_baseline_report.md`._",
+    ])
 
     fields = [
-        {"name": "Evaluated", "value": str(len(rows)), "inline": True},
-        {"name": "Promoted → Stage 2", "value": str(len(promoted)),
+        {"name": "Total Evaluated", "value": str(len(rows)), "inline": True},
+        {"name": "Promoted \u2192 Stage 2", "value": str(len(promoted)),
          "inline": True},
         {"name": "Dropped", "value": str(len(rows) - len(promoted)),
          "inline": True},
-        {"name": "Timeframes",
+        {"name": "Timeframes Screened",
          "value": ", ".join(f"`{t}`" for t in timeframes) or "not recorded",
          "inline": True},
         # Three states, never two. `--no-ml` means survival was decided on
@@ -1734,11 +1726,15 @@ def build_stage1_embed(strat: str, blob: dict[str, Any],
     ]
 
     return {
-        "title": f"\U0001F50D Stage 1 · Baseline Screening & Regime Profiling: {strat}",
-        "description": text,
-        "color": SLATE_BLUE if promoted else AMBER,
+        "title": "\U0001F50D Stage 1 Complete \u00b7 Baseline Screening",
+        "description": description,
+        # Green when something survived, amber when nothing did. Amber rather
+        # than red because an empty screen is a RESULT - the idea does not work
+        # on these contracts - and colouring it like a crash invites a re-run
+        # with different parameters until something passes.
+        "color": EMERALD_GREEN if promoted else AMBER,
         "fields": fields,
-        "footer": {"text": "backtest/discord_reporter.py · Stage 1 screen · "
+        "footer": {"text": "backtest/discord_reporter.py \u00b7 Stage 1 screen \u00b7 "
                            "values as recorded by baseline.py, not recomputed"},
     }
 

@@ -406,37 +406,40 @@ def test_stage1_card(blob: dict) -> None:
     embed = dr.build_stage1_embed("demo", blob, source="/mnt/backtest/x.json")
     text = embed["description"]
 
-    check("the card is titled as a Stage 1 regime-firewall screen",
-          "Stage 1" in embed["title"] and "demo" in embed["title"],
-          embed["title"])
+    check("the card is titled as a Stage 1 screen, with the strategy named "
+          "in the body rather than in the title",
+          "Stage 1" in embed["title"] and "demo" in text, embed["title"])
     fields = {f["name"]: f["value"] for f in embed["fields"]}
     check("it counts what was evaluated, promoted and dropped",
-          (fields["Evaluated"], fields["Promoted → Stage 2"],
+          (fields["Total Evaluated"], fields["Promoted → Stage 2"],
            fields["Dropped"]) == ("3", "2", "1"), str(fields))
-    check("the SURVIVING asset/timeframe pairs are on the card...",
-          "NQ" in text and "GC" in text
-          and "15m" in text and "30m" in text)
+    check("the per-pair leaderboard is NOT on the card - it was a fixed-width "
+          "table inside a container that reflows, so every row wrapped on a "
+          "narrow client and the alignment it existed for was the first "
+          "casualty",
+          "```" not in text and "NQ" not in text, text)
+    check("...and the card names the two files that DO carry the detail, so "
+          "a reader is pointed somewhere rather than left with five numbers",
+          "stage1_survivors.csv" in text
+          and "stage1_baseline_report.md" in text, text)
     check("...and the DROPPED one is off the table entirely - the card is "
           "read to answer 'what goes to Stage 2', and a drop is not that",
           "CL" not in text and "DROPPED" not in text, text)
-    check("...with the exclusion STATED, so a short table can never read as "
-          "a short screen", "SURVIVING configurations only" in text, text)
-    check("...while the counts beside it still cover the whole screen",
-          (fields["Evaluated"], fields["Dropped"]) == ("3", "1"), str(fields))
+    check("...while the counts still cover the whole screen",
+          (fields["Total Evaluated"], fields["Dropped"]) == ("3", "1"),
+          str(fields))
     check("...with the timeframes screened named as a field",
-          "`15m`" in fields["Timeframes"] and "`30m`" in fields["Timeframes"])
-    check("the discovered optimal regime appears as its quadrant id...",
-          "Q1" in text and "Q3" in text, text)
-    check("...spelled out in full on the row, transcribed from the handoff, "
-          "so no second spelling of a regime name lives in the notifier",
-          REGIMES[0] in text and REGIMES[2] in text)
-    check("the quadrant PF is on the card", "1.28" in text and "1.61" in text)
-    check("...and the trade count beside it", "120" in text and "60" in text)
-    check("...beside BOTH versions' blended factors, which answer a "
-          "different question from the quadrant they were promoted on",
-          "PF (A)" in text and "PF (B)" in text, text)
-    check("the version that carried each pair is shown",
-          "VA" in text and "VB" in text)
+          "`15m`" in fields["Timeframes Screened"]
+          and "`30m`" in fields["Timeframes Screened"])
+    # The regime name, the quadrant PF, the trade count, both versions'
+    # factors and the carrying version were columns of the removed table.
+    # They are NOT lost - every one of them is a column of
+    # stage1_survivors.csv, which the card names - but they are no longer
+    # ASSERTED HERE, because the card no longer claims to carry them.
+    check("no per-row metric is left stranded on the card - a number without "
+          "the row it belonged to is worse than no number",
+          not any(t in text for t in ("PF (A)", "PF (B)", "VA", "VB",
+                                      "1.28", "1.61")), text)
     check("the in-sample window is on the card - a leaderboard whose bars "
           "nobody can name is a table of unlabelled figures",
           CHARTER_IS_START in text and CHARTER_IS_END in text)
@@ -473,11 +476,12 @@ def test_stage1_card(blob: dict) -> None:
                                             if r["status"] == "DROPPED"]})
     check("a screen where nothing survived is AMBER, not green - an empty "
           "screen is a result, and nothing on it is an approval",
-          empty["color"] == dr.AMBER and embed["color"] == dr.SLATE_BLUE)
-    check("...and its block states the RESULT rather than rendering an empty "
-          "table that reads as a card which failed to draw",
-          dr.STAGE1_NO_ROWS_NOTE in empty["description"],
-          empty["description"])
+          empty["color"] == dr.AMBER and embed["color"] == dr.EMERALD_GREEN)
+    check("...and it still reports the counts, so an empty screen is legible "
+          "as a screen that ran and promoted nothing rather than as a card "
+          "which failed to draw",
+          {f["name"]: f["value"] for f in empty["fields"]}["Promoted → Stage 2"]
+          == "0", empty["description"])
 
 
 def test_stage1_card_edges() -> None:
@@ -491,12 +495,13 @@ def test_stage1_card_edges() -> None:
           len(embed["description"]) <= dr.MAX_EMBED_DESCRIPTION
           and dr._embed_size(embed) <= dr.MAX_EMBED_TOTAL,
           str(len(embed["description"])))
-    check("...and what did not fit is COUNTED on the card, never dropped in "
-          "silence - a truncated leaderboard reads as a complete one",
-          f"{108 - dr.STAGE1_MAX_ROWS} further" in embed["description"],
-          embed["description"][-200:])
-    check("the totals still describe the whole screen, not the visible rows",
-          {f["name"]: f["value"] for f in embed["fields"]}["Evaluated"] == "108")
+    check("...because the description no longer grows with the screen at "
+          "all - there is no table to truncate, so there is no truncation to "
+          "under-report",
+          len(embed["description"]) < 512, str(len(embed["description"])))
+    check("the totals describe the whole screen",
+          {f["name"]: f["value"]
+           for f in embed["fields"]}["Total Evaluated"] == "108")
 
     old = dr.build_stage1_embed("legacy", {
         "surviving_pairs": [{"symbol": "NQ", "tf": "15m",
@@ -504,18 +509,10 @@ def test_stage1_card_edges() -> None:
                              "kill_switch_regimes": list(REGIMES[1:])}],
         "dropped": [{"symbol": "CL", "timeframe": "30m", "reason": "..."}]})
     fields = {f["name"]: f["value"] for f in old["fields"]}
-    check("a handoff written before screen_results existed is reassembled "
-          "from surviving_pairs + dropped",
-          "NQ" in old["description"] and fields["Evaluated"] == "2"
-          and fields["Dropped"] == "1", str(fields))
-    check("...and the dropped entry it reassembled is counted but not "
-          "tabled, reading its timeframe from either key the two lists use",
-          "CL" not in old["description"]
-          and old["description"].count("30m") == 0, old["description"])
-    check("...while the survivor's missing version and quadrant render as -- "
-          "rather than being back-filled with a plausible value",
-          "1.28" in old["description"]
-          and old["description"].count("--") >= 2, old["description"])
+    check("a handoff written before screen_results existed is still "
+          "reassembled from surviving_pairs + dropped, and COUNTED",
+          fields["Total Evaluated"] == "2" and fields["Dropped"] == "1",
+          str(fields))
 
     ml_off = dr.build_stage1_embed("x", {"screen_results": [],
                                          "ml_evaluated": False})
@@ -533,11 +530,11 @@ def test_stage1_card_edges() -> None:
     check("the card filters on the STATUS the stage recorded and never "
           "re-derives it - a notifier that re-applied the hurdle would table "
           "this 9.99-over-5,000-trades row Stage 1 dropped",
-          "NQ" not in card["description"]
-          and "9.99" not in card["description"]
-          and dr.STAGE1_NO_ROWS_NOTE in card["description"]
+          "9.99" not in card["description"]
           and {f["name"]: f["value"]
-               for f in card["fields"]}["Promoted → Stage 2"] == "0",
+               for f in card["fields"]}["Promoted → Stage 2"] == "0"
+          and {f["name"]: f["value"]
+               for f in card["fields"]}["Total Evaluated"] == "1",
           card["description"])
 
 
@@ -556,8 +553,8 @@ def test_cli(tmp: Path, blob: dict) -> None:
 
     out = run("--stage", "1", "--strat", "demo", "--survivors", str(path),
               "--dry-run")
-    check("--stage 1 posts the leaderboard, and --dry-run sends nothing",
-          "Stage 1" in out and "DRY RUN" in out and "NQ" in out)
+    check("--stage 1 posts the Stage 1 card, and --dry-run sends nothing",
+          "Stage 1" in out and "DRY RUN" in out and "demo" in out)
     payload = json.loads(out[out.index("{"): out.rindex("}") + 1])
     check("...as a single well-formed embed",
           len(payload["embeds"]) == 1 and payload["embeds"][0]["description"])
@@ -613,6 +610,54 @@ def test_cli(tmp: Path, blob: dict) -> None:
           "SECRET-TOKEN" not in out and "discord.example" in out, out[-300:])
 
 
+def test_survivors_csv(tmp: Path) -> None:
+    print("\n10. The Stage 1 CSV leaderboard")
+    import csv as _csv
+    from backtest.baseline import SURVIVORS_CSV_COLUMNS, write_survivors_csv
+
+    rows = [
+        {"symbol": "NQ", "timeframe": "1h", "status": "PROMOTED",
+         "regime_version": "A", "optimal_regime": REGIMES[0],
+         "regime_pf": 1.13, "regime_trade_count": 801,
+         "profit_factor_a": 1.06, "profit_factor_b": 1.10,
+         "sharpe_a": 0.43, "sharpe_b": 0.42,
+         "max_drawdown_pct_a": -12.5, "reason": None},
+        {"symbol": "ES", "timeframe": "15m", "status": "DROPPED",
+         "regime_version": None, "optimal_regime": None,
+         "regime_pf": None, "regime_trade_count": None,
+         "profit_factor_a": 0.83, "profit_factor_b": 0.91,
+         "sharpe_a": -0.24, "sharpe_b": -0.16,
+         "max_drawdown_pct_a": -31.0, "reason": "no quadrant cleared"},
+    ]
+    dest = write_survivors_csv(tmp / "stage1_survivors.csv", rows)
+    text = dest.read_text()
+    parsed = list(_csv.DictReader(text.splitlines()))
+
+    check("the DROPPED configuration is in the file, not filtered out - a "
+          "survivors-only sheet cannot answer what was tried",
+          [r["status"] for r in parsed] == ["PROMOTED", "DROPPED"],
+          str([r["status"] for r in parsed]))
+    check("the columns are the fixed schema, in order - a sheet whose "
+          "columns move between runs cannot be diffed",
+          list(parsed[0]) == list(SURVIVORS_CSV_COLUMNS), str(list(parsed[0])))
+    check("no index column is written",
+          not text.startswith(",") and text.split(",")[0] == "symbol")
+    check("a dropped row leaves the quadrant columns EMPTY rather than zero - "
+          "0.0 reads as a measurement that came back bad, which is a "
+          "different finding from one never taken",
+          (parsed[1]["optimal_regime"], parsed[1]["optimal_regime_pf"],
+           parsed[1]["optimal_regime_trades"],
+           parsed[1]["version_selected"]) == ("", "", "", ""), str(parsed[1]))
+    check("...while still carrying the metrics it DOES have, so a drop can be "
+          "understood rather than merely counted",
+          parsed[1]["baseline_pf_va"].startswith("0.83")
+          and parsed[1]["reason"] == "no quadrant cleared", str(parsed[1]))
+    check("the trade count is written as an integer - a gap in the column "
+          "must not render every surviving row as '801.0'",
+          parsed[0]["optimal_regime_trades"] == "801",
+          parsed[0]["optimal_regime_trades"])
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="stage1charter_") as td:
         tmp = Path(td)
@@ -626,6 +671,7 @@ def main() -> int:
         test_stage1_card(blob)
         test_stage1_card_edges()
         test_cli(tmp, blob)
+        test_survivors_csv(tmp)
 
     print("\n" + "=" * 60)
     if _failures:
