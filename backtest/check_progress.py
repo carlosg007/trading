@@ -119,6 +119,7 @@ load_env()
 
 
 import argparse
+import difflib
 import json
 import os
 import re
@@ -877,22 +878,178 @@ def newest_campaign(out_dir: str | Path | None = None) -> str | None:
     is rewritten, so a sweep writing into `5m/` for six hours never touches the
     parent and the wrong campaign would win.
     """
+    ranked = list_campaigns(out_dir)
+    return ranked[0][0] if ranked else None
+
+
+def list_campaigns(out_dir: str | Path | None = None
+                   ) -> list[tuple[str, float | None]]:
+    """
+    Every campaign directory with an artifact tree, NEWEST FIRST.
+
+    Ranked on the newest FILE anywhere beneath each directory, for the reason
+    `newest_campaign` gives: a directory's own mtime moves when a subdirectory
+    is created and not when a file inside one is rewritten, so a sweep writing
+    into `5m/` for six hours never touches the parent.
+
+    A directory with no readable file at all is kept, with `None` for its time,
+    and sorts last. Dropping it would make an empty campaign - a run that died
+    before Stage 1 wrote anything - indistinguishable from one that was never
+    launched, and that is exactly the state somebody runs this to diagnose.
+    """
     root = Path(out_dir) if out_dir else artifacts_root() / "pipeline"
-    best, best_m = None, -1.0
     try:
         candidates = [d for d in root.iterdir() if d.is_dir()]
     except OSError:
-        return None
+        return []
+    out: list[tuple[str, float | None]] = []
     for d in candidates:
+        best_m: float | None = None
         try:
             for sub, _dirs, files in os.walk(d):
                 for name in files:
                     m = mtime(Path(sub) / name)
-                    if m is not None and m > best_m:
-                        best, best_m = d.name, m
+                    if m is not None and (best_m is None or m > best_m):
+                        best_m = m
         except OSError:
-            continue
-    return best
+            pass
+        out.append((d.name, best_m))
+    out.sort(key=lambda r: (r[1] is not None, r[1] or 0.0), reverse=True)
+    return out
+
+
+def match_campaign(requested: str, out_dir: str | Path | None = None
+                   ) -> tuple[str | None, list[str]]:
+    """
+    Resolve a user-typed strategy to a real campaign directory.
+
+    Returns `(name, suggestions)`. An exact hit returns `(name, [])` without
+    consulting the rest, so a strategy whose name is a substring of another
+    still resolves to ITSELF rather than to an ambiguity.
+
+    Falling back: case-insensitive equality, then case-insensitive substring.
+    A substring hit is only accepted when it is UNIQUE - `ema_crossover` across
+    three dated campaigns is an ambiguity, and silently reporting on the newest
+    of them would put a card with the wrong provenance in front of somebody who
+    asked a precise question. Ambiguous and missing both come back as
+    `(None, suggestions)`; the caller prints them and exits non-zero.
+    """
+    names = [n for n, _ in list_campaigns(out_dir)]
+    if requested in names:
+        return requested, []
+    folded = requested.casefold()
+    ci = [n for n in names if n.casefold() == folded]
+    if len(ci) == 1:
+        return ci[0], []
+    sub = [n for n in names if folded in n.casefold()]
+    if len(sub) == 1:
+        return sub[0], []
+    if sub:
+        return None, sub
+    close = difflib.get_close_matches(requested, names, n=5, cutoff=0.6)
+    return None, close
+
+
+def running_rows(procs: Sequence[Proc]) -> list[dict[str, Any]]:
+    """
+    One row per live orchestrator: pid, strategy, stage, timeframes, elapsed.
+
+    The strategy and the timeframes are read off the ORCHESTRATOR's own command
+    line with `parse_cli_flags`, not off the artifacts, because that is the
+    only source that says what THIS process was asked to do - two campaigns
+    writing into the same tree are told apart by their arguments and by nothing
+    else.
+
+    The stage is the live descendant, resolved through the same `descendants`
+    walk the single-campaign card uses: a stage script is a grandchild under
+    `nice`, and a sweep parallelised over symbols puts it deeper still.
+    """
+    rows: list[dict[str, Any]] = []
+    for orch in find_orchestrators(procs):
+        flags = parse_cli_flags(orch.args)
+        kids = [p for p in descendants(procs, orch.pid)
+                if p.script() in STAGE_OF_SCRIPT]
+        stage = STAGE_OF_SCRIPT.get(kids[0].script() or "") if kids else None
+        strat = flags.get("strat")
+        tf = flags.get("tf")
+        rows.append({
+            "pid": orch.pid,
+            "strategy": strat if isinstance(strat, str) and strat else "?",
+            "stage": stage,
+            "tf": tf if isinstance(tf, str) and tf else "?",
+            "etimes": orch.etimes,
+        })
+    return rows
+
+
+def _stage_text(stage: int | None) -> str:
+    if stage is None:
+        return "-"
+    if stage == 0:
+        return "discord"
+    return f"{stage}"
+
+
+def render_running_table(rows: Sequence[dict[str, Any]]) -> str:
+    """The compact multi-pipeline summary, one line per live orchestrator."""
+    L = ["=" * W, f"BACKTEST PIPELINE STATUS  ·  {len(rows)} RUNS ACTIVE", "=" * W,
+         f"{'PID':>7}  {'STAGE':>5}  {'ELAPSED':>11}  {'TIMEFRAMES':<18}  STRATEGY",
+         "-" * W]
+    for r in rows:
+        L.append(f"{r['pid']:>7}  {_stage_text(r['stage']):>5}  "
+                 f"{elapsed_text(r['etimes']):>11}  {r['tf'][:18]:<18}  "
+                 f"{r['strategy']}")
+    L += ["-" * W,
+          "  More than one campaign is live, so no single card describes the box.",
+          "  Full Stage 1-5 detail for one of them:",
+          "      bt-check <strategy>",
+          "=" * W]
+    return "\n".join(L)
+
+
+def render_campaign_list(out_dir: str | None = None) -> str:
+    """Every campaign with an artifact tree, newest first."""
+    root = Path(out_dir) if out_dir else artifacts_root() / "pipeline"
+    ranked = list_campaigns(out_dir)
+    L = ["=" * W, "CAMPAIGNS WITH AN ARTIFACT TREE", "=" * W, f"  {root}", ""]
+    if not ranked:
+        L += ["  (none)", "=" * W]
+        return "\n".join(L)
+    now = time.time()
+    for name, m in ranked:
+        when = ago_text(now - m) if m is not None else "no files"
+        L.append(f"  {when:>14}   {name}")
+    L += ["", f"  {len(ranked)} campaign(s).  Detail: bt-check <strategy>",
+          "=" * W]
+    return "\n".join(L)
+
+
+def render_all(out_dir: str | None = None,
+               procs: Sequence[Proc] | None = None) -> str:
+    """
+    Running pipelines and recent campaigns in one view.
+
+    Deliberately two SEPARATE sections rather than one merged table. A live run
+    and a finished tree are different kinds of fact - one is a process, the
+    other is what is on disk - and a row that blends them cannot say whether
+    "Stage 3" means running now or stopped there.
+    """
+    table = ps_snapshot() if procs is None else list(procs)
+    rows = running_rows(table or [])
+    L = ["=" * W, "ALL PIPELINES", "=" * W, ""]
+    if table is None:
+        L.append("  the process table could not be read - live runs unknown.")
+    elif rows:
+        L.append(f"  RUNNING ({len(rows)}):")
+        L.append(f"      {'PID':>7}  {'STAGE':>5}  {'ELAPSED':>11}  STRATEGY")
+        for r in rows:
+            L.append(f"      {r['pid']:>7}  {_stage_text(r['stage']):>5}  "
+                     f"{elapsed_text(r['etimes']):>11}  {r['strategy']}")
+    else:
+        L.append("  RUNNING: nothing.")
+    L.append("")
+    L.append(render_campaign_list(out_dir))
+    return "\n".join(L)
 
 
 # ==========================================================================
@@ -951,12 +1108,34 @@ def build_report(strategy: str | None = None,
     # An orchestrator is preferred, but a stage script run by hand is a real
     # pipeline too - and reporting IDLE while scan.py is burning a core would
     # be the single most misleading thing this tool could say.
+    # When a strategy was NAMED, bind to ITS orchestrator - never to the
+    # longest-running one. Concurrent campaigns are the whole reason this
+    # argument exists, and `orchestrators[0]` under a name produced a card
+    # headed with the requested strategy and filled with another run's PID,
+    # elapsed time, CPU and timeframes. Every line read correctly and the card
+    # described a different campaign; a strategy that was not running at all
+    # was reported as Running.
+    #
+    # No match means this strategy is not live. That is a REPORT, not a
+    # fallback: reading the artifacts of one campaign beside the process of
+    # another is what produced the wrong card in the first place.
+    if strategy:
+        orchestrators = [o for o in orchestrators
+                         if parse_cli_flags(o.args).get("strat") == strategy]
     orch = orchestrators[0] if orchestrators else None
     if orch is not None:
         stage_procs = [p for p in descendants(procs, orch.pid)
                        if p.script() in STAGE_OF_SCRIPT]
     else:
         stage_procs = find_stage_procs(procs)
+        # Same wrong-provenance trap as the orchestrator above, one level down.
+        # A hand-run stage carries its own --strat, and without this filter a
+        # named strategy that is NOT running borrowed whichever stage script
+        # happened to be alive - `bt-check t3_braid...` reported Running at
+        # 99% CPU on a scan.py belonging to sma_momentum_crossover.
+        if strategy:
+            stage_procs = [p for p in stage_procs
+                           if parse_cli_flags(p.args).get("strat") == strategy]
 
     stage_proc = stage_procs[0] if stage_procs else None
     live = orch is not None or stage_proc is not None
@@ -1267,13 +1446,39 @@ def _reached(s1: dict[str, Any], s2_status: str, s3: dict[str, Any],
 # CLI
 # ==========================================================================
 
-def build_parser() -> argparse.ArgumentParser:
+def active_note(procs: Sequence[Proc] | None = None) -> str:
+    """One line per live campaign, for the bottom of --help."""
+    table = ps_snapshot() if procs is None else list(procs)
+    if table is None:
+        return "running now: the process table could not be read."
+    rows = running_rows(table)
+    if not rows:
+        return "running now: nothing."
+    return "running now:\n" + "\n".join(
+        f"    {r['strategy']}  (pid {r['pid']}, stage "
+        f"{_stage_text(r['stage'])}, {elapsed_text(r['etimes'])})"
+        for r in rows)
+
+
+def build_parser(epilog: str | None = None) -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=epilog,
         description="What the backtest pipeline is doing right now, in "
                     "English. Reads processes and artifacts; runs nothing.")
+    # The positional and --strategy are ONE option with two spellings, folded
+    # onto separate dests only so that supplying both can be caught rather than
+    # silently resolved by argparse's last-wins. `bt-check <name>` is what
+    # people type; `--strategy` predates it and stays.
+    ap.add_argument("strategy_pos", nargs="?", default=None, metavar="STRATEGY",
+                    help="report on this strategy (same as --strategy)")
     ap.add_argument("--strategy", "--strat", dest="strategy", default=None,
                     help="report on this strategy instead of the running one "
                          "(or, when nothing is running, the most recent)")
+    ap.add_argument("-a", "--all", action="store_true",
+                    help="running pipelines and recent campaigns in one view")
+    ap.add_argument("-l", "--list", dest="list_campaigns", action="store_true",
+                    help="list every strategy with an artifact tree")
     ap.add_argument("--out-dir", default=None,
                     help="an explicit artifacts directory, matching the same "
                          "flag on the stages")
@@ -1284,8 +1489,66 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+def _requested_strategy(args: argparse.Namespace) -> str | None:
+    """
+    The strategy the caller named, from either spelling.
+
+    Both given and disagreeing is an ERROR rather than a precedence rule.
+    Either answer would be defensible, which is the problem: somebody who
+    types `bt-check A --strategy B` has two strategies in mind and needs to
+    be told, not handed a card for one of them that reads exactly like a card
+    for the other.
+    """
+    pos, flag = args.strategy_pos, args.strategy
+    if pos and flag and pos != flag:
+        raise SystemExit(f"bt-check: named two strategies, {pos!r} and "
+                         f"{flag!r}. Pass one.")
+    return pos or flag
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    args = build_parser().parse_args(list(argv) if argv is not None else None)
+    raw = list(argv) if argv is not None else sys.argv[1:]
+    # The live list is built ONLY for --help. It costs a `ps`, and every other
+    # path already takes its own snapshot; paying for one on each invocation to
+    # fill an epilog nobody is reading would be a waste on the tool whose whole
+    # point is answering quickly.
+    epilog = active_note() if ("-h" in raw or "--help" in raw) else None
+    args = build_parser(epilog).parse_args(raw)
+
+    if args.list_campaigns:
+        print(render_campaign_list(args.out_dir))
+        return 0
+    if args.all:
+        print(render_all(args.out_dir))
+        return 0
+
+    requested = _requested_strategy(args)
+    if requested:
+        # Resolve BEFORE reporting. Without this a typo silently produced an
+        # empty card for a campaign that does not exist, which reads like a run
+        # that has not started rather than like a name nobody recognises.
+        resolved, suggestions = match_campaign(requested, args.out_dir)
+        if resolved is None:
+            print(f"bt-check: no campaign matches {requested!r}.",
+                  file=sys.stderr)
+            if suggestions:
+                print("  did you mean:", file=sys.stderr)
+                for n in suggestions:
+                    print(f"      {n}", file=sys.stderr)
+            else:
+                print("  bt-check --list shows every campaign.",
+                      file=sys.stderr)
+            return 2
+        args.strategy = resolved
+    else:
+        # Nobody named one and more than one campaign is live: no single card
+        # describes the box, so show the table instead of silently picking the
+        # longest-running of them.
+        table = ps_snapshot()
+        rows = running_rows(table or [])
+        if len(rows) > 1:
+            print(render_running_table(rows))
+            return 0
 
     if args.watch is None:
         card, _live = build_report(args.strategy, args.out_dir)
