@@ -30,7 +30,7 @@
   "source": "/home/cgrullon/src/trading/strategies/experimental/sma_momentum_crossover_20260818.py",
   "source_sha256": "b6a96268115e0c719a5fe1550910a969d7f9aa63974c078dd032bb4de53b73a4",
   "promoted_sha256": "b6a96268115e0c719a5fe1550910a969d7f9aa63974c078dd032bb4de53b73a4",
-  "promoted_utc": "2026-08-28T00:44:50+00:00",
+  "promoted_utc": "2026-08-28T03:38:45+00:00",
   "costs_included": true,
   "variants_tested": null,
   "metrics_status": "RECORDED \u00b7 locked from dual_metrics_HO.json",
@@ -63,12 +63,12 @@
   },
   "certification": {
     "audit_file": "/mnt/backtest/artifacts/pipeline/sma_momentum_crossover_20260818/gate_audit_HO_30m.json",
-    "audit_sha256": "8619325d156cbfb6882a3821e89dbe2159262ece7c4ce332b98cf76ca4ca2416",
+    "audit_sha256": "6bfe7e6d431950b11ec658c1306940747125c5d9b5185d2b4f6300cd45554054",
     "audit_symbol": "HO",
     "audit_timeframe": "30m",
     "target_quadrant": "Q1",
     "target_regime": "High Volatility / Trending",
-    "audit_generated_utc": "2026-08-28T00:35:10+00:00",
+    "audit_generated_utc": "2026-08-28T03:29:17+00:00",
     "in_sample": {
       "start": "2013-01-01",
       "end": "2022-12-31"
