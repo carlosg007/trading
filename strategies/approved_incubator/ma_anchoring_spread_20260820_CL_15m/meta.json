@@ -1,0 +1,139 @@
+{
+  "name": "ma_anchoring_spread_20260820_CL_15m",
+  "strategy": "ma_anchoring_spread_20260820",
+  "symbol": "CL",
+  "version": "B",
+  "description": "Promoted Version B (baseline + causal ML filter).",
+  "symbols": [
+    "CL"
+  ],
+  "timeframe": "15m",
+  "params": {
+    "fast_window": 21,
+    "slow_window": 200,
+    "spread_threshold": 0.015,
+    "exit_revert_mult": 0.5,
+    "use_macro_anchor": true,
+    "use_spread_hurdle": true,
+    "use_spread_expansion": true,
+    "use_news_filter": false,
+    "sl_atr_mult": 1.5,
+    "tp_atr_mult": 3.0,
+    "trailing": false
+  },
+  "params_source": "ma_anchoring_spread_20260820.py DEFAULT_PARAMS",
+  "params_conflict": [],
+  "risk": {
+    "sl_atr_mult": 1.5,
+    "tp_atr_mult": 3.0,
+    "trailing": false
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/ma_anchoring_spread_20260820.py",
+  "source_sha256": "3c87f3720be7dd06950d86eb242f32918b3c0f0348a94641f845795c5d512f40",
+  "promoted_sha256": "b64c9a44c5f9c858fd84a84e0c0f6b6eda2c9540f7dbf274ab796341c8bf72ee",
+  "promoted_utc": "2026-08-28T05:54:57+00:00",
+  "costs_included": false,
+  "variants_tested": 270,
+  "metrics_status": "NOT RECORDED",
+  "metrics": null,
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "FAIL",
+    "gate2": "FAIL",
+    "gate3": "PASS",
+    "gate_regime": "PASS",
+    "gate_ruin": "PASS"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/gate_audit_CL_15m.json",
+    "audit_sha256": "0542e798b42ff13abd682f050a335c82ac9b47c04ad784b2b41173565b66c486",
+    "audit_symbol": "CL",
+    "audit_timeframe": "15m",
+    "target_quadrant": "Q1",
+    "target_regime": "High Volatility / Trending",
+    "audit_generated_utc": "2026-08-28T05:54:57+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "fast_window": 30,
+      "slow_window": 100,
+      "spread_threshold": 0.015,
+      "sl_atr_mult": 2.0,
+      "tp_atr_mult": 3.0,
+      "trailing": true
+    },
+    "params_source": "stage 2 winner (best_params_CL_15m.json)",
+    "variants_tested": 270,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "NOT EVALUATED",
+    "agrees_with_snapshot": null
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [
+    "import from 'backtest.event_calendar' is not allowed"
+  ],
+  "notes": "Stage 3 certified CL 15m in High Volatility / Trending; staged by backtest/audit_gates.py, not committed.",
+  "ml_threshold": 0.5,
+  "baseline": "baseline.py",
+  "seal": {
+    "algorithm": "sha256",
+    "strategy_code": {
+      "path": "/home/cgrullon/src/trading/strategies/approved_incubator/ma_anchoring_spread_20260820_CL_15m/baseline.py",
+      "sha256": "3c87f3720be7dd06950d86eb242f32918b3c0f0348a94641f845795c5d512f40"
+    },
+    "winning_parameters": {
+      "path": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/best_params_CL_15m.json",
+      "sha256": "77fbfe14caa2ad9b630ffa4d9269b3f91ee0b9876e09fc3437f4fd210ee01496"
+    },
+    "gate_audit": {
+      "path": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/gate_audit_CL_15m.json",
+      "sha256": "0542e798b42ff13abd682f050a335c82ac9b47c04ad784b2b41173565b66c486"
+    },
+    "metrics_handoff": {
+      "path": null,
+      "sha256": "NOT AVAILABLE"
+    },
+    "rule": "The three hashes are sealed together because they can be separated: the same code under a different winning cell is a different strategy with the same code checksum.",
+    "certified_symbol": "CL",
+    "certified_timeframe": "15m",
+    "target_regime": "High Volatility / Trending",
+    "target_quadrant": "Q1",
+    "params": {
+      "fast_window": 30,
+      "slow_window": 100,
+      "spread_threshold": 0.015,
+      "sl_atr_mult": 2.0,
+      "tp_atr_mult": 3.0,
+      "trailing": true
+    },
+    "params_locked": true
+  }
+}
