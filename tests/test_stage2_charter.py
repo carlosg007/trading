@@ -614,6 +614,43 @@ def test_stage2_card(blob: dict) -> None:
           starved == ([], 1), str(starved))
 
 
+def test_baseline_pf_carry() -> None:
+    print("\nStage 1's PF carried into the matrix, with its scope")
+    from backtest.scan import summary_matrix_rows
+
+    rows = [
+        {"symbol": "6A", "timeframe": "15m", "status": "OPTIMIZED",
+         "in_stage1": True, "winner": {"fast_period": 9},
+         "stage1": {"quadrant": "Q1", "version": "B", "regime_pf": 1.03,
+                    "optimal_regime": "High Volatility / Trending"},
+         "profit_factor": 0.9439, "trades": 603},
+        {"symbol": "XX", "timeframe": "1h", "status": "OPTIMIZED",
+         "in_stage1": False, "stage1": None, "winner": {},
+         "profit_factor": 1.2},
+    ]
+    out = {(r["symbol"], r["timeframe"]): r
+           for r in summary_matrix_rows(rows, [])}
+    surv, unscreened = out[("6A", "15m")], out[("XX", "1h")]
+
+    check("Stage 1's regime_pf lands in the matrix as baseline_pf",
+          surv["baseline_pf"] == 1.03, str(surv["baseline_pf"]))
+    check("...beside the sweep's own factor as optimized_pf",
+          surv["optimized_pf"] == 0.9439, str(surv["optimized_pf"]))
+    check("...and profit_factor is KEPT as its alias, because this same dict "
+          "is `results` in stage2_summary.json and the card and Stage 3's "
+          "target resolution both bind to that key",
+          surv["profit_factor"] == surv["optimized_pf"])
+    check("the SCOPE travels with the number - the two factors are measured "
+          "on different bars (one quadrant against the whole window, since "
+          "regime_applied_to_sweep is False) and subtracting them is wrong",
+          surv["baseline_pf_scope"] == "stage 1 designated quadrant only",
+          str(surv["baseline_pf_scope"]))
+    check("a pair with no Stage 1 record carries no baseline and no scope "
+          "either - a scope beside an absent number would describe nothing",
+          (unscreened["baseline_pf"], unscreened["baseline_pf_scope"])
+          == (None, None), str(unscreened))
+
+
 def test_mode_resolution() -> None:
     print("\nmode resolution: --stage 2 and --mode scan are one choice")
 
@@ -686,6 +723,7 @@ def main() -> int:
         test_plateau_in_the_sweep(tmp)
         blob = test_summary_handoff(tmp)
         test_stage2_card(blob)
+        test_baseline_pf_carry()
         test_mode_resolution()
         test_cli(tmp, blob)
 

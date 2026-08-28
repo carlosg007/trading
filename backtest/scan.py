@@ -2373,6 +2373,29 @@ def summary_matrix_rows(rows: list[dict], errors: list[dict]) -> list[dict]:
         "in_stage1": bool(r.get("in_stage1")),
         "params": (", ".join(f"{k}={v}" for k, v in (r.get("winner") or {}).items())
                    or "(no winner)"),
+        # THESE TWO ARE NOT THE SAME MEASUREMENT AND SUBTRACTING THEM IS
+        # WRONG. `baseline_pf` is Stage 1's `regime_pf`: the profit factor
+        # inside the DESIGNATED QUADRANT only. `optimized_pf` is this sweep's
+        # winner over the WHOLE in-sample window, because Stage 2 deliberately
+        # does not mask to the quadrant (`regime_applied_to_sweep` is False -
+        # masking would stack a second in-sample selection under the first).
+        #
+        # Measured on ema_crossover_20260821 6A 15m: 1.03 over 97 quadrant
+        # trades against 0.94 over 603 window trades. Read as a delta that is
+        # "optimisation made it worse"; read as what it is, it is a
+        # four-quadrant number beside a one-quadrant number.
+        #
+        # `baseline_pf_scope` is carried so the CSV says this at the point of
+        # use. A spreadsheet cannot hold a comment, and two adjacent PF columns
+        # with no scope beside them is an invitation to subtract.
+        "baseline_pf": (r.get("stage1") or {}).get("regime_pf"),
+        "baseline_pf_scope": ("stage 1 designated quadrant only"
+                              if (r.get("stage1") or {}).get("regime_pf")
+                              is not None else None),
+        "optimized_pf": r.get("profit_factor"),
+        # KEPT. This same dict is `results` in stage2_summary.json, and the
+        # Discord card and Stage 3's target resolution both bind to
+        # `profit_factor`; `optimized_pf` is its alias for the spreadsheet.
         "profit_factor": r.get("profit_factor"),
         "sharpe": r.get("sharpe"),
         "max_drawdown_pct": r.get("max_drawdown_pct"),
