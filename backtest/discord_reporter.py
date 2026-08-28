@@ -299,9 +299,13 @@ load_env()
 
 
 import argparse
+import hashlib
 import json
+import os
 import re
 import sys
+import tempfile
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -3867,6 +3871,9 @@ def build_parser() -> argparse.ArgumentParser:
                              "membership is read from (default: "
                              f"{PORTFOLIO_CONFIG_FILE}). Read only - this "
                              "never allocates anything")
+    parser.add_argument("--force", action="store_true",
+                        help=("post even if an identical payload went out in "
+                              f"the last {int(DUPLICATE_WINDOW_SECONDS)}s"))
     parser.add_argument("--dry-run", action="store_true",
                         help="print the payload and send nothing")
     return parser
@@ -4024,6 +4031,75 @@ def _build_card(args: argparse.Namespace) -> tuple[dict[str, Any], str]:
                    + (f", {auto} value(s) auto-resolved" if auto else ""))
 
 
+#: How long an identical payload is treated as a repeat rather than as a new
+#: card. Ten seconds is long enough to catch a double-invocation - a re-run
+#: after a scrollback, an orchestrator and a hand-typed command racing - and
+#: far too short to suppress a genuine re-post minutes later.
+DUPLICATE_WINDOW_SECONDS = 10.0
+
+
+def _guard_path() -> Path:
+    """
+    Where the last-post record lives: LOCAL disk, never the NFS mount.
+
+    The lake is mounted hard and the artifact tree is shared; a guard file
+    there would be one more thing taking a lock over NLM for a convenience
+    that only ever concerns one box. It is also not an artifact - nothing
+    downstream reads it - so it does not belong beside the handoffs.
+    """
+    return Path(tempfile.gettempdir()) / f"discord_reporter_guard_{os.getuid()}.json"
+
+
+def payload_fingerprint(payload: dict[str, Any]) -> str:
+    """
+    A stable digest of exactly what would be sent.
+
+    Keyed on the PAYLOAD rather than on (stage, strategy), because those two
+    are equal for a re-post that legitimately carries new numbers - a screen
+    re-run after a fix is the same stage and the same strategy and is not a
+    duplicate. Two posts collide here only when every character Discord would
+    receive is identical.
+    """
+    blob = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def seconds_since_identical_post(fingerprint: str, *, now: float | None = None,
+                                 path: Path | None = None) -> float | None:
+    """
+    Age of an identical post, or None if there is not one inside the window.
+
+    UNREADABLE STATE IS NOT A DUPLICATE. A corrupt, truncated or absent guard
+    file returns None and the card goes out. The guard is a convenience against
+    double-invocation; failing the other way would let a broken temp file
+    silence a stage card, and a notification that is missing is a far worse
+    failure than one that arrives twice.
+    """
+    now = time.time() if now is None else now
+    try:
+        record = json.loads((path or _guard_path()).read_text())
+        if record.get("fingerprint") != fingerprint:
+            return None
+        age = now - float(record["posted_at"])
+    except (OSError, ValueError, TypeError, KeyError,
+            json.JSONDecodeError):
+        return None
+    if 0 <= age < DUPLICATE_WINDOW_SECONDS:
+        return age
+    return None
+
+
+def record_post(fingerprint: str, *, now: float | None = None,
+                path: Path | None = None) -> None:
+    """Remember what was just sent. A write that fails is not a failed post."""
+    now = time.time() if now is None else now
+    try:
+        (path or _guard_path()).write_text(json.dumps(
+            {"fingerprint": fingerprint, "posted_at": now}))
+    except OSError:
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
@@ -4049,6 +4125,20 @@ def main(argv: list[str] | None = None) -> int:
         print("DRY RUN  nothing was sent.")
         return 0
 
+    # Checked AFTER --dry-run, so a dry run neither consults nor arms the
+    # guard, and BEFORE the webhook is resolved, so a suppressed duplicate
+    # never touches the credential.
+    fingerprint = payload_fingerprint(payload)
+    age = None if args.force else seconds_since_identical_post(fingerprint)
+    if age is not None:
+        # Exit 0, not 1. Nothing failed - the card the operator wanted is
+        # already in the channel - and run_pipeline posts these with
+        # check=False beside stages that must not be aborted by a notifier.
+        print(f"SKIPPED  an identical payload was posted "
+              f"{age:.1f}s ago; not sending it again. "
+              f"Use --force to override.")
+        return 0
+
     webhook, webhook_source = describe_webhook(args.webhook)
     if not webhook:
         print(f"FAILED  no webhook: {WEBHOOK_HINT}.", file=sys.stderr)
@@ -4057,6 +4147,9 @@ def main(argv: list[str] | None = None) -> int:
     result = post_embed(webhook, payload)
 
     if result["ok"]:
+        # Armed only on a post Discord ACCEPTED. Recording a rejected send
+        # would make the retry look like a duplicate and swallow the card.
+        record_post(fingerprint)
         # The SOURCE is a variable name and is safe to print; the URL is a
         # credential and is not. Naming it is what tells an operator with a
         # test channel and a live one which of the two just received the card.

@@ -658,6 +658,43 @@ def test_survivors_csv(tmp: Path) -> None:
           parsed[0]["optimal_regime_trades"])
 
 
+def test_duplicate_guard(tmp: Path) -> None:
+    print("\n11. The duplicate-post guard")
+    guard = tmp / "guard.json"
+    payload = {"embeds": [{"title": "Stage 1", "description": "x"}]}
+    fp = dr.payload_fingerprint(payload)
+
+    check("nothing recorded is not a duplicate",
+          dr.seconds_since_identical_post(fp, now=10.0, path=guard) is None)
+
+    dr.record_post(fp, now=1000.0, path=guard)
+    check("an identical payload inside the window is suppressed",
+          dr.seconds_since_identical_post(fp, now=1003.0, path=guard) == 3.0)
+    check("...and outside it is not - the guard catches a double "
+          "invocation, never a genuine re-post minutes later",
+          dr.seconds_since_identical_post(
+              fp, now=1000.0 + dr.DUPLICATE_WINDOW_SECONDS + 1,
+              path=guard) is None)
+
+    other = dr.payload_fingerprint(
+        {"embeds": [{"title": "Stage 1", "description": "DIFFERENT"}]})
+    check("a re-run carrying new numbers is NOT a duplicate - the guard is "
+          "keyed on the payload, not on (stage, strategy), which are equal "
+          "for a screen re-run after a fix",
+          dr.seconds_since_identical_post(other, now=1003.0,
+                                          path=guard) is None)
+
+    guard.write_text("{truncated")
+    check("a corrupt guard file posts the card rather than swallowing it - "
+          "a missing notification is a worse failure than a doubled one",
+          dr.seconds_since_identical_post(fp, now=1003.0, path=guard) is None)
+
+    unwritable = tmp / "no_such_dir" / "guard.json"
+    dr.record_post(fp, now=1000.0, path=unwritable)
+    check("...and a guard that cannot be WRITTEN is not a failed post either",
+          not unwritable.exists())
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="stage1charter_") as td:
         tmp = Path(td)
@@ -672,6 +709,7 @@ def main() -> int:
         test_stage1_card_edges()
         test_cli(tmp, blob)
         test_survivors_csv(tmp)
+        test_duplicate_guard(tmp)
 
     print("\n" + "=" * 60)
     if _failures:
