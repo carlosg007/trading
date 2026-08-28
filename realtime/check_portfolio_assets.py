@@ -234,13 +234,23 @@ def render(snap: dict[str, Any]) -> str:
     if pf["version"]:
         L.append(f"{'Routing Table Schema':<28}: {pf['version']}")
 
+    # `interlock()` reports ARMED: its `armed()` helper matches `--live` as a
+    # whole flag, so True means the loop sends orders. This read the polarity
+    # backwards and printed LIVE precisely BECAUSE the loop was unarmed - and
+    # would have printed DRY RUN once somebody armed it. Both directions are
+    # wrong and the second is the dangerous one.
+    #
+    # The same inversion in check_trade_firewall.py "cost a deployment on
+    # 2026-08-27" (see `interlock`'s docstring); the fix never reached here.
+    # Dry run is the DEFAULT - a unit carrying neither flag sends nothing - so
+    # anything that is not positively armed is reported as dry run.
     if il["running"] is True:
-        mode = "DRY RUN — the running loop formats orders and sends none"
-    elif il["running"] is False:
         mode = "LIVE — the running loop WILL send orders"
+    elif il["running"] is False:
+        mode = "DRY RUN — the running loop formats orders and sends none"
     else:
         mode = ("no loop running; systemd would start it "
-                + ("in DRY RUN" if il["effective"] else "LIVE"))
+                + ("LIVE" if il["effective"] else "in DRY RUN"))
     L.append(f"{'Execution Mode':<28}: {mode}")
 
     # ---- per portfolio -----------------------------------------------
