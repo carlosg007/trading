@@ -113,12 +113,33 @@ EXECUTION_ACCOUNTS = {"Incubator-Odd": "SimIncubator1",
 # them between accounts cannot help. They need full-size contracts, which is a
 # different risk profile from these sim accounts.
 EXPECTED_ASSIGNMENTS = {
-    "Incubator-Odd":  ["t3_braid_scalp_20260823_NQ_1h",        # 1h,  NQ
-                       "double_rsi_macd_scalp_20260823_NQ_3m",  # 3m,  NQ
-                       "ema_crossover_20260821_NQ_15m",         # 15m, NQ
-                       "ema_crossover_20260821_CL_15m"],        # 15m, CL
-    "Incubator-Even": ["ema_crossover_20260821_ES_15m",         # 15m, ES
-                       "ema_crossover_20260821_ES_30m"],        # 30m, ES
+    "Incubator-Odd":  [
+        "t3_braid_scalp_20260823_NQ_1h",                #  1h, NQ
+        "double_rsi_macd_scalp_20260823_NQ_3m",         #  3m, NQ
+        "ema_crossover_20260821_NQ_15m",                # 15m, NQ
+        "ema_crossover_20260821_CL_15m",                # 15m, CL
+        "sma_momentum_crossover_20260818_CL_15m",       # 15m, CL
+        "sma_momentum_crossover_20260818_NQ_5m",        #  5m, NQ
+        "sma_momentum_crossover_20260818_NQ_3m",        #  3m, NQ
+        "ema_crossover_20260821_NQ_1h",                 #  1h, NQ
+        "ema_crossover_20260821_NQ_3m",                 #  3m, NQ
+        "ema_crossover_20260821_NQ_1m",                 #  1m, NQ
+        "ema_crossover_20260821_NQ_2m",                 #  2m, NQ
+        "ma_anchoring_spread_20260820_CL_5m",           #  5m, CL
+        "ma_anchoring_spread_20260820_CL_1h",           #  1h, CL
+        "ma_anchoring_spread_20260820_CL_15m",          # 15m, CL
+    ],
+    "Incubator-Even": [
+        "ema_crossover_20260821_ES_15m",                # 15m, ES
+        "ema_crossover_20260821_ES_30m",                # 30m, ES
+        "t3_braid_scalp_20260823_GC_1h",                #  1h, GC
+        "sma_momentum_crossover_20260818_GC_1h",        #  1h, GC
+        "sma_momentum_crossover_20260818_ES_15m",       # 15m, ES
+        "sma_momentum_crossover_20260818_GC_5m",        #  5m, GC
+        "ema_crossover_20260821_ES_5m",                 #  5m, ES
+        "ma_anchoring_spread_20260820_GC_1h",           #  1h, GC
+        "ema_crossover_20260821_ES_2m",                 #  2m, ES
+    ],
     "Prop-Odd":       [],
     "Prop-Even":      [],
 }
