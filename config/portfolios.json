@@ -37,17 +37,12 @@
         "t3_braid_scalp_20260823_NQ_1h",
         "double_rsi_macd_scalp_20260823_NQ_3m",
         "ema_crossover_20260821_NQ_15m",
-        "ema_crossover_20260821_CL_15m",
-        "sma_momentum_crossover_20260818_CL_15m",
         "sma_momentum_crossover_20260818_NQ_5m",
         "sma_momentum_crossover_20260818_NQ_3m",
         "ema_crossover_20260821_NQ_1h",
         "ema_crossover_20260821_NQ_3m",
         "ema_crossover_20260821_NQ_1m",
-        "ema_crossover_20260821_NQ_2m",
-        "ma_anchoring_spread_20260820_CL_5m",
-        "ma_anchoring_spread_20260820_CL_1h",
-        "ma_anchoring_spread_20260820_CL_15m"
+        "ema_crossover_20260821_NQ_2m"
       ],
       "strategy_allocations": {
         "t3_braid_scalp_20260823_NQ_1h": {
@@ -84,44 +79,6 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_NQ_1h.json (Gate R's certification target)"
-              }
-            }
-          ]
-        },
-        "sma_momentum_crossover_20260818_CL_15m": {
-          "strat": "sma_momentum_crossover_20260818_CL_15m",
-          "symbol": "CL",
-          "timeframe": "15m",
-          "version": "A",
-          "allocation": 1,
-          "regime_filter": "Q1",
-          "status": "incubating",
-          "path": "strategies/approved_incubator/sma_momentum_crossover_20260818_CL_15m/strat.py",
-          "registered_utc": "2026-08-28T03:39:26+00:00",
-          "registered_by": "backtest/promote.py",
-          "routing_basis": "already registered on Incubator-Odd; a re-promotion does not move an account",
-          "resolved_from": {
-            "symbol": "--symbol",
-            "timeframe": "--timeframe",
-            "regime_filter": "gate_audit_CL_15m.json (Gate R's certification target)"
-          },
-          "configurations": [
-            {
-              "strat": "sma_momentum_crossover_20260818_CL_15m",
-              "symbol": "CL",
-              "timeframe": "15m",
-              "version": "A",
-              "allocation": 1,
-              "regime_filter": "Q1",
-              "status": "incubating",
-              "path": "strategies/approved_incubator/sma_momentum_crossover_20260818_CL_15m/strat.py",
-              "registered_utc": "2026-08-28T03:39:26+00:00",
-              "registered_by": "backtest/promote.py",
-              "routing_basis": "already registered on Incubator-Odd; a re-promotion does not move an account",
-              "resolved_from": {
-                "symbol": "--symbol",
-                "timeframe": "--timeframe",
-                "regime_filter": "gate_audit_CL_15m.json (Gate R's certification target)"
               }
             }
           ]
@@ -278,44 +235,6 @@
             }
           ]
         },
-        "ema_crossover_20260821_CL_15m": {
-          "strat": "ema_crossover_20260821_CL_15m",
-          "symbol": "CL",
-          "timeframe": "15m",
-          "version": "A",
-          "allocation": 1,
-          "regime_filter": "Q1",
-          "status": "incubating",
-          "path": "strategies/approved_incubator/ema_crossover_20260821_CL_15m/strat.py",
-          "registered_utc": "2026-08-28T03:56:10+00:00",
-          "registered_by": "backtest/promote.py",
-          "routing_basis": "already registered on Incubator-Odd; a re-promotion does not move an account",
-          "resolved_from": {
-            "symbol": "--symbol",
-            "timeframe": "--timeframe",
-            "regime_filter": "gate_audit_CL_15m.json (Gate R's certification target)"
-          },
-          "configurations": [
-            {
-              "strat": "ema_crossover_20260821_CL_15m",
-              "symbol": "CL",
-              "timeframe": "15m",
-              "version": "A",
-              "allocation": 1,
-              "regime_filter": "Q1",
-              "status": "incubating",
-              "path": "strategies/approved_incubator/ema_crossover_20260821_CL_15m/strat.py",
-              "registered_utc": "2026-08-28T03:56:10+00:00",
-              "registered_by": "backtest/promote.py",
-              "routing_basis": "already registered on Incubator-Odd; a re-promotion does not move an account",
-              "resolved_from": {
-                "symbol": "--symbol",
-                "timeframe": "--timeframe",
-                "regime_filter": "gate_audit_CL_15m.json (Gate R's certification target)"
-              }
-            }
-          ]
-        },
         "ema_crossover_20260821_NQ_3m": {
           "strat": "ema_crossover_20260821_NQ_3m",
           "symbol": "NQ",
@@ -464,120 +383,6 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_NQ_3m.json (Gate R's certification target)"
-              }
-            }
-          ]
-        },
-        "ma_anchoring_spread_20260820_CL_5m": {
-          "strat": "ma_anchoring_spread_20260820_CL_5m",
-          "symbol": "CL",
-          "timeframe": "5m",
-          "version": "A",
-          "allocation": 1,
-          "regime_filter": "Q2",
-          "status": "incubating",
-          "path": "strategies/approved_incubator/ma_anchoring_spread_20260820_CL_5m/strat.py",
-          "registered_utc": "2026-08-28T05:59:20+00:00",
-          "registered_by": "backtest/promote.py",
-          "routing_basis": "trades CL; declares Q2; fewest active strategies (Incubator-Odd=11), ties alphabetical; certified on 5m bars",
-          "resolved_from": {
-            "symbol": "--symbol",
-            "timeframe": "--timeframe",
-            "regime_filter": "gate_audit_CL_5m.json (Gate R's certification target)"
-          },
-          "configurations": [
-            {
-              "strat": "ma_anchoring_spread_20260820_CL_5m",
-              "symbol": "CL",
-              "timeframe": "5m",
-              "version": "A",
-              "allocation": 1,
-              "regime_filter": "Q2",
-              "status": "incubating",
-              "path": "strategies/approved_incubator/ma_anchoring_spread_20260820_CL_5m/strat.py",
-              "registered_utc": "2026-08-28T05:59:20+00:00",
-              "registered_by": "backtest/promote.py",
-              "routing_basis": "trades CL; declares Q2; fewest active strategies (Incubator-Odd=11), ties alphabetical; certified on 5m bars",
-              "resolved_from": {
-                "symbol": "--symbol",
-                "timeframe": "--timeframe",
-                "regime_filter": "gate_audit_CL_5m.json (Gate R's certification target)"
-              }
-            }
-          ]
-        },
-        "ma_anchoring_spread_20260820_CL_1h": {
-          "strat": "ma_anchoring_spread_20260820_CL_1h",
-          "symbol": "CL",
-          "timeframe": "1h",
-          "version": "A",
-          "allocation": 1,
-          "regime_filter": "Q2",
-          "status": "incubating",
-          "path": "strategies/approved_incubator/ma_anchoring_spread_20260820_CL_1h/strat.py",
-          "registered_utc": "2026-08-28T05:59:34+00:00",
-          "registered_by": "backtest/promote.py",
-          "routing_basis": "trades CL; declares Q2; fewest active strategies (Incubator-Odd=12), ties alphabetical; certified on 1h bars",
-          "resolved_from": {
-            "symbol": "--symbol",
-            "timeframe": "--timeframe",
-            "regime_filter": "gate_audit_CL_1h.json (Gate R's certification target)"
-          },
-          "configurations": [
-            {
-              "strat": "ma_anchoring_spread_20260820_CL_1h",
-              "symbol": "CL",
-              "timeframe": "1h",
-              "version": "A",
-              "allocation": 1,
-              "regime_filter": "Q2",
-              "status": "incubating",
-              "path": "strategies/approved_incubator/ma_anchoring_spread_20260820_CL_1h/strat.py",
-              "registered_utc": "2026-08-28T05:59:34+00:00",
-              "registered_by": "backtest/promote.py",
-              "routing_basis": "trades CL; declares Q2; fewest active strategies (Incubator-Odd=12), ties alphabetical; certified on 1h bars",
-              "resolved_from": {
-                "symbol": "--symbol",
-                "timeframe": "--timeframe",
-                "regime_filter": "gate_audit_CL_1h.json (Gate R's certification target)"
-              }
-            }
-          ]
-        },
-        "ma_anchoring_spread_20260820_CL_15m": {
-          "strat": "ma_anchoring_spread_20260820_CL_15m",
-          "symbol": "CL",
-          "timeframe": "15m",
-          "version": "B",
-          "allocation": 1,
-          "regime_filter": "Q1",
-          "status": "incubating",
-          "path": "strategies/approved_incubator/ma_anchoring_spread_20260820_CL_15m/strat.py",
-          "registered_utc": "2026-08-28T14:43:25+00:00",
-          "registered_by": "manual edit (operator request); promote.py not run",
-          "routing_basis": "CL is in Incubator-Odd's Index_Energy_Uncorrelated basket; routed to MCL",
-          "resolved_from": {
-            "symbol": "meta.json",
-            "timeframe": "meta.json",
-            "regime_filter": "gate_audit_CL_15m.json (Gate R's certification target)"
-          },
-          "configurations": [
-            {
-              "strat": "ma_anchoring_spread_20260820_CL_15m",
-              "symbol": "CL",
-              "timeframe": "15m",
-              "version": "B",
-              "allocation": 1,
-              "regime_filter": "Q1",
-              "status": "incubating",
-              "path": "strategies/approved_incubator/ma_anchoring_spread_20260820_CL_15m/strat.py",
-              "registered_utc": "2026-08-28T14:43:25+00:00",
-              "registered_by": "manual edit (operator request); promote.py not run",
-              "routing_basis": "CL is in Incubator-Odd's Index_Energy_Uncorrelated basket; routed to MCL",
-              "resolved_from": {
-                "symbol": "meta.json",
-                "timeframe": "meta.json",
-                "regime_filter": "gate_audit_CL_15m.json (Gate R's certification target)"
               }
             }
           ]

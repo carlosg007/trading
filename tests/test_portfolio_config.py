@@ -112,22 +112,35 @@ EXECUTION_ACCOUNTS = {"Incubator-Odd": "SimIncubator1",
 # has no micro for either, so NO incubator basket can reach them and moving
 # them between accounts cannot help. They need full-size contracts, which is a
 # different risk profile from these sim accounts.
+#
+# CL promotions are deliberately absent too, for a DIFFERENT reason, and the
+# difference matters if anyone is tempted to put them back. NG and RB cannot be
+# reached by any basket; CL can - Incubator-Odd holds MCL and the routing works.
+# What is missing is the DATA: NinjaTrader on this box streams no CL series, so
+# /mnt/backtest/artifacts/nt8_bars carries 27 symbols and none of them is CL,
+# and the regime daemon fails every cycle with "the feed returned no 15m bars".
+# Five CL strategies sat here reading `no_regime_published` - allocated,
+# certified, permanently inert.
+#
+# So this absence is reversible and NG/RB's is not. Restore them when the CL
+# feed exists, and confirm it with the spool rather than with this comment:
+#
+#     ls /mnt/backtest/artifacts/nt8_bars/ | grep '^CL'
+#
+# MCL is deliberately LEFT in Incubator-Odd's basket. The basket says what the
+# account may trade, not what it currently does, and stripping it would turn a
+# missing upstream feed into a config change that has to be undone twice.
 EXPECTED_ASSIGNMENTS = {
     "Incubator-Odd":  [
         "t3_braid_scalp_20260823_NQ_1h",                #  1h, NQ
         "double_rsi_macd_scalp_20260823_NQ_3m",         #  3m, NQ
         "ema_crossover_20260821_NQ_15m",                # 15m, NQ
-        "ema_crossover_20260821_CL_15m",                # 15m, CL
-        "sma_momentum_crossover_20260818_CL_15m",       # 15m, CL
         "sma_momentum_crossover_20260818_NQ_5m",        #  5m, NQ
         "sma_momentum_crossover_20260818_NQ_3m",        #  3m, NQ
         "ema_crossover_20260821_NQ_1h",                 #  1h, NQ
         "ema_crossover_20260821_NQ_3m",                 #  3m, NQ
         "ema_crossover_20260821_NQ_1m",                 #  1m, NQ
         "ema_crossover_20260821_NQ_2m",                 #  2m, NQ
-        "ma_anchoring_spread_20260820_CL_5m",           #  5m, CL
-        "ma_anchoring_spread_20260820_CL_1h",           #  1h, CL
-        "ma_anchoring_spread_20260820_CL_15m",          # 15m, CL
     ],
     "Incubator-Even": [
         "ema_crossover_20260821_ES_15m",                # 15m, ES
