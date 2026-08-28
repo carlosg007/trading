@@ -2123,11 +2123,12 @@ def build_stage2_embed(strat: str, blob: dict[str, Any],
     is a run failure rather than a screening result.
     """
     rows = stage2_rows(blob)
-    ordered = sorted(rows, key=_stage2_sort_key)
     optimized = [r for r in rows
                  if str(r.get("status") or "").upper() == OPTIMIZED]
-    table, hidden, legend = format_stage2_table(rows, max_rows)
-
+    # NO TABLE. Same reasoning as the Stage 1 card: a fixed-width block inside
+    # a container that reflows loses its alignment on a narrow client, which is
+    # the only thing a table was for. The per-configuration detail lives in
+    # stage2_summary_matrix.csv, which this card links.
     window = blob.get("in_sample_window") or {}
     start = window.get("start") or blob.get("start") or "not recorded"
     end = window.get("end") or blob.get("end") or "not recorded"
@@ -2136,37 +2137,32 @@ def build_stage2_embed(strat: str, blob: dict[str, Any],
     coverage = blob.get("coverage") or {}
     rank = blob.get("rank") or "not recorded"
 
+    pfs = sorted(float(r["profit_factor"]) for r in rows
+                 if isinstance(r.get("profit_factor"), (int, float)))
+
     description = [
-        f"**In-sample window** `{start} → {end}`"
-        + (f" · holdout from `{holdout}` untouched" if holdout else ""),
+        f"**Strategy** `{strat}`",
+        f"**In-sample window** `{start} \u2192 {end}`"
+        + (f" \u00b7 holdout from `{holdout}` untouched" if holdout else ""),
         # `rank` is what was APPLIED, which Stage 2 resolves - a rebuild of a
         # table with no plateau columns is ranked on Sharpe however the sweep
         # was invoked, and the card must not claim otherwise.
         f"**Selection** best parameters by `{rank}` rank, per configuration",
-        "```text",
-        table if table.strip() else "no configuration was optimised",
-        "```",
     ]
-    if legend:
-        description.append("**Target regimes** " + " · ".join(
-            f"`{q}` {legend[q]}" for q in sorted(legend)))
-    if hidden:
+    if pfs:
+        # The RANGE, not a mean. Averaging profit factors across contracts
+        # blends separate simulations on different multipliers into one number
+        # that describes no instrument - the same reason nothing else here is
+        # summed across symbols.
         description.append(
-            f"_{hidden} further configuration(s) are not shown — the full "
-            f"matrix is in the handoff._")
-    if any(str(r.get("params") or "").strip() for r in rows):
-        # The table's cells are abbreviated and clipped, so the card has to say
-        # where the copy that is neither lives. Without this line an `f=5` cell
-        # reads as the parameter name the strategy declared.
-        description.append(ABBREV_NOTE)
+            f"**Optimised PF** `{pfs[0]:.2f}` \u2013 `{pfs[-1]:.2f}` "
+            f"(median `{pfs[len(pfs) // 2]:.2f}`)")
+    description.append("")
+    description.append(
+        "_Per-configuration parameters, plateau scores and drawdowns saved to "
+        "`stage2_summary_matrix.csv`._")
 
     text = "\n".join(description)
-    if len(text) > MAX_EMBED_DESCRIPTION:
-        # Trim the TABLE and never the header lines, for the same reason the
-        # Stage 1 card does: without the window and the selection rule the
-        # numbers underneath are unlabelled.
-        keep = MAX_EMBED_DESCRIPTION - 64
-        text = text[:keep] + "\n```\n_truncated — see the handoff._"
 
     errors = len(rows) - len(optimized)
     fields = [
@@ -2202,24 +2198,19 @@ def build_stage2_embed(strat: str, blob: dict[str, Any],
                            "recomputed"},
     }
 
-    # The full parameter sets go in LAST, on whatever the rest of the card
-    # left of Discord's 6000 characters. Sized against the FINISHED embed
-    # rather than against a constant, because the description holding the
-    # table is most of it: a fixed reservation would either starve this block
-    # under a wide table or overflow the embed under a narrow one.
+    # The full parameter sets are NOT fields any more. They were five
+    # continuation blocks of monospace text - 5,212 of Discord's 6,000
+    # characters on a 47-configuration run - and they wrapped on exactly the
+    # clients the table did. Every one of them is the `params` column of
+    # stage2_summary_matrix.csv and the `params` key of
+    # best_params_<SYMBOL>_<TF>.json, both of which this card names.
+    #
+    # `format_stage2_param_fields` is KEPT, not deleted: it is covered by its
+    # own tests and is the formatter to reach for if these ever return behind
+    # a flag. Nothing calls it here.
     handoff = {"name": "Handoff", "value": _fmt_report(str(source or "")),
                "inline": False}
-    budget = (MAX_EMBED_TOTAL - _embed_size(embed)
-              - len(handoff["name"]) - len(handoff["value"]))
-    param_fields, _hidden = format_stage2_param_fields(ordered, budget=budget)
-    if not param_fields:
-        # The block did not fit at all. The note must not keep pointing at it:
-        # a line saying the full parameters are below, with nothing below, is
-        # worse than the clipped cells it was added to explain. The
-        # replacement is SHORTER, so the budget just measured still holds.
-        embed["description"] = embed["description"].replace(
-            ABBREV_NOTE, ABBREV_NOTE_NO_BLOCK)
-    embed["fields"] = fields + param_fields + [handoff]
+    embed["fields"] = fields + [handoff]
     return embed
 
 

@@ -518,27 +518,32 @@ def test_stage2_card(blob: dict) -> None:
           f"{CHARTER_IS_START} → {CHARTER_IS_END}" in text, text[:120])
     check("the card states the holdout was untouched",
           HOLDOUT_START in text and "untouched" in text)
-    for want in ("NQ", "GC", "5m", "15m"):
-        check(f"the symbol/timeframe column carries {want}", want in text)
-    # The parameter sets are on the card TWICE: abbreviated in the table so
-    # the fixed-width columns align, and in full below it. Both are checked,
-    # because the abbreviation is only safe while the full copy is present -
-    # a reader retypes `--param` from the block, never from the table.
-    check("the table carries the selected parameters with abbreviated keys",
-          "f=5 s=20" in text and "f=3 s=40" in text, text)
-    check("the table says its keys are abbreviated",
-          "abbreviated" in text)
-    full = "\n".join(f["value"] for f in embed["fields"]
-                     if f["name"].startswith(dr.STAGE2_PARAM_FIELD_NAME))
-    check("the full, unabbreviated parameter sets are their own field",
-          "fast=5, slow=20" in full and "fast=3, slow=40" in full, full)
-    check("a configuration whose sweep failed is in the full block too, "
-          "saying so rather than going missing", "NOT OPTIMIZED" in full, full)
-    check("the in-sample profit factor is on the card", "1.28" in text)
-    check("the max drawdown is on the card", "-8.40" in text)
-    check("the target regime quadrant is a column", "QUAD" in text)
-    check("the quadrant legend is built from the rows",
-          "High Volatility / Trending" in text)
+    # The per-configuration table and the full-parameter blocks are GONE.
+    # Both were fixed-width monospace inside a container that reflows, and on
+    # a 47-configuration run they took 5,212 of Discord's 6,000 characters.
+    # Every value they carried is a column of stage2_summary_matrix.csv.
+    check("no monospace block survives anywhere on the card - not in the "
+          "description and not in a field",
+          "```" not in text
+          and not any("```" in str(f["value"]) for f in embed["fields"]),
+          text)
+    check("...and the card names the file that carries the detail instead",
+          "stage2_summary_matrix.csv" in text, text)
+    # Parameters, per-row drawdowns and the quadrant legend all moved to
+    # stage2_summary_matrix.csv. What the card keeps is the range, because a
+    # reader needs to know whether the sweep produced anything usable before
+    # deciding to open the file.
+    check("no per-row parameter set is left on the card",
+          "fast=5, slow=20" not in text
+          and not any("fast=5" in str(f["value"]) for f in embed["fields"]),
+          text)
+    check("the optimised profit factor RANGE is on the card, so the sweep's "
+          "outcome is legible without opening the CSV",
+          "Optimised PF" in text and "1.28" in text, text)
+    check("...as a range and a median, never a mean - averaging profit "
+          "factors across contracts blends separate simulations on different "
+          "multipliers into a number that describes no instrument",
+          "median" in text and "mean" not in text.lower(), text)
 
     fields = {f["name"]: f["value"] for f in embed["fields"]}
     check("the card counts the configurations it covers",
@@ -563,7 +568,9 @@ def test_stage2_card(blob: dict) -> None:
     empty = dr.build_stage2_embed("probe", {"results": []})
     check("a stage that optimised nothing gets an amber card, not a crash",
           empty["color"] == dr.AMBER
-          and "no configuration was optimised" in empty["description"])
+          and [f["value"] for f in empty["fields"]
+               if f["name"] == "Configurations"] == ["0"],
+          str(empty["fields"]))
 
     many = {"results": [{"symbol": f"S{i}", "timeframe": "15m",
                          "status": "OPTIMIZED", "quadrant": "Q1",
@@ -571,48 +578,34 @@ def test_stage2_card(blob: dict) -> None:
                          "params": "fast=5, slow=20", "profit_factor": 1.1,
                          "max_drawdown_pct": -5.0} for i in range(60)]}
     wide = dr.build_stage2_embed("probe", many, max_rows=dr.STAGE2_MAX_ROWS)
-    check("a long matrix is truncated and the remainder is COUNTED",
-          "40 further configuration(s) are not shown" in wide["description"],
-          wide["description"][-160:])
+    check("a long matrix no longer grows the description at all - there is "
+          "no table to truncate, so there is no truncation to under-report",
+          len(wide["description"]) < 512, str(len(wide["description"])))
     check("the totals still describe the whole matrix",
           [f["value"] for f in wide["fields"]
            if f["name"] == "Configurations"] == ["60"])
 
-    # The full block is the one part of the card that grows without bound, so
-    # it is what would push an embed past 6000 and be rejected with a 400
-    # nobody reads. It is sized against the finished embed and what does not
-    # fit is COUNTED, exactly like every other cap on these cards.
+    # The card no longer carries the parameter sets, so the one part of it
+    # that used to grow without bound cannot push an embed past 6000. The
+    # worst case is now a constant.
     heavy = {"results": [
         {"symbol": f"SYM{i}", "timeframe": "15m", "status": "OPTIMIZED",
          "quadrant": "Q1", "optimal_regime": "High Volatility / Trending",
          "params": ", ".join(f"param_number_{j}={j}.0" for j in range(12)),
          "profit_factor": 1.1, "max_drawdown_pct": -5.0} for i in range(60)]}
     big = dr.build_stage2_embed("probe", heavy, source="/mnt/x/s.json")
-    param_fields = [f for f in big["fields"]
-                    if f["name"].startswith(dr.STAGE2_PARAM_FIELD_NAME)]
-    check("a matrix of wide parameter sets still fits Discord's embed limit",
-          dr._embed_size(big) <= dr.MAX_EMBED_TOTAL, str(dr._embed_size(big)))
-    check("every full-parameter field is inside the 1024-character field cap",
-          all(len(f["value"]) <= dr.MAX_FIELD_VALUE for f in param_fields),
-          str([len(f["value"]) for f in param_fields]))
-    check("the block is capped at STAGE2_PARAM_MAX_FIELDS fields",
-          0 < len(param_fields) <= dr.STAGE2_PARAM_MAX_FIELDS)
-    check("and what did not fit is COUNTED on the card, not dropped in "
-          "silence", "further configuration(s) not shown"
-          in param_fields[-1]["value"], param_fields[-1]["value"][-140:])
-    printed = sum(1 for f in param_fields
-                  for line in f["value"].splitlines()
-                  if line.startswith("SYM"))
-    left_out = int(param_fields[-1]["value"]
-                   .split("further configuration(s)")[0].rsplit("_", 1)[-1])
-    check("the count of what was left off matches what was printed",
-          printed + left_out == 60, f"{printed} printed + {left_out} hidden")
+    check("60 configurations of wide parameter sets stay far inside the "
+          "embed limit",
+          dr._embed_size(big) <= dr.MAX_EMBED_TOTAL // 2,
+          str(dr._embed_size(big)))
+    check("...and no parameter field is emitted at all",
+          not [f for f in big["fields"]
+               if f["name"].startswith(dr.STAGE2_PARAM_FIELD_NAME)],
+          str([f["name"] for f in big["fields"]]))
 
-    # Nothing in the block is clipped: that is the whole reason it exists.
-    for field in param_fields:
-        check("no full-parameter line is truncated with an ellipsis",
-              dr.ELLIPSIS not in field["value"])
-
+    # format_stage2_param_fields is retained though the card no longer calls
+    # it - it keeps its own coverage so it is ready if the block ever returns
+    # behind a flag.
     # A budget too small for even one field must not leave the description
     # pointing at a block that is not there.
     starved = dr.format_stage2_param_fields(
