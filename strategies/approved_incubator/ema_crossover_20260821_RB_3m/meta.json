@@ -25,7 +25,7 @@
   "source": "/home/cgrullon/src/trading/strategies/experimental/ema_crossover_20260821.py",
   "source_sha256": "9c290bc1e02d816f675ee2752d856aac563d8ae4f7563b0452fdac597d31857b",
   "promoted_sha256": "9c290bc1e02d816f675ee2752d856aac563d8ae4f7563b0452fdac597d31857b",
-  "promoted_utc": "2026-08-27T13:23:03+00:00",
+  "promoted_utc": "2026-08-28T03:56:33+00:00",
   "costs_included": true,
   "variants_tested": null,
   "metrics_status": "RECORDED \u00b7 locked from dual_metrics_RB.json",
