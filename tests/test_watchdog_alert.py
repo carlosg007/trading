@@ -114,3 +114,122 @@ def test_description_is_truncated_under_the_embed_limit(recorder):
     watchdog.alert("x" * 10_000)
     _, payload = recorder[0]
     assert len(payload["embeds"][0]["description"]) <= 4096
+
+
+# --------------------------------------------------------------------------
+# Market hours and alert debouncing
+#
+# The second failure this module has had: the watchdog fires every two minutes
+# under its timer, and `alert()` was called on EVERY cycle a fault was present.
+# One stale feed therefore produced 30 identical webhooks an hour until somebody
+# fixed it - and across a 49-hour weekend, when the feed is stale because the
+# exchange is shut, roughly 1,470 of them. A channel that is paged that often is
+# a channel nobody reads, which is the same outcome as the alert never arriving.
+# --------------------------------------------------------------------------
+
+from datetime import datetime, timedelta, timezone                 # noqa: E402
+from zoneinfo import ZoneInfo                                      # noqa: E402
+
+import scripts.watchdog as wd                                      # noqa: E402
+
+_ET = ZoneInfo("America/New_York")
+
+
+def _et(text: str) -> datetime:
+    return datetime.fromisoformat(text).replace(tzinfo=_ET)
+
+
+@pytest.mark.parametrize("when,is_open,why", [
+    ("2026-08-28 16:59", True,  "Friday before the 17:00 close"),
+    ("2026-08-28 17:00", False, "the weekend starts AT 17:00, not after it"),
+    ("2026-08-29 09:00", False, "Saturday"),
+    ("2026-08-30 17:59", False, "Sunday, one minute before the reopen"),
+    ("2026-08-30 18:00", True,  "the reopen is inclusive"),
+    ("2026-08-31 17:30", False, "Monday maintenance break"),
+    ("2026-08-31 18:00", True,  "maintenance ends AT 18:00"),
+    ("2026-09-02 02:00", True,  "Wednesday overnight IS a trading session"),
+])
+def test_cme_schedule_boundaries(when, is_open, why):
+    assert wd.market_status(_et(when))[0] is is_open, why
+
+
+def test_a_stale_feed_on_saturday_is_not_a_fault(tmp_path, monkeypatch):
+    """The whole point: closed-market staleness raises nothing."""
+    sent = []
+    monkeypatch.setattr(wd, "alert",
+                        lambda *a, **k: sent.append(k.get("kind")) or True)
+    monkeypatch.setattr(wd, "kill_switch_engaged", lambda: (False, "clear"))
+    monkeypatch.setattr(wd, "check_feed", lambda *a, **k: [])
+    monkeypatch.setattr(wd, "check_state",
+                        lambda p: [{"check": "state", "ok": True, "detail": ""}])
+    # A NEW dict per call: main() marks these in place.
+    monkeypatch.setattr(wd, "check_regime", lambda *a, **k: [
+        {"check": "regime", "ok": False, "detail": "no reading for 3h"}])
+
+    guard = tmp_path / "state.json"
+    for _ in range(5):
+        rc = wd.main(["--now", "2026-08-29T13:00:00+00:00",
+                      "--alert-state-path", str(guard)])
+        assert rc == wd.HEALTHY
+    assert sent == [], "the weekend must not page anybody"
+
+
+def test_kill_switch_is_not_silenced_by_the_weekend(tmp_path, monkeypatch):
+    """Only STALENESS is suppressed. A real fault is real on a Saturday."""
+    monkeypatch.setattr(wd, "alert", lambda *a, **k: True)
+    monkeypatch.setattr(wd, "kill_switch_engaged", lambda: (False, "clear"))
+    monkeypatch.setattr(wd, "check_feed", lambda *a, **k: [])
+    monkeypatch.setattr(wd, "check_regime", lambda *a, **k: [])
+    monkeypatch.setattr(wd, "check_state", lambda p: [
+        {"check": "state", "ok": False, "detail": "1 UNVERIFIED claim"}])
+    rc = wd.main(["--now", "2026-08-29T13:00:00+00:00",
+                  "--alert-state-path", str(tmp_path / "s.json")])
+    assert rc == wd.DEGRADED
+
+
+def test_one_alert_on_the_transition_then_silence():
+    now = datetime(2026, 9, 2, 14, 0, tzinfo=timezone.utc)
+    kind, state = wd.decide_alert({}, True, now)
+    assert kind == "transition"
+    kind, state = wd.decide_alert(state, True, now + timedelta(minutes=2))
+    assert kind is None, "a STATE is not an EVENT; only changes are news"
+    kind, state = wd.decide_alert(state, True, now + timedelta(hours=2))
+    assert kind is None
+
+
+def test_a_persistent_fault_reminds_after_the_throttle():
+    now = datetime(2026, 9, 2, 14, 0, tzinfo=timezone.utc)
+    _, state = wd.decide_alert({}, True, now)
+    kind, state = wd.decide_alert(
+        state, True, now + timedelta(hours=wd.ALERT_REMINDER_HOURS, minutes=1))
+    assert kind == "reminder"
+    kind, _ = wd.decide_alert(state, True,
+                              now + timedelta(hours=wd.ALERT_REMINDER_HOURS,
+                                              minutes=5))
+    assert kind is None, "the reminder resets the clock, it does not open a gate"
+
+
+def test_recovery_is_announced_once():
+    now = datetime(2026, 9, 2, 14, 0, tzinfo=timezone.utc)
+    _, state = wd.decide_alert({}, True, now)
+    kind, state = wd.decide_alert(state, False, now + timedelta(minutes=10))
+    assert kind == "recovery", "a fix must be as audible as the fault"
+    kind, _ = wd.decide_alert(state, False, now + timedelta(minutes=12))
+    assert kind is None
+
+
+def test_unreadable_state_alerts_rather_than_staying_quiet(tmp_path):
+    """Safe direction: one duplicate beats a fault nobody is told about."""
+    broken = tmp_path / "s.json"
+    broken.write_text("{truncated")
+    assert wd.read_alert_state(broken) == {}
+    kind, _ = wd.decide_alert(wd.read_alert_state(broken), True,
+                              datetime.now(timezone.utc))
+    assert kind == "transition"
+
+
+def test_a_missing_last_alert_time_reminds(tmp_path):
+    """An unknown must not be read as 'recently told'."""
+    kind, _ = wd.decide_alert({"degraded": True, "last_alert_at": None}, True,
+                              datetime.now(timezone.utc))
+    assert kind == "reminder"

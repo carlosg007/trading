@@ -41,8 +41,9 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -60,6 +61,142 @@ from realtime.risk_firewall import (arm_kill_switch,              # noqa: E402
                                     kill_switch_engaged)
 
 HEALTHY, DEGRADED, BROKEN = 0, 1, 2
+
+#: CME futures trade nearly around the clock, and the gaps are the point here:
+#: a feed that returns nothing at 02:00 on a Saturday is a CLOSED MARKET, not a
+#: dead feed, and a watchdog that cannot tell them apart pages somebody every
+#: two minutes for 49 hours. New York, not UTC - the schedule is defined in
+#: exchange local time and moves with US daylight saving, so a fixed UTC offset
+#: is right for half the year.
+EXCHANGE_TZ = ZoneInfo("America/New_York")
+#: Friday 17:00 ET until Sunday 18:00 ET.
+WEEKEND_CLOSE_HOUR = 17
+WEEKEND_OPEN_HOUR = 18
+#: Monday-Thursday 17:00-18:00 ET, the daily maintenance break.
+MAINTENANCE_START_HOUR = 17
+MAINTENANCE_END_HOUR = 18
+
+#: How long a persistent DEGRADED state waits before it says so again. The
+#: first alert is immediate; this only governs the REMINDERS, so a fault that
+#: nobody has fixed is still audible without being a stream.
+ALERT_REMINDER_HOURS = 4.0
+
+#: Where the last verdict is remembered. The watchdog is a ONESHOT under a
+#: 2-minute timer, not a resident daemon, so nothing survives in memory between
+#: checks - debouncing that lived in a variable would reset 720 times a day and
+#: alert on every one of them.
+ALERT_STATE_FILE = REPO_ROOT / "data" / "watchdog_alert_state.json"
+
+#: The checks whose failure is a STALENESS claim, and therefore meaningless
+#: while the market is shut. `state` and `kill_switch` are deliberately absent:
+#: an unverified claim or an armed switch is just as real on a Saturday, and
+#: suppressing those would use the weekend to hide a fault that has nothing to
+#: do with the weekend.
+STALENESS_CHECKS = ("regime", "feed")
+
+
+def market_status(now: datetime | None = None) -> tuple[bool, str]:
+    """
+    `(is_open, reason)` for CME futures, in exchange local time.
+
+    Closed windows, both from the CME schedule:
+      * Friday 17:00 ET -> Sunday 18:00 ET
+      * Monday-Thursday 17:00-18:00 ET (daily maintenance)
+
+    The boundaries are half-open at the close and closed at the open - 17:00:00
+    exactly is shut, 18:00:00 exactly is trading - so the two windows meet with
+    no minute belonging to both and none belonging to neither.
+    """
+    now = datetime.now(timezone.utc) if now is None else now
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    local = now.astimezone(EXCHANGE_TZ)
+    dow, hour = local.weekday(), local.hour       # Monday is 0
+
+    if dow == 4 and hour >= WEEKEND_CLOSE_HOUR:
+        return False, "weekend — closed Friday 17:00 ET"
+    if dow == 5:
+        return False, "weekend — Saturday"
+    if dow == 6 and hour < WEEKEND_OPEN_HOUR:
+        return False, "weekend — reopens Sunday 18:00 ET"
+    if dow <= 3 and MAINTENANCE_START_HOUR <= hour < MAINTENANCE_END_HOUR:
+        return False, "daily maintenance break 17:00-18:00 ET"
+    return True, f"open ({local:%a %H:%M} ET)"
+
+
+def read_alert_state(path: Path | None = None) -> dict:
+    """
+    The previous verdict, or an empty dict.
+
+    UNREADABLE STATE IS TREATED AS NO STATE, which makes the next DEGRADED look
+    like a fresh transition and alert. That is the safe direction: the failure
+    is one duplicate alert, where the opposite - inventing a "we already told
+    them" - is a fault that never gets announced at all.
+    """
+    try:
+        return json.loads((path or ALERT_STATE_FILE).read_text())
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {}
+
+
+def write_alert_state(state: dict, path: Path | None = None) -> None:
+    """Remember this verdict. A failed write must not fail the check."""
+    dest = path or ALERT_STATE_FILE
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+    except OSError as exc:
+        print(f"[watchdog] could not persist alert state: {exc}",
+              file=sys.stderr)
+
+
+def decide_alert(previous: dict, degraded: bool, now: datetime,
+                 reminder_hours: float = ALERT_REMINDER_HOURS
+                 ) -> tuple[str | None, dict]:
+    """
+    `(kind, next_state)` where kind is 'transition', 'reminder', 'recovery'
+    or None.
+
+    The whole point is that a STATE is not an EVENT. The old code posted on
+    every cycle a fault was present, so one stale feed produced an alert every
+    two minutes until somebody fixed it - 30 an hour, all of them the same
+    sentence. What an operator needs to be told is that something CHANGED, and
+    then periodically that it still has not.
+    """
+    was_degraded = bool(previous.get("degraded"))
+    last_at = previous.get("last_alert_at")
+    state = {"degraded": degraded,
+             "last_alert_at": last_at,
+             "updated_at": now.isoformat(timespec="seconds")}
+
+    if degraded and not was_degraded:
+        state["last_alert_at"] = now.isoformat(timespec="seconds")
+        return "transition", state
+    if not degraded and was_degraded:
+        state["last_alert_at"] = now.isoformat(timespec="seconds")
+        return "recovery", state
+    if degraded and was_degraded:
+        age = _age_of(last_at, now)
+        # No recorded time for the last alert means it cannot be shown to be
+        # recent, so it reminds. Staying quiet on an unknown would let a
+        # truncated state file silence a live fault indefinitely.
+        if age is None or age >= reminder_hours * 3600.0:
+            state["last_alert_at"] = now.isoformat(timespec="seconds")
+            return "reminder", state
+    return None, state
+
+
+def _age_of(stamp, now: datetime) -> float | None:
+    if not stamp:
+        return None
+    try:
+        when = datetime.fromisoformat(str(stamp))
+    except (TypeError, ValueError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return (now - when).total_seconds()
+
 
 
 def _age_s(stamp) -> float | None:
@@ -172,18 +309,29 @@ def check_state(state_path: str | None) -> list[dict]:
                       f"run — reconcile in NinjaTrader" if claims else ""))}]
 
 
-def alert(message: str, webhook: str | None = None) -> bool:
+def alert(message: str, webhook: str | None = None,
+          kind: str = "transition") -> bool:
     """Post to Discord, or say why not. Never raises: losing the alert must not
-    lose the check that produced it."""
+    lose the check that produced it.
+
+    `kind` picks the heading. A RECOVERY is a different event from a fault and
+    must not arrive wearing the same red title - an operator scanning a channel
+    reads the colour before the words, and "resolved" in amber reads as another
+    page.
+    """
     try:
         from mdlib.env import discord_webhook                      # noqa: PLC0415
         url = webhook or discord_webhook()
         if not url:
             return False
         from backtest.discord_reporter import build_payload, post_embed  # noqa: PLC0415
-        embed = {"title": "🐕 Trading watchdog — DEGRADED",
+        title, color = {
+            "recovery": ("🐕 Trading watchdog — RECOVERED", 0x2ECC71),
+            "reminder": ("🐕 Trading watchdog — STILL DEGRADED", 0xE67E22),
+        }.get(kind, ("🐕 Trading watchdog — DEGRADED", 0xE67E22))
+        embed = {"title": title,
                  "description": f"```\n{message[:3800]}\n```",
-                 "color": 0xE67E22}
+                 "color": color}
         # (webhook, payload) — that ORDER, and build_payload takes ONE embed,
         # not a list. Reversed, `requests.post` was handed the payload dict as
         # its URL and raised AttributeError inside the except below, so every
@@ -223,6 +371,17 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--json", dest="json_out", metavar="PATH")
     ap.add_argument("--quiet", action="store_true",
                     help="do not post an alert")
+    ap.add_argument("--reminder-hours", type=float,
+                    default=ALERT_REMINDER_HOURS,
+                    help=(f"how long a persistent DEGRADED state waits before "
+                          f"saying so again (default {ALERT_REMINDER_HOURS})"))
+    ap.add_argument("--alert-state-path", default=None,
+                    help="where the last verdict is remembered")
+    ap.add_argument("--ignore-market-hours", action="store_true",
+                    help=("check staleness even while the market is shut. For "
+                          "diagnosing the feed out of hours"))
+    ap.add_argument("--now", default=None,
+                    help="ISO timestamp to evaluate the schedule at (testing)")
     args = ap.parse_args(argv)
 
     try:
@@ -240,8 +399,31 @@ def main(argv: list[str] | None = None) -> int:
                     "engaged": engaged,
                     "detail": why or "clear"})
 
+    now = datetime.now(timezone.utc)
+    if args.now:
+        now = datetime.fromisoformat(args.now)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+
+    # MARKET HOURS, applied to the staleness checks ONLY. A feed returning
+    # nothing at 02:00 on a Saturday is a closed exchange, and a bar two days
+    # old at 09:00 on a Sunday is the Friday close doing exactly what it should
+    # - neither is a fault, and both used to page every two minutes for the
+    # whole 49-hour weekend.
+    #
+    # `state` and `kill_switch` are NOT suppressed. An unverified claim or an
+    # armed switch is just as true on a Saturday, and using the weekend to
+    # silence those would hide a fault that has nothing to do with the weekend.
+    is_open, market_reason = market_status(now)
+    if not is_open and not args.ignore_market_hours:
+        for record in results:
+            if record["check"] in STALENESS_CHECKS and not record["ok"]:
+                record["ok"] = True
+                record["market_closed"] = True
+                record["detail"] = f"MARKET_CLOSED ({market_reason}) — {record['detail']}"
+
     failed = [r for r in results if not r["ok"]]
-    stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    stamp = now.isoformat(timespec="seconds")
     for record in results:
         mark = "ok  " if record["ok"] else "FAIL"
         print(f"[{stamp}] {mark} {record['check']:<12} {record['detail']}")
@@ -251,7 +433,21 @@ def main(argv: list[str] | None = None) -> int:
             json.dumps({"at": stamp, "results": results}, indent=2) + "\n",
             encoding="utf-8")
 
+    if not is_open and not args.ignore_market_hours:
+        print(f"[{stamp}] ok   market       {market_reason}")
+
+    state_path = Path(args.alert_state_path) if args.alert_state_path else None
+    kind, next_state = decide_alert(read_alert_state(state_path), bool(failed),
+                                    now, args.reminder_hours)
+
     if not failed:
+        # The recovery notice is the reason this runs on the healthy path too.
+        # A channel that is told about every fault and never about a fix leaves
+        # an operator to infer the fix from silence, which is the same signal
+        # as a watchdog that has stopped running.
+        if kind == "recovery" and not args.quiet:
+            alert(f"All checks passed at {stamp}.", kind="recovery")
+        write_alert_state(next_state, state_path)
         return HEALTHY
 
     summary = "\n".join(f"{r['check']}: {r['detail']}" for r in failed)
@@ -259,8 +455,16 @@ def main(argv: list[str] | None = None) -> int:
         path = arm_kill_switch(f"watchdog: {failed[0]['check']} degraded")
         summary += f"\n\nKILL SWITCH ARMED at {path} — new entries blocked. " \
                    f"Open positions were NOT touched."
-    if not args.quiet:
-        alert(summary)
+    if kind and not args.quiet:
+        if kind == "reminder":
+            summary += (f"\n\nStill degraded. Reminders are throttled to one "
+                        f"every {args.reminder_hours:g}h.")
+        alert(summary, kind=kind)
+    write_alert_state(next_state, state_path)
+    # The EXIT CODE still reports the fault on every cycle. Only the Discord
+    # post is debounced: the timer's status is how `systemctl` and anything
+    # scraping it see the fault, and silencing that would hide it from
+    # everything, not just from the channel.
     return DEGRADED
 
 
