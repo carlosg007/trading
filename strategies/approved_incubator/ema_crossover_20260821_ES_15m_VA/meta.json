@@ -1,0 +1,113 @@
+{
+  "name": "ema_crossover_20260821_ES_15m_VA",
+  "strategy": "ema_crossover_20260821",
+  "symbol": "ES",
+  "version": "A",
+  "description": "Promoted Version A (rule-based baseline).",
+  "symbols": [
+    "ES"
+  ],
+  "timeframe": "15m",
+  "params": {
+    "fast_period": 20,
+    "slow_period": 89,
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": 5.0,
+    "trailing": false
+  },
+  "params_source": "locked from dual_metrics_ES.json",
+  "params_conflict": [],
+  "risk": {
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": 5.0,
+    "trailing": false
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/ema_crossover_20260821.py",
+  "source_sha256": "9c290bc1e02d816f675ee2752d856aac563d8ae4f7563b0452fdac597d31857b",
+  "promoted_sha256": "9c290bc1e02d816f675ee2752d856aac563d8ae4f7563b0452fdac597d31857b",
+  "promoted_utc": "2026-08-29T21:04:35+00:00",
+  "costs_included": true,
+  "variants_tested": null,
+  "metrics_status": "RECORDED \u00b7 locked from dual_metrics_ES.json",
+  "metrics": {
+    "sharpe": 0.48546078165779805,
+    "sortino": 0.9388845290686796,
+    "calmar": 0.2534835266733241,
+    "profit_factor": 1.2323833676782188,
+    "win_rate": 0.4713763702801462,
+    "max_drawdown_pct": -9.47330479247256,
+    "total_return_pct": 48.777319999998724,
+    "annualized_return_pct": 2.4013267080472467,
+    "trade_count": 821,
+    "total_pnl": 48777.31999999915,
+    "total_costs": 24285.180000000873,
+    "final_equity": 148777.31999999873,
+    "n_days": 4219,
+    "start": "2013-01-02 11:00:00+00:00",
+    "end": "2026-08-07 20:45:00+00:00",
+    "bars": 306692,
+    "initial_capital": 100000.0
+  },
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "PASS",
+    "gate2": "FAIL",
+    "gate3": "PASS",
+    "gate_regime": "PASS",
+    "gate_ruin": "PASS"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/ema_crossover_20260821/gate_audit_ES_15m.json",
+    "audit_sha256": "d7e34a15a6afc59282e388a49dc05601026ce9c9bcd22fae874e73ad70a9f69c",
+    "audit_symbol": "ES",
+    "audit_timeframe": "15m",
+    "target_quadrant": "Q1",
+    "target_regime": "High Volatility / Trending",
+    "audit_generated_utc": "2026-08-29T20:38:29+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "fast_period": 20,
+      "slow_period": 89,
+      "sl_atr_mult": 2.0,
+      "tp_atr_mult": 5.0,
+      "trailing": false
+    },
+    "params_source": "stage 2 winner (best_params_ES_15m.json)",
+    "variants_tested": 108,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "NOT EVALUATED",
+    "agrees_with_snapshot": false
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [],
+  "notes": ""
+}
