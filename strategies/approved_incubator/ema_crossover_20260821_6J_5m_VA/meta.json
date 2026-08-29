@@ -1,0 +1,113 @@
+{
+  "name": "ema_crossover_20260821_6J_5m_VA",
+  "strategy": "ema_crossover_20260821",
+  "symbol": "6J",
+  "version": "A",
+  "description": "Promoted Version A (rule-based baseline).",
+  "symbols": [
+    "6J"
+  ],
+  "timeframe": "5m",
+  "params": {
+    "fast_period": 20,
+    "slow_period": 89,
+    "sl_atr_mult": 2.5,
+    "tp_atr_mult": 5.0,
+    "trailing": false
+  },
+  "params_source": "locked from dual_metrics_6J.json",
+  "params_conflict": [],
+  "risk": {
+    "sl_atr_mult": 2.5,
+    "tp_atr_mult": 5.0,
+    "trailing": false
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/ema_crossover_20260821.py",
+  "source_sha256": "9c290bc1e02d816f675ee2752d856aac563d8ae4f7563b0452fdac597d31857b",
+  "promoted_sha256": "9c290bc1e02d816f675ee2752d856aac563d8ae4f7563b0452fdac597d31857b",
+  "promoted_utc": "2026-08-29T21:04:09+00:00",
+  "costs_included": true,
+  "variants_tested": null,
+  "metrics_status": "RECORDED \u00b7 locked from dual_metrics_6J.json",
+  "metrics": {
+    "sharpe": -1.3624612823461941,
+    "sortino": -1.8803411847942473,
+    "calmar": -0.07250925207387254,
+    "profit_factor": 0.6778390924774054,
+    "win_rate": 0.31954887218045114,
+    "max_drawdown_pct": -38.94709745631506,
+    "total_return_pct": -38.09718000000431,
+    "annualized_return_pct": -2.824024907005629,
+    "trade_count": 1596,
+    "total_pnl": -38097.18000000329,
+    "total_costs": 31172.180000003216,
+    "final_equity": 61902.81999999569,
+    "n_days": 4219,
+    "start": "2013-01-02 11:00:00+00:00",
+    "end": "2026-08-07 20:55:00+00:00",
+    "bars": 951224,
+    "initial_capital": 100000.0
+  },
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "FAIL",
+    "gate2": "FAIL",
+    "gate3": "PASS",
+    "gate_regime": "PASS",
+    "gate_ruin": "PASS"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/ema_crossover_20260821/gate_audit_6J_5m.json",
+    "audit_sha256": "0335eaff9c8986bb9202c90863065ab837cf3528ed717f011c12eb052f4223f9",
+    "audit_symbol": "6J",
+    "audit_timeframe": "5m",
+    "target_quadrant": "Q1",
+    "target_regime": "High Volatility / Trending",
+    "audit_generated_utc": "2026-08-29T21:00:24+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "fast_period": 20,
+      "slow_period": 89,
+      "sl_atr_mult": 2.5,
+      "tp_atr_mult": 5.0,
+      "trailing": false
+    },
+    "params_source": "stage 2 winner (best_params_6J_5m.json)",
+    "variants_tested": 108,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "FAIL",
+    "agrees_with_snapshot": false
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [],
+  "notes": ""
+}
