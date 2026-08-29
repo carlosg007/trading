@@ -695,6 +695,34 @@ def test_duplicate_guard(tmp: Path) -> None:
           not unwritable.exists())
 
 
+def test_handoff_version_fields() -> None:
+    print("\n12. The version a survivor was carried by, spelled for readers")
+    from backtest.baseline import surviving_pairs_from
+
+    def pair(version):
+        return surviving_pairs_from([{
+            "symbol": "NQ", "timeframe": "1h", "regime_version": version,
+            "survived": True, "optimal_regime": REGIMES[0],
+            "optimal_quadrant": "Q1", "regime_pf": 1.1,
+            "regime_trade_count": 100, "regime_win_rate": 50.0,
+            "regime_net_pnl": 1.0, "regime_score": 1.0,
+            "regime_sample_floor": 50, "regime_scores": {},
+            "secondary_regimes": []}])[0]
+
+    b, a = pair("B"), pair("A")
+    check("stage1_version carries the same letter under the name every "
+          "downstream reader already uses",
+          (b["stage1_version"], a["stage1_version"]) == ("B", "A"))
+    check("ml_filtered states the fact rather than making a reader infer it "
+          "from the version letter",
+          (b["ml_filtered"], a["ml_filtered"]) == (True, False))
+    check("the letter is NOT written as 'VB' - scan.py decides whether to run "
+          "the ML confirmation from this value, and a display prefix there "
+          "would send a Version B survivor to Stage 3 with none on file",
+          b["version"] == "B" and b["stage1_version"] == "B",
+          f"{b['version']} / {b['stage1_version']}")
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="stage1charter_") as td:
         tmp = Path(td)
@@ -710,6 +738,7 @@ def main() -> int:
         test_cli(tmp, blob)
         test_survivors_csv(tmp)
         test_duplicate_guard(tmp)
+        test_handoff_version_fields()
 
     print("\n" + "=" * 60)
     if _failures:

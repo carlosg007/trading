@@ -614,6 +614,25 @@ def test_stage2_card(blob: dict) -> None:
           starved == ([], 1), str(starved))
 
 
+def test_stage1_version_spellings() -> None:
+    print("\nthe Version B trigger cannot be disarmed by a spelling")
+    from backtest.scan import stage1_version_of
+
+    for scope, want, why in [
+        ({"version": "B"}, "B", "what surviving_assets.json has always written"),
+        ({"version": "VB"}, "B", "a display prefix must not disarm a gate"),
+        ({"stage1_version": "B"}, "B", "the name every reader downstream uses"),
+        ({"stage1_version": "VB"}, "B", "both, together"),
+        ({"version": " b "}, "B", "whitespace and case are not a version"),
+        ({"version": "A"}, "A", None),
+        ({"version": "VA"}, "A", None),
+        ({}, "", "absent is NOT Version A - it leaves the pass to --ml"),
+        (None, "", "and neither is a missing scope"),
+    ]:
+        check(f"{str(scope):26} -> {want!r}" + (f"  ({why})" if why else ""),
+              stage1_version_of(scope) == want, stage1_version_of(scope))
+
+
 def test_baseline_pf_carry() -> None:
     print("\nStage 1's PF carried into the matrix, with its scope")
     from backtest.scan import summary_matrix_rows
@@ -724,6 +743,7 @@ def main() -> int:
         blob = test_summary_handoff(tmp)
         test_stage2_card(blob)
         test_baseline_pf_carry()
+        test_stage1_version_spellings()
         test_mode_resolution()
         test_cli(tmp, blob)
 

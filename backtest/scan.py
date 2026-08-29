@@ -2027,6 +2027,32 @@ def format_scan_summary(scan: dict, top: int = 5) -> str:
 # --------------------------------------------------------------------------
 # Version B confirmation of the WINNER
 # --------------------------------------------------------------------------
+def stage1_version_of(scope: dict | None) -> str:
+    """
+    The Stage 1 version letter - "A", "B" or "" - from either spelling.
+
+    A FUNCTION rather than an inline comparison, because what it guards is not
+    obvious at the call site. `_resolve_ml_confirmation` forces the ML pass when
+    this returns "B", so anything that makes it return something else sends a
+    Version B survivor to Stage 3 with no confirmation on file - the silent
+    handoff failure that function's docstring records having closed.
+
+    Three spellings of the same fact, all accepted:
+      * `version`, which is what surviving_assets.json has always written
+      * `stage1_version`, the name every reader downstream uses
+      * a "V" display prefix - "VB" is the same claim as "B", and a formatter's
+        choice must not be able to disarm a gate
+
+    An absent or unrecognised value returns "", which leaves the ML pass to
+    `--ml`. That is the honest answer: not recorded is not the same as
+    Version A, and a handoff too old to carry the field must not be read as
+    one that recorded a rules-only survivor.
+    """
+    raw = ((scope or {}).get("version")
+           or (scope or {}).get("stage1_version") or "")
+    return str(raw).strip().upper().removeprefix("V")
+
+
 def _resolve_ml_confirmation(args, scope: dict | None, scan: dict,
                              strategy_path, symbol: str, tf: str,
                              cfg, bars, base_params: dict,
@@ -2039,7 +2065,7 @@ def _resolve_ml_confirmation(args, scope: dict | None, scan: dict,
     this work exists to close, and an absent key is how it stayed invisible.
     """
     wanted = bool(getattr(args, "ml", False))
-    stage1_version = str((scope or {}).get("version") or "").strip().upper()
+    stage1_version = stage1_version_of(scope)
     if getattr(args, "no_stage1_ml", False):
         if not wanted:
             return _ml_skipped("--no-stage1-ml")

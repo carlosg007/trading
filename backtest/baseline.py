@@ -1398,6 +1398,24 @@ def surviving_pairs_from(rows: list[dict]) -> list[dict]:
              # and a pair that only B cleared is a different claim from one
              # the rules carried on their own.
              "version": r.get("regime_version"),
+             # `stage1_version` is the SAME value under the name every reader
+             # downstream already uses - scan.py's matrix column, the Stage 2
+             # card, best_params_<SYMBOL>_<TF>.json. Spelled here so a consumer
+             # does not have to know that the handoff calls it `version` and
+             # everything after it calls it `stage1_version`.
+             #
+             # DELIBERATELY "A"/"B" AND NOT "VA"/"VB". scan.py decides whether
+             # to run the ML confirmation with `stage1_version == "B"`, so a
+             # value of "VB" would compare False and a Version B survivor would
+             # reach Stage 3 with no confirmation on file - which is exactly the
+             # handoff bug scan.py's `_run_ml_confirmation` docstring records
+             # having closed. The prefix is a display choice and belongs in the
+             # formatter, never in the key a gate reads.
+             "stage1_version": r.get("regime_version"),
+             # Stated rather than inferred from the version letter. "B carried
+             # this pair" and "the ML filter was applied" are the same fact
+             # today and a reader should not have to know that to act on it.
+             "ml_filtered": str(r.get("regime_version") or "").upper() == "B",
              "status": "PROMOTED",
              "optimal_regime": r["optimal_regime"],
              "quadrant": r.get("optimal_quadrant"),
