@@ -124,6 +124,7 @@ if str(REPO) not in sys.path:
 
 from backtest.run import DEFAULT_TFS, TF_GROUPS  # noqa: E402
 from backtest.pipeline import (  # noqa: E402
+    ML_THRESHOLD_DEFAULT,
     CHARTER_IS_START,
     CHARTER_IS_END,
     HOLDOUT_START,
@@ -225,18 +226,21 @@ def check_in_sample_window(start: str | None, end: str | None) -> None:
 # ---------------------------------------------------------------------------
 
 def stage1_cmd(strat: str, symbols: str, tfs: Sequence[str], start: str,
-               end: str, out_dir: str | None = None) -> list[str]:
+               end: str, out_dir: str | None = None,
+               ml_threshold: float = ML_THRESHOLD_DEFAULT) -> list[str]:
     """Stage 1: the regime screen, over every requested timeframe at once."""
     cmd = _py() + [str(STAGE_SCRIPTS[1]), "--strat", strat,
                    "--symbols", symbols, "--tf", ",".join(tfs),
-                   "--start", start, "--end", end]
+                   "--start", start, "--end", end,
+                   "--ml-threshold", str(ml_threshold)]
     if out_dir:
         cmd += ["--out-dir", out_dir]
     return cmd
 
 
 def stage2_cmd(strat: str, start: str, end: str,
-               out_dir: str | None = None) -> list[str]:
+               out_dir: str | None = None,
+               ml_threshold: float = ML_THRESHOLD_DEFAULT) -> list[str]:
     """
     Stage 2: the sweep, over Stage 1's EXACT surviving pairs.
 
@@ -244,8 +248,13 @@ def stage2_cmd(strat: str, start: str, end: str,
     That omission IS the inheritance, and adding either would replace the
     ragged survivor list with the cross product of two axes.
     """
+    # --ml-threshold is NOT a scope flag. The omission of --symbols and --tf
+    # is what makes Stage 2 inherit Stage 1's ragged survivor list; a
+    # threshold constrains no pair and adding it changes nothing about which
+    # configurations are swept.
     cmd = _py() + [str(STAGE_SCRIPTS[2]), "--strat", strat,
-                   "--start", start, "--end", end]
+                   "--start", start, "--end", end,
+                   "--ml-threshold", str(ml_threshold)]
     if out_dir:
         cmd += ["--out-dir", out_dir]
     return cmd
@@ -255,7 +264,8 @@ def stage3_cmd(strat: str, tf: str, is_start: str, is_end: str,
                holdout_start: str = HOLDOUT_START,
                holdout_end: str | None = None,
                promote: bool = True,
-               out_dir: str | None = None) -> list[str]:
+               out_dir: str | None = None,
+               ml_threshold: float = ML_THRESHOLD_DEFAULT) -> list[str]:
     """
     Stage 3: certify one timeframe against the holdout.
 
@@ -267,7 +277,8 @@ def stage3_cmd(strat: str, tf: str, is_start: str, is_end: str,
     """
     cmd = _py() + [str(STAGE_SCRIPTS[3]), "--strat", strat, "--tf", tf,
                    "--is-start", is_start, "--is-end", is_end,
-                   "--holdout-start", holdout_start]
+                   "--holdout-start", holdout_start,
+                   "--ml-threshold", str(ml_threshold)]
     if holdout_end:
         cmd += ["--holdout-end", holdout_end]
     if not promote:
@@ -278,7 +289,8 @@ def stage3_cmd(strat: str, tf: str, is_start: str, is_end: str,
 
 
 def stage4_cmd(strat: str, tf: str, start: str, end: str,
-               out_dir: str | None = None) -> list[str]:
+               out_dir: str | None = None,
+               ml_threshold: float = ML_THRESHOLD_DEFAULT) -> list[str]:
     """
     Stage 4: the lifecycle run for one timeframe.
 
@@ -287,7 +299,23 @@ def stage4_cmd(strat: str, tf: str, start: str, end: str,
     than defaulted for the reason given in the module docstring.
     """
     cmd = _py() + [str(STAGE_SCRIPTS[4]), "--strat", strat, "--tf", tf,
-                   "--start", start, "--end", end]
+                   "--start", start, "--end", end,
+                   # --ml IS REQUIRED HERE, and its absence was a silent
+                   # pipeline break. verify_full's --ml is store_true and this
+                   # command never passed it, so Stage 4 wrote
+                   # `version_b: null` into dual_metrics_<SYM>.json - and
+                   # Stage 5, handed a Version B that Stage 3 had certified,
+                   # looked for the `version_b` block, did not find it, and
+                   # died in load_metrics with "carries no `version_b` block".
+                   # On sma_momentum_crossover_20260818 that lost all NINE
+                   # certified Version B packages: promoted 17, failed 9.
+                   "--ml",
+                   # At the SAME bar Stage 1 screened and Stage 3 certified
+                   # at. Stage 4's numbers are what promote.py locks into the
+                   # promoted module, so a filter measured here at a different
+                   # threshold would deploy metrics for a Version B nobody
+                   # certified.
+                   "--ml-threshold", str(ml_threshold)]
     if out_dir:
         cmd += ["--out-dir", out_dir]
     return cmd
@@ -803,6 +831,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--end", default=CHARTER_IS_END,
                    help=f"In-sample end (default {CHARTER_IS_END}). Refused if "
                         f"it reaches {HOLDOUT_START}.")
+    p.add_argument("--ml-threshold", type=float,
+                   default=ML_THRESHOLD_DEFAULT,
+                   help=(f"Version B: P(win) at or above which an entry is "
+                         f"kept (default {ML_THRESHOLD_DEFAULT}). Forwarded "
+                         f"to every stage, so one run cannot screen, certify "
+                         f"and measure at three different bars"))
     p.add_argument("--report-discord", action="store_true",
                    help="Post the Discord card after Stages 1, 2 and 3")
     p.add_argument("--auto-promote", action="store_true",
@@ -914,11 +948,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         post_card(strat, stage, out_dir=out_dir, dry_run=dry)
 
     try:
-        run_step(stage1_cmd(strat, args.symbols, tfs, args.start, args.end, out_dir),
+        run_step(stage1_cmd(strat, args.symbols, tfs, args.start, args.end,
+                            out_dir, args.ml_threshold),
                  "STAGE 1 · baseline.py · regime screen", dry_run=dry)
         discord(1)
 
-        run_step(stage2_cmd(strat, args.start, args.end, out_dir),
+        run_step(stage2_cmd(strat, args.start, args.end, out_dir,
+                            args.ml_threshold),
                  "STAGE 2 · scan.py · parameter sweep over Stage 1's exact pairs",
                  dry_run=dry)
         discord(2)
@@ -966,7 +1002,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         for tf in certify_tfs:
             run_step(stage3_cmd(strat, tf, args.start, args.end,
-                                out_dir=out_dir),
+                                out_dir=out_dir,
+                                ml_threshold=args.ml_threshold),
                      f"STAGE 3 · audit_gates.py · certify {tf} on the holdout",
                      dry_run=dry)
         # The card is posted AFTER Stage 3 has run at every timeframe, because
@@ -999,7 +1036,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                       f"{len(b_pairs)} pair(s).", flush=True)
 
         for tf in certify_tfs:
-            run_step(stage4_cmd(strat, tf, args.start, _today(), out_dir),
+            run_step(stage4_cmd(strat, tf, args.start, _today(), out_dir,
+                                args.ml_threshold),
                      f"STAGE 4 · verify_full.py · lifecycle {tf}", dry_run=dry)
         # Card 4 after every timeframe, for the same reason Card 3 waits: it
         # reads ONE run's artifacts directory and defaults to the newest.

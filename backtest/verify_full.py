@@ -137,7 +137,8 @@ from backtest.engine import BacktestConfig, round_turn_cost        # noqa: E402
 from backtest.event_calendar import (add_filter_args,              # noqa: E402
                                      describe_filters,
                                      filter_config_kwargs)
-from backtest.pipeline import (BEST_PARAMS_FILE, VERIFY_FILE,      # noqa: E402
+from backtest.pipeline import (ML_THRESHOLD_DEFAULT,
+                               BEST_PARAMS_FILE, VERIFY_FILE,      # noqa: E402
                                next_step, pipeline_dir, read_stage,
                                stage_banner, write_stage)
 from backtest.profiler import (REGIME_TO_QUADRANT, REGIMES,        # noqa: E402
@@ -642,7 +643,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Use the module's DEFAULT_PARAMS instead of Stage 2's "
                         "winner")
     p.add_argument("--ml", action="store_true", help="Also run Version B")
-    p.add_argument("--threshold", type=float, default=0.50)
+    p.add_argument("--ml-threshold", "--threshold", dest="threshold",
+                   type=float, default=ML_THRESHOLD_DEFAULT,
+                   help=(f"Version B: P(win) at or above which an entry is "
+                         f"kept (default {ML_THRESHOLD_DEFAULT}). Stage 3 "
+                         f"certifies at this bar and promote.py embeds it, so "
+                         f"a different value here measures a filter nobody "
+                         f"certified"))
     p.add_argument("--capital", type=float, default=100_000.0)
     p.add_argument("--contracts", type=int, default=1)
     p.add_argument("--slippage-ticks", type=float, default=1.0)

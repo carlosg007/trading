@@ -723,6 +723,49 @@ def test_defaults_are_the_charter(tmp: Path) -> None:
           flag_value(s4, "--end") is not None)
 
 
+def test_stage4_runs_version_b() -> None:
+    print("\nStage 4 runs Version B, at the bar Stage 3 certified")
+
+    cmd = rp.stage4_cmd("demo", "1h", "2013-01-01", "2026-08-29")
+    check("--ml is passed to verify_full. Its absence was a SILENT pipeline "
+          "break: verify_full's --ml is store_true, so Stage 4 wrote "
+          "version_b: null, and Stage 5 - handed a Version B that Stage 3 had "
+          "certified - died in load_metrics with 'carries no version_b "
+          "block'. sma_momentum_crossover_20260818 lost all nine certified "
+          "Version B packages that way: promoted 17, failed 9",
+          "--ml" in cmd, " ".join(cmd))
+
+    check("...and the threshold travels with it, so Stage 4 measures the "
+          "filter at the bar Stage 1 screened and Stage 3 certified at",
+          "--ml-threshold" in cmd
+          and cmd[cmd.index("--ml-threshold") + 1] == str(
+              rp.ML_THRESHOLD_DEFAULT), " ".join(cmd))
+
+    over = rp.stage4_cmd("demo", "1h", "2013-01-01", "2026-08-29",
+                         ml_threshold=0.55)
+    check("...an override reaching Stage 4 too - one run must not screen, "
+          "certify and measure at three different bars",
+          over[over.index("--ml-threshold") + 1] == "0.55", " ".join(over))
+
+    for name, built in (
+            ("stage 1", rp.stage1_cmd("demo", "NQ", ["1h"], "2013-01-01",
+                                      "2022-12-31", None, 0.55)),
+            ("stage 2", rp.stage2_cmd("demo", "2013-01-01", "2022-12-31",
+                                      None, 0.55)),
+            ("stage 3", rp.stage3_cmd("demo", "1h", "2013-01-01",
+                                      "2022-12-31", ml_threshold=0.55)),
+            ("stage 4", over)):
+        check(f"{name} carries the same override",
+              built[built.index("--ml-threshold") + 1] == "0.55",
+              " ".join(built))
+
+    check("Stage 2 still inherits its pairs by OMITTING --symbols and --tf - "
+          "a threshold constrains no pair, so adding it changes nothing "
+          "about which configurations are swept",
+          "--symbols" not in rp.stage2_cmd("demo", "a", "b")
+          and "--tf" not in rp.stage2_cmd("demo", "a", "b"))
+
+
 def main() -> int:
     print("=" * 60)
     print("  backtest/run_pipeline.py - the unified orchestrator")
@@ -730,6 +773,7 @@ def main() -> int:
 
     test_window_guard()
     test_stage1_cmd()
+    test_stage4_runs_version_b()
     test_stage2_cmd_inherits_exact_pairs()
     test_stage3_cmd_window_flags()
     test_stage4_cmd()
