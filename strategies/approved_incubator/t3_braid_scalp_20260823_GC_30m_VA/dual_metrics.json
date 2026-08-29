@@ -1,0 +1,850 @@
+{
+  "meta": {
+    "strategy": "t3_braid_scalp_20260823",
+    "strategy_path": "/home/cgrullon/src/trading/strategies/experimental/t3_braid_scalp_20260823.py",
+    "params": {
+      "t3_period": 5,
+      "t3_vfactor": 0.7,
+      "braid_fast": 3,
+      "braid_slow": 7,
+      "stiffness_period": 20,
+      "stiffness_threshold": 45.0,
+      "use_t3_filter": true,
+      "use_braid_filter": true,
+      "use_stiffness_filter": true,
+      "use_news_filter": false,
+      "sl_atr_mult": 1.5,
+      "tp_atr_mult": 3.0,
+      "trailing": false
+    },
+    "symbol": "GC",
+    "timeframe": "30m",
+    "bars": 159393,
+    "start": "2013-01-01 23:00:00+00:00",
+    "end": "2026-08-07 20:30:00+00:00",
+    "costs_included": true,
+    "initial_capital": 100000.0,
+    "ml_threshold": 0.48,
+    "ml_evaluated": true,
+    "ml_features": [
+      "t3_slope",
+      "braid_hist",
+      "stiffness",
+      "atr_norm",
+      "hour_et"
+    ],
+    "ml_refit": {
+      "long": {
+        "direction": "long",
+        "candidates": 3656,
+        "fits": 52,
+        "train_rows_max": 3434,
+        "refit_growth": 0.1,
+        "max_train_rows": 50000,
+        "threads": 1,
+        "elapsed_s": 1.423
+      },
+      "short": {
+        "direction": "short",
+        "candidates": 3650,
+        "fits": 52,
+        "train_rows_max": 3434,
+        "refit_growth": 0.1,
+        "max_train_rows": 50000,
+        "threads": 1,
+        "elapsed_s": 1.417
+      }
+    },
+    "logic": {
+      "concept": "An intraday scalp that only ever trades WITH a trend it can already see, in three layers, each removing a different way a scalp bleeds. The T3 baseline \u2014 a six-fold smoothed average that turns faster than a plain moving average of the same length without the lag that makes a slow average useless on a scalp \u2014 decides which side is permitted at all: longs only above a rising T3, shorts only below a falling one, so a counter-trend bounce is never bought. The Braid histogram, the gap between a fast and a slow average of the close, is the timing: it must be on the right side of zero AND pulling away from its own smoothing, which is the difference between momentum that exists and momentum that is fading. The Stiffness Index is the veto: it counts what proportion of the last 20 closes moved in the direction being traded, and refuses the trade below 45.0 percent \u2014 a market that alternates up and down closes will satisfy the first two layers repeatedly and stop out on every one of them. EACH LAYER IS SWITCHABLE and this run used T3 filter=True, Braid filter=True, Stiffness filter=True. Every layer can only REMOVE bars from the set the strategy is PERMITTED to trade on \u2014 but not necessarily remove trades, and a layer switched on can leave MORE entries than it found: the entry fires where the confluence starts, so breaking one long permitted stretch into two creates a second start. Judge a layer by the trade list, never by the count. The short rules are the long rules mirrored throughout.",
+      "entry": "The trade fires on the bar where ALL of the active conditions below first hold together, and not again until at least one of them has failed \u2014 one entry per episode, not one per bar. Each condition applies ONLY IF ITS TOGGLE IS TRUE; a toggle set to False means that condition was not checked at all, not that it happened to pass. (1) use_t3_filter=True: for a long, the close above the Tillson T3 (5, vfactor 0.7) and the T3 itself higher than on the previous bar; for a short, the close below it and the T3 lower. (2) use_braid_filter=True: for a long, the Braid histogram \u2014 the fast EMA (3) minus the slow EMA (7) of the close \u2014 above zero AND above its own 14-period smoothing; for a short, below zero AND below it. (3) use_stiffness_filter=True: at least 45.0 percent of the last 20 close-to-close changes moving the way the trade is going \u2014 up for a long, down for a short. (4) use_news_filter=False: when True, a trigger whose FILL bar lands within 30 minutes either side of a scheduled US macro release is dropped. Only one position is held at a time and it is never reversed on the spot \u2014 a short trigger while the long is open is ignored, and vice versa. The fill is the next bar's open.",
+      "exit": "Exit at whichever comes first, and the rules are mirrored for a short. (1) A stop 1.5 x ATR 14 away from the fill price \u2014 below it on a long, above it on a short \u2014 with trailing=False, where True means it follows the best price reached since the fill (the high on a long, the low on a short) and never widens, and False means it sits fixed that far from the fill. (2) A take-profit 3.0 x ATR 14 from the fill price \u2014 above it on a long, below it on a short \u2014 where None means NO take-profit is modelled at all. THERE IS NO THIRD EXIT: the position is not closed when the confluence breaks, when the T3 slope rolls over, or at the end of the session, so despite the name this scalp carries positions overnight and over weekends. Both distances are frozen at the ATR measured on the SIGNAL bar and are never re-measured. Neither is an ORDER: each is detected on the bar that breaches it and filled at the NEXT bar's open, so the realised loss on a stop is not 1.5 x ATR."
+    }
+  },
+  "comparison": {
+    "ml_evaluated": true,
+    "entries_a": 3656,
+    "entries_b": 390,
+    "entries_suppressed": 3266,
+    "sharpe_delta": -0.1542806560089215,
+    "b_beats_a": false
+  },
+  "version_a": {
+    "metrics": {
+      "ok": true,
+      "ruined": false,
+      "final_equity": 266863.099999983,
+      "total_pnl": 166863.09999998572,
+      "gross_pnl": 346419.99999999854,
+      "total_costs": 179556.90000001286,
+      "total_return_pct": 166.86309999998298,
+      "annualized_return_pct": 6.038145997469124,
+      "sharpe": 0.4082706728592301,
+      "sortino": 0.731061701385756,
+      "calmar": 0.06097792087011603,
+      "metrics_basis": {
+        "frequency": "daily_close",
+        "annualization_factor": 252,
+        "risk_free_rate": 0.0,
+        "n_days": 4219
+      },
+      "max_drawdown_pct": -99.02184120594197,
+      "win_rate": 0.356331279945243,
+      "profit_factor": 1.0533096144566654,
+      "trade_count": 7305,
+      "long_trades": 3656,
+      "short_trades": 3649,
+      "breach": {},
+      "n_days": 4219,
+      "dow_breakdown": [
+        {
+          "day": "Mon",
+          "weekday": 0,
+          "trades": 1372,
+          "net_pnl": -5793.760000003507,
+          "gross_win": 613289.1599999988,
+          "gross_loss": 619082.9200000023,
+          "win_rate": 0.3629737609329446,
+          "avg_pnl": -4.2228571428596995,
+          "profit_factor": 0.9906413829023042,
+          "pct_of_trades": 18.781656399726216,
+          "pct_of_net_pnl": -3.4721637078563226
+        },
+        {
+          "day": "Tue",
+          "weekday": 1,
+          "trades": 1480,
+          "net_pnl": 76281.59999999736,
+          "gross_win": 658156.3400000001,
+          "gross_loss": 581874.7400000028,
+          "win_rate": 0.3560810810810811,
+          "avg_pnl": 51.54162162161984,
+          "profit_factor": 1.1310962562148632,
+          "pct_of_trades": 20.26009582477755,
+          "pct_of_net_pnl": 45.71508020647099
+        },
+        {
+          "day": "Wed",
+          "weekday": 2,
+          "trades": 1535,
+          "net_pnl": 12759.699999997521,
+          "gross_win": 639647.2599999998,
+          "gross_loss": 626887.5600000022,
+          "win_rate": 0.36026058631921826,
+          "avg_pnl": 8.31250814332086,
+          "profit_factor": 1.0203540488185754,
+          "pct_of_trades": 21.013004791238878,
+          "pct_of_net_pnl": 7.64680747271183
+        },
+        {
+          "day": "Thu",
+          "weekday": 3,
+          "trades": 1542,
+          "net_pnl": -10392.360000003304,
+          "gross_win": 666718.4799999986,
+          "gross_loss": 677110.8400000017,
+          "win_rate": 0.3527885862516213,
+          "avg_pnl": -6.739533073932104,
+          "profit_factor": 0.9846519072121145,
+          "pct_of_trades": 21.1088295687885,
+          "pct_of_net_pnl": -6.22807559011201
+        },
+        {
+          "day": "Fri",
+          "weekday": 4,
+          "trades": 1368,
+          "net_pnl": 97074.55999999767,
+          "gross_win": 718111.5999999989,
+          "gross_loss": 621037.0400000014,
+          "win_rate": 0.3508771929824561,
+          "avg_pnl": 70.96093567251292,
+          "profit_factor": 1.156310419101568,
+          "pct_of_trades": 18.72689938398357,
+          "pct_of_net_pnl": 58.17616956655245
+        },
+        {
+          "day": "Sun",
+          "weekday": 6,
+          "trades": 8,
+          "net_pnl": -3066.64,
+          "gross_win": 1015.4200000000292,
+          "gross_loss": 4082.060000000029,
+          "win_rate": 0.125,
+          "avg_pnl": -383.33,
+          "profit_factor": 0.24875185568071562,
+          "pct_of_trades": 0.10951403148528405,
+          "pct_of_net_pnl": -1.8378179477669194
+        }
+      ],
+      "entry_filters": {},
+      "meta": {
+        "strategy": "t3_braid_scalp_20260823",
+        "strategy_path": "/home/cgrullon/src/trading/strategies/experimental/t3_braid_scalp_20260823.py",
+        "params": {
+          "t3_period": 5,
+          "t3_vfactor": 0.7,
+          "braid_fast": 3,
+          "braid_slow": 7,
+          "stiffness_period": 20,
+          "stiffness_threshold": 45.0,
+          "use_t3_filter": true,
+          "use_braid_filter": true,
+          "use_stiffness_filter": true,
+          "use_news_filter": false,
+          "sl_atr_mult": 1.5,
+          "tp_atr_mult": 3.0,
+          "trailing": false
+        },
+        "symbol": "GC",
+        "timeframe": "30m",
+        "bars": 159393,
+        "start": "2013-01-01 23:00:00+00:00",
+        "end": "2026-08-07 20:30:00+00:00",
+        "costs_included": true,
+        "initial_capital": 100000.0,
+        "ml_threshold": 0.48,
+        "ml_evaluated": true,
+        "ml_features": [
+          "t3_slope",
+          "braid_hist",
+          "stiffness",
+          "atr_norm",
+          "hour_et"
+        ],
+        "ml_refit": {
+          "long": {
+            "direction": "long",
+            "candidates": 3656,
+            "fits": 52,
+            "train_rows_max": 3434,
+            "refit_growth": 0.1,
+            "max_train_rows": 50000,
+            "threads": 1,
+            "elapsed_s": 1.423
+          },
+          "short": {
+            "direction": "short",
+            "candidates": 3650,
+            "fits": 52,
+            "train_rows_max": 3434,
+            "refit_growth": 0.1,
+            "max_train_rows": 50000,
+            "threads": 1,
+            "elapsed_s": 1.417
+          }
+        },
+        "logic": {
+          "concept": "An intraday scalp that only ever trades WITH a trend it can already see, in three layers, each removing a different way a scalp bleeds. The T3 baseline \u2014 a six-fold smoothed average that turns faster than a plain moving average of the same length without the lag that makes a slow average useless on a scalp \u2014 decides which side is permitted at all: longs only above a rising T3, shorts only below a falling one, so a counter-trend bounce is never bought. The Braid histogram, the gap between a fast and a slow average of the close, is the timing: it must be on the right side of zero AND pulling away from its own smoothing, which is the difference between momentum that exists and momentum that is fading. The Stiffness Index is the veto: it counts what proportion of the last 20 closes moved in the direction being traded, and refuses the trade below 45.0 percent \u2014 a market that alternates up and down closes will satisfy the first two layers repeatedly and stop out on every one of them. EACH LAYER IS SWITCHABLE and this run used T3 filter=True, Braid filter=True, Stiffness filter=True. Every layer can only REMOVE bars from the set the strategy is PERMITTED to trade on \u2014 but not necessarily remove trades, and a layer switched on can leave MORE entries than it found: the entry fires where the confluence starts, so breaking one long permitted stretch into two creates a second start. Judge a layer by the trade list, never by the count. The short rules are the long rules mirrored throughout.",
+          "entry": "The trade fires on the bar where ALL of the active conditions below first hold together, and not again until at least one of them has failed \u2014 one entry per episode, not one per bar. Each condition applies ONLY IF ITS TOGGLE IS TRUE; a toggle set to False means that condition was not checked at all, not that it happened to pass. (1) use_t3_filter=True: for a long, the close above the Tillson T3 (5, vfactor 0.7) and the T3 itself higher than on the previous bar; for a short, the close below it and the T3 lower. (2) use_braid_filter=True: for a long, the Braid histogram \u2014 the fast EMA (3) minus the slow EMA (7) of the close \u2014 above zero AND above its own 14-period smoothing; for a short, below zero AND below it. (3) use_stiffness_filter=True: at least 45.0 percent of the last 20 close-to-close changes moving the way the trade is going \u2014 up for a long, down for a short. (4) use_news_filter=False: when True, a trigger whose FILL bar lands within 30 minutes either side of a scheduled US macro release is dropped. Only one position is held at a time and it is never reversed on the spot \u2014 a short trigger while the long is open is ignored, and vice versa. The fill is the next bar's open.",
+          "exit": "Exit at whichever comes first, and the rules are mirrored for a short. (1) A stop 1.5 x ATR 14 away from the fill price \u2014 below it on a long, above it on a short \u2014 with trailing=False, where True means it follows the best price reached since the fill (the high on a long, the low on a short) and never widens, and False means it sits fixed that far from the fill. (2) A take-profit 3.0 x ATR 14 from the fill price \u2014 above it on a long, below it on a short \u2014 where None means NO take-profit is modelled at all. THERE IS NO THIRD EXIT: the position is not closed when the confluence breaks, when the T3 slope rolls over, or at the end of the session, so despite the name this scalp carries positions overnight and over weekends. Both distances are frozen at the ATR measured on the SIGNAL bar and are never re-measured. Neither is an ORDER: each is detected on the bar that breaches it and filled at the NEXT bar's open, so the realised loss on a stop is not 1.5 x ATR."
+        }
+      }
+    },
+    "gate_audit": {
+      "version": "A",
+      "name": "t3_braid_scalp_20260823",
+      "gates": {
+        "gate1": {
+          "name": "GATE 1 \u00b7 In-Sample",
+          "status": "FAIL",
+          "checks": [
+            {
+              "label": "Sharpe (not gated)",
+              "value": 0.4082706728592301,
+              "threshold": null,
+              "direction": "min",
+              "unit": "",
+              "status": "INFO",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Profit factor",
+              "value": 1.0533096144566654,
+              "threshold": 1.0,
+              "direction": "min",
+              "unit": "",
+              "status": "PASS",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Trades",
+              "value": 7305.0,
+              "threshold": 200.0,
+              "direction": "min",
+              "unit": "",
+              "status": "PASS",
+              "note": "16.74 years at 30 trades/yr is 502; the 200-trade cap binds",
+              "fmt": "{:,.0f}"
+            },
+            {
+              "label": "Max drawdown",
+              "value": 99.02184120594197,
+              "threshold": 12.0,
+              "direction": "max",
+              "unit": "%",
+              "status": "FAIL",
+              "note": null,
+              "fmt": "{:.2f}"
+            }
+          ]
+        },
+        "gate2": {
+          "name": "GATE 2 \u00b7 Robustness",
+          "status": "NOT EVALUATED",
+          "checks": [
+            {
+              "label": "WFO efficiency",
+              "value": null,
+              "threshold": 0.5,
+              "direction": "min",
+              "unit": "",
+              "status": "NOT EVALUATED",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Monte Carlo 95% max DD",
+              "value": null,
+              "threshold": 18.0,
+              "direction": "max",
+              "unit": "%",
+              "status": "NOT EVALUATED",
+              "note": null,
+              "fmt": "{:.2f}"
+            }
+          ]
+        },
+        "gate3": {
+          "name": "GATE 3 \u00b7 OOS Holdout",
+          "status": "NOT EVALUATED",
+          "checks": [
+            {
+              "label": "Holdout Sharpe retention",
+              "value": null,
+              "threshold": 0.8,
+              "direction": "min",
+              "unit": "x",
+              "status": "NOT EVALUATED",
+              "note": "no holdout Sharpe supplied, so Sharpe retention is undefined",
+              "fmt": "{:.2f}"
+            }
+          ]
+        }
+      },
+      "status": "FAIL",
+      "passed": false,
+      "thresholds": {
+        "gate1": {
+          "min_profit_factor": 1.0,
+          "min_trades": 100,
+          "max_required_trades": 200,
+          "min_trades_per_year": 30,
+          "max_drawdown_pct": 12.0
+        },
+        "gate2": {
+          "min_wfo_efficiency": 0.5,
+          "max_mc_drawdown_pct": 18.0
+        },
+        "gate3": {
+          "min_retention": 0.8
+        }
+      },
+      "holdout_sharpe": null,
+      "in_sample_sharpe": 0.4082706728592301,
+      "sharpe_retention": null,
+      "retention": null,
+      "retention_metric": null
+    }
+  },
+  "version_b": {
+    "metrics": {
+      "ok": true,
+      "ruined": false,
+      "final_equity": 139339.91999999626,
+      "total_pnl": 39339.919999996615,
+      "gross_pnl": 63329.99999999871,
+      "total_costs": 23990.080000002097,
+      "total_return_pct": 39.33991999999626,
+      "annualized_return_pct": 2.0012756792574526,
+      "sharpe": 0.2539900168503086,
+      "sortino": 0.444676008318236,
+      "calmar": 0.05834080010840508,
+      "metrics_basis": {
+        "frequency": "daily_close",
+        "annualization_factor": 252,
+        "risk_free_rate": 0.0,
+        "n_days": 4219
+      },
+      "max_drawdown_pct": -34.3031922006351,
+      "win_rate": 0.3463114754098361,
+      "profit_factor": 1.0899913906383611,
+      "trade_count": 976,
+      "long_trades": 390,
+      "short_trades": 586,
+      "breach": {},
+      "n_days": 4219,
+      "dow_breakdown": [
+        {
+          "day": "Mon",
+          "weekday": 0,
+          "trades": 174,
+          "net_pnl": -14056.92000000053,
+          "gross_win": 76003.5199999998,
+          "gross_loss": 90060.44000000034,
+          "win_rate": 0.3218390804597701,
+          "avg_pnl": -80.78689655172718,
+          "profit_factor": 0.8439168185276412,
+          "pct_of_trades": 17.827868852459016,
+          "pct_of_net_pnl": -35.731948616066674
+        },
+        {
+          "day": "Tue",
+          "weekday": 1,
+          "trades": 199,
+          "net_pnl": 6168.579999999038,
+          "gross_win": 98516.87999999963,
+          "gross_loss": 92348.3000000006,
+          "win_rate": 0.32160804020100503,
+          "avg_pnl": 30.997889447231344,
+          "profit_factor": 1.0667968982644942,
+          "pct_of_trades": 20.389344262295083,
+          "pct_of_net_pnl": 15.680204738595219
+        },
+        {
+          "day": "Wed",
+          "weekday": 2,
+          "trades": 206,
+          "net_pnl": -4103.480000000278,
+          "gross_win": 86670.24000000022,
+          "gross_loss": 90773.72000000051,
+          "win_rate": 0.34951456310679613,
+          "avg_pnl": -19.91980582524407,
+          "profit_factor": 0.9547944052529712,
+          "pct_of_trades": 21.10655737704918,
+          "pct_of_net_pnl": -10.430829549222853
+        },
+        {
+          "day": "Thu",
+          "weekday": 3,
+          "trades": 210,
+          "net_pnl": 23868.199999999604,
+          "gross_win": 99967.33999999987,
+          "gross_loss": 76099.14000000028,
+          "win_rate": 0.36666666666666664,
+          "avg_pnl": 113.65809523809335,
+          "profit_factor": 1.3136461200481306,
+          "pct_of_trades": 21.516393442622952,
+          "pct_of_net_pnl": 60.67170446712057
+        },
+        {
+          "day": "Fri",
+          "weekday": 4,
+          "trades": 186,
+          "net_pnl": 28528.119999998817,
+          "gross_win": 115333.97999999969,
+          "gross_loss": 86805.86000000089,
+          "win_rate": 0.3709677419354839,
+          "avg_pnl": 153.37698924730546,
+          "profit_factor": 1.3286427897839905,
+          "pct_of_trades": 19.057377049180328,
+          "pct_of_net_pnl": 72.51697512349102
+        },
+        {
+          "day": "Sun",
+          "weekday": 6,
+          "trades": 1,
+          "net_pnl": -1064.58,
+          "gross_win": 0.0,
+          "gross_loss": 1064.58,
+          "win_rate": 0.0,
+          "avg_pnl": -1064.58,
+          "profit_factor": 0.0,
+          "pct_of_trades": 0.10245901639344263,
+          "pct_of_net_pnl": -2.7061061639171906
+        }
+      ],
+      "entry_filters": {},
+      "meta": {
+        "strategy": "t3_braid_scalp_20260823",
+        "strategy_path": "/home/cgrullon/src/trading/strategies/experimental/t3_braid_scalp_20260823.py",
+        "params": {
+          "t3_period": 5,
+          "t3_vfactor": 0.7,
+          "braid_fast": 3,
+          "braid_slow": 7,
+          "stiffness_period": 20,
+          "stiffness_threshold": 45.0,
+          "use_t3_filter": true,
+          "use_braid_filter": true,
+          "use_stiffness_filter": true,
+          "use_news_filter": false,
+          "sl_atr_mult": 1.5,
+          "tp_atr_mult": 3.0,
+          "trailing": false
+        },
+        "symbol": "GC",
+        "timeframe": "30m",
+        "bars": 159393,
+        "start": "2013-01-01 23:00:00+00:00",
+        "end": "2026-08-07 20:30:00+00:00",
+        "costs_included": true,
+        "initial_capital": 100000.0,
+        "ml_threshold": 0.48,
+        "ml_evaluated": true,
+        "ml_features": [
+          "t3_slope",
+          "braid_hist",
+          "stiffness",
+          "atr_norm",
+          "hour_et"
+        ],
+        "ml_refit": {
+          "long": {
+            "direction": "long",
+            "candidates": 3656,
+            "fits": 52,
+            "train_rows_max": 3434,
+            "refit_growth": 0.1,
+            "max_train_rows": 50000,
+            "threads": 1,
+            "elapsed_s": 1.423
+          },
+          "short": {
+            "direction": "short",
+            "candidates": 3650,
+            "fits": 52,
+            "train_rows_max": 3434,
+            "refit_growth": 0.1,
+            "max_train_rows": 50000,
+            "threads": 1,
+            "elapsed_s": 1.417
+          }
+        },
+        "logic": {
+          "concept": "An intraday scalp that only ever trades WITH a trend it can already see, in three layers, each removing a different way a scalp bleeds. The T3 baseline \u2014 a six-fold smoothed average that turns faster than a plain moving average of the same length without the lag that makes a slow average useless on a scalp \u2014 decides which side is permitted at all: longs only above a rising T3, shorts only below a falling one, so a counter-trend bounce is never bought. The Braid histogram, the gap between a fast and a slow average of the close, is the timing: it must be on the right side of zero AND pulling away from its own smoothing, which is the difference between momentum that exists and momentum that is fading. The Stiffness Index is the veto: it counts what proportion of the last 20 closes moved in the direction being traded, and refuses the trade below 45.0 percent \u2014 a market that alternates up and down closes will satisfy the first two layers repeatedly and stop out on every one of them. EACH LAYER IS SWITCHABLE and this run used T3 filter=True, Braid filter=True, Stiffness filter=True. Every layer can only REMOVE bars from the set the strategy is PERMITTED to trade on \u2014 but not necessarily remove trades, and a layer switched on can leave MORE entries than it found: the entry fires where the confluence starts, so breaking one long permitted stretch into two creates a second start. Judge a layer by the trade list, never by the count. The short rules are the long rules mirrored throughout.",
+          "entry": "The trade fires on the bar where ALL of the active conditions below first hold together, and not again until at least one of them has failed \u2014 one entry per episode, not one per bar. Each condition applies ONLY IF ITS TOGGLE IS TRUE; a toggle set to False means that condition was not checked at all, not that it happened to pass. (1) use_t3_filter=True: for a long, the close above the Tillson T3 (5, vfactor 0.7) and the T3 itself higher than on the previous bar; for a short, the close below it and the T3 lower. (2) use_braid_filter=True: for a long, the Braid histogram \u2014 the fast EMA (3) minus the slow EMA (7) of the close \u2014 above zero AND above its own 14-period smoothing; for a short, below zero AND below it. (3) use_stiffness_filter=True: at least 45.0 percent of the last 20 close-to-close changes moving the way the trade is going \u2014 up for a long, down for a short. (4) use_news_filter=False: when True, a trigger whose FILL bar lands within 30 minutes either side of a scheduled US macro release is dropped. Only one position is held at a time and it is never reversed on the spot \u2014 a short trigger while the long is open is ignored, and vice versa. The fill is the next bar's open.",
+          "exit": "Exit at whichever comes first, and the rules are mirrored for a short. (1) A stop 1.5 x ATR 14 away from the fill price \u2014 below it on a long, above it on a short \u2014 with trailing=False, where True means it follows the best price reached since the fill (the high on a long, the low on a short) and never widens, and False means it sits fixed that far from the fill. (2) A take-profit 3.0 x ATR 14 from the fill price \u2014 above it on a long, below it on a short \u2014 where None means NO take-profit is modelled at all. THERE IS NO THIRD EXIT: the position is not closed when the confluence breaks, when the T3 slope rolls over, or at the end of the session, so despite the name this scalp carries positions overnight and over weekends. Both distances are frozen at the ATR measured on the SIGNAL bar and are never re-measured. Neither is an ORDER: each is detected on the bar that breaches it and filled at the NEXT bar's open, so the realised loss on a stop is not 1.5 x ATR."
+        }
+      }
+    },
+    "gate_audit": {
+      "version": "B",
+      "name": "t3_braid_scalp_20260823",
+      "gates": {
+        "gate1": {
+          "name": "GATE 1 \u00b7 In-Sample",
+          "status": "FAIL",
+          "checks": [
+            {
+              "label": "Sharpe (not gated)",
+              "value": 0.2539900168503086,
+              "threshold": null,
+              "direction": "min",
+              "unit": "",
+              "status": "INFO",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Profit factor",
+              "value": 1.0899913906383611,
+              "threshold": 1.0,
+              "direction": "min",
+              "unit": "",
+              "status": "PASS",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Trades",
+              "value": 976.0,
+              "threshold": 200.0,
+              "direction": "min",
+              "unit": "",
+              "status": "PASS",
+              "note": "16.74 years at 30 trades/yr is 502; the 200-trade cap binds",
+              "fmt": "{:,.0f}"
+            },
+            {
+              "label": "Max drawdown",
+              "value": 34.3031922006351,
+              "threshold": 12.0,
+              "direction": "max",
+              "unit": "%",
+              "status": "FAIL",
+              "note": null,
+              "fmt": "{:.2f}"
+            }
+          ]
+        },
+        "gate2": {
+          "name": "GATE 2 \u00b7 Robustness",
+          "status": "NOT EVALUATED",
+          "checks": [
+            {
+              "label": "WFO efficiency",
+              "value": null,
+              "threshold": 0.5,
+              "direction": "min",
+              "unit": "",
+              "status": "NOT EVALUATED",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Monte Carlo 95% max DD",
+              "value": null,
+              "threshold": 18.0,
+              "direction": "max",
+              "unit": "%",
+              "status": "NOT EVALUATED",
+              "note": null,
+              "fmt": "{:.2f}"
+            }
+          ]
+        },
+        "gate3": {
+          "name": "GATE 3 \u00b7 OOS Holdout",
+          "status": "NOT EVALUATED",
+          "checks": [
+            {
+              "label": "Holdout Sharpe retention",
+              "value": null,
+              "threshold": 0.8,
+              "direction": "min",
+              "unit": "x",
+              "status": "NOT EVALUATED",
+              "note": "no holdout Sharpe supplied, so Sharpe retention is undefined",
+              "fmt": "{:.2f}"
+            }
+          ]
+        }
+      },
+      "status": "FAIL",
+      "passed": false,
+      "thresholds": {
+        "gate1": {
+          "min_profit_factor": 1.0,
+          "min_trades": 100,
+          "max_required_trades": 200,
+          "min_trades_per_year": 30,
+          "max_drawdown_pct": 12.0
+        },
+        "gate2": {
+          "min_wfo_efficiency": 0.5,
+          "max_mc_drawdown_pct": 18.0
+        },
+        "gate3": {
+          "min_retention": 0.8
+        }
+      },
+      "holdout_sharpe": null,
+      "in_sample_sharpe": 0.2539900168503086,
+      "sharpe_retention": null,
+      "retention": null,
+      "retention_metric": null
+    }
+  },
+  "generated_utc": "2026-08-29T20:45:58+00:00",
+  "reports": {
+    "version_a": "/mnt/backtest/artifacts/pipeline/t3_braid_scalp_20260823/verify_20260829_204551/report_GC_version_a.html",
+    "version_b": "/mnt/backtest/artifacts/pipeline/t3_braid_scalp_20260823/verify_20260829_204551/report_GC_version_b.html"
+  },
+  "cost_drag": {
+    "trades": 7305,
+    "total_costs": 179556.90000001286,
+    "gross_pnl": 346419.99999999854,
+    "net_pnl": 166863.09999998572,
+    "cost_per_trade": 24.58000000000176,
+    "cost_share_pct": 51.83214017666809,
+    "commission": 33456.899999999994,
+    "slippage": 146100.00000001292,
+    "split_available": true,
+    "modelled_round_turn": 24.58,
+    "by_year": [
+      {
+        "year": 2013,
+        "trades": 517,
+        "gross_pnl": 29609.99999999972,
+        "costs": 12707.860000000557,
+        "net_pnl": 16902.139999999177,
+        "cost_per_trade": 24.58000000000108,
+        "cost_share_pct": 42.917460317462606
+      },
+      {
+        "year": 2014,
+        "trades": 500,
+        "gross_pnl": -1530.0000000000182,
+        "costs": 12290.000000000573,
+        "net_pnl": -13820.000000000582,
+        "cost_per_trade": 24.580000000001146,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2015,
+        "trades": 470,
+        "gross_pnl": 3050.000000000068,
+        "costs": 11552.59999999954,
+        "net_pnl": -8502.599999999458,
+        "cost_per_trade": 24.57999999999902,
+        "cost_share_pct": 378.7737704917797
+      },
+      {
+        "year": 2016,
+        "trades": 551,
+        "gross_pnl": -530.000000000201,
+        "costs": 13543.57999999985,
+        "net_pnl": -14073.580000000038,
+        "cost_per_trade": 24.57999999999973,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2017,
+        "trades": 562,
+        "gross_pnl": -2499.999999999909,
+        "costs": 13813.959999999845,
+        "net_pnl": -16313.959999999746,
+        "cost_per_trade": 24.579999999999725,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2018,
+        "trades": 540,
+        "gross_pnl": 4689.9999999996,
+        "costs": 13273.200000000488,
+        "net_pnl": -8583.200000000881,
+        "cost_per_trade": 24.580000000000904,
+        "cost_share_pct": 283.0106609808448
+      },
+      {
+        "year": 2019,
+        "trades": 560,
+        "gross_pnl": -4050.0000000004775,
+        "costs": 13764.800000001062,
+        "net_pnl": -17814.80000000153,
+        "cost_per_trade": 24.580000000001895,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2020,
+        "trades": 538,
+        "gross_pnl": -4869.999999999575,
+        "costs": 13224.040000000981,
+        "net_pnl": -18094.040000000547,
+        "cost_per_trade": 24.580000000001824,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2021,
+        "trades": 524,
+        "gross_pnl": 8100.000000000029,
+        "costs": 12879.92000000146,
+        "net_pnl": -4779.920000001421,
+        "cost_per_trade": 24.580000000002787,
+        "cost_share_pct": 159.0113580247088
+      },
+      {
+        "year": 2022,
+        "trades": 529,
+        "gross_pnl": 38470.00000000005,
+        "costs": 13002.820000001046,
+        "net_pnl": 25467.179999999018,
+        "cost_per_trade": 24.580000000001977,
+        "cost_share_pct": 33.79989602287764
+      },
+      {
+        "year": 2023,
+        "trades": 554,
+        "gross_pnl": 19399.99999999986,
+        "costs": 13617.32000000139,
+        "net_pnl": 5782.679999998485,
+        "cost_per_trade": 24.580000000002507,
+        "cost_share_pct": 70.19237113402828
+      },
+      {
+        "year": 2024,
+        "trades": 567,
+        "gross_pnl": 31540.000000000782,
+        "costs": 13936.859999998713,
+        "net_pnl": 17603.14000000208,
+        "cost_per_trade": 24.579999999997728,
+        "cost_share_pct": 44.18788839568284
+      },
+      {
+        "year": 2025,
+        "trades": 556,
+        "gross_pnl": 82200.00000000003,
+        "costs": 13666.480000005946,
+        "net_pnl": 68533.5199999941,
+        "cost_per_trade": 24.580000000010696,
+        "cost_share_pct": 16.625888077866108
+      },
+      {
+        "year": 2026,
+        "trades": 337,
+        "gross_pnl": 142839.9999999986,
+        "costs": 8283.460000001418,
+        "net_pnl": 134556.53999999713,
+        "cost_per_trade": 24.58000000000421,
+        "cost_share_pct": 5.799117894148347
+      }
+    ]
+  },
+  "friction_by_regime": {
+    "available": true,
+    "attribution": "the quadrant of the trade's ENTRY bar",
+    "regime_source": "the labels RegimeProfiler classified for this run",
+    "attributed_trades": 7305,
+    "unplaced_trades": 0,
+    "unplaced_note": null,
+    "by_regime": [
+      {
+        "regime": "High Volatility / Trending",
+        "quadrant": "Q1",
+        "trades": 2852,
+        "gross_pnl": 232529.99999999997,
+        "costs": 70102.16000000814,
+        "net_pnl": 162427.83999999176,
+        "cost_per_trade": 24.580000000002855,
+        "cost_share_pct": 30.147576656778973
+      },
+      {
+        "regime": "High Volatility / Ranging",
+        "quadrant": "Q2",
+        "trades": 2033,
+        "gross_pnl": 130149.99999999949,
+        "costs": 49971.14000000312,
+        "net_pnl": 80178.8599999964,
+        "cost_per_trade": 24.580000000001537,
+        "cost_share_pct": 38.395036496352915
+      },
+      {
+        "regime": "Low Volatility / Trending",
+        "quadrant": "Q3",
+        "trades": 1218,
+        "gross_pnl": -26550.000000000455,
+        "costs": 29938.4400000007,
+        "net_pnl": -56488.44000000114,
+        "cost_per_trade": 24.580000000000574,
+        "cost_share_pct": null
+      },
+      {
+        "regime": "Low Volatility / Ranging",
+        "quadrant": "Q4",
+        "trades": 1202,
+        "gross_pnl": 10289.9999999996,
+        "costs": 29545.160000000906,
+        "net_pnl": -19255.1600000013,
+        "cost_per_trade": 24.580000000000755,
+        "cost_share_pct": 287.1249757045875
+      }
+    ]
+  },
+  "slippage_model": {
+    "model": "constant_ticks",
+    "slippage_ticks": 1.0,
+    "note": "ticks x that bar's tick size / price, per bar"
+  }
+}
