@@ -25,7 +25,7 @@
   "source": "/home/cgrullon/src/trading/strategies/experimental/ema_crossover_20260821.py",
   "source_sha256": "9c290bc1e02d816f675ee2752d856aac563d8ae4f7563b0452fdac597d31857b",
   "promoted_sha256": "9c290bc1e02d816f675ee2752d856aac563d8ae4f7563b0452fdac597d31857b",
-  "promoted_utc": "2026-08-29T14:37:50+00:00",
+  "promoted_utc": "2026-08-29T16:47:18+00:00",
   "costs_included": true,
   "variants_tested": null,
   "metrics_status": "RECORDED \u00b7 locked from dual_metrics_CL.json",
@@ -58,12 +58,12 @@
   },
   "certification": {
     "audit_file": "/mnt/backtest/artifacts/pipeline/ema_crossover_20260821/gate_audit_CL_15m.json",
-    "audit_sha256": "eda154eca4497695e820062622e9aad24e383c12313b1fc277b9cedbcdd7c365",
+    "audit_sha256": "e0de9e6385db1913474687de4080fd859401e932ef603f42998a5d61582c7c05",
     "audit_symbol": "CL",
     "audit_timeframe": "15m",
     "target_quadrant": "Q1",
     "target_regime": "High Volatility / Trending",
-    "audit_generated_utc": "2026-08-29T14:20:15+00:00",
+    "audit_generated_utc": "2026-08-29T16:25:03+00:00",
     "in_sample": {
       "start": "2013-01-01",
       "end": "2022-12-31"
