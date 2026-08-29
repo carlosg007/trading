@@ -31,7 +31,7 @@
   "source": "/home/cgrullon/src/trading/strategies/experimental/ma_anchoring_spread_20260820.py",
   "source_sha256": "3c87f3720be7dd06950d86eb242f32918b3c0f0348a94641f845795c5d512f40",
   "promoted_sha256": "3c87f3720be7dd06950d86eb242f32918b3c0f0348a94641f845795c5d512f40",
-  "promoted_utc": "2026-08-28T05:59:46+00:00",
+  "promoted_utc": "2026-08-29T01:34:08+00:00",
   "costs_included": true,
   "variants_tested": null,
   "metrics_status": "RECORDED \u00b7 locked from dual_metrics_ZS.json",
@@ -64,12 +64,12 @@
   },
   "certification": {
     "audit_file": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/gate_audit_ZS_1h.json",
-    "audit_sha256": "825d984273dc9649ec602ab90d586a9e23270a5d9d8f2a7937c775dae0b36877",
+    "audit_sha256": "3e854964d3f34840f762202a38d40cf902675fde545a3bac2b46735b0764a720",
     "audit_symbol": "ZS",
     "audit_timeframe": "1h",
     "target_quadrant": "Q2",
     "target_regime": "High Volatility / Ranging",
-    "audit_generated_utc": "2026-08-28T05:50:01+00:00",
+    "audit_generated_utc": "2026-08-29T01:24:25+00:00",
     "in_sample": {
       "start": "2013-01-01",
       "end": "2022-12-31"
