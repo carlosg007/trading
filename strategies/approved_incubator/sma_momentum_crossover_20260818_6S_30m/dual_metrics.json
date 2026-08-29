@@ -286,9 +286,9 @@
     }
   },
   "version_b": null,
-  "generated_utc": "2026-08-29T14:19:38+00:00",
+  "generated_utc": "2026-08-29T16:15:41+00:00",
   "reports": {
-    "version_a": "/mnt/backtest/artifacts/pipeline/sma_momentum_crossover_20260818/verify_20260829_141922/report_6S_version_a.html"
+    "version_a": "/mnt/backtest/artifacts/pipeline/sma_momentum_crossover_20260818/verify_20260829_161531/report_6S_version_a.html"
   },
   "cost_drag": {
     "trades": 1005,
