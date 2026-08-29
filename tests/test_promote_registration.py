@@ -942,6 +942,54 @@ def test_an_uncertified_pair_reports_why_rather_than_raising() -> None:
 # ==========================================================================
 # 8. one strategy id per certified pair
 # ==========================================================================
+def test_version_qualified_ids_round_trip():
+    """
+    Version A and Version B of one pair are two directories, not one.
+
+    Both can certify. On 2026-08-29 NQ 1h passed Gate R on A at OOS PF 1.25
+    and on B at 1.22; without a version segment both resolved to
+    `t3_braid_scalp_20260823_NQ_1h`, promote.py wrote A, found the path taken
+    when it reached B and exited 1 - `promoted: 1, failed: 1`. A certified
+    package was lost with no gate having refused it.
+    """
+    from backtest.pipeline import (split_strategy_id, strategy_id,
+                                   version_of_strategy_id)
+
+    a = strategy_id("t3_braid_scalp_20260823", "NQ", "1h", "A")
+    b = strategy_id("t3_braid_scalp_20260823", "NQ", "1h", "B")
+    assert (a, b) == ("t3_braid_scalp_20260823_NQ_1h_VA",
+                      "t3_braid_scalp_20260823_NQ_1h_VB")
+    assert a != b, "the collision this exists to prevent"
+
+    # The parser must still find the timeframe. LiveDispatcher._resolve_
+    # timeframe falls back to split_strategy_id when a meta.json declares
+    # none, and an unparsed id returns (whole, None, None) - which would admit
+    # a promoted Version B with its timeframe unknown rather than checked.
+    for sid in (a, b):
+        assert split_strategy_id(sid) == ("t3_braid_scalp_20260823", "NQ", "1h")
+    assert (version_of_strategy_id(a), version_of_strategy_id(b)) == ("A", "B")
+
+    # FORWARD ONLY. Every id already on disk and in config/portfolios.json was
+    # written without a version and must keep its exact spelling.
+    plain = strategy_id("t3_braid_scalp_20260823", "NQ", "1h")
+    assert plain == "t3_braid_scalp_20260823_NQ_1h"
+    assert split_strategy_id(plain) == ("t3_braid_scalp_20260823", "NQ", "1h")
+    assert version_of_strategy_id(plain) is None, (
+        "an unqualified id is NOT Version A - the name never recorded it, and "
+        "meta.json is where that fact lives")
+
+    # "VB" and "B" are the same request; anything else is refused rather than
+    # silently producing a directory nobody can parse.
+    assert strategy_id("s", "NQ", "1h", "VB") == "s_NQ_1h_VB"
+    try:
+        strategy_id("s", "NQ", "1h", "C")
+    except ValueError:
+        pass
+    else:                                                    # pragma: no cover
+        raise AssertionError("an unknown version must be refused, not "
+                             "silently turned into a directory nobody parses")
+
+
 def test_a_strategy_id_names_the_pair_and_splits_back_apart() -> None:
     """
     The id is the directory under `approved_incubator/`, the id in

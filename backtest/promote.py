@@ -581,11 +581,23 @@ def promote(strat: str,
                else list(info["symbols"] or []))
     tf = scope_tf or info["timeframe"]
 
-    # ONE DIRECTORY PER CERTIFIED PAIR. `strategy_id` returns the bare
-    # strategy name when the pair is not known, which is the `bt-run`
+    # ONE DIRECTORY PER CERTIFIED PAIR **AND VERSION**. `strategy_id` returns
+    # the bare strategy name when the pair is not known, which is the `bt-run`
     # workflow's id and is left exactly as it was - a dual-version run is not
     # scoped to a certified pair and there is nothing to name.
-    promoted_id = strategy_id(strat, scope_symbol, scope_tf)
+    #
+    # The version segment is why this line changed. Version A and Version B of
+    # one pair are two different strategies, and both can certify: on
+    # 2026-08-29 NQ 1h passed Gate R on A at OOS PF 1.25 and on B at 1.22.
+    # Without the segment both resolved to `<strat>_NQ_1h`, promote.py wrote A,
+    # found the directory taken when it reached B, and exited 1. The Version B
+    # package was lost with no gate having refused it - `promoted: 1, failed:
+    # 1` in that run's auto_promotion block.
+    #
+    # Forward-only. Every id already in config/portfolios.json and on disk was
+    # written without a version and keeps its exact spelling; `strategy_id`
+    # appends nothing when no version is passed.
+    promoted_id = strategy_id(strat, scope_symbol, scope_tf, version)
     dest = Path(incubator) / promoted_id
     dest.mkdir(parents=True, exist_ok=True)
 

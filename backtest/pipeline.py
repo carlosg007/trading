@@ -203,8 +203,14 @@ TIMEFRAME_TOKENS = ("1m", "2m", "3m", "5m", "10m", "15m", "30m",
                     "1d", "1w")
 
 
+#: The version suffixes a promotion id may carry. Spelled once so the builder
+#: and the parser cannot disagree about what a version segment looks like.
+VERSION_TOKENS = {"VA": "A", "VB": "B"}
+
+
 def strategy_id(strategy: str, symbol: str | None = None,
-                timeframe: str | None = None) -> str:
+                timeframe: str | None = None,
+                version: str | None = None) -> str:
     """
     The id for one certified pair: `<strategy>_<SYMBOL>_<TF>`.
 
@@ -225,7 +231,23 @@ def strategy_id(strategy: str, symbol: str | None = None,
         raise ValueError("a strategy id needs a strategy name")
     if not sym or not tf:
         return strategy
-    return f"{strategy}_{sym}_{tf}"
+    sid = f"{strategy}_{sym}_{tf}"
+    # The version segment exists because Version A and Version B of the SAME
+    # pair are two different strategies that used to resolve to one directory.
+    # Both can certify - NQ 1h certified on both on 2026-08-29, A at OOS PF
+    # 1.25 and B at 1.22 - and promote.py then wrote A, found the path taken
+    # when it reached B, and exited 1. The Version B package was lost with no
+    # gate having refused it.
+    #
+    # Appended ONLY when a version is given, so every id already on disk and
+    # in config/portfolios.json keeps its exact spelling. This is forward-only:
+    # nothing is renamed.
+    ver = str(version or "").strip().upper().removeprefix("V")
+    if ver:
+        if f"V{ver}" not in VERSION_TOKENS:
+            raise ValueError(f"unknown version {version!r}; expected A or B")
+        sid = f"{sid}_V{ver}"
+    return sid
 
 
 def split_strategy_id(sid: str) -> tuple[str, str | None, str | None]:
@@ -250,6 +272,17 @@ def split_strategy_id(sid: str) -> tuple[str, str | None, str | None]:
     text = str(sid or "").strip()
     if "_" not in text:
         return text, None, None
+    # Strip a trailing version segment BEFORE the timeframe anchor. Without
+    # this the parse fails outright on a version-qualified id and returns
+    # (whole_id, None, None) - and `LiveDispatcher._resolve_timeframe` falls
+    # back to exactly this call when a meta.json declares no timeframe, so a
+    # promoted Version B would have been admitted with its timeframe unknown
+    # rather than checked. The version itself is NOT returned here: the tuple
+    # is three-wide and every caller unpacks it that way. Use
+    # `version_of_strategy_id` for the letter.
+    head0, _, last = text.rpartition("_")
+    if last.upper() in VERSION_TOKENS and "_" in head0:
+        text = head0
     head, _, tf = text.rpartition("_")
     if tf.lower() not in TIMEFRAME_TOKENS:
         return text, None, None
@@ -257,6 +290,22 @@ def split_strategy_id(sid: str) -> tuple[str, str | None, str | None]:
     if not strategy or not symbol:
         return text, None, None
     return strategy, symbol, tf.lower()
+
+
+def version_of_strategy_id(sid: str) -> str | None:
+    """
+    "A", "B", or None for an id that carries no version segment.
+
+    None is NOT Version A. Every id promoted before 2026-08-29 is unqualified,
+    and reading those as A would assert a fact about them that the name never
+    recorded - the version is in their meta.json and that is where it should be
+    read from.
+    """
+    text = str(sid or "").strip()
+    head, _, last = text.rpartition("_")
+    if last.upper() in VERSION_TOKENS and "_" in head:
+        return VERSION_TOKENS[last.upper()]
+    return None
 
 
 def base_strategy(sid: str) -> str:
