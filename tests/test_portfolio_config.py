@@ -132,7 +132,6 @@ EXECUTION_ACCOUNTS = {"Incubator-Odd": "SimIncubator1",
 # missing upstream feed into a config change that has to be undone twice.
 EXPECTED_ASSIGNMENTS = {
     "Incubator-Odd":  [
-        "t3_braid_scalp_20260823_NQ_1h",                #  1h, NQ
         "double_rsi_macd_scalp_20260823_NQ_3m",         #  3m, NQ
         "ema_crossover_20260821_NQ_15m",                # 15m, NQ
         "sma_momentum_crossover_20260818_NQ_5m",        #  5m, NQ
