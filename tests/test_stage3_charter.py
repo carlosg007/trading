@@ -695,13 +695,19 @@ def test_seal_and_incubator(tmp: Path) -> None:
     out = seal_and_promote("demo", "A", src, "NQ", "15m",
                            {"fast": 5, "slow": 50}, prov, good,
                            metrics_file=None, threshold=0.5, incubator=inc)
-    # `<strategy>_<SYMBOL>_<TF>`, not `<strategy>`. Stage 3 stages one
-    # certified PAIR, and a campaign certifies several: sharing one directory
-    # meant each staging overwrote the last, leaving one strat.py and one
-    # meta.json describing whichever timeframe ran last.
-    check("a Gate R PASS is staged into the incubator under its PAIR id",
-          out["promoted"] is True and Path(out["dir"]) == inc / "demo_NQ_15m",
+    # `<strategy>_<SYMBOL>_<TF>_V<A|B>`, not `<strategy>` and no longer the
+    # bare pair either. Stage 3 stages one certified PAIR AND VERSION, and a
+    # campaign certifies several of each: sharing one directory per strategy
+    # meant each staging overwrote the last, and sharing one per PAIR meant
+    # Version B collided with the Version A that got there first. On
+    # 2026-08-29 t3_braid NQ 1h certified on both - A at OOS PF 1.25, B at
+    # 1.22 - and promote.py exited 1 on B, losing a package no gate refused.
+    check("a Gate R PASS is staged under its PAIR *and VERSION* id",
+          out["promoted"] is True
+          and Path(out["dir"]) == inc / "demo_NQ_15m_VA",
           out.get("error") or str(out.get("dir")))
+    check("...so the other version of the same pair does not collide with it",
+          Path(out["dir"]) != inc / "demo_NQ_15m_VB")
 
     dest = Path(out["dir"])
     meta = json.loads((dest / "meta.json").read_text())
