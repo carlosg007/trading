@@ -16,10 +16,20 @@
 _TRADING_REPO="/home/cgrullon/src/trading"
 _TRADING_PY="${_TRADING_REPO}/.venv/bin/python3"
 
-# The 24 contracts that have BOTH 1m lake data and a ContractSpec. HG, ZM and
-# ZL are deliberately absent: neither is in the lake and neither has a spec, so
-# including them buys a failed run, not more coverage.
-_TRADING_UNIVERSE="ES,NQ,RTY,YM,CL,NG,RB,HO,GC,SI,PL,ZB,ZN,ZF,ZT,6E,6J,6B,6A,6C,6S,ZC,ZS,ZW"
+# The 23 contracts that have BOTH 1m lake data and a ContractSpec AND a live
+# NT8 feed. HG, ZM and ZL are absent because neither is in the lake and neither
+# has a spec, so including them buys a failed run rather than more coverage.
+#
+# CL was removed on 2026-08-29 for a DIFFERENT reason, and the difference
+# decides whether putting it back is right. CL has 16 years of 1m data, a
+# verified ContractSpec and all ten regime caches, and it cleared Stage 1 at
+# 15m, 30m and 1h on t3_braid_scalp_20260823. What it does not have is a live
+# NT8 series, so nothing screened on it can be traded from this box. Restore it
+# here the day the feed carries it, and check the spool rather than this
+# comment:
+#
+#     ls /mnt/backtest/artifacts/nt8_bars/ | grep '^CL' 
+_TRADING_UNIVERSE="ES,NQ,RTY,YM,NG,RB,HO,GC,SI,PL,ZB,ZN,ZF,ZT,6E,6J,6B,6A,6C,6S,ZC,ZS,ZW"
 
 # Fail loudly here rather than three screens into a run.
 _trading_preflight() {

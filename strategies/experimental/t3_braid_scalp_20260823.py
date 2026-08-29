@@ -257,7 +257,7 @@ STRATEGY_NAME = "t3_braid_scalp_20260823"
 # are defaults so `bt-run` has something to run, not a claim about where the
 # edge is, and `--tf` / `--symbols` override both.
 TIMEFRAME = "5m"
-SYMBOLS = ["NQ", "ES", "CL", "GC"]
+SYMBOLS = ["NQ", "ES", "GC"]
 
 DEFAULT_PARAMS = {
     "t3_period": 5,

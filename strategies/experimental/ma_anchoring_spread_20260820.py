@@ -243,7 +243,7 @@ import pandas as pd
 STRATEGY_NAME = "ma_anchoring_spread"
 
 TIMEFRAME = "15m"
-SYMBOLS = ["NQ", "ES", "CL", "GC"]
+SYMBOLS = ["NQ", "ES", "GC"]
 
 DEFAULT_PARAMS = {
     "fast_window": 21,

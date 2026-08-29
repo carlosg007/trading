@@ -170,7 +170,13 @@ DEFAULT_TF = "15m"
 
 # The symbols the specification names. Used only to report which anchors are
 # MISSING at construction; nothing restricts `calculate_regime` to this list.
-REFERENCE_SYMBOLS = ("NQ", "ES", "CL", "GC")
+#: CL was dropped on 2026-08-29. NinjaTrader on this box streams no CL series -
+#: /mnt/backtest/artifacts/nt8_bars carries 27 symbols and none is CL - so every
+#: cycle failed three times ("the feed returned no 15m bars") and the unit
+#: reported failed while publishing NQ/ES/GC correctly. The lake HAS CL and so
+#: does the regime cache; it is the live feed that does not, so restoring this
+#: is a one-word change once NT8 carries it.
+REFERENCE_SYMBOLS = ("NQ", "ES", "GC")
 
 # The schema label for each quadrant id, INVERTED from the config loader's
 # table rather than written out again. `CANONICAL_QUADRANT` maps label -> id;
