@@ -1,0 +1,122 @@
+{
+  "name": "ma_anchoring_spread_20260820_RB_1h_VA",
+  "strategy": "ma_anchoring_spread_20260820",
+  "symbol": "RB",
+  "version": "A",
+  "description": "Promoted Version A (rule-based baseline).",
+  "symbols": [
+    "RB"
+  ],
+  "timeframe": "1h",
+  "params": {
+    "fast_window": 21,
+    "slow_window": 200,
+    "spread_threshold": 0.015,
+    "exit_revert_mult": 0.5,
+    "use_macro_anchor": true,
+    "use_spread_hurdle": true,
+    "use_spread_expansion": true,
+    "use_news_filter": false,
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": 3.0,
+    "trailing": false
+  },
+  "params_source": "locked from dual_metrics_RB.json",
+  "params_conflict": [],
+  "risk": {
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": 3.0,
+    "trailing": false
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/ma_anchoring_spread_20260820.py",
+  "source_sha256": "296538f7b4199e7eb5fc5000a9b6271c2b779160e9a9d6bcce4e002d00394e4d",
+  "promoted_sha256": "296538f7b4199e7eb5fc5000a9b6271c2b779160e9a9d6bcce4e002d00394e4d",
+  "promoted_utc": "2026-08-29T22:45:22+00:00",
+  "costs_included": true,
+  "variants_tested": null,
+  "metrics_status": "RECORDED \u00b7 locked from dual_metrics_RB.json",
+  "metrics": {
+    "sharpe": 0.05719992237731653,
+    "sortino": 0.08775018489117255,
+    "calmar": -0.003989289364644845,
+    "profit_factor": 0.9977104033984354,
+    "win_rate": 0.4119442022667829,
+    "max_drawdown_pct": -57.244993252872575,
+    "total_return_pct": -3.757120000001568,
+    "annualized_return_pct": -0.22836684276285046,
+    "trade_count": 2294,
+    "total_pnl": -3757.1199999995806,
+    "total_costs": 29776.11999999953,
+    "final_equity": 96242.87999999843,
+    "n_days": 4221,
+    "start": "2013-01-01 23:00:00+00:00",
+    "end": "2026-08-07 20:00:00+00:00",
+    "bars": 77009,
+    "initial_capital": 100000.0
+  },
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "FAIL",
+    "gate2": "FAIL",
+    "gate3": "FAIL",
+    "gate_regime": "PASS",
+    "gate_ruin": "PASS"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/gate_audit_RB_1h.json",
+    "audit_sha256": "49aa6df06a3afa4291292354e25617db0e4fb0ec747d861826a7c086f2d57b2e",
+    "audit_symbol": "RB",
+    "audit_timeframe": "1h",
+    "target_quadrant": "Q2",
+    "target_regime": "High Volatility / Ranging",
+    "audit_generated_utc": "2026-08-29T22:32:34+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "fast_window": 21,
+      "slow_window": 200,
+      "spread_threshold": 0.015,
+      "sl_atr_mult": 2.0,
+      "tp_atr_mult": 3.0,
+      "trailing": false
+    },
+    "params_source": "stage 2 winner (best_params_RB_1h.json)",
+    "variants_tested": 270,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "FAIL",
+    "agrees_with_snapshot": false
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [
+    "import from 'backtest.event_calendar' is not allowed"
+  ],
+  "notes": ""
+}
