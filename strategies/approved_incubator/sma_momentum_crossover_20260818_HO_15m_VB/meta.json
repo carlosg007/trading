@@ -1,0 +1,122 @@
+{
+  "name": "sma_momentum_crossover_20260818_HO_15m_VB",
+  "strategy": "sma_momentum_crossover_20260818",
+  "symbol": "HO",
+  "version": "B",
+  "description": "Promoted Version B (baseline + causal ML filter).",
+  "symbols": [
+    "HO"
+  ],
+  "timeframe": "15m",
+  "params": {
+    "fast_window": 15,
+    "slow_window": 50,
+    "macro_window": 200,
+    "adx_threshold": 20.0,
+    "use_macro_anchor": true,
+    "use_adx_filter": true,
+    "use_news_filter": false,
+    "sl_atr_mult": 1.5,
+    "tp_atr_mult": 3.0,
+    "trailing": false
+  },
+  "params_source": "locked from dual_metrics_HO.json",
+  "params_conflict": [],
+  "risk": {
+    "sl_atr_mult": 1.5,
+    "tp_atr_mult": 3.0,
+    "trailing": false
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/sma_momentum_crossover_20260818.py",
+  "source_sha256": "fbd447f1f683fb03a1a7e1e41f90fe0e0a7e7f7ff43df8b842ed074869534c75",
+  "promoted_sha256": "c960309a592d7c823bd43a9857bd519497022e9d2f65d735ba93f37b4939f01b",
+  "promoted_utc": "2026-08-29T20:20:12+00:00",
+  "costs_included": true,
+  "variants_tested": null,
+  "metrics_status": "RECORDED \u00b7 locked from dual_metrics_HO.json",
+  "metrics": {
+    "sharpe": 0.235463315912711,
+    "sortino": 0.39654312030745253,
+    "calmar": 0.08047347482271303,
+    "profit_factor": 1.1189079941349287,
+    "win_rate": 0.378099173553719,
+    "max_drawdown_pct": -10.036216207984728,
+    "total_return_pct": 14.423679999999962,
+    "annualized_return_pct": 0.8076491923285634,
+    "trade_count": 484,
+    "total_pnl": 14423.679999999964,
+    "total_costs": 6282.32000000014,
+    "final_equity": 114423.67999999996,
+    "n_days": 4221,
+    "start": "2013-01-01 23:00:00+00:00",
+    "end": "2026-08-07 20:45:00+00:00",
+    "bars": 297693,
+    "initial_capital": 100000.0
+  },
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "PASS",
+    "gate2": "FAIL",
+    "gate3": "PASS",
+    "gate_regime": "PASS",
+    "gate_ruin": "PASS"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/sma_momentum_crossover_20260818/gate_audit_HO_15m.json",
+    "audit_sha256": "fbbc90bd6211eec8bee51c91753c110fffdd9aaa2000d3fcfab19c06c48a379c",
+    "audit_symbol": "HO",
+    "audit_timeframe": "15m",
+    "target_quadrant": "Q1",
+    "target_regime": "High Volatility / Trending",
+    "audit_generated_utc": "2026-08-29T20:01:15+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "fast_window": 15,
+      "slow_window": 50,
+      "tp_atr_mult": 3.0,
+      "sl_atr_mult": 1.5,
+      "trailing": false
+    },
+    "params_source": "stage 2 winner (best_params_HO_15m.json)",
+    "variants_tested": 54,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "NOT EVALUATED",
+    "agrees_with_snapshot": false
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [
+    "import from 'backtest.event_calendar' is not allowed"
+  ],
+  "notes": "",
+  "ml_threshold": 0.48,
+  "baseline": "baseline.py"
+}
