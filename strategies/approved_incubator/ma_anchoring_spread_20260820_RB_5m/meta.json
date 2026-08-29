@@ -31,7 +31,7 @@
   "source": "/home/cgrullon/src/trading/strategies/experimental/ma_anchoring_spread_20260820.py",
   "source_sha256": "3c87f3720be7dd06950d86eb242f32918b3c0f0348a94641f845795c5d512f40",
   "promoted_sha256": "3c87f3720be7dd06950d86eb242f32918b3c0f0348a94641f845795c5d512f40",
-  "promoted_utc": "2026-08-28T05:59:21+00:00",
+  "promoted_utc": "2026-08-29T01:33:43+00:00",
   "costs_included": true,
   "variants_tested": null,
   "metrics_status": "RECORDED \u00b7 locked from dual_metrics_RB.json",
@@ -64,12 +64,12 @@
   },
   "certification": {
     "audit_file": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/gate_audit_RB_5m.json",
-    "audit_sha256": "b2dd6435baf9c6aca170b0f690f505b858ac175303d35f548a67da9139e46ff3",
+    "audit_sha256": "a835236fe573f1403bf919e28f71cb4f9911eeff2084ab2b5f211282752da98e",
     "audit_symbol": "RB",
     "audit_timeframe": "5m",
     "target_quadrant": "Q2",
     "target_regime": "High Volatility / Ranging",
-    "audit_generated_utc": "2026-08-28T05:52:20+00:00",
+    "audit_generated_utc": "2026-08-29T01:26:44+00:00",
     "in_sample": {
       "start": "2013-01-01",
       "end": "2022-12-31"
