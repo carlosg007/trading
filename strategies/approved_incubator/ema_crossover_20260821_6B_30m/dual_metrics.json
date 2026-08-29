@@ -276,9 +276,9 @@
     }
   },
   "version_b": null,
-  "generated_utc": "2026-08-29T14:36:27+00:00",
+  "generated_utc": "2026-08-29T16:45:11+00:00",
   "reports": {
-    "version_a": "/mnt/backtest/artifacts/pipeline/ema_crossover_20260821/verify_20260829_143625/report_6B_version_a.html"
+    "version_a": "/mnt/backtest/artifacts/pipeline/ema_crossover_20260821/verify_20260829_164508/report_6B_version_a.html"
   },
   "cost_drag": {
     "trades": 374,
