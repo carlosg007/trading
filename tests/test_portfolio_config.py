@@ -132,41 +132,23 @@ EXECUTION_ACCOUNTS = {"Incubator-Odd": "SimIncubator1",
 # missing upstream feed into a config change that has to be undone twice.
 EXPECTED_ASSIGNMENTS = {
     "Incubator-Odd":  [
-        "double_rsi_macd_scalp_20260823_NQ_3m",             #  3m, NQ
-        "ema_crossover_20260821_NQ_15m",                    # 15m, NQ
-        "sma_momentum_crossover_20260818_NQ_5m",            #  5m, NQ
-        "sma_momentum_crossover_20260818_NQ_3m",            #  3m, NQ
-        "ema_crossover_20260821_NQ_1h",                     #  1h, NQ
-        "ema_crossover_20260821_NQ_3m",                     #  3m, NQ
-        "ema_crossover_20260821_NQ_1m",                     #  1m, NQ
-        "ema_crossover_20260821_NQ_2m",                     #  2m, NQ
-        "sma_momentum_crossover_20260818_NQ_5m_VA",         #  5m, NQ
-        "t3_braid_scalp_20260823_NQ_1h_VA",                 #  1h, NQ
-        "t3_braid_scalp_20260823_NQ_1h_VB",                 #  1h, NQ
-        "ema_crossover_20260821_NQ_1h_VA",                  #  1h, NQ
-        "ema_crossover_20260821_NQ_1h_VB",                  #  1h, NQ
-        "ema_crossover_20260821_NQ_15m_VA",                 # 15m, NQ
-        "ema_crossover_20260821_CL_15m_VA",                 # 15m, CL
+        "sma_momentum_crossover_20260818_NQ_5m_VA",           #  5m, NQ
+        "t3_braid_scalp_20260823_NQ_1h_VA",                   #  1h, NQ
+        "t3_braid_scalp_20260823_NQ_1h_VB",                   #  1h, NQ
+        "ema_crossover_20260821_NQ_1h_VA",                    #  1h, NQ
+        "ema_crossover_20260821_NQ_1h_VB",                    #  1h, NQ
+        "ema_crossover_20260821_NQ_15m_VA",                   # 15m, NQ
     ],
     "Incubator-Even": [
-        "ema_crossover_20260821_ES_15m",                    # 15m, ES
-        "ema_crossover_20260821_ES_30m",                    # 30m, ES
-        "t3_braid_scalp_20260823_GC_1h",                    #  1h, GC
-        "sma_momentum_crossover_20260818_GC_1h",            #  1h, GC
-        "sma_momentum_crossover_20260818_ES_15m",           # 15m, ES
-        "sma_momentum_crossover_20260818_GC_5m",            #  5m, GC
-        "ema_crossover_20260821_ES_5m",                     #  5m, ES
-        "ma_anchoring_spread_20260820_GC_1h",               #  1h, GC
-        "ema_crossover_20260821_ES_2m",                     #  2m, ES
-        "sma_momentum_crossover_20260818_GC_1h_VA",         #  1h, GC
-        "sma_momentum_crossover_20260818_ES_15m_VA",        # 15m, ES
-        "sma_momentum_crossover_20260818_GC_5m_VA",         #  5m, GC
-        "sma_momentum_crossover_20260818_GC_1h_VB",         #  1h, GC
-        "sma_momentum_crossover_20260818_ES_15m_VB",        # 15m, ES
-        "t3_braid_scalp_20260823_GC_30m_VA",                # 30m, GC
-        "t3_braid_scalp_20260823_GC_30m_VB",                # 30m, GC
-        "ema_crossover_20260821_ES_30m_VA",                 # 30m, ES
-        "ema_crossover_20260821_ES_15m_VA",                 # 15m, ES
+        "sma_momentum_crossover_20260818_GC_1h_VA",           #  1h, GC
+        "sma_momentum_crossover_20260818_ES_15m_VA",          # 15m, ES
+        "sma_momentum_crossover_20260818_GC_5m_VA",           #  5m, GC
+        "sma_momentum_crossover_20260818_GC_1h_VB",           #  1h, GC
+        "sma_momentum_crossover_20260818_ES_15m_VB",          # 15m, ES
+        "t3_braid_scalp_20260823_GC_30m_VA",                  # 30m, GC
+        "t3_braid_scalp_20260823_GC_30m_VB",                  # 30m, GC
+        "ema_crossover_20260821_ES_30m_VA",                   # 30m, ES
+        "ema_crossover_20260821_ES_15m_VA",                   # 15m, ES
     ],
     "Prop-Odd":       [],
     "Prop-Even":      [],
