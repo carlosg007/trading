@@ -390,6 +390,33 @@ alias trade-gate='firewall-check'
 alias crosstrade-check="${_TRADING_PY} ${_TRADING_REPO}/realtime/check_crosstrade_connection.py"
 alias ct-check='crosstrade-check'
 
+# 9. What is allocated, on what evidence.
+#
+# The other cards ask about MOTION and CONFIGURATION. This one joins the two
+# to the EVIDENCE: it walks config/portfolios.json, the promoted package under
+# strategies/approved_incubator/, and the gate audit each package cites, and
+# puts them on one row.
+#
+# It exists because nothing joined those three. On 2026-08-29 the routing
+# table carried 18 allocations naming packages that had been deleted, and the
+# live dispatcher imports a strategy by that path - so every one was an entry
+# that could never load. Finding it took a hand-written diff.
+#
+# A FUNCTION, so `complete -F` attaches and it works in a script. Exits
+# non-zero when any allocation names a package that is not on disk, so it
+# chains:  bt-inventory && systemctl restart trading-master-live
+bt-inventory() { "$_TRADING_PY" "${_TRADING_REPO}/tools/portfolio_inventory.py" "$@"; }
+# The spelling for "what is in the portfolios" rather than "is the config
+# readable". One implementation, two names.
+inv-portfolios() { bt-inventory "$@"; }
+
+_bt_inventory_complete() {
+    local cur="${COMP_WORDS[COMP_CWORD]}"
+    COMPREPLY=($(compgen -W "--out --portfolio --symbol --version --no-csv \
+                             --config -h --help" -- "$cur"))
+}
+complete -F _bt_inventory_complete bt-inventory inv-portfolios
+
 # 8. Who is allowed to trade what, and where does the order go?
 #
 # The other cards ask about MOTION — are bars arriving, what did the loop
