@@ -1,0 +1,115 @@
+{
+  "name": "ema_crossover_20260821_ZW_15m_VB",
+  "strategy": "ema_crossover_20260821",
+  "symbol": "ZW",
+  "version": "B",
+  "description": "Promoted Version B (baseline + causal ML filter).",
+  "symbols": [
+    "ZW"
+  ],
+  "timeframe": "15m",
+  "params": {
+    "fast_period": 20,
+    "slow_period": 89,
+    "sl_atr_mult": 2.5,
+    "tp_atr_mult": null,
+    "trailing": false
+  },
+  "params_source": "locked from dual_metrics_ZW.json",
+  "params_conflict": [],
+  "risk": {
+    "sl_atr_mult": 2.5,
+    "tp_atr_mult": null,
+    "trailing": false
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/ema_crossover_20260821.py",
+  "source_sha256": "9c290bc1e02d816f675ee2752d856aac563d8ae4f7563b0452fdac597d31857b",
+  "promoted_sha256": "7ed565af08092d864f4c8679aa7e2d8fc5fe93f8d9949421621b129a2ec8461b",
+  "promoted_utc": "2026-08-29T21:05:06+00:00",
+  "costs_included": true,
+  "variants_tested": null,
+  "metrics_status": "RECORDED \u00b7 locked from dual_metrics_ZW.json",
+  "metrics": {
+    "sharpe": 0.1794979871193662,
+    "sortino": 0.3513971861249843,
+    "calmar": 0.06249848754917105,
+    "profit_factor": 1.1371164918368937,
+    "win_rate": 0.41832669322709165,
+    "max_drawdown_pct": -3.8621926907122406,
+    "total_return_pct": 3.33791999999995,
+    "annualized_return_pct": 0.2413812017929784,
+    "trade_count": 251,
+    "total_pnl": 3337.9199999999505,
+    "total_costs": 7424.580000000051,
+    "final_equity": 103337.91999999995,
+    "n_days": 3432,
+    "start": "2013-01-02 15:30:00+00:00",
+    "end": "2026-08-07 18:15:00+00:00",
+    "bars": 236949,
+    "initial_capital": 100000.0
+  },
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "PASS",
+    "gate2": "FAIL",
+    "gate3": "FAIL",
+    "gate_regime": "PASS",
+    "gate_ruin": "PASS"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/ema_crossover_20260821/gate_audit_ZW_15m.json",
+    "audit_sha256": "b4832606c0c4b3198654f58585a8d006426a9f9fc25bc94fbdfaa79d694472de",
+    "audit_symbol": "ZW",
+    "audit_timeframe": "15m",
+    "target_quadrant": "Q1",
+    "target_regime": "High Volatility / Trending",
+    "audit_generated_utc": "2026-08-29T20:44:22+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "fast_period": 20,
+      "slow_period": 89,
+      "sl_atr_mult": 2.5,
+      "tp_atr_mult": null,
+      "trailing": false
+    },
+    "params_source": "stage 2 winner (best_params_ZW_15m.json)",
+    "variants_tested": 108,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "NOT EVALUATED",
+    "agrees_with_snapshot": false
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [],
+  "notes": "",
+  "ml_threshold": 0.48,
+  "baseline": "baseline.py"
+}
