@@ -242,7 +242,7 @@ import pandas as pd
 STRATEGY_NAME = "sma_momentum_crossover_20260818"
 
 TIMEFRAME = "15m"
-SYMBOLS = ["NQ", "ES", "CL", "GC"]
+SYMBOLS = ["NQ", "ES", "GC"]
 DEFAULT_PARAMS = {"fast_window": 10, "slow_window": 30, "macro_window": 200,
                   "adx_threshold": 20.0,
                   "use_macro_anchor": True, "use_adx_filter": True,
