@@ -30,7 +30,7 @@
   "source": "/home/cgrullon/src/trading/strategies/experimental/sma_momentum_crossover_20260818.py",
   "source_sha256": "fbd447f1f683fb03a1a7e1e41f90fe0e0a7e7f7ff43df8b842ed074869534c75",
   "promoted_sha256": "fbd447f1f683fb03a1a7e1e41f90fe0e0a7e7f7ff43df8b842ed074869534c75",
-  "promoted_utc": "2026-08-29T19:00:55+00:00",
+  "promoted_utc": "2026-08-29T20:19:06+00:00",
   "costs_included": true,
   "variants_tested": null,
   "metrics_status": "RECORDED \u00b7 locked from dual_metrics_RB.json",
@@ -63,12 +63,12 @@
   },
   "certification": {
     "audit_file": "/mnt/backtest/artifacts/pipeline/sma_momentum_crossover_20260818/gate_audit_RB_30m.json",
-    "audit_sha256": "a53023e2f00b4a7b2ae9ed56734c1de4b9710371aca014cb3aad66327040078b",
+    "audit_sha256": "43057558e17b84b33eed787119205bd215dafbc392e96e99140e0ee5ddb10dba",
     "audit_symbol": "RB",
     "audit_timeframe": "30m",
     "target_quadrant": "Q1",
     "target_regime": "High Volatility / Trending",
-    "audit_generated_utc": "2026-08-29T18:53:57+00:00",
+    "audit_generated_utc": "2026-08-29T20:10:38+00:00",
     "in_sample": {
       "start": "2013-01-01",
       "end": "2022-12-31"
