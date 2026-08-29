@@ -195,7 +195,8 @@ from backtest.memory_guard import (DEFAULT_GUARD,                  # noqa: E402
                                    MemorySafetyException)
 from backtest.parallel import (describe_plan, map_units,            # noqa: E402
                                resolve_jobs)
-from backtest.pipeline import (BASELINE_REPORT_FILE,               # noqa: E402
+from backtest.pipeline import (ML_THRESHOLD_DEFAULT,
+                               BASELINE_REPORT_FILE,               # noqa: E402
                                CHARTER_IS_END, CHARTER_IS_START,
                                SURVIVORS_CSV, SURVIVORS_FILE, leaderboard, next_step,
                                pipeline_dir, stage_banner, write_stage)
@@ -1262,8 +1263,11 @@ def build_parser() -> argparse.ArgumentParser:
                         "refits once per completed trade - but a skipped "
                         "Version B is reported as NOT RUN everywhere, never "
                         "as a Version B that scored nothing.")
-    p.add_argument("--threshold", type=float, default=0.50,
-                   help="Version B: P(win) at or above which an entry is kept")
+    p.add_argument("--ml-threshold", "--threshold", dest="threshold",
+                   type=float, default=ML_THRESHOLD_DEFAULT,
+                   help=(f"Version B: P(win) at or above which an entry is "
+                         f"kept (default {ML_THRESHOLD_DEFAULT}). Recorded in "
+                         f"the handoff as ml_threshold"))
     p.add_argument("--capital", type=float, default=100_000.0)
     p.add_argument("--contracts", type=int, default=1)
     p.add_argument("--slippage-ticks", type=float, default=1.0)
@@ -1810,6 +1814,12 @@ def main(argv: list[str] | None = None) -> int:
         "min_trades": args.min_trades,
         "min_trade_fraction": args.min_trade_fraction,
         "ml_evaluated": bool(args.ml),
+        # The threshold THIS run applied, not the current default. A handoff
+        # that records only "B was evaluated" cannot be compared with one drawn
+        # at a different bar - the filter's whole behaviour is this number, and
+        # a survivor list read a month later would otherwise be attributed to
+        # whatever the default had become.
+        "ml_threshold": float(args.threshold) if args.ml else None,
         "entry_filters": cfg_kwargs,
         "surviving_pairs": surviving_pairs,
         "surviving": survivors,

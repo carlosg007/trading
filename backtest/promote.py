@@ -75,7 +75,8 @@ if str(PROJECT_ROOT) not in sys.path:
     # root, so mdlib is not importable until this runs.
     sys.path.insert(0, str(PROJECT_ROOT))
 from mdlib.env import discord_webhook, load_env                    # noqa: E402
-from backtest.pipeline import base_strategy, strategy_id            # noqa: E402
+from backtest.pipeline import (ML_THRESHOLD_DEFAULT,               # noqa: E402
+                               base_strategy, strategy_id)
 
 load_env()
 # ---------------------------------------------------------------------------
@@ -2103,8 +2104,13 @@ def main(argv: list[str] | None = None) -> int:
                    help="Override the module's TIMEFRAME")
     p.add_argument("--params", default=None,
                    help="JSON dict merged over the module's DEFAULT_PARAMS")
-    p.add_argument("--threshold", type=float, default=0.50,
-                   help="Version B: P(win) at or above which an entry is kept")
+    # The SAME default as the three stages upstream. A promotion that baked
+    # in a different number would deploy a Version B nobody certified.
+    p.add_argument("--ml-threshold", "--threshold", dest="threshold",
+                   type=float, default=ML_THRESHOLD_DEFAULT,
+                   help=(f"Version B: P(win) at or above which an entry is "
+                         f"kept (default {ML_THRESHOLD_DEFAULT}). Embedded "
+                         f"into the promoted module as ML_THRESHOLD"))
     p.add_argument("--variants-tested", type=int, default=None,
                    help="How many variants were tried to reach this result")
     p.add_argument("--notes", default="", help="Free text for meta.json")

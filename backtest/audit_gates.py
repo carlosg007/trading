@@ -181,7 +181,8 @@ from backtest.event_calendar import (WEEKDAY_NAMES, add_filter_args,  # noqa: E4
 # they were screened on.
 from backtest.baseline import (MIN_REGIME_PROFIT_FACTOR,           # noqa: E402
                                MIN_REGIME_TRADES, quadrant_id)
-from backtest.pipeline import (BEST_PARAMS_FILE, CHARTER_IS_END,   # noqa: E402
+from backtest.pipeline import (ML_THRESHOLD_DEFAULT,
+                               BEST_PARAMS_FILE, CHARTER_IS_END,   # noqa: E402
                                CHARTER_IS_START, GATE_AUDIT_FILE,
                                HOLDOUT_START, RUIN_MIN_DRAWDOWN_PCT,
                                STAGE2_SUMMARY_FILE,
@@ -1793,7 +1794,10 @@ def build_parser() -> argparse.ArgumentParser:
                         "pair that qualified on it. For a B survivor whose "
                         "classifier cannot be rebuilt; the audit records that "
                         "the version was overridden.")
-    p.add_argument("--threshold", type=float, default=0.50)
+    p.add_argument("--ml-threshold", "--threshold", dest="threshold",
+                   type=float, default=ML_THRESHOLD_DEFAULT,
+                   help=(f"Version B: P(win) at or above which an entry is "
+                         f"kept (default {ML_THRESHOLD_DEFAULT})"))
     p.add_argument("--wfo-train", type=int, default=2,
                    help="Walk-forward train window in years (default 2)")
     p.add_argument("--wfo-test", type=int, default=1,
@@ -2134,6 +2138,19 @@ def write_stage3_summary(strat_name: str, out_dir: Path, results: list[dict],
         # and a command missing --source is a command nobody can paste.
         "strategy_source": (str(source_path) if source_path else None),
         "in_sample": {"start": args.is_start, "end": args.is_end},
+        # The bar Version B's holdout inference ran at. Gate R's verdict on a
+        # Version B candidate is a verdict on the FILTER, and the filter is
+        # this number - a certification that does not record it cannot be
+        # matched against the ML_THRESHOLD promote.py bakes into the module
+        # it deploys, which is the one comparison that says the promoted
+        # strategy is the certified one.
+        # getattr, not args.threshold. This function is also reached by
+        # `rebuild_stage3_summary`, which reconstructs a partial namespace from
+        # gate_audit files on disk - a rebuild must not crash because the
+        # rebuilt args carry no CLI flag. Absent records None, which is the
+        # honest answer: not recorded is not 0.48.
+        "ml_threshold": (float(t) if (t := getattr(args, "threshold", None))
+                         is not None else None),
         "holdout": {
             "start": args.holdout_start, "end": args.holdout_end,
             "end_basis": ("the present - every bar the lake holds"

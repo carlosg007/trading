@@ -170,7 +170,8 @@ from backtest.engine import (BacktestConfig, TRADE_COLUMNS,   # noqa: E402
                              unpack_signals)
 from backtest.event_calendar import (WEEKDAY_NAMES, add_filter_args,   # noqa: E402
                                     entry_block_mask)
-from backtest.pipeline import (CHARTER_IS_END, CHARTER_IS_START,  # noqa: E402
+from backtest.pipeline import (ML_THRESHOLD_DEFAULT,
+                               CHARTER_IS_END, CHARTER_IS_START,  # noqa: E402
                                RUIN_MIN_DRAWDOWN_PCT,
                                HOLDOUT_START)
 from backtest.report import INFO, PASS, audit_acceptance_gates  # noqa: E402
@@ -2469,7 +2470,8 @@ def write_stage2_summary(strategy: str, rows: list[dict], errors: list[dict],
                          out_dir: Path, start: str | None, end: str | None,
                          timeframes: list[str], target_source: str,
                          unscreened: list[str], rank: str,
-                         grid: dict | None = None) -> list[Path]:
+                         grid: dict | None = None,
+                         ml_threshold: float | None = None) -> list[Path]:
     """
     `stage2_summary.json` + `stage2_summary_matrix.csv` - the stage's own
     handoff, beside the per-contract `best_params` files.
@@ -2501,6 +2503,11 @@ def write_stage2_summary(strategy: str, rows: list[dict], errors: list[dict],
     payload = {
         "start": start,
         "end": end,
+        # The bar the Version B confirmation ran at, recorded because it is
+        # the filter's entire behaviour. Stage 3 certifies at its own
+        # --ml-threshold and promote.py bakes one into the deployed module;
+        # three numbers that must agree are three numbers worth writing down.
+        "ml_threshold": ml_threshold,
         "in_sample_window": {
             "start": start, "end": end,
             "charter_default": bool(start == CHARTER_IS_START
@@ -2604,9 +2611,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Do NOT confirm the winner even for a pair whose "
                         "stage1_version is B. best_params records that the "
                         "confirmation was skipped, and why.")
-    p.add_argument("--ml-threshold", type=float, default=0.50,
-                   help="P(win) at or above which the confirmation filter "
-                        "keeps an entry (default 0.50)")
+    p.add_argument("--ml-threshold", type=float,
+                   default=ML_THRESHOLD_DEFAULT,
+                   help=(f"P(win) at or above which the confirmation filter "
+                         f"keeps an entry (default {ML_THRESHOLD_DEFAULT})"))
     p.add_argument("--reuse-scan", action="store_true",
                    help="Do not sweep. Rebuild best_params_<SYMBOL>_<TF>.json "
                         "from the scan_<SYMBOL>.csv files already in the "
@@ -3305,7 +3313,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         written = write_stage2_summary(
             strat_name, rows, errors, out_dir, args.start, args.end,
-            timeframes, source, unscreened, args.rank, grid)
+            timeframes, source, unscreened, args.rank, grid,
+            ml_threshold=float(args.ml_threshold))
         for w in written:
             print(f"\n  summary    → {w}")
     except Exception as e:                                        # noqa: BLE001

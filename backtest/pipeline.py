@@ -131,6 +131,24 @@ BEST_PARAMS_FILE = "best_params_{symbol}.json"
 # human and for a spreadsheet - it is NOT read back by any stage, because a
 # CSV round trip loses the types a parameter set is made of.
 STAGE2_SUMMARY_FILE = "stage2_summary.json"
+#: Version B keeps an entry when the classifier's P(win) is at or above this.
+#:
+#: ONE constant, imported by all four stages, because a threshold that differs
+#: between them is invisible and wrong in the worst direction. Stage 3 certifies
+#: a filter at one value and promote.py bakes another into the module it
+#: deploys; the promoted strategy then reproduces a Version B that was never
+#: certified, and every log line reads correctly. Each stage still takes
+#: `--ml-threshold` to override it, and the value that was APPLIED is written
+#: into that stage's handoff so a run can be read back without guessing.
+#:
+#: 0.48 rather than 0.50 since 2026-08-29. A coin-flip bar filtered out roughly
+#: half of Version B's entries, which shrank the holdout sample in the
+#: designated quadrant toward Gate R's 30-trade floor - so B failed on COUNT
+#: rather than on edge, whatever its profit factor did. Lowering the bar keeps
+#: more entries; it does not make the filter better, and Gate R is still the
+#: only evidence either way.
+ML_THRESHOLD_DEFAULT = 0.48
+
 STAGE2_MATRIX_FILE = "stage2_summary_matrix.csv"
 GATE_AUDIT_FILE = "gate_audit_{symbol}.json"
 
