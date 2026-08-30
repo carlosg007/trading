@@ -5,6 +5,15 @@
 # fix here reaches the box through git rather than through somebody editing a
 # dotfile from memory.
 #
+# BASH ONLY, AND `sh -n` ON THIS FILE IS EXPECTED TO FAIL. Thirteen helpers are
+# named with a hyphen — precompute-all, pipeline-all, bt-check, bt-inventory —
+# because that is the vocabulary CLAUDE.md documents and the one people type.
+# Bash permits a hyphen in a function name; POSIX sh does not, so `dash -n`
+# stops at the first of them with "Bad function name" and a reader can mistake
+# a deliberate bash file for a broken one. `bash -n` is the check that applies
+# here, and it passes. Renaming them to satisfy a shell that never sources this
+# file would break every command in the runbook.
+#
 #   precompute_all_regimes   (precompute-all)  build the ATR/ADX regime cache
 #   run_pipeline_all         (pipeline-all)    run the multi-asset pipeline
 #
