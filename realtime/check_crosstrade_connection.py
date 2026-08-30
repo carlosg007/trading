@@ -379,13 +379,19 @@ def render(snap: dict[str, Any]) -> str:
              "sent for the micro.")
 
     il = snap["interlock"]
+    # `interlock()` sets both fields with `armed()`, which is TRUE when `--live`
+    # is present. All three branches here read that backwards until 2026-08-30:
+    # a running ARMED loop printed "formats orders and sends none". That is the
+    # inversion that costs money — the operator reads the card, believes the
+    # socket is closed, and walks away from a loop sending real orders.
+    # `check_trade_firewall` has always had this polarity right; match it.
     if il["running"] is True:
-        guard = "DRY RUN — the running loop formats orders and sends none"
-    elif il["running"] is False:
         guard = "LIVE — the running loop WILL send orders"
+    elif il["running"] is False:
+        guard = "DRY RUN — the running loop formats orders and sends none"
     else:
         guard = (f"no loop running; systemd would start it "
-                 + ("in DRY RUN" if il["effective"] else "LIVE"))
+                 + ("LIVE" if il["effective"] else "in DRY RUN"))
     L.append(f"  Firewall Interlock   : {guard}")
 
     # ---- what was sent -----------------------------------------------
