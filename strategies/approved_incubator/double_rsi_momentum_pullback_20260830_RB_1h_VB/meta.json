@@ -1,0 +1,124 @@
+{
+  "name": "double_rsi_momentum_pullback_20260830_RB_1h_VB",
+  "strategy": "double_rsi_momentum_pullback_20260830",
+  "symbol": "RB",
+  "version": "B",
+  "description": "Promoted Version B (baseline + causal ML filter).",
+  "symbols": [
+    "RB"
+  ],
+  "timeframe": "1h",
+  "params": {
+    "rsi_fast_len": 7,
+    "rsi_slow_len": 14,
+    "pullback_window": 3,
+    "volume_sma_len": 20,
+    "volume_mult": 1.1,
+    "rsi_exit_long": 80.0,
+    "rsi_exit_short": 20.0,
+    "use_baseline_filter": true,
+    "use_alpha_trigger": true,
+    "use_volume_filter": true,
+    "use_news_filter": false,
+    "sl_atr_mult": 1.0,
+    "tp_atr_mult": null,
+    "trailing": false
+  },
+  "params_source": "locked from dual_metrics_RB.json",
+  "params_conflict": [],
+  "risk": {
+    "sl_atr_mult": 1.0,
+    "tp_atr_mult": null,
+    "trailing": false
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/double_rsi_momentum_pullback_20260830.py",
+  "source_sha256": "d6e295b941ca9bbee04fe1ad9a100d55dbf003592a3ed926b717482c5e78b1bd",
+  "promoted_sha256": "40a888959738d9d50dc6dfcaf64e266648ad6a166a213db3b1d78a2dfb354aed",
+  "promoted_utc": "2026-08-30T17:27:33+00:00",
+  "costs_included": true,
+  "variants_tested": null,
+  "metrics_status": "RECORDED \u00b7 locked from dual_metrics_RB.json",
+  "metrics": {
+    "sharpe": 0.2651236064478384,
+    "sortino": 0.6225034187338624,
+    "calmar": 0.1023901543166032,
+    "profit_factor": 1.1811117974424894,
+    "win_rate": 0.31444759206798867,
+    "max_drawdown_pct": -13.959141777866147,
+    "total_return_pct": 26.83405999999957,
+    "annualized_return_pct": 1.4292786807630575,
+    "trade_count": 353,
+    "total_pnl": 26834.059999999692,
+    "total_costs": 4581.940000000193,
+    "final_equity": 126834.05999999956,
+    "n_days": 4221,
+    "start": "2013-01-01 23:00:00+00:00",
+    "end": "2026-08-07 20:00:00+00:00",
+    "bars": 77009,
+    "initial_capital": 100000.0
+  },
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "FAIL",
+    "gate2": "FAIL",
+    "gate3": "PASS",
+    "gate_regime": "PASS",
+    "gate_ruin": "PASS"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/double_rsi_momentum_pullback_20260830/gate_audit_RB_1h.json",
+    "audit_sha256": "2a398198d94f0ba7d09f918a570845f09c69f6bf72654e992c84ef0a1cfe652f",
+    "audit_symbol": "RB",
+    "audit_timeframe": "1h",
+    "target_quadrant": "Q1",
+    "target_regime": "High Volatility / Trending",
+    "audit_generated_utc": "2026-08-30T17:18:40+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "rsi_fast_len": 7,
+      "rsi_slow_len": 14,
+      "sl_atr_mult": 1.0,
+      "tp_atr_mult": null,
+      "trailing": false
+    },
+    "params_source": "stage 2 winner (best_params_RB_1h.json)",
+    "variants_tested": 162,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "FAIL",
+    "agrees_with_snapshot": false
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [],
+  "notes": "",
+  "ml_threshold": 0.48,
+  "baseline": "baseline.py"
+}
