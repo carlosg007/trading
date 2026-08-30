@@ -6,6 +6,12 @@ __pycache__/
 *.duckdb
 *.parquet
 *.csv
+# `reports/` is a SYMLINK to /mnt/backtest/reports since 2026-08-30, and a
+# symlink is a FILE to git. The *.csv rule above hid the directory's contents
+# while it was a real directory; it does not hide the link itself, which git
+# would otherwise offer to track - committing an absolute NFS path that is
+# wrong on any machine without this mount.
+/reports
 scratch/
 courses/
 
