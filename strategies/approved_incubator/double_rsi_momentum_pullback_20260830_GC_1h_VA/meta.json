@@ -1,0 +1,122 @@
+{
+  "name": "double_rsi_momentum_pullback_20260830_GC_1h_VA",
+  "strategy": "double_rsi_momentum_pullback_20260830",
+  "symbol": "GC",
+  "version": "A",
+  "description": "Promoted Version A (rule-based baseline).",
+  "symbols": [
+    "GC"
+  ],
+  "timeframe": "1h",
+  "params": {
+    "rsi_fast_len": 7,
+    "rsi_slow_len": 14,
+    "pullback_window": 3,
+    "volume_sma_len": 20,
+    "volume_mult": 1.1,
+    "rsi_exit_long": 80.0,
+    "rsi_exit_short": 20.0,
+    "use_baseline_filter": true,
+    "use_alpha_trigger": true,
+    "use_volume_filter": true,
+    "use_news_filter": false,
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": 2.0,
+    "trailing": false
+  },
+  "params_source": "locked from dual_metrics_GC.json",
+  "params_conflict": [],
+  "risk": {
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": 2.0,
+    "trailing": false
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/double_rsi_momentum_pullback_20260830.py",
+  "source_sha256": "d6e295b941ca9bbee04fe1ad9a100d55dbf003592a3ed926b717482c5e78b1bd",
+  "promoted_sha256": "d6e295b941ca9bbee04fe1ad9a100d55dbf003592a3ed926b717482c5e78b1bd",
+  "promoted_utc": "2026-08-30T17:27:37+00:00",
+  "costs_included": true,
+  "variants_tested": null,
+  "metrics_status": "RECORDED \u00b7 locked from dual_metrics_GC.json",
+  "metrics": {
+    "sharpe": 0.21058267959198554,
+    "sortino": 0.3050701927427587,
+    "calmar": 0.04009768766409994,
+    "profit_factor": 1.0519656261761758,
+    "win_rate": 0.5111394016549968,
+    "max_drawdown_pct": -55.14028253582012,
+    "total_return_pct": 44.21481999999537,
+    "annualized_return_pct": 2.21099782683154,
+    "trade_count": 1571,
+    "total_pnl": 44214.8199999964,
+    "total_costs": 38615.18000000343,
+    "final_equity": 144214.81999999538,
+    "n_days": 4219,
+    "start": "2013-01-01 23:00:00+00:00",
+    "end": "2026-08-07 20:00:00+00:00",
+    "bars": 80130,
+    "initial_capital": 100000.0
+  },
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "FAIL",
+    "gate2": "FAIL",
+    "gate3": "PASS",
+    "gate_regime": "PASS",
+    "gate_ruin": "PASS"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/double_rsi_momentum_pullback_20260830/gate_audit_GC_1h.json",
+    "audit_sha256": "aeadb982317527ebf3660ade37afaf252876861dccef31a57b072dd56d3cc053",
+    "audit_symbol": "GC",
+    "audit_timeframe": "1h",
+    "target_quadrant": "Q1",
+    "target_regime": "High Volatility / Trending",
+    "audit_generated_utc": "2026-08-30T17:19:10+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "rsi_fast_len": 7,
+      "rsi_slow_len": 14,
+      "sl_atr_mult": 2.0,
+      "tp_atr_mult": 2.0,
+      "trailing": false
+    },
+    "params_source": "stage 2 winner (best_params_GC_1h.json)",
+    "variants_tested": 162,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "FAIL",
+    "agrees_with_snapshot": false
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [],
+  "notes": ""
+}
