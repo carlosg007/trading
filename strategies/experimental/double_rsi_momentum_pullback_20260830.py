@@ -120,7 +120,7 @@ DEFAULT_PARAMS = {
     "rsi_slow_len": 21,
     "pullback_window": 3,
     "volume_sma_len": 20,
-    "volume_mult": 1.05,
+    "volume_mult": 1.1,
     "rsi_exit_long": 80.0,
     "rsi_exit_short": 20.0,
     "use_baseline_filter": True,
@@ -132,23 +132,54 @@ DEFAULT_PARAMS = {
     "trailing": False,
 }
 
-#: The request's grid, transcribed. COUNT IT BEFORE RUNNING IT:
+#: The search space `backtest/run.py --scan` and `backtest/scan.py` sweep.
 #:
-#:     3 x 3 x 3 x 3 x 3 x 3 x 2 = 1,458 combinations
+#:     3 x 3 x 3 x 3 x 2 = 162 combinations
 #:
-#: That is SEVEN TIMES the ~200-cell bound this repository holds its grids to,
-#: and the bound is not a style rule. The reported Sharpe is the maximum of
-#: that many draws from one sample of bars, and the maximum of a sample climbs
-#: with N whether or not anything in the market has changed.
+#: TRIMMED FROM THE REQUEST'S 1,458 by pinning `pullback_window` at 3 and
+#: `volume_mult` at 1.1, on 2026-08-30. The full grid is preserved below.
 #:
-#: Multiply before quoting it: `--tf 5m,15m,30m,1h` is 1,458 fits PER timeframe
-#: PER contract - 5,832 per symbol, 23,328 across the four declared assets.
+#: Why those two and not others: they are the parameters the PREMISE is least
+#: sensitive to. The hypothesis is "a fast oscillator pulling back inside a
+#: slower trend, on participation" - the RSI lengths ARE that hypothesis and
+#: the brackets decide whether it survives its costs, so both stay open. A
+#: pullback measured over 2 bars rather than 3, or a volume bar 10% above its
+#: mean rather than 25%, varies the same idea rather than testing a different
+#: one.
 #:
-#: It is transcribed rather than trimmed because the grid is the request's to
-#: set and `variants_tested` carries the count into every artifact, so the
-#: search is at least reported honestly. A 162-cell version testing the same
-#: hypothesis is in the module docstring's companion note; prefer it.
+#: The count is the reason. 1,458 is seven times the ~200-cell bound this
+#: repository holds its grids to, and the bound is not a style rule: the
+#: reported Sharpe is the maximum of that many draws from ONE sample of bars,
+#: and the maximum of a sample climbs with N whether or not anything in the
+#: market has changed. Multiply before quoting either number - `--tf
+#: 5m,15m,30m,1h` is 162 fits PER timeframe PER contract, so 648 per symbol
+#: and 2,592 across the four declared assets. At 1,458 it would have been
+#: 23,328.
+#:
+#: `variants_tested` carries whichever count actually ran into every artifact,
+#: so a Sharpe read from this grid can be read against the search that
+#: produced it.
 PARAM_GRID = {
+    "rsi_fast_len": [3, 5, 7],
+    "rsi_slow_len": [14, 21, 28],
+    "sl_atr_mult": [1.0, 1.5, 2.0],
+    "tp_atr_mult": [2.0, 3.0, None],
+    "trailing": [False, True],
+}
+
+#: THE REQUEST'S ORIGINAL 1,458-CELL GRID, kept for provenance. Restoring it
+#: is a deliberate act with a stated cost, not a default anyone falls into:
+#:
+#:     PARAM_GRID = {
+#:         "rsi_fast_len":    [3, 5, 7],
+#:         "rsi_slow_len":    [14, 21, 28],
+#:         "pullback_window": [2, 3, 5],       # pinned at 3
+#:         "volume_mult":     [1.0, 1.1, 1.25],# pinned at 1.1
+#:         "sl_atr_mult":     [1.0, 1.5, 2.0],
+#:         "tp_atr_mult":     [2.0, 3.0, None],
+#:         "trailing":        [False, True],
+#:     }
+FULL_PARAM_GRID_AS_REQUESTED = {
     "rsi_fast_len": [3, 5, 7],
     "rsi_slow_len": [14, 21, 28],
     "pullback_window": [2, 3, 5],

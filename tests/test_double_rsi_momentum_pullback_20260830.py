@@ -213,11 +213,32 @@ def test_the_grid_is_counted_honestly():
     cells = 1
     for values in M.PARAM_GRID.values():
         cells *= len(values)
-    assert cells == 1458
-    assert str(cells) in MODULE_PATH.read_text() or "1,458" in \
-        MODULE_PATH.read_text(), "the module must state its own cell count"
+    assert cells == 162, "trimmed from the request's 1,458 on 2026-08-30"
+    assert "162" in MODULE_PATH.read_text(), (
+        "the module must state its own cell count")
+
+    # The original is kept for provenance, and it must remain a RECORD rather
+    # than drift into something the module never swept.
+    full = 1
+    for values in M.FULL_PARAM_GRID_AS_REQUESTED.values():
+        full *= len(values)
+    assert full == 1458
+    assert "1,458" in MODULE_PATH.read_text()
+
     for key in M.PARAM_GRID:
         assert key in M.DEFAULT_PARAMS, f"{key} is swept but not a parameter"
+
+    # THE PINNED PARAMETERS MUST BE THE DEFAULTS. A grid that pins a value
+    # while the default differs sweeps around one setting and reports another:
+    # every cell would run at volume_mult 1.05 while the provenance comment
+    # says 1.1 was chosen.
+    pinned = set(M.FULL_PARAM_GRID_AS_REQUESTED) - set(M.PARAM_GRID)
+    assert pinned == {"pullback_window", "volume_mult"}
+    assert M.DEFAULT_PARAMS["pullback_window"] == 3
+    assert M.DEFAULT_PARAMS["volume_mult"] == 1.1
+    for key in pinned:
+        assert M.DEFAULT_PARAMS[key] in M.FULL_PARAM_GRID_AS_REQUESTED[key], (
+            f"{key} is pinned to a value the original grid never contained")
 
 
 def test_the_module_passes_the_ast_security_audit():
@@ -233,7 +254,12 @@ def test_every_grid_cell_this_module_accepts_is_walkable():
     combos = list(itertools.product(*M.PARAM_GRID.values()))
     bars = _bars(400, seed=3)
     checked = 0
-    for combo in combos[::97]:                 # a spread across the space
+    # A stride PROPORTIONAL to the grid, not a constant. A fixed 97 was sized
+    # for the original 1,458 cells and silently sampled two of the trimmed
+    # 162 - the assertion below caught it, which is the only reason this is a
+    # comment rather than a coverage hole.
+    stride = max(1, len(combos) // 12)
+    for combo in combos[::stride]:             # a spread across the space
         params = dict(zip(keys, combo))
         try:
             out = M.signal_fn(bars, **params)
