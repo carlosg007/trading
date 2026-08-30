@@ -1324,7 +1324,16 @@ class LiveExecutionDispatcher:
                 self.firewall.check_order(payload, strategy_tag=strategy_tag,
                                           bar_ts=bar_ts)
             except RiskViolation as exc:
+                # `rule` and `detail` are carried as their own keys, not just
+                # folded into `error`. `master_live` prints the refusal line
+                # from `risk_refusals` and reads exactly these two; before
+                # they were stored the loop raised `KeyError: 'rule'` INSIDE
+                # the handler for a refused order, so the first time the
+                # firewall did its job the execution loop died and systemd
+                # restarted it into the same refusal every 15 seconds.
+                # `blocked_by` is kept for anything reading the old name.
                 record.update({"ok": False, "blocked_by": exc.rule,
+                               "rule": exc.rule, "detail": exc.detail,
                                "error": f"RISK REFUSED [{exc.rule}] {exc.detail}",
                                "elapsed_ms": round(
                                    (time.perf_counter() - started) * 1000, 1)})
