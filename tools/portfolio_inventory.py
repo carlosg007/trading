@@ -54,7 +54,7 @@ COLUMNS = (
     "version", "ml_threshold", "optimal_regime", "kill_switch_regimes",
     "in_sample_pf", "in_sample_trades", "in_sample_win_rate",
     "gate_r_pf", "gate_r_trades", "oos_holdout_pf", "oos_holdout_trades",
-    "gate_r_status",
+    "gate_r_status", "report_html",
     "disk_status", "promoted_at",
 )
 
@@ -88,6 +88,39 @@ def _family(strategy_id: str, meta: dict | None) -> str:
         return base_strategy(strategy_id)
     except Exception:                                            # noqa: BLE001
         return strategy_id
+
+
+def _report_html(meta: dict, version: str | None) -> str:
+    """
+    The tearsheet Stage 4 wrote for this package, or MISSING.
+
+    Resolved by CONVENTION, because nothing records it: meta.json carries no
+    report key, so the path is rebuilt from the family, the symbol and the
+    version - `<family>/verify_*/report_<SYMBOL>_version_<a|b>.html`. The
+    NEWEST verify_ directory wins, since a campaign re-run leaves the older
+    ones in place and the stale tearsheet describes a run whose parameters no
+    longer match the promoted module.
+
+    MISSING rather than a guessed path. A column offering a file that is not
+    there wastes more time than an empty one.
+    """
+    strategy = str(meta.get("strategy") or "").strip()
+    symbol = str(meta.get("symbol") or "").strip().upper()
+    ver = str(version or "").strip().lower()
+    if not (strategy and symbol and ver in ("a", "b")):
+        return "MISSING"
+    try:
+        from backtest.pipeline import artifacts_root
+        home = artifacts_root() / "pipeline" / strategy
+    except Exception:                                            # noqa: BLE001
+        return "MISSING"
+    runs = sorted((d for d in home.glob("verify_*") if d.is_dir()),
+                  key=lambda d: d.name, reverse=True)
+    for run in runs:
+        candidate = run / f"report_{symbol}_version_{ver}.html"
+        if candidate.is_file():
+            return str(candidate)
+    return "MISSING"
 
 
 def _version_block(audit: dict | None, version: str | None) -> dict:
@@ -140,6 +173,8 @@ def collect_rows(portfolios: dict, incubator: Path = INCUBATOR) -> list[dict]:
             is_m = block.get("metrics_in_sample") or {}
             oos_m = block.get("metrics_holdout") or {}
             profile = block.get("regime_profile_holdout") or {}
+            gate_r = (((block.get("gate_audit") or {}).get("gates") or {})
+                      .get("gate_regime") or {}).get("measured") or {}
 
             quadrant = profile.get("optimal_quadrant")
             regime = profile.get("optimal_regime")
@@ -161,19 +196,28 @@ def collect_rows(portfolios: dict, incubator: Path = INCUBATOR) -> list[dict]:
                 "in_sample_pf": _num(is_m.get("profit_factor")),
                 "in_sample_trades": is_m.get("trade_count", ""),
                 "in_sample_win_rate": _pct(is_m.get("win_rate")),
-                # TWO DIFFERENT MEASUREMENTS, and conflating them is how a
-                # summary invents a disagreement with the certification it
-                # reports. Gate R judges the DESIGNATED QUADRANT only;
-                # metrics_holdout covers the whole holdout across all four.
-                # t3_braid NQ 1h Version B: 1.22 in Q2, 1.15 over everything.
-                # The gate's verdict rests on the first, so it is named for
-                # the gate and the second keeps the neutral name.
-                "gate_r_pf": _num(profile.get("optimal_profit_factor")),
-                "gate_r_trades": profile.get("optimal_trade_count", ""),
+                # FROM THE GATE'S OWN BLOCK, not from the holdout profile
+                # beside it. Both carry an "optimal" profit factor and they
+                # are not the same measurement: `regime_profile_holdout`
+                # describes the best quadrant WITHIN THE HOLDOUT, while Gate R
+                # judges the quadrant DESIGNATED IN SAMPLE. They coincide only
+                # when the holdout's best happens to be the designated one.
+                #
+                # Reading the profile made this tool report
+                # sma_momentum GC 1h Version B as certified on 0 trades - its
+                # holdout had no dominant quadrant, so optimal_trade_count was
+                # 0 - when Gate R had measured 46 trades at PF 1.20 in Q1 and
+                # passed it on that. The gate was right; the summary was
+                # reading the wrong field, and a "certified on nothing" row is
+                # exactly the kind of false finding a read-only tool must not
+                # manufacture.
+                "gate_r_pf": _num(gate_r.get("profit_factor")),
+                "gate_r_trades": gate_r.get("trade_count", ""),
                 "oos_holdout_pf": _num(oos_m.get("profit_factor")),
                 "oos_holdout_trades": oos_m.get("trade_count", ""),
                 "gate_r_status": (meta.get("gate_audit_status")
                                   or meta.get("oos_status") or ""),
+                "report_html": _report_html(meta, version),
                 "disk_status": disk,
                 "promoted_at": meta.get("promoted_utc") or "",
             })

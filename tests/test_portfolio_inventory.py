@@ -34,6 +34,9 @@ def _audit(path: Path, version: str = "B") -> Path:
         "metrics_in_sample": {"profit_factor": 1.0748, "trade_count": 1719,
                               "win_rate": 0.5183},
         "metrics_holdout": {"profit_factor": 1.1545, "trade_count": 673},
+        "gate_audit": {"gates": {"gate_regime": {
+            "status": "PASS",
+            "measured": {"profit_factor": 1.22, "trade_count": 280}}}},
         "regime_profile_holdout": {
             "optimal_quadrant": "Q2",
             "optimal_regime": "High Volatility / Ranging",
@@ -85,7 +88,64 @@ def test_gate_r_pf_is_the_quadrant_not_the_whole_holdout(world):
     row, = inv.collect_rows(cfg, inc)
     assert (row["gate_r_pf"], row["gate_r_trades"]) == (1.22, 280)
     assert (row["oos_holdout_pf"], row["oos_holdout_trades"]) == (1.1545, 673)
+    assert "report_html" in row
     assert row["gate_r_pf"] != row["oos_holdout_pf"]
+
+
+def test_gate_r_comes_from_the_gate_not_the_holdout_profile(tmp_path):
+    """
+    Both blocks carry an "optimal" profit factor and they are NOT the same
+    measurement. `regime_profile_holdout` describes the best quadrant WITHIN
+    THE HOLDOUT; Gate R judges the quadrant DESIGNATED IN SAMPLE.
+
+    Reading the profile reported sma_momentum GC 1h Version B as certified on
+    0 trades - its holdout had no dominant quadrant - when Gate R had measured
+    46 trades at PF 1.20 in Q1 and passed it. A read-only summary must not
+    manufacture a "certified on nothing" finding out of the wrong field.
+    """
+    inc = tmp_path / "inc"
+    pkg = inc / "demo_GC_1h_VB"
+    pkg.mkdir(parents=True)
+    audit = tmp_path / "a.json"
+    audit.write_text(json.dumps({"versions": {"B": {
+        "metrics_holdout": {"profit_factor": 1.0018, "trade_count": 93},
+        "gate_audit": {"gates": {"gate_regime": {
+            "measured": {"profit_factor": 1.20, "trade_count": 46}}}},
+        # The holdout had no dominant quadrant. This is the trap.
+        "regime_profile_holdout": {"optimal_profit_factor": None,
+                                   "optimal_trade_count": 0,
+                                   "optimal_regime": None}}}}))
+    (pkg / "meta.json").write_text(json.dumps({
+        "strategy": "demo", "symbol": "GC", "timeframe": "1h", "version": "B",
+        "certification": {"audit_file": str(audit)}}))
+    cfg = {"portfolios": {"P": {"active_strategies": ["demo_GC_1h_VB"],
+                                "strategy_allocations": {}}}}
+    row, = inv.collect_rows(cfg, inc)
+    assert (row["gate_r_pf"], row["gate_r_trades"]) == (1.2, 46), (
+        "the gate's own measurement, not the holdout profile's 0")
+    assert row["gate_r_trades"] != 0
+
+
+def test_report_html_resolves_or_says_missing(tmp_path, monkeypatch):
+    """MISSING rather than a guessed path - a column offering a file that is
+    not there wastes more time than an empty one."""
+    root = tmp_path / "artifacts"
+    run = root / "pipeline" / "demo" / "verify_20260829_120000"
+    run.mkdir(parents=True)
+    (run / "report_NQ_version_b.html").write_text("<html/>")
+    # A NEWER run wins, because a re-run leaves the old tearsheet describing
+    # parameters the promoted module no longer uses.
+    newer = root / "pipeline" / "demo" / "verify_20260830_090000"
+    newer.mkdir(parents=True)
+    (newer / "report_NQ_version_b.html").write_text("<html/>")
+    monkeypatch.setenv("BT_ARTIFACTS", str(root))
+
+    meta = {"strategy": "demo", "symbol": "NQ"}
+    assert inv._report_html(meta, "B").endswith(
+        "verify_20260830_090000/report_NQ_version_b.html")
+    assert inv._report_html({"strategy": "demo", "symbol": "ES"}, "B") == "MISSING"
+    assert inv._report_html({}, "B") == "MISSING"
+    assert inv._report_html(meta, None) == "MISSING"
 
 
 def test_win_rate_is_a_percentage_not_a_fraction(world):

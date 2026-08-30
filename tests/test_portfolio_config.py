@@ -138,6 +138,7 @@ EXPECTED_ASSIGNMENTS = {
         "ema_crossover_20260821_NQ_1h_VA",                    #  1h, NQ
         "ema_crossover_20260821_NQ_1h_VB",                    #  1h, NQ
         "ema_crossover_20260821_NQ_15m_VA",                   # 15m, NQ
+        "ma_anchoring_spread_20260820_NQ_15m_VA",             # 15m, NQ
     ],
     "Incubator-Even": [
         "sma_momentum_crossover_20260818_GC_1h_VA",           #  1h, GC
@@ -149,6 +150,8 @@ EXPECTED_ASSIGNMENTS = {
         "t3_braid_scalp_20260823_GC_30m_VB",                  # 30m, GC
         "ema_crossover_20260821_ES_30m_VA",                   # 30m, ES
         "ema_crossover_20260821_ES_15m_VA",                   # 15m, ES
+        "ma_anchoring_spread_20260820_GC_1h_VA",              #  1h, GC
+        "ma_anchoring_spread_20260820_GC_1h_VB",              #  1h, GC
     ],
     "Prop-Odd":       [],
     "Prop-Even":      [],
