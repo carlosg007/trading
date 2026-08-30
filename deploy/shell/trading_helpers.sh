@@ -399,6 +399,36 @@ alias trade-gate='firewall-check'
 alias crosstrade-check="${_TRADING_PY} ${_TRADING_REPO}/realtime/check_crosstrade_connection.py"
 alias ct-check='crosstrade-check'
 
+# 10. Is this box in a fit state to be trusted?
+#
+# The post-power-on check, run before anything is armed. It walks the mount,
+# the interpreter and its packages, the NT8 spool, the CrossTrade bridge, the
+# routing table and outbound DNS, and prints a badge per subsystem.
+#
+# IT CHANGES NOTHING and CONTACTS NO ORDER ENDPOINT. Every probe is a read, a
+# DNS lookup or a TLS handshake; the one write is a probe file on the mount,
+# removed immediately, because that is the only honest way to answer "is it
+# writable". `check_crosstrade_connection`'s rule holds - the webhook's PATH is
+# the credential, so a completed handshake is the whole proof a preflight needs.
+#
+# It will NOT print "ready for live trading". It can see machinery; the account
+# balance lives in CrossTrade, the evidence behind each strategy lives in its
+# gate audit, and the decision is a human's with the runbook open.
+#
+# Exits non-zero on any subsystem FAULT, so it chains:
+#     check-system && systemctl restart trading-master-live
+check-system()    { "$_TRADING_PY" "${_TRADING_REPO}/tools/system_preflight_check.py" "$@"; }
+# The spelling for "run the preflight" rather than "check the system". One
+# implementation, two names.
+preflight-check() { check-system "$@"; }
+
+_check_system_complete() {
+    local cur="${COMP_WORDS[COMP_CWORD]}"
+    COMPREPLY=($(compgen -W "--skip-network --json --no-color -h --help" \
+                         -- "$cur"))
+}
+complete -F _check_system_complete check-system preflight-check
+
 # 9. What is allocated, on what evidence.
 #
 # The other cards ask about MOTION and CONFIGURATION. This one joins the two
