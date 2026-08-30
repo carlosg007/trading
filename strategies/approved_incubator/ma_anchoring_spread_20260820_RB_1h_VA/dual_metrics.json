@@ -41,7 +41,7 @@
         "refit_growth": 0.1,
         "max_train_rows": 50000,
         "threads": 1,
-        "elapsed_s": 1.027
+        "elapsed_s": 0.971
       },
       "short": {
         "direction": "short",
@@ -51,7 +51,7 @@
         "refit_growth": 0.1,
         "max_train_rows": 50000,
         "threads": 1,
-        "elapsed_s": 1.013
+        "elapsed_s": 0.967
       }
     },
     "logic": {
@@ -218,7 +218,7 @@
             "refit_growth": 0.1,
             "max_train_rows": 50000,
             "threads": 1,
-            "elapsed_s": 1.027
+            "elapsed_s": 0.971
           },
           "short": {
             "direction": "short",
@@ -228,7 +228,7 @@
             "refit_growth": 0.1,
             "max_train_rows": 50000,
             "threads": 1,
-            "elapsed_s": 1.013
+            "elapsed_s": 0.967
           }
         },
         "logic": {
@@ -493,7 +493,7 @@
             "refit_growth": 0.1,
             "max_train_rows": 50000,
             "threads": 1,
-            "elapsed_s": 1.027
+            "elapsed_s": 0.971
           },
           "short": {
             "direction": "short",
@@ -503,7 +503,7 @@
             "refit_growth": 0.1,
             "max_train_rows": 50000,
             "threads": 1,
-            "elapsed_s": 1.013
+            "elapsed_s": 0.967
           }
         },
         "logic": {
@@ -631,10 +631,10 @@
       "retention_metric": null
     }
   },
-  "generated_utc": "2026-08-29T22:43:54+00:00",
+  "generated_utc": "2026-08-30T16:44:04+00:00",
   "reports": {
-    "version_a": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/verify_20260829_224307/report_RB_version_a.html",
-    "version_b": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/verify_20260829_224307/report_RB_version_b.html"
+    "version_a": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/verify_20260830_164319/report_RB_version_a.html",
+    "version_b": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/verify_20260830_164319/report_RB_version_b.html"
   },
   "cost_drag": {
     "trades": 2294,
