@@ -1,3 +1,10 @@
+#!/usr/bin/env bash
+# The shebang is for TOOLING, not for execution. This file is SOURCED
+# from ~/.bashrc and is never run as a program, so the kernel never
+# reads this line. Editors, linters and `shellcheck` do: without it they
+# default to POSIX sh, where a hyphen in a function name is illegal, and
+# report `bt-check()` at line 66 as "Bad function name" - a real error
+# message about a file that is not broken. `bash -n` has always passed.
 # Interactive shell helpers for the research pipeline.
 #
 # Sourced from ~/.bashrc. It lives in the REPO rather than inline in .bashrc so
