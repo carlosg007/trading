@@ -29,6 +29,30 @@
 # this box, and a backtest that wins a CPU fight with the loop is a backtest
 # that cost money.
 
+# WHY THIS BLOCK EXISTS, AND WHY IT IS FIRST.
+#
+# In an INTERACTIVE shell bash expands aliases BEFORE it parses. So if a name
+# defined below as a function is already an alias, the definition line is
+# rewritten before bash sees it and `bt-check()    { ... }` becomes
+# `<alias body>()    { ... }` - which fails with
+#
+#     line 301: syntax error near unexpected token `('
+#
+# and the source ABORTS there, leaving every helper after line 301 undefined.
+#
+# The stale aliases are this file's own history. bt-check, bt-progress,
+# pipeline-all and precompute-all all SHIPPED AS ALIASES and were converted to
+# functions (d7eef5f, and later for the launchers) so they would resolve in a
+# non-interactive shell. Any terminal opened before those commits still holds
+# the alias in memory, and re-sourcing ~/.bashrc in one of them hits the error
+# above - on a file that is correct, in a shell that is merely old.
+#
+# `|| true` because unalias returns non-zero for a name that was not set, and
+# under `set -e` that would abort the very sourcing this protects.
+unalias bt-check bt-progress bt-inventory inv-portfolios check-system \
+        preflight-check pipeline-all precompute-all bt-tf run-bt \
+        bt-1h bt-30m bt-15m bt-5m bt-swing 2>/dev/null || true
+
 _TRADING_REPO="/home/cgrullon/src/trading"
 _TRADING_PY="${_TRADING_REPO}/.venv/bin/python3"
 
