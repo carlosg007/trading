@@ -1,0 +1,128 @@
+{
+  "name": "dual_ema_slope_scalp_20260831_6J_1h_VA",
+  "strategy": "dual_ema_slope_scalp_20260831",
+  "symbol": "6J",
+  "version": "A",
+  "description": "Promoted Version A (rule-based baseline).",
+  "symbols": [
+    "6J"
+  ],
+  "timeframe": "1h",
+  "params": {
+    "fast_ema": 5,
+    "slow_ema": 17,
+    "htf_ema": 50,
+    "htf_fast_ema": 7,
+    "htf_slow_ema": 17,
+    "min_slope": 0.2,
+    "vol_mult": 1.0,
+    "volume_sma_len": 20,
+    "session_start_et": "09:30",
+    "session_end_et": "16:00",
+    "use_baseline_filter": true,
+    "use_alpha_trigger": true,
+    "use_volume_filter": true,
+    "use_session_filter": false,
+    "use_news_filter": false,
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": null,
+    "trailing": true
+  },
+  "params_source": "locked from dual_metrics_6J.json",
+  "params_conflict": [],
+  "risk": {
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": null,
+    "trailing": true
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/dual_ema_slope_scalp_20260831.py",
+  "source_sha256": "59723e3ceebf4501ad78c2762af0a0f61b3c29897d6729ee248b21380346f5a5",
+  "promoted_sha256": "59723e3ceebf4501ad78c2762af0a0f61b3c29897d6729ee248b21380346f5a5",
+  "promoted_utc": "2026-08-31T15:11:58+00:00",
+  "costs_included": true,
+  "variants_tested": null,
+  "metrics_status": "RECORDED \u00b7 locked from dual_metrics_6J.json",
+  "metrics": {
+    "sharpe": -0.00238603182732502,
+    "sortino": -0.00375436775460593,
+    "calmar": -0.008680136351335212,
+    "profit_factor": 0.9952042032810131,
+    "win_rate": 0.428927680798005,
+    "max_drawdown_pct": -15.063683588210264,
+    "total_return_pct": -2.166720000006561,
+    "annualized_return_pct": -0.13075482749903555,
+    "trade_count": 3609,
+    "total_pnl": -2166.7200000067332,
+    "total_costs": 69047.97000000655,
+    "final_equity": 97833.27999999344,
+    "n_days": 4219,
+    "start": "2013-01-02 11:00:00+00:00",
+    "end": "2026-08-07 20:00:00+00:00",
+    "bars": 79540,
+    "initial_capital": 100000.0
+  },
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "PASS",
+    "gate2": "FAIL",
+    "gate3": "FAIL",
+    "gate_regime": "PASS",
+    "gate_ruin": "PASS"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/dual_ema_slope_scalp_20260831/gate_audit_6J_1h.json",
+    "audit_sha256": "d0f9c398db6cff1b067db452e936fa69cf85fff7dc825d7df20f8f2686adac20",
+    "audit_symbol": "6J",
+    "audit_timeframe": "1h",
+    "target_quadrant": "Q2",
+    "target_regime": "High Volatility / Ranging",
+    "audit_generated_utc": "2026-08-31T15:04:43+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "fast_ema": 5,
+      "min_slope": 0.2,
+      "sl_atr_mult": 2.0,
+      "tp_atr_mult": null,
+      "trailing": true
+    },
+    "params_source": "stage 2 winner (best_params_6J_1h.json)",
+    "variants_tested": 162,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "FAIL",
+    "agrees_with_snapshot": false
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [
+    "import from 'backtest.event_calendar' is not allowed"
+  ],
+  "notes": ""
+}
