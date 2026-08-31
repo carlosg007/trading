@@ -58,6 +58,7 @@ from backtest.promote import (                                    # noqa: E402
     NOT_RESOLVED,
     SOURCE_CANDIDATES,
     certified_scope,
+    unrouted_packages,
     ensure_portfolio_groups,
     incubator_portfolios,
     merge_configuration,
@@ -1226,3 +1227,81 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+# ---------------------------------------------------------------------------
+# unrouted_packages / the end-of-run card
+# ---------------------------------------------------------------------------
+def _incubator(tmp_path, packages):
+    """`packages` is {package_id: symbol}. Writes a minimal meta.json each."""
+    inc = tmp_path / "approved_incubator"
+    inc.mkdir(parents=True, exist_ok=True)
+    for pid, symbol in packages.items():
+        d = inc / pid
+        d.mkdir()
+        (d / "meta.json").write_text(json.dumps({"symbol": symbol}))
+    return inc
+
+
+def _config(tmp_path, active, assets):
+    cfg = tmp_path / "portfolios.json"
+    cfg.write_text(json.dumps({"portfolios": {"Incubator-Odd": {
+        "portfolio_id": "Incubator-Odd",
+        "account_type": "incubator_sim",
+        "active_strategies": list(active),
+        "basket": {"assets": list(assets)}}}}))
+    return cfg
+
+
+def test_unrouted_packages_groups_by_certified_contract(tmp_path):
+    inc = _incubator(tmp_path, {"a_PL_1h_VA": "PL", "b_PL_30m_VA": "PL",
+                                "c_NQ_1h_VA": "NQ", "d_NQ_1h_VB": "NQ"})
+    cfg = _config(tmp_path, active=["d_NQ_1h_VB"], assets=["MNQ"])
+    groups = unrouted_packages(cfg, inc)
+    assert groups["PL"] == ["a_PL_1h_VA", "b_PL_30m_VA"]
+    # d_ is routed, so only c_ is left - and NQ IS carried via MNQ, so it is
+    # marked as the re-promotion case rather than pooled with PL.
+    assert groups["NQ (carried; re-promote to route)"] == ["c_NQ_1h_VA"]
+    assert "d_NQ_1h_VB" not in {p for v in groups.values() for p in v}
+
+
+def test_the_two_reasons_are_not_pooled(tmp_path):
+    """A contract the basket carries needs a re-promotion; one it does not
+    needs a decision about accounts. Saying "no basket carries their contract"
+    over the first would send the reader to a basket edit already done."""
+    inc = _incubator(tmp_path, {"x_NQ_1h_VA": "NQ", "y_PL_1h_VA": "PL"})
+    cfg = _config(tmp_path, active=[], assets=["MNQ"])
+    groups = unrouted_packages(cfg, inc)
+    assert "NQ (carried; re-promote to route)" in groups
+    assert "PL" in groups and "PL (carried; re-promote to route)" not in groups
+
+
+def test_a_directory_without_meta_is_not_an_unrouted_strategy(tmp_path):
+    inc = _incubator(tmp_path, {"a_PL_1h_VA": "PL"})
+    (inc / "__pycache__").mkdir()
+    cfg = _config(tmp_path, active=[], assets=[])
+    assert unrouted_packages(cfg, inc) == {"PL": ["a_PL_1h_VA"]}
+
+
+def test_an_unreadable_config_reports_nothing_rather_than_everything(tmp_path):
+    """A missing routing table would make every package look unrouted. An
+    empty tally is the honest answer to "I could not read the table"."""
+    inc = _incubator(tmp_path, {"a_PL_1h_VA": "PL"})
+    assert unrouted_packages(tmp_path / "nope.json", inc) == {}
+
+
+def test_render_unrouted_is_empty_when_everything_is_routed():
+    from backtest.run_pipeline import render_unrouted
+    assert render_unrouted({}) == ""
+
+
+def test_render_unrouted_leads_with_the_biggest_contract():
+    from backtest.run_pipeline import render_unrouted
+    card = render_unrouted({"NG": ["a", "b"], "PL": ["c", "d", "e"],
+                            "SI": ["f"]})
+    body = [ln.strip() for ln in card.splitlines() if ln.strip()]
+    order = [ln.split()[0] for ln in body
+             if ln.split()[0] in ("PL", "NG", "SI")]
+    assert order == ["PL", "NG", "SI"], order
+    assert "6 promoted package(s) are NOT routed" in card
+    assert "--include-unallocated" in card

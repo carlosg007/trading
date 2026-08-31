@@ -1456,6 +1456,73 @@ def _write_portfolio_config(path: Path, blob: dict) -> None:
     os.replace(tmp, path)
 
 
+def unrouted_packages(config_path: Path | str = PORTFOLIO_CONFIG,
+                      incubator: Path = INCUBATOR) -> dict[str, list[str]]:
+    """
+    Promoted packages that no portfolio routes, grouped by certified contract.
+
+    DERIVED FROM STATE, NOT FROM THIS RUN'S LOG. A tally counted while
+    promoting would only see the configurations this invocation touched, and
+    the number an operator needs is how many are unrouted IN TOTAL - a
+    campaign that refuses four today, on a tree that already held seventy-six,
+    has a problem of size eighty. Reading the incubator against the routing
+    table also cannot drift from what the live loop will actually load, which
+    a counter incremented in a loop can.
+
+    THIS IS NOT A FAULT LIST. A promotion records that a version was CHOSEN,
+    not that it was armed, and `register_portfolio` refuses on purpose when no
+    incubator basket carries the certified contract - routing a strategy to an
+    account that cannot trade its symbol would have it refused on every asset
+    it reaches, forever. Grouping by symbol is what makes the remedy legible:
+    the question is which contracts the incubator should carry, and that is a
+    decision about accounts and risk rather than anything a promotion can
+    settle.
+    """
+    try:
+        blob = json.loads(Path(config_path).read_text())
+    except (OSError, ValueError):
+        return {}
+    routed: set[str] = set()
+    for block in (blob.get("portfolios") or {}).values():
+        if isinstance(block, dict):
+            routed.update(block.get("active_strategies") or [])
+
+    # Which contracts an INCUBATOR basket can carry. The two reasons a package
+    # is unrouted are fixed by different work and must not be pooled: a
+    # contract no basket carries needs a decision about accounts and risk,
+    # while a contract a basket carries already needs only a re-promotion -
+    # it was certified before the basket was widened, and routing is decided
+    # at promotion time and never revisited.
+    carried: list[str] = []
+    for block in (blob.get("portfolios") or {}).values():
+        if (isinstance(block, dict)
+                and block.get("account_type") == INCUBATOR_ACCOUNT_TYPE):
+            carried += list((block.get("basket") or {}).get("assets") or [])
+
+    out: dict[str, list[str]] = {}
+    if not Path(incubator).is_dir():
+        return out
+    for pkg in sorted(Path(incubator).iterdir()):
+        meta_path = pkg / "meta.json"
+        if not pkg.is_dir() or pkg.name in routed or not meta_path.is_file():
+            # No meta.json means it is a stray directory, not a promoted
+            # package. Counting one would invent an unrouted strategy.
+            continue
+        try:
+            symbol = str(json.loads(meta_path.read_text()).get("symbol") or "")
+        except (OSError, ValueError):
+            symbol = ""
+        key = symbol or "UNKNOWN"
+        if symbol and _basket_covers(symbol, carried):
+            # Marked, not dropped. Saying "no basket carries their contract"
+            # over a package whose contract IS carried would be false on the
+            # card, and the reader would go looking for a basket edit that is
+            # already done.
+            key = f"{symbol} (carried; re-promote to route)"
+        out.setdefault(key, []).append(pkg.name)
+    return out
+
+
 def register_portfolio(strat: str,
                        *,
                        version: str,

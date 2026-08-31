@@ -122,6 +122,7 @@ REPO = Path(__file__).resolve().parent.parent
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+from backtest.promote import unrouted_packages  # noqa: E402
 from backtest.run import DEFAULT_TFS, TF_GROUPS  # noqa: E402
 from backtest.pipeline import (  # noqa: E402
     ML_THRESHOLD_DEFAULT,
@@ -1069,6 +1070,52 @@ def main(argv: Sequence[str] | None = None) -> int:
     return rc
 
 
+def render_unrouted(groups: dict[str, list[str]], width: int = 78) -> str:
+    """
+    The end-of-run tally of promoted packages no portfolio routes.
+
+    WHY THIS PRINTS AT ALL. `register_portfolio` refuses, correctly, when no
+    incubator basket carries a certified contract, and says so on the console
+    at the moment it happens. In a `--auto-promote` run that is one `!` line
+    among up to 168 configurations, and it scrolls. Seventy-five accumulated
+    that way before anybody counted them, and the only reason they surfaced
+    was somebody looking for two specific packages in a CSV and not finding
+    them.
+
+    Grouped by CONTRACT rather than listed by package, because the remedy is
+    per contract: widening one basket routes every package certified on that
+    symbol, and a flat list of eighty ids says nothing about how many
+    decisions that is.
+    """
+    if not groups:
+        return ""
+    total = sum(len(v) for v in groups.values())
+    lines = ["", "-" * width,
+             f"  {total} promoted package(s) are NOT routed by any portfolio",
+             ""]
+    # Biggest first: the contract worth deciding about is the one carrying the
+    # most certified work.
+    for symbol, ids in sorted(groups.items(),
+                              key=lambda kv: (-len(kv[1]), kv[0])):
+        lines.append(f"    {symbol:<6} {len(ids):>3}")
+    lines += [
+        "",
+        "  These cleared Gate R and were written to the incubator, and nothing",
+        "  armed them. For most, no basket carries the contract - that is the",
+        "  refusal working, not a failure: a strategy routed to an account",
+        "  that cannot trade its symbol is refused on every asset, forever.",
+        "  Rows marked (carried; re-promote to route) are the other case -",
+        "  the basket carries them NOW but did not when they were promoted,",
+        "  and routing is decided at promotion time and never revisited.",
+        "",
+        "  To arm them, add the contract to a basket in",
+        "  config/portfolios.json (with asset_metadata matching",
+        "  backtest/specs.py) and re-promote. To review them:",
+        "      python3 tools/portfolio_inventory.py --include-unallocated",
+        "-" * width]
+    return "\n".join(lines)
+
+
 def auto_promote(strat: str, *, out_dir: str | None = None,
                  dry_run: bool = False) -> dict[str, Any]:
     """
@@ -1183,8 +1230,21 @@ def auto_promote(strat: str, *, out_dir: str | None = None,
     written = record_auto_promotion(strat, out_dir, promotions, commit)
     if written:
         print(f"\n  promotion outcome recorded → {written}")
+
+    # Read from the incubator and the routing table, never counted from the
+    # loop above: the number that matters is how many are unrouted in TOTAL,
+    # not how many this invocation happened to refuse.
+    unrouted = unrouted_packages()
+    card = render_unrouted(unrouted)
+    if card:
+        print(card)
     return {"returncode": 1 if failures else 0, "promotions": promotions,
-            "rows": rows, "commit": commit}
+            "rows": rows, "commit": commit,
+            # Reported, never a failure: an unrouted package is a certified
+            # strategy nobody armed, not a broken run. Moving `returncode` on
+            # it would fail every pipeline that promotes onto a contract no
+            # basket carries yet, which is the normal case.
+            "unrouted": unrouted}
 
 
 if __name__ == "__main__":
