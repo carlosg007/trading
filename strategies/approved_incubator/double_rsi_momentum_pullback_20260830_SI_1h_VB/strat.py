@@ -1,5 +1,5 @@
 """
-double_rsi_momentum_pullback_20260830 - Version B (ML-filtered), promoted 2026-08-30.
+double_rsi_momentum_pullback_20260830 - Version B (ML-filtered), promoted 2026-08-31.
 
 Baseline signals from `baseline.py` (SHA-256 d6e295b941ca9bbee04fe1ad9a100d55dbf003592a3ed926b717482c5e78b1bd), with the causal ML
 filter applied on top. This is the pipeline, not a new idea: every entry here
