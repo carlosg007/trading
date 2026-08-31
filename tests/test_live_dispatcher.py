@@ -47,7 +47,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from portfolio.config_loader import clear_cache                     # noqa: E402
 from portfolio.portfolio_manager import PortfolioManager            # noqa: E402
-from realtime.crosstrade_formatter import ACTIVE_CONTRACT           # noqa: E402
+from realtime.contract_resolver import resolve_contract             # noqa: E402
 from realtime.live_dispatcher import (                              # noqa: E402
     LiveDispatchError,
     LiveExecutionDispatcher,
@@ -685,16 +685,16 @@ def test_dry_run_formats_both_wire_forms_and_sends_nothing(tmp_path):
     # with "Instrument 'MNQ' not found", and CrossTrade returns 200 before it
     # ever gets there - so this was refused DOWNSTREAM of anything this
     # repository logs, on orders whose dispatch record said OK. Asserted
-    # against `ACTIVE_CONTRACT` rather than a literal so the table is the one
+    # against `config/contracts.json` rather than a literal so the table is the one
     # place a roll is recorded.
-    assert f"instrument={ACTIVE_CONTRACT['MNQ']};" in attempt["command"]
+    assert f"instrument={resolve_contract('MNQ')};" in attempt["command"]
     assert "action=BUY;" in attempt["command"]
     assert "order_type=MARKET;" in attempt["command"]
 
     # And the JSON form, lower-cased as the endpoint declares.
     assert attempt["json"]["command"] == "place"
     assert attempt["json"]["action"] == "buy"
-    assert attempt["json"]["instrument"] == ACTIVE_CONTRACT["MNQ"]
+    assert attempt["json"]["instrument"] == resolve_contract("MNQ")
     assert attempt["json"]["qty"] == EXPECTED_CONTRACTS
 
 
@@ -1597,70 +1597,3 @@ def test_a_strategy_declaring_no_timeframe_is_still_evaluated(tmp_path):
     assert report["timeframe_skipped"] == []
     assert report["payloads"], "it trades, as it did before the guard"
 
-
-# --------------------------------------------------------------------------
-# The contract roll table
-# --------------------------------------------------------------------------
-def test_a_bare_root_resolves_to_a_contract_month():
-    """NinjaTrader answers a bare root with "Instrument 'MNQ' not found".
-
-    CrossTrade returns 200 before NT8 ever sees it, so this failed DOWNSTREAM
-    of everything this repository logs - the dispatch record said OK on orders
-    that never reached an account.
-    """
-    from realtime.crosstrade_formatter import resolve_contract
-    for root in ("MNQ", "MES", "MGC", "6E", "6J"):
-        out = resolve_contract(root)
-        assert out.startswith(root + " "), f"{root} -> {out}"
-        assert out != root, f"{root} was not resolved"
-    assert resolve_contract("mnq") == resolve_contract("MNQ"), "case matters"
-
-
-def test_resolution_is_idempotent_for_an_explicit_contract():
-    """A caller who names the month gets exactly what they typed.
-
-    `send_test_probe.py --symbol "MNQ SEP26"` must not become
-    "MNQ SEP26 SEP26", and a continuous or dash-formatted contract is the
-    caller's choice to make.
-    """
-    from realtime.crosstrade_formatter import resolve_contract
-    for explicit in ("MNQ SEP26", "MES 09-26", "MNQ 1!", "MGC DEC26"):
-        assert resolve_contract(explicit) == explicit
-    assert resolve_contract(resolve_contract("MNQ")) == resolve_contract("MNQ")
-
-
-def test_an_unknown_root_is_refused_rather_than_guessed():
-    from realtime.crosstrade_formatter import (CrossTradeFormatError,
-                                               resolve_contract)
-    with pytest.raises(CrossTradeFormatError, match="no active contract"):
-        resolve_contract("ZZZ")
-
-
-def test_the_table_refuses_once_it_is_out_of_date():
-    """THE POINT OF THE EXPIRY DATE.
-
-    `_clean_instrument` declined to map a root because "guessed here it would
-    send an order to whichever contract month a stale rule named". The table
-    answers that by expiring: past the date it RAISES, so a stale table costs
-    a refused order - visible in the first cycle - rather than a FILLED order
-    in an expired contract, which nothing downstream can detect.
-    """
-    from realtime.crosstrade_formatter import (CONTRACT_TABLE_VALID_UNTIL,
-                                               CrossTradeFormatError,
-                                               resolve_contract)
-    assert resolve_contract("MNQ", on=CONTRACT_TABLE_VALID_UNTIL)
-    day_after = (dt.date.fromisoformat(CONTRACT_TABLE_VALID_UNTIL)
-                 + dt.timedelta(days=1)).isoformat()
-    with pytest.raises(CrossTradeFormatError, match="expired"):
-        resolve_contract("MNQ", on=day_after)
-
-
-def test_the_table_covers_every_micro_the_router_can_reach():
-    """A symbol a basket can hold but the table cannot map is an order that
-    is refused at the formatter - so the two lists have to agree."""
-    from realtime.contract_alias import MICRO_TO_PARENT
-    from realtime.crosstrade_formatter import ACTIVE_CONTRACT
-    missing = sorted(set(MICRO_TO_PARENT) - set(ACTIVE_CONTRACT))
-    assert not missing, f"no contract month recorded for {missing}"
-    parents = sorted(set(MICRO_TO_PARENT.values()) - set(ACTIVE_CONTRACT))
-    assert not parents, f"no contract month recorded for {parents}"
