@@ -1,0 +1,123 @@
+{
+  "name": "compressed_bollinger_reversion_20260901_NQ_15m_VA",
+  "strategy": "compressed_bollinger_reversion_20260901",
+  "symbol": "NQ",
+  "version": "A",
+  "description": "Promoted Version A (rule-based baseline).",
+  "symbols": [
+    "NQ"
+  ],
+  "timeframe": "15m",
+  "params": {
+    "bb_len": 40,
+    "bb_mult": 1.8,
+    "rsi_thresh": 30.0,
+    "rsi_len": 14,
+    "use_regime_filter": true,
+    "use_alpha_trigger": true,
+    "use_midline_exit": true,
+    "use_news_filter": false,
+    "sl_atr_mult": 1.5,
+    "tp_atr_mult": null,
+    "trailing": false
+  },
+  "params_source": "locked from dual_metrics_NQ.json",
+  "params_conflict": [],
+  "risk": {
+    "sl_atr_mult": 1.5,
+    "tp_atr_mult": null,
+    "trailing": false
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/compressed_bollinger_reversion_20260901.py",
+  "source_sha256": "ff36d03a3b17e72388a3280b460e5f8968497ca63c6c2306a2059e0b358bd574",
+  "promoted_sha256": "ff36d03a3b17e72388a3280b460e5f8968497ca63c6c2306a2059e0b358bd574",
+  "promoted_utc": "2026-08-31T02:07:59+00:00",
+  "costs_included": true,
+  "variants_tested": null,
+  "metrics_status": "RECORDED \u00b7 locked from dual_metrics_NQ.json",
+  "metrics": {
+    "sharpe": 0.34793338355361375,
+    "sortino": 0.6854371746986406,
+    "calmar": 0.1853126479037276,
+    "profit_factor": 1.2298496904707061,
+    "win_rate": 0.38631346578366443,
+    "max_drawdown_pct": -8.721571234921132,
+    "total_return_pct": 30.79026000000016,
+    "annualized_return_pct": 1.6162174594242185,
+    "trade_count": 453,
+    "total_pnl": 30790.26000000044,
+    "total_costs": 6604.739999999569,
+    "final_equity": 130790.26000000015,
+    "n_days": 4219,
+    "start": "2013-01-02 11:00:00+00:00",
+    "end": "2026-08-07 20:45:00+00:00",
+    "bars": 306666,
+    "initial_capital": 100000.0
+  },
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "PASS",
+    "gate2": "PASS",
+    "gate3": "FAIL",
+    "gate_regime": "PASS",
+    "gate_ruin": "PASS"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/compressed_bollinger_reversion_20260901/gate_audit_NQ_15m.json",
+    "audit_sha256": "131c9837d17978d7388c762ad5ea0c22ec3312b3b800c30b420a6825aec1697c",
+    "audit_symbol": "NQ",
+    "audit_timeframe": "15m",
+    "target_quadrant": "Q2",
+    "target_regime": "High Volatility / Ranging",
+    "audit_generated_utc": "2026-08-31T02:02:21+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "bb_len": 40,
+      "bb_mult": 1.8,
+      "rsi_thresh": 30.0,
+      "rsi_len": 14,
+      "sl_atr_mult": 1.5,
+      "tp_atr_mult": null,
+      "trailing": false
+    },
+    "params_source": "stage 2 winner (best_params_NQ_15m.json)",
+    "variants_tested": 108,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "NOT EVALUATED",
+    "agrees_with_snapshot": false
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [
+    "import from 'backtest.event_calendar' is not allowed"
+  ],
+  "notes": ""
+}

@@ -1,0 +1,836 @@
+{
+  "meta": {
+    "strategy": "compressed_bollinger_reversion_20260901",
+    "strategy_path": "/home/cgrullon/src/trading/strategies/experimental/compressed_bollinger_reversion_20260901.py",
+    "params": {
+      "bb_len": 40,
+      "bb_mult": 1.8,
+      "rsi_thresh": 30.0,
+      "rsi_len": 14,
+      "use_regime_filter": true,
+      "use_alpha_trigger": true,
+      "use_midline_exit": true,
+      "use_news_filter": false,
+      "sl_atr_mult": 1.5,
+      "tp_atr_mult": null,
+      "trailing": false
+    },
+    "symbol": "NQ",
+    "timeframe": "15m",
+    "bars": 306666,
+    "start": "2013-01-02 11:00:00+00:00",
+    "end": "2026-08-07 20:45:00+00:00",
+    "costs_included": true,
+    "initial_capital": 100000.0,
+    "ml_threshold": 0.48,
+    "ml_evaluated": true,
+    "ml_features": [
+      "norm_atr",
+      "band_width_norm",
+      "dist_from_mid_sigma",
+      "rsi",
+      "adx",
+      "roc_5",
+      "roc_15",
+      "close_over_atr",
+      "volume_z",
+      "hour_et",
+      "dow_et"
+    ],
+    "ml_refit": {
+      "long": {
+        "direction": "long",
+        "candidates": 196,
+        "fits": 21,
+        "train_rows_max": 179,
+        "refit_growth": 0.1,
+        "max_train_rows": 50000,
+        "threads": 1,
+        "elapsed_s": 0.447
+      },
+      "short": {
+        "direction": "short",
+        "candidates": 257,
+        "fits": 24,
+        "train_rows_max": 236,
+        "refit_growth": 0.1,
+        "max_train_rows": 50000,
+        "threads": 1,
+        "elapsed_s": 0.502
+      }
+    },
+    "logic": {
+      "concept": "A fade of the outer band in a market with no direction to fight. ADX(14) below {adx_range_max} says the tape is not trending; a close pushing outside SMA({bb_len}) +/- {bb_mult} x sigma with RSI({rsi_len}) at an extreme is the entry; and the position is taken off at the central SMA rather than at a fixed distance, because in a compressed regime the mean is the only level the move is actually reverting TO.",
+      "entry": "LONG when ADX(14) < {adx_range_max}, Close crosses BELOW SMA({bb_len}) - {bb_mult} x sigma and RSI({rsi_len}) < {rsi_thresh}. SHORT mirrors it: Close crosses ABOVE SMA({bb_len}) + {bb_mult} x sigma and RSI({rsi_len}) > 100 - {rsi_thresh}.",
+      "exit": "Close crossing the SMA(40) midline - UP for a long, DOWN for a short - or the hard ATR stop at 1.5 x ATR(14), whichever the bar reaches first. No static take-profit is modelled (tp_atr_mult=None); the midline IS the target."
+    }
+  },
+  "comparison": {
+    "ml_evaluated": true,
+    "entries_a": 196,
+    "entries_b": 107,
+    "entries_suppressed": 89,
+    "sharpe_delta": 0.043409822690620437,
+    "b_beats_a": true
+  },
+  "version_a": {
+    "metrics": {
+      "ok": true,
+      "ruined": false,
+      "final_equity": 130790.26000000015,
+      "total_pnl": 30790.26000000044,
+      "gross_pnl": 37395.0,
+      "total_costs": 6604.739999999569,
+      "total_return_pct": 30.79026000000016,
+      "annualized_return_pct": 1.6162174594242185,
+      "sharpe": 0.34793338355361375,
+      "sortino": 0.6854371746986406,
+      "calmar": 0.1853126479037276,
+      "metrics_basis": {
+        "frequency": "daily_close",
+        "annualization_factor": 252,
+        "risk_free_rate": 0.0,
+        "n_days": 4219
+      },
+      "max_drawdown_pct": -8.721571234921132,
+      "win_rate": 0.38631346578366443,
+      "profit_factor": 1.2298496904707061,
+      "trade_count": 453,
+      "long_trades": 196,
+      "short_trades": 257,
+      "breach": {},
+      "n_days": 4219,
+      "dow_breakdown": [
+        {
+          "day": "Mon",
+          "weekday": 0,
+          "trades": 98,
+          "net_pnl": 6041.160000000286,
+          "gross_win": 32256.800000000134,
+          "gross_loss": 26215.639999999847,
+          "win_rate": 0.40816326530612246,
+          "avg_pnl": 61.64448979592129,
+          "profit_factor": 1.2304410649520792,
+          "pct_of_trades": 21.63355408388521,
+          "pct_of_net_pnl": 19.62036046464109
+        },
+        {
+          "day": "Tue",
+          "weekday": 1,
+          "trades": 85,
+          "net_pnl": -7179.299999999684,
+          "gross_win": 19776.340000000026,
+          "gross_loss": 26955.639999999716,
+          "win_rate": 0.3176470588235294,
+          "avg_pnl": -84.46235294117275,
+          "profit_factor": 0.7336624172158492,
+          "pct_of_trades": 18.763796909492275,
+          "pct_of_net_pnl": -23.316789140460592
+        },
+        {
+          "day": "Wed",
+          "weekday": 2,
+          "trades": 98,
+          "net_pnl": 5271.159999999951,
+          "gross_win": 34430.12000000006,
+          "gross_loss": 29158.960000000123,
+          "win_rate": 0.3673469387755102,
+          "avg_pnl": 53.78734693877501,
+          "profit_factor": 1.1807732511721925,
+          "pct_of_trades": 21.63355408388521,
+          "pct_of_net_pnl": 17.11956963013588
+        },
+        {
+          "day": "Thu",
+          "weekday": 3,
+          "trades": 80,
+          "net_pnl": 13153.599999999915,
+          "gross_win": 33792.179999999826,
+          "gross_loss": 20638.57999999992,
+          "win_rate": 0.3625,
+          "avg_pnl": 164.41999999999894,
+          "profit_factor": 1.6373306690673464,
+          "pct_of_trades": 17.660044150110377,
+          "pct_of_net_pnl": 42.720003013939234
+        },
+        {
+          "day": "Fri",
+          "weekday": 4,
+          "trades": 92,
+          "net_pnl": 13503.639999999965,
+          "gross_win": 44493.06000000004,
+          "gross_loss": 30989.42000000008,
+          "win_rate": 0.4673913043478261,
+          "avg_pnl": 146.77869565217352,
+          "profit_factor": 1.435750007583231,
+          "pct_of_trades": 20.309050772626932,
+          "pct_of_net_pnl": 43.856856031744364
+        }
+      ],
+      "entry_filters": {},
+      "meta": {
+        "strategy": "compressed_bollinger_reversion_20260901",
+        "strategy_path": "/home/cgrullon/src/trading/strategies/experimental/compressed_bollinger_reversion_20260901.py",
+        "params": {
+          "bb_len": 40,
+          "bb_mult": 1.8,
+          "rsi_thresh": 30.0,
+          "rsi_len": 14,
+          "use_regime_filter": true,
+          "use_alpha_trigger": true,
+          "use_midline_exit": true,
+          "use_news_filter": false,
+          "sl_atr_mult": 1.5,
+          "tp_atr_mult": null,
+          "trailing": false
+        },
+        "symbol": "NQ",
+        "timeframe": "15m",
+        "bars": 306666,
+        "start": "2013-01-02 11:00:00+00:00",
+        "end": "2026-08-07 20:45:00+00:00",
+        "costs_included": true,
+        "initial_capital": 100000.0,
+        "ml_threshold": 0.48,
+        "ml_evaluated": true,
+        "ml_features": [
+          "norm_atr",
+          "band_width_norm",
+          "dist_from_mid_sigma",
+          "rsi",
+          "adx",
+          "roc_5",
+          "roc_15",
+          "close_over_atr",
+          "volume_z",
+          "hour_et",
+          "dow_et"
+        ],
+        "ml_refit": {
+          "long": {
+            "direction": "long",
+            "candidates": 196,
+            "fits": 21,
+            "train_rows_max": 179,
+            "refit_growth": 0.1,
+            "max_train_rows": 50000,
+            "threads": 1,
+            "elapsed_s": 0.447
+          },
+          "short": {
+            "direction": "short",
+            "candidates": 257,
+            "fits": 24,
+            "train_rows_max": 236,
+            "refit_growth": 0.1,
+            "max_train_rows": 50000,
+            "threads": 1,
+            "elapsed_s": 0.502
+          }
+        },
+        "logic": {
+          "concept": "A fade of the outer band in a market with no direction to fight. ADX(14) below {adx_range_max} says the tape is not trending; a close pushing outside SMA({bb_len}) +/- {bb_mult} x sigma with RSI({rsi_len}) at an extreme is the entry; and the position is taken off at the central SMA rather than at a fixed distance, because in a compressed regime the mean is the only level the move is actually reverting TO.",
+          "entry": "LONG when ADX(14) < {adx_range_max}, Close crosses BELOW SMA({bb_len}) - {bb_mult} x sigma and RSI({rsi_len}) < {rsi_thresh}. SHORT mirrors it: Close crosses ABOVE SMA({bb_len}) + {bb_mult} x sigma and RSI({rsi_len}) > 100 - {rsi_thresh}.",
+          "exit": "Close crossing the SMA(40) midline - UP for a long, DOWN for a short - or the hard ATR stop at 1.5 x ATR(14), whichever the bar reaches first. No static take-profit is modelled (tp_atr_mult=None); the midline IS the target."
+        }
+      }
+    },
+    "gate_audit": {
+      "version": "A",
+      "name": "compressed_bollinger_reversion_20260901",
+      "gates": {
+        "gate1": {
+          "name": "GATE 1 \u00b7 In-Sample",
+          "status": "PASS",
+          "checks": [
+            {
+              "label": "Sharpe (not gated)",
+              "value": 0.34793338355361375,
+              "threshold": null,
+              "direction": "min",
+              "unit": "",
+              "status": "INFO",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Profit factor",
+              "value": 1.2298496904707061,
+              "threshold": 1.0,
+              "direction": "min",
+              "unit": "",
+              "status": "PASS",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Trades",
+              "value": 453.0,
+              "threshold": 200.0,
+              "direction": "min",
+              "unit": "",
+              "status": "PASS",
+              "note": "16.74 years at 30 trades/yr is 502; the 200-trade cap binds",
+              "fmt": "{:,.0f}"
+            },
+            {
+              "label": "Max drawdown",
+              "value": 8.721571234921132,
+              "threshold": 12.0,
+              "direction": "max",
+              "unit": "%",
+              "status": "PASS",
+              "note": null,
+              "fmt": "{:.2f}"
+            }
+          ]
+        },
+        "gate2": {
+          "name": "GATE 2 \u00b7 Robustness",
+          "status": "NOT EVALUATED",
+          "checks": [
+            {
+              "label": "WFO efficiency",
+              "value": null,
+              "threshold": 0.5,
+              "direction": "min",
+              "unit": "",
+              "status": "NOT EVALUATED",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Monte Carlo 95% max DD",
+              "value": null,
+              "threshold": 18.0,
+              "direction": "max",
+              "unit": "%",
+              "status": "NOT EVALUATED",
+              "note": null,
+              "fmt": "{:.2f}"
+            }
+          ]
+        },
+        "gate3": {
+          "name": "GATE 3 \u00b7 OOS Holdout",
+          "status": "NOT EVALUATED",
+          "checks": [
+            {
+              "label": "Holdout Sharpe retention",
+              "value": null,
+              "threshold": 0.8,
+              "direction": "min",
+              "unit": "x",
+              "status": "NOT EVALUATED",
+              "note": "no holdout Sharpe supplied, so Sharpe retention is undefined",
+              "fmt": "{:.2f}"
+            }
+          ]
+        }
+      },
+      "status": "NOT EVALUATED",
+      "passed": false,
+      "thresholds": {
+        "gate1": {
+          "min_profit_factor": 1.0,
+          "min_trades": 100,
+          "max_required_trades": 200,
+          "min_trades_per_year": 30,
+          "max_drawdown_pct": 12.0
+        },
+        "gate2": {
+          "min_wfo_efficiency": 0.5,
+          "max_mc_drawdown_pct": 18.0
+        },
+        "gate3": {
+          "min_retention": 0.8
+        }
+      },
+      "holdout_sharpe": null,
+      "in_sample_sharpe": 0.34793338355361375,
+      "sharpe_retention": null,
+      "retention": null,
+      "retention_metric": null
+    }
+  },
+  "version_b": {
+    "metrics": {
+      "ok": true,
+      "ruined": false,
+      "final_equity": 129514.46000000002,
+      "total_pnl": 29514.4600000001,
+      "gross_pnl": 32620.0,
+      "total_costs": 3105.5399999998945,
+      "total_return_pct": 29.51446000000002,
+      "annualized_return_pct": 1.5567388323687759,
+      "sharpe": 0.3913432062442342,
+      "sortino": 0.9251491957817866,
+      "calmar": 0.1746072134194457,
+      "metrics_basis": {
+        "frequency": "daily_close",
+        "annualization_factor": 252,
+        "risk_free_rate": 0.0,
+        "n_days": 4219
+      },
+      "max_drawdown_pct": -8.915661626356409,
+      "win_rate": 0.38028169014084506,
+      "profit_factor": 1.495046592091591,
+      "trade_count": 213,
+      "long_trades": 107,
+      "short_trades": 106,
+      "breach": {},
+      "n_days": 4219,
+      "dow_breakdown": [
+        {
+          "day": "Mon",
+          "weekday": 0,
+          "trades": 48,
+          "net_pnl": 4035.1600000000667,
+          "gross_win": 18236.72000000003,
+          "gross_loss": 14201.559999999963,
+          "win_rate": 0.3333333333333333,
+          "avg_pnl": 84.06583333333472,
+          "profit_factor": 1.2841349823540567,
+          "pct_of_trades": 22.535211267605632,
+          "pct_of_net_pnl": 13.671806971904799
+        },
+        {
+          "day": "Tue",
+          "weekday": 1,
+          "trades": 33,
+          "net_pnl": -1416.139999999992,
+          "gross_win": 7245.040000000001,
+          "gross_loss": 8661.179999999993,
+          "win_rate": 0.36363636363636365,
+          "avg_pnl": -42.913333333333085,
+          "profit_factor": 0.8364957199827283,
+          "pct_of_trades": 15.492957746478874,
+          "pct_of_net_pnl": -4.798122682915381
+        },
+        {
+          "day": "Wed",
+          "weekday": 2,
+          "trades": 48,
+          "net_pnl": 3280.1600000000676,
+          "gross_win": 19252.560000000067,
+          "gross_loss": 15972.4,
+          "win_rate": 0.375,
+          "avg_pnl": 68.33666666666808,
+          "profit_factor": 1.2053642533370106,
+          "pct_of_trades": 22.535211267605632,
+          "pct_of_net_pnl": 11.113738824969376
+        },
+        {
+          "day": "Thu",
+          "weekday": 3,
+          "trades": 45,
+          "net_pnl": 11878.899999999798,
+          "gross_win": 21646.29999999983,
+          "gross_loss": 9767.400000000034,
+          "win_rate": 0.3333333333333333,
+          "avg_pnl": 263.97555555555107,
+          "profit_factor": 2.216178307430816,
+          "pct_of_trades": 21.12676056338028,
+          "pct_of_net_pnl": 40.24772941805392
+        },
+        {
+          "day": "Fri",
+          "weekday": 4,
+          "trades": 39,
+          "net_pnl": 11736.380000000168,
+          "gross_win": 22753.400000000118,
+          "gross_loss": 11017.019999999948,
+          "win_rate": 0.5128205128205128,
+          "avg_pnl": 300.93282051282483,
+          "profit_factor": 2.06529533394695,
+          "pct_of_trades": 18.309859154929576,
+          "pct_of_net_pnl": 39.76484746798731
+        }
+      ],
+      "entry_filters": {},
+      "meta": {
+        "strategy": "compressed_bollinger_reversion_20260901",
+        "strategy_path": "/home/cgrullon/src/trading/strategies/experimental/compressed_bollinger_reversion_20260901.py",
+        "params": {
+          "bb_len": 40,
+          "bb_mult": 1.8,
+          "rsi_thresh": 30.0,
+          "rsi_len": 14,
+          "use_regime_filter": true,
+          "use_alpha_trigger": true,
+          "use_midline_exit": true,
+          "use_news_filter": false,
+          "sl_atr_mult": 1.5,
+          "tp_atr_mult": null,
+          "trailing": false
+        },
+        "symbol": "NQ",
+        "timeframe": "15m",
+        "bars": 306666,
+        "start": "2013-01-02 11:00:00+00:00",
+        "end": "2026-08-07 20:45:00+00:00",
+        "costs_included": true,
+        "initial_capital": 100000.0,
+        "ml_threshold": 0.48,
+        "ml_evaluated": true,
+        "ml_features": [
+          "norm_atr",
+          "band_width_norm",
+          "dist_from_mid_sigma",
+          "rsi",
+          "adx",
+          "roc_5",
+          "roc_15",
+          "close_over_atr",
+          "volume_z",
+          "hour_et",
+          "dow_et"
+        ],
+        "ml_refit": {
+          "long": {
+            "direction": "long",
+            "candidates": 196,
+            "fits": 21,
+            "train_rows_max": 179,
+            "refit_growth": 0.1,
+            "max_train_rows": 50000,
+            "threads": 1,
+            "elapsed_s": 0.447
+          },
+          "short": {
+            "direction": "short",
+            "candidates": 257,
+            "fits": 24,
+            "train_rows_max": 236,
+            "refit_growth": 0.1,
+            "max_train_rows": 50000,
+            "threads": 1,
+            "elapsed_s": 0.502
+          }
+        },
+        "logic": {
+          "concept": "A fade of the outer band in a market with no direction to fight. ADX(14) below {adx_range_max} says the tape is not trending; a close pushing outside SMA({bb_len}) +/- {bb_mult} x sigma with RSI({rsi_len}) at an extreme is the entry; and the position is taken off at the central SMA rather than at a fixed distance, because in a compressed regime the mean is the only level the move is actually reverting TO.",
+          "entry": "LONG when ADX(14) < {adx_range_max}, Close crosses BELOW SMA({bb_len}) - {bb_mult} x sigma and RSI({rsi_len}) < {rsi_thresh}. SHORT mirrors it: Close crosses ABOVE SMA({bb_len}) + {bb_mult} x sigma and RSI({rsi_len}) > 100 - {rsi_thresh}.",
+          "exit": "Close crossing the SMA(40) midline - UP for a long, DOWN for a short - or the hard ATR stop at 1.5 x ATR(14), whichever the bar reaches first. No static take-profit is modelled (tp_atr_mult=None); the midline IS the target."
+        }
+      }
+    },
+    "gate_audit": {
+      "version": "B",
+      "name": "compressed_bollinger_reversion_20260901",
+      "gates": {
+        "gate1": {
+          "name": "GATE 1 \u00b7 In-Sample",
+          "status": "PASS",
+          "checks": [
+            {
+              "label": "Sharpe (not gated)",
+              "value": 0.3913432062442342,
+              "threshold": null,
+              "direction": "min",
+              "unit": "",
+              "status": "INFO",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Profit factor",
+              "value": 1.495046592091591,
+              "threshold": 1.0,
+              "direction": "min",
+              "unit": "",
+              "status": "PASS",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Trades",
+              "value": 213.0,
+              "threshold": 200.0,
+              "direction": "min",
+              "unit": "",
+              "status": "PASS",
+              "note": "16.74 years at 30 trades/yr is 502; the 200-trade cap binds",
+              "fmt": "{:,.0f}"
+            },
+            {
+              "label": "Max drawdown",
+              "value": 8.915661626356409,
+              "threshold": 12.0,
+              "direction": "max",
+              "unit": "%",
+              "status": "PASS",
+              "note": null,
+              "fmt": "{:.2f}"
+            }
+          ]
+        },
+        "gate2": {
+          "name": "GATE 2 \u00b7 Robustness",
+          "status": "NOT EVALUATED",
+          "checks": [
+            {
+              "label": "WFO efficiency",
+              "value": null,
+              "threshold": 0.5,
+              "direction": "min",
+              "unit": "",
+              "status": "NOT EVALUATED",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Monte Carlo 95% max DD",
+              "value": null,
+              "threshold": 18.0,
+              "direction": "max",
+              "unit": "%",
+              "status": "NOT EVALUATED",
+              "note": null,
+              "fmt": "{:.2f}"
+            }
+          ]
+        },
+        "gate3": {
+          "name": "GATE 3 \u00b7 OOS Holdout",
+          "status": "NOT EVALUATED",
+          "checks": [
+            {
+              "label": "Holdout Sharpe retention",
+              "value": null,
+              "threshold": 0.8,
+              "direction": "min",
+              "unit": "x",
+              "status": "NOT EVALUATED",
+              "note": "no holdout Sharpe supplied, so Sharpe retention is undefined",
+              "fmt": "{:.2f}"
+            }
+          ]
+        }
+      },
+      "status": "NOT EVALUATED",
+      "passed": false,
+      "thresholds": {
+        "gate1": {
+          "min_profit_factor": 1.0,
+          "min_trades": 100,
+          "max_required_trades": 200,
+          "min_trades_per_year": 30,
+          "max_drawdown_pct": 12.0
+        },
+        "gate2": {
+          "min_wfo_efficiency": 0.5,
+          "max_mc_drawdown_pct": 18.0
+        },
+        "gate3": {
+          "min_retention": 0.8
+        }
+      },
+      "holdout_sharpe": null,
+      "in_sample_sharpe": 0.3913432062442342,
+      "sharpe_retention": null,
+      "retention": null,
+      "retention_metric": null
+    }
+  },
+  "generated_utc": "2026-08-31T02:06:56+00:00",
+  "reports": {
+    "version_a": "/mnt/backtest/artifacts/pipeline/compressed_bollinger_reversion_20260901/verify_20260831_020639/report_NQ_version_a.html",
+    "version_b": "/mnt/backtest/artifacts/pipeline/compressed_bollinger_reversion_20260901/verify_20260831_020639/report_NQ_version_b.html"
+  },
+  "cost_drag": {
+    "trades": 453,
+    "total_costs": 6604.739999999569,
+    "gross_pnl": 37395.0,
+    "net_pnl": 30790.26000000044,
+    "cost_per_trade": 14.579999999999048,
+    "cost_share_pct": 17.662093862814732,
+    "commission": 2074.74,
+    "slippage": 4529.999999999569,
+    "split_available": true,
+    "modelled_round_turn": 14.58,
+    "by_year": [
+      {
+        "year": 2013,
+        "trades": 31,
+        "gross_pnl": 120.0,
+        "costs": 451.97999999995653,
+        "net_pnl": -331.9799999999566,
+        "cost_per_trade": 14.579999999998599,
+        "cost_share_pct": 376.6499999999638
+      },
+      {
+        "year": 2014,
+        "trades": 34,
+        "gross_pnl": -140.0,
+        "costs": 495.7199999999856,
+        "net_pnl": -635.7199999999856,
+        "cost_per_trade": 14.579999999999576,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2015,
+        "trades": 48,
+        "gross_pnl": 5415.0,
+        "costs": 699.8400000000142,
+        "net_pnl": 4715.159999999985,
+        "cost_per_trade": 14.580000000000297,
+        "cost_share_pct": 12.924099722991953
+      },
+      {
+        "year": 2016,
+        "trades": 37,
+        "gross_pnl": 905.0,
+        "costs": 539.4599999999854,
+        "net_pnl": 365.5400000000152,
+        "cost_per_trade": 14.579999999999604,
+        "cost_share_pct": 59.60883977900391
+      },
+      {
+        "year": 2017,
+        "trades": 40,
+        "gross_pnl": -1220.0,
+        "costs": 583.2000000000581,
+        "net_pnl": -1803.2000000000585,
+        "cost_per_trade": 14.580000000001453,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2018,
+        "trades": 37,
+        "gross_pnl": 5115.0,
+        "costs": 539.4600000001017,
+        "net_pnl": 4575.539999999899,
+        "cost_per_trade": 14.580000000002748,
+        "cost_share_pct": 10.546627565984393
+      },
+      {
+        "year": 2019,
+        "trades": 29,
+        "gross_pnl": 3300.0,
+        "costs": 422.8200000000578,
+        "net_pnl": 2877.179999999943,
+        "cost_per_trade": 14.580000000001993,
+        "cost_share_pct": 12.812727272729024
+      },
+      {
+        "year": 2020,
+        "trades": 41,
+        "gross_pnl": 12955.0,
+        "costs": 597.7799999999113,
+        "net_pnl": 12357.22000000009,
+        "cost_per_trade": 14.579999999997836,
+        "cost_share_pct": 4.614280200694028
+      },
+      {
+        "year": 2021,
+        "trades": 34,
+        "gross_pnl": -1530.0,
+        "costs": 495.7199999998529,
+        "net_pnl": -2025.719999999852,
+        "cost_per_trade": 14.579999999995675,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2022,
+        "trades": 34,
+        "gross_pnl": 10635.0,
+        "costs": 495.7199999997943,
+        "net_pnl": 10139.280000000206,
+        "cost_per_trade": 14.57999999999395,
+        "cost_share_pct": 4.661212976020633
+      },
+      {
+        "year": 2023,
+        "trades": 22,
+        "gross_pnl": -2000.0,
+        "costs": 320.76000000008656,
+        "net_pnl": -2320.7600000000857,
+        "cost_per_trade": 14.580000000003935,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2024,
+        "trades": 22,
+        "gross_pnl": -1080.0,
+        "costs": 320.75999999988267,
+        "net_pnl": -1400.7599999998824,
+        "cost_per_trade": 14.579999999994667,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2025,
+        "trades": 32,
+        "gross_pnl": 2300.0,
+        "costs": 466.5599999997654,
+        "net_pnl": 1833.4400000002352,
+        "cost_per_trade": 14.579999999992669,
+        "cost_share_pct": 20.28521739129415
+      },
+      {
+        "year": 2026,
+        "trades": 12,
+        "gross_pnl": 2620.0,
+        "costs": 174.9600000001158,
+        "net_pnl": 2445.0399999998845,
+        "cost_per_trade": 14.58000000000965,
+        "cost_share_pct": 6.677862595424267
+      }
+    ]
+  },
+  "friction_by_regime": {
+    "available": true,
+    "attribution": "the quadrant of the trade's ENTRY bar",
+    "regime_source": "the labels RegimeProfiler classified for this run",
+    "attributed_trades": 453,
+    "unplaced_trades": 0,
+    "unplaced_note": null,
+    "by_regime": [
+      {
+        "regime": "High Volatility / Trending",
+        "quadrant": "Q1",
+        "trades": 0,
+        "gross_pnl": 0.0,
+        "costs": 0.0,
+        "net_pnl": 0.0,
+        "cost_per_trade": null,
+        "cost_share_pct": null
+      },
+      {
+        "regime": "High Volatility / Ranging",
+        "quadrant": "Q2",
+        "trades": 254,
+        "gross_pnl": 36210.0,
+        "costs": 3703.3199999995973,
+        "net_pnl": 32506.680000000408,
+        "cost_per_trade": 14.579999999998414,
+        "cost_share_pct": 10.227340513669144
+      },
+      {
+        "regime": "Low Volatility / Trending",
+        "quadrant": "Q3",
+        "trades": 0,
+        "gross_pnl": 0.0,
+        "costs": 0.0,
+        "net_pnl": 0.0,
+        "cost_per_trade": null,
+        "cost_share_pct": null
+      },
+      {
+        "regime": "Low Volatility / Ranging",
+        "quadrant": "Q4",
+        "trades": 199,
+        "gross_pnl": 1185.0,
+        "costs": 2901.4199999999705,
+        "net_pnl": -1716.41999999997,
+        "cost_per_trade": 14.579999999999853,
+        "cost_share_pct": 244.84556962025067
+      }
+    ]
+  },
+  "slippage_model": {
+    "model": "constant_ticks",
+    "slippage_ticks": 1.0,
+    "note": "ticks x that bar's tick size / price, per bar"
+  }
+}
