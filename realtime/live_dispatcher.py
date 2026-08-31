@@ -1417,9 +1417,22 @@ class LiveExecutionDispatcher:
 
         for d in report["dispatches"]:
             status = "OK  " if d["ok"] else "FAIL"
+            # THE RESPONSE BODY, ON FAILURE ONLY. `send_execution_signal`
+            # captures it on every 4xx/5xx and it was being thrown away here,
+            # leaving "HTTP 400: Bad Request" as the whole of what an operator
+            # could see. On 2026-08-31 that cost a diagnosis: 109 consecutive
+            # live orders were refused and the only readable fact was the
+            # status code, which names a class of error rather than the error.
+            # The endpoint's own explanation is the thing worth printing.
+            detail = ""
+            if not d["ok"]:
+                body = (d.get("result") or {}).get("response_body")
+                if body:
+                    detail = f"  <- {str(body).strip()[:400]}"
             lines.append(f"  {status} {d['account']:<16} {d['action']:<5} "
                          f"{d['symbol']:<5} x{d['quantity']}"
-                         + (f"   {d['error']}" if d.get("error") else ""))
+                         + (f"   {d['error']}" if d.get("error") else "")
+                         + detail)
         if report["plan"] and not report["payloads"]:
             lines.append("  no orders — every net position was declined:")
         for r in report["plan"]:
