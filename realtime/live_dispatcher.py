@@ -1428,7 +1428,19 @@ class LiveExecutionDispatcher:
             if not d["ok"]:
                 body = (d.get("result") or {}).get("response_body")
                 if body:
-                    detail = f"  <- {str(body).strip()[:400]}"
+                    # SANITISED BEFORE IT IS PRINTED. An endpoint that echoes
+                    # the request back in its error body hands back the
+                    # `key=` field verbatim, and this line goes to a log file
+                    # that outlives the session. `redact` replaces the key and
+                    # passes text without one through unchanged; the webhook
+                    # PATH is scrubbed separately because it is the other half
+                    # of the credential and `redact` knows nothing about it.
+                    detail = redact(str(body).strip())
+                    secret = str(getattr(self, "crosstrade_url", "") or "")
+                    path = _url_path(secret)
+                    if path:
+                        detail = detail.replace(path, "/<redacted>")
+                    detail = f"  <- {detail[:400]}"
             lines.append(f"  {status} {d['account']:<16} {d['action']:<5} "
                          f"{d['symbol']:<5} x{d['quantity']}"
                          + (f"   {d['error']}" if d.get("error") else "")
@@ -1568,6 +1580,26 @@ def _fmt_reading(value: Any) -> str:
         # somebody is doing that.
         return f"{f:.2f}"
     return f"{f:.4f}".rstrip("0").rstrip(".")
+
+
+def _url_path(url: str) -> str:
+    """
+    The PATH of a webhook URL, for scrubbing it out of text that may echo it.
+
+    `_host_only` keeps the host because that is the safe half; this returns
+    the other half, which is the half that is the credential - CrossTrade's
+    `/v1/send/<token>/<token>` route authorises orders on the account by
+    itself. Returns "" for a URL with no meaningful path, so a caller's
+    `replace()` cannot blank out every "/" in the string it is cleaning.
+    """
+    if not url:
+        return ""
+    from urllib.parse import urlparse
+    try:
+        path = urlparse(url).path or ""
+    except ValueError:
+        return ""
+    return path if len(path) > 1 else ""
 
 
 def _host_only(url: str) -> str:
