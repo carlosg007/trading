@@ -1,0 +1,127 @@
+{
+  "name": "intrinsic_alpha_engine_20260831_RB_5m_VB",
+  "strategy": "intrinsic_alpha_engine_20260831",
+  "symbol": "RB",
+  "version": "B",
+  "description": "Promoted Version B (baseline + causal ML filter).",
+  "symbols": [
+    "RB"
+  ],
+  "timeframe": "5m",
+  "params": {
+    "delta_pct": 0.004,
+    "os_mult": 2.5,
+    "vol_mult": 1.0,
+    "ema_baseline_len": 20,
+    "volume_sma_len": 20,
+    "session_start_et": "09:30",
+    "session_end_et": "16:00",
+    "use_baseline_filter": true,
+    "use_alpha_trigger": true,
+    "use_volume_filter": true,
+    "use_session_filter": false,
+    "use_news_filter": false,
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": 2.0,
+    "trailing": false
+  },
+  "params_source": "locked from dual_metrics_RB.json",
+  "params_conflict": [],
+  "risk": {
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": 2.0,
+    "trailing": false
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/intrinsic_alpha_engine_20260831.py",
+  "source_sha256": "da8f6be64e0deb00461cbc6f062643730d6b68652aab1dcfc6b3193b02b15f15",
+  "promoted_sha256": "56d8a3937e865aec80286aa3088c88d181f88482cf803870201411e0d0a93bf3",
+  "promoted_utc": "2026-08-31T14:12:24+00:00",
+  "costs_included": true,
+  "variants_tested": null,
+  "metrics_status": "RECORDED \u00b7 locked from dual_metrics_RB.json",
+  "metrics": {
+    "sharpe": 0.0054552520029158,
+    "sortino": 0.008215559998851594,
+    "calmar": -0.0005329631426498881,
+    "profit_factor": 0.9983142768152384,
+    "win_rate": 0.42105263157894735,
+    "max_drawdown_pct": -9.534310111778488,
+    "total_return_pct": -0.08508000000024829,
+    "annualized_return_pct": -0.005081435880172069,
+    "trade_count": 456,
+    "total_pnl": -85.08000000026527,
+    "total_costs": 5918.8800000002175,
+    "final_equity": 99914.91999999975,
+    "n_days": 4221,
+    "start": "2013-01-01 23:00:00+00:00",
+    "end": "2026-08-07 20:55:00+00:00",
+    "bars": 802577,
+    "initial_capital": 100000.0
+  },
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "FAIL",
+    "gate2": "FAIL",
+    "gate3": "PASS",
+    "gate_regime": "PASS",
+    "gate_ruin": "PASS"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/intrinsic_alpha_engine_20260831/gate_audit_RB_5m.json",
+    "audit_sha256": "41579a89e1fc1a8788f1b42ecc1152fb78e48daee5d8c87de4ed22f8d2868e23",
+    "audit_symbol": "RB",
+    "audit_timeframe": "5m",
+    "target_quadrant": "Q2",
+    "target_regime": "High Volatility / Ranging",
+    "audit_generated_utc": "2026-08-31T14:00:38+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "delta_pct": 0.004,
+      "os_mult": 2.5,
+      "sl_atr_mult": 2.0,
+      "tp_atr_mult": 2.0,
+      "trailing": false
+    },
+    "params_source": "stage 2 winner (best_params_RB_5m.json)",
+    "variants_tested": 162,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "FAIL",
+    "agrees_with_snapshot": false
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [
+    "import from 'backtest.event_calendar' is not allowed"
+  ],
+  "notes": "",
+  "ml_threshold": 0.48,
+  "baseline": "baseline.py"
+}

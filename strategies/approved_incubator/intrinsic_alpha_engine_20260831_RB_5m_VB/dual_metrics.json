@@ -1,0 +1,861 @@
+{
+  "meta": {
+    "strategy": "intrinsic_alpha_engine_20260831",
+    "strategy_path": "/home/cgrullon/src/trading/strategies/experimental/intrinsic_alpha_engine_20260831.py",
+    "params": {
+      "delta_pct": 0.004,
+      "os_mult": 2.5,
+      "vol_mult": 1.0,
+      "ema_baseline_len": 20,
+      "volume_sma_len": 20,
+      "session_start_et": "09:30",
+      "session_end_et": "16:00",
+      "use_baseline_filter": true,
+      "use_alpha_trigger": true,
+      "use_volume_filter": true,
+      "use_session_filter": false,
+      "use_news_filter": false,
+      "sl_atr_mult": 2.0,
+      "tp_atr_mult": 2.0,
+      "trailing": false
+    },
+    "symbol": "RB",
+    "timeframe": "5m",
+    "bars": 802577,
+    "start": "2013-01-01 23:00:00+00:00",
+    "end": "2026-08-07 20:55:00+00:00",
+    "costs_included": true,
+    "initial_capital": 100000.0,
+    "ml_threshold": 0.48,
+    "ml_evaluated": true,
+    "ml_features": [
+      "norm_atr",
+      "adx",
+      "vol_percentile",
+      "vol_scale",
+      "overshoot_units",
+      "dist_from_baseline_atr",
+      "dist_from_macro_atr",
+      "roc_5",
+      "roc_15",
+      "volume_z",
+      "hour_et"
+    ],
+    "ml_refit": {
+      "long": {
+        "direction": "long",
+        "candidates": 550,
+        "fits": 32,
+        "train_rows_max": 500,
+        "refit_growth": 0.1,
+        "max_train_rows": 50000,
+        "threads": 1,
+        "elapsed_s": 0.713
+      },
+      "short": {
+        "direction": "short",
+        "candidates": 598,
+        "fits": 33,
+        "train_rows_max": 550,
+        "refit_growth": 0.1,
+        "max_train_rows": 50000,
+        "threads": 1,
+        "elapsed_s": 0.751
+      }
+    },
+    "logic": {
+      "concept": "A coastline reversal in intrinsic time. Clock time is replaced by events: a Directional Change is a reversal of at least 0.4% of price - scaled by how volatile the tape is now against its own recent median - and the Overshoot is the run that preceded it. The scaling law says an overshoot averages about one threshold, so an overshoot of 2.5x that is a stretched coastline, and the DC ending it is the entry. Volume at or above its mean and a volatility floor say the turn happened on participation rather than in an illiquid stall.",
+      "entry": "LONG on an upward Directional Change that ends a downward overshoot of at least 2.5 thresholds, with volume >= SMA(20) x 1.0, ATR/close > 0.0005, and ADX(14) < 30 or close above EMA(200). SHORT mirrors it.",
+      "exit": "The opposite Directional Change, or reversion to EMA(20), or the ATR stop (2.0x) or target (2.0x) - whichever the bar reaches first."
+    }
+  },
+  "comparison": {
+    "ml_evaluated": true,
+    "entries_a": 550,
+    "entries_b": 241,
+    "entries_suppressed": 309,
+    "sharpe_delta": 0.19542627618772165,
+    "b_beats_a": true
+  },
+  "version_a": {
+    "metrics": {
+      "ok": true,
+      "ruined": false,
+      "final_equity": 90672.36000000035,
+      "total_pnl": -9327.639999999708,
+      "gross_pnl": 5573.400000000143,
+      "total_costs": 14901.039999999854,
+      "total_return_pct": -9.327639999999649,
+      "annualized_return_pct": -0.5828774229136635,
+      "sharpe": -0.18997102418480585,
+      "sortino": -0.2709180512839159,
+      "calmar": -0.035030392128069944,
+      "metrics_basis": {
+        "frequency": "daily_close",
+        "annualization_factor": 252,
+        "risk_free_rate": 0.0,
+        "n_days": 4221
+      },
+      "max_drawdown_pct": -16.639192070208153,
+      "win_rate": 0.4094076655052265,
+      "profit_factor": 0.9340134287289248,
+      "trade_count": 1148,
+      "long_trades": 550,
+      "short_trades": 598,
+      "breach": {},
+      "n_days": 4221,
+      "dow_breakdown": [
+        {
+          "day": "Mon",
+          "weekday": 0,
+          "trades": 255,
+          "net_pnl": 13208.700000000303,
+          "gross_win": 36773.12000000019,
+          "gross_loss": 23564.41999999989,
+          "win_rate": 0.4549019607843137,
+          "avg_pnl": 51.79882352941295,
+          "profit_factor": 1.5605357568741502,
+          "pct_of_trades": 22.21254355400697,
+          "pct_of_net_pnl": 141.60816669597793
+        },
+        {
+          "day": "Tue",
+          "weekday": 1,
+          "trades": 232,
+          "net_pnl": -6875.359999999922,
+          "gross_win": 24868.38000000007,
+          "gross_loss": 31743.74,
+          "win_rate": 0.4267241379310345,
+          "avg_pnl": -29.63517241379277,
+          "profit_factor": 0.783410524405759,
+          "pct_of_trades": 20.209059233449477,
+          "pct_of_net_pnl": -73.70953424446202
+        },
+        {
+          "day": "Wed",
+          "weekday": 2,
+          "trades": 198,
+          "net_pnl": -7374.840000000064,
+          "gross_win": 18608.4199999998,
+          "gross_loss": 25983.25999999988,
+          "win_rate": 0.35858585858585856,
+          "avg_pnl": -37.24666666666699,
+          "profit_factor": 0.7161695645580997,
+          "pct_of_trades": 17.247386759581882,
+          "pct_of_net_pnl": -79.06437212414174
+        },
+        {
+          "day": "Thu",
+          "weekday": 3,
+          "trades": 250,
+          "net_pnl": -3694.4000000000506,
+          "gross_win": 28136.739999999918,
+          "gross_loss": 31831.139999999963,
+          "win_rate": 0.388,
+          "avg_pnl": -14.777600000000202,
+          "profit_factor": 0.8839375529748527,
+          "pct_of_trades": 21.777003484320556,
+          "pct_of_net_pnl": -39.60701742348725
+        },
+        {
+          "day": "Fri",
+          "weekday": 4,
+          "trades": 212,
+          "net_pnl": -4524.159999999979,
+          "gross_win": 23642.340000000004,
+          "gross_loss": 28166.5,
+          "win_rate": 0.41037735849056606,
+          "avg_pnl": -21.340377358490468,
+          "profit_factor": 0.8393779844851155,
+          "pct_of_trades": 18.466898954703833,
+          "pct_of_net_pnl": -48.50272952215266
+        },
+        {
+          "day": "Sun",
+          "weekday": 6,
+          "trades": 1,
+          "net_pnl": -67.57999999999274,
+          "gross_win": 0.0,
+          "gross_loss": 67.57999999999274,
+          "win_rate": 0.0,
+          "avg_pnl": -67.57999999999274,
+          "profit_factor": 0.0,
+          "pct_of_trades": 0.08710801393728224,
+          "pct_of_net_pnl": -0.7245133817342312
+        }
+      ],
+      "entry_filters": {},
+      "meta": {
+        "strategy": "intrinsic_alpha_engine_20260831",
+        "strategy_path": "/home/cgrullon/src/trading/strategies/experimental/intrinsic_alpha_engine_20260831.py",
+        "params": {
+          "delta_pct": 0.004,
+          "os_mult": 2.5,
+          "vol_mult": 1.0,
+          "ema_baseline_len": 20,
+          "volume_sma_len": 20,
+          "session_start_et": "09:30",
+          "session_end_et": "16:00",
+          "use_baseline_filter": true,
+          "use_alpha_trigger": true,
+          "use_volume_filter": true,
+          "use_session_filter": false,
+          "use_news_filter": false,
+          "sl_atr_mult": 2.0,
+          "tp_atr_mult": 2.0,
+          "trailing": false
+        },
+        "symbol": "RB",
+        "timeframe": "5m",
+        "bars": 802577,
+        "start": "2013-01-01 23:00:00+00:00",
+        "end": "2026-08-07 20:55:00+00:00",
+        "costs_included": true,
+        "initial_capital": 100000.0,
+        "ml_threshold": 0.48,
+        "ml_evaluated": true,
+        "ml_features": [
+          "norm_atr",
+          "adx",
+          "vol_percentile",
+          "vol_scale",
+          "overshoot_units",
+          "dist_from_baseline_atr",
+          "dist_from_macro_atr",
+          "roc_5",
+          "roc_15",
+          "volume_z",
+          "hour_et"
+        ],
+        "ml_refit": {
+          "long": {
+            "direction": "long",
+            "candidates": 550,
+            "fits": 32,
+            "train_rows_max": 500,
+            "refit_growth": 0.1,
+            "max_train_rows": 50000,
+            "threads": 1,
+            "elapsed_s": 0.713
+          },
+          "short": {
+            "direction": "short",
+            "candidates": 598,
+            "fits": 33,
+            "train_rows_max": 550,
+            "refit_growth": 0.1,
+            "max_train_rows": 50000,
+            "threads": 1,
+            "elapsed_s": 0.751
+          }
+        },
+        "logic": {
+          "concept": "A coastline reversal in intrinsic time. Clock time is replaced by events: a Directional Change is a reversal of at least 0.4% of price - scaled by how volatile the tape is now against its own recent median - and the Overshoot is the run that preceded it. The scaling law says an overshoot averages about one threshold, so an overshoot of 2.5x that is a stretched coastline, and the DC ending it is the entry. Volume at or above its mean and a volatility floor say the turn happened on participation rather than in an illiquid stall.",
+          "entry": "LONG on an upward Directional Change that ends a downward overshoot of at least 2.5 thresholds, with volume >= SMA(20) x 1.0, ATR/close > 0.0005, and ADX(14) < 30 or close above EMA(200). SHORT mirrors it.",
+          "exit": "The opposite Directional Change, or reversion to EMA(20), or the ATR stop (2.0x) or target (2.0x) - whichever the bar reaches first."
+        }
+      }
+    },
+    "gate_audit": {
+      "version": "A",
+      "name": "intrinsic_alpha_engine_20260831",
+      "gates": {
+        "gate1": {
+          "name": "GATE 1 \u00b7 In-Sample",
+          "status": "FAIL",
+          "checks": [
+            {
+              "label": "Sharpe (not gated)",
+              "value": -0.18997102418480585,
+              "threshold": null,
+              "direction": "min",
+              "unit": "",
+              "status": "INFO",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Profit factor",
+              "value": 0.9340134287289248,
+              "threshold": 1.0,
+              "direction": "min",
+              "unit": "",
+              "status": "FAIL",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Trades",
+              "value": 1148.0,
+              "threshold": 200.0,
+              "direction": "min",
+              "unit": "",
+              "status": "PASS",
+              "note": "16.75 years at 30 trades/yr is 502; the 200-trade cap binds",
+              "fmt": "{:,.0f}"
+            },
+            {
+              "label": "Max drawdown",
+              "value": 16.639192070208153,
+              "threshold": 12.0,
+              "direction": "max",
+              "unit": "%",
+              "status": "FAIL",
+              "note": null,
+              "fmt": "{:.2f}"
+            }
+          ]
+        },
+        "gate2": {
+          "name": "GATE 2 \u00b7 Robustness",
+          "status": "NOT EVALUATED",
+          "checks": [
+            {
+              "label": "WFO efficiency",
+              "value": null,
+              "threshold": 0.5,
+              "direction": "min",
+              "unit": "",
+              "status": "NOT EVALUATED",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Monte Carlo 95% max DD",
+              "value": null,
+              "threshold": 18.0,
+              "direction": "max",
+              "unit": "%",
+              "status": "NOT EVALUATED",
+              "note": null,
+              "fmt": "{:.2f}"
+            }
+          ]
+        },
+        "gate3": {
+          "name": "GATE 3 \u00b7 OOS Holdout",
+          "status": "NOT EVALUATED",
+          "checks": [
+            {
+              "label": "Holdout Sharpe retention",
+              "value": null,
+              "threshold": 0.8,
+              "direction": "min",
+              "unit": "x",
+              "status": "NOT EVALUATED",
+              "note": "in-sample Sharpe is -0.19 (<= 0), so Sharpe retention is undefined, not passing",
+              "fmt": "{:.2f}"
+            }
+          ]
+        }
+      },
+      "status": "FAIL",
+      "passed": false,
+      "thresholds": {
+        "gate1": {
+          "min_profit_factor": 1.0,
+          "min_trades": 100,
+          "max_required_trades": 200,
+          "min_trades_per_year": 30,
+          "max_drawdown_pct": 12.0
+        },
+        "gate2": {
+          "min_wfo_efficiency": 0.5,
+          "max_mc_drawdown_pct": 18.0
+        },
+        "gate3": {
+          "min_retention": 0.8
+        }
+      },
+      "holdout_sharpe": null,
+      "in_sample_sharpe": -0.18997102418480585,
+      "sharpe_retention": null,
+      "retention": null,
+      "retention_metric": null
+    }
+  },
+  "version_b": {
+    "metrics": {
+      "ok": true,
+      "ruined": false,
+      "final_equity": 99914.91999999975,
+      "total_pnl": -85.08000000026527,
+      "gross_pnl": 5833.799999999948,
+      "total_costs": 5918.8800000002175,
+      "total_return_pct": -0.08508000000024829,
+      "annualized_return_pct": -0.005081435880172069,
+      "sharpe": 0.0054552520029158,
+      "sortino": 0.008215559998851594,
+      "calmar": -0.0005329631426498881,
+      "metrics_basis": {
+        "frequency": "daily_close",
+        "annualization_factor": 252,
+        "risk_free_rate": 0.0,
+        "n_days": 4221
+      },
+      "max_drawdown_pct": -9.534310111778488,
+      "win_rate": 0.42105263157894735,
+      "profit_factor": 0.9983142768152384,
+      "trade_count": 456,
+      "long_trades": 241,
+      "short_trades": 215,
+      "breach": {},
+      "n_days": 4221,
+      "dow_breakdown": [
+        {
+          "day": "Mon",
+          "weekday": 0,
+          "trades": 94,
+          "net_pnl": 3311.6800000001513,
+          "gross_win": 12130.060000000081,
+          "gross_loss": 8818.37999999993,
+          "win_rate": 0.4574468085106383,
+          "avg_pnl": 35.23063829787395,
+          "profit_factor": 1.3755429001698927,
+          "pct_of_trades": 20.614035087719298,
+          "pct_of_net_pnl": 3892.4306534906273
+        },
+        {
+          "day": "Tue",
+          "weekday": 1,
+          "trades": 93,
+          "net_pnl": -1660.7400000000612,
+          "gross_win": 7666.980000000049,
+          "gross_loss": 9327.72000000011,
+          "win_rate": 0.41935483870967744,
+          "avg_pnl": -17.85741935483937,
+          "profit_factor": 0.8219564909752821,
+          "pct_of_trades": 20.394736842105264,
+          "pct_of_net_pnl": -1951.974612123746
+        },
+        {
+          "day": "Wed",
+          "weekday": 2,
+          "trades": 82,
+          "net_pnl": 124.23999999982811,
+          "gross_win": 8870.459999999892,
+          "gross_loss": 8746.220000000061,
+          "win_rate": 0.4024390243902439,
+          "avg_pnl": 1.515121951217416,
+          "profit_factor": 1.014204993700116,
+          "pct_of_trades": 17.982456140350877,
+          "pct_of_net_pnl": 146.02726845256316
+        },
+        {
+          "day": "Thu",
+          "weekday": 3,
+          "trades": 99,
+          "net_pnl": -1847.8200000000875,
+          "gross_win": 11446.979999999976,
+          "gross_loss": 13294.800000000065,
+          "win_rate": 0.3939393939393939,
+          "avg_pnl": -18.66484848484937,
+          "profit_factor": 0.8610118241718506,
+          "pct_of_trades": 21.710526315789473,
+          "pct_of_net_pnl": -2171.861777144248
+        },
+        {
+          "day": "Fri",
+          "weekday": 4,
+          "trades": 88,
+          "net_pnl": -12.440000000095552,
+          "gross_win": 10271.359999999919,
+          "gross_loss": 10283.800000000014,
+          "win_rate": 0.4318181818181818,
+          "avg_pnl": -0.14136363636472218,
+          "profit_factor": 0.9987903304225972,
+          "pct_of_trades": 19.29824561403509,
+          "pct_of_net_pnl": -14.62153267519601
+        }
+      ],
+      "entry_filters": {},
+      "meta": {
+        "strategy": "intrinsic_alpha_engine_20260831",
+        "strategy_path": "/home/cgrullon/src/trading/strategies/experimental/intrinsic_alpha_engine_20260831.py",
+        "params": {
+          "delta_pct": 0.004,
+          "os_mult": 2.5,
+          "vol_mult": 1.0,
+          "ema_baseline_len": 20,
+          "volume_sma_len": 20,
+          "session_start_et": "09:30",
+          "session_end_et": "16:00",
+          "use_baseline_filter": true,
+          "use_alpha_trigger": true,
+          "use_volume_filter": true,
+          "use_session_filter": false,
+          "use_news_filter": false,
+          "sl_atr_mult": 2.0,
+          "tp_atr_mult": 2.0,
+          "trailing": false
+        },
+        "symbol": "RB",
+        "timeframe": "5m",
+        "bars": 802577,
+        "start": "2013-01-01 23:00:00+00:00",
+        "end": "2026-08-07 20:55:00+00:00",
+        "costs_included": true,
+        "initial_capital": 100000.0,
+        "ml_threshold": 0.48,
+        "ml_evaluated": true,
+        "ml_features": [
+          "norm_atr",
+          "adx",
+          "vol_percentile",
+          "vol_scale",
+          "overshoot_units",
+          "dist_from_baseline_atr",
+          "dist_from_macro_atr",
+          "roc_5",
+          "roc_15",
+          "volume_z",
+          "hour_et"
+        ],
+        "ml_refit": {
+          "long": {
+            "direction": "long",
+            "candidates": 550,
+            "fits": 32,
+            "train_rows_max": 500,
+            "refit_growth": 0.1,
+            "max_train_rows": 50000,
+            "threads": 1,
+            "elapsed_s": 0.713
+          },
+          "short": {
+            "direction": "short",
+            "candidates": 598,
+            "fits": 33,
+            "train_rows_max": 550,
+            "refit_growth": 0.1,
+            "max_train_rows": 50000,
+            "threads": 1,
+            "elapsed_s": 0.751
+          }
+        },
+        "logic": {
+          "concept": "A coastline reversal in intrinsic time. Clock time is replaced by events: a Directional Change is a reversal of at least 0.4% of price - scaled by how volatile the tape is now against its own recent median - and the Overshoot is the run that preceded it. The scaling law says an overshoot averages about one threshold, so an overshoot of 2.5x that is a stretched coastline, and the DC ending it is the entry. Volume at or above its mean and a volatility floor say the turn happened on participation rather than in an illiquid stall.",
+          "entry": "LONG on an upward Directional Change that ends a downward overshoot of at least 2.5 thresholds, with volume >= SMA(20) x 1.0, ATR/close > 0.0005, and ADX(14) < 30 or close above EMA(200). SHORT mirrors it.",
+          "exit": "The opposite Directional Change, or reversion to EMA(20), or the ATR stop (2.0x) or target (2.0x) - whichever the bar reaches first."
+        }
+      }
+    },
+    "gate_audit": {
+      "version": "B",
+      "name": "intrinsic_alpha_engine_20260831",
+      "gates": {
+        "gate1": {
+          "name": "GATE 1 \u00b7 In-Sample",
+          "status": "FAIL",
+          "checks": [
+            {
+              "label": "Sharpe (not gated)",
+              "value": 0.0054552520029158,
+              "threshold": null,
+              "direction": "min",
+              "unit": "",
+              "status": "INFO",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Profit factor",
+              "value": 0.9983142768152384,
+              "threshold": 1.0,
+              "direction": "min",
+              "unit": "",
+              "status": "FAIL",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Trades",
+              "value": 456.0,
+              "threshold": 200.0,
+              "direction": "min",
+              "unit": "",
+              "status": "PASS",
+              "note": "16.75 years at 30 trades/yr is 502; the 200-trade cap binds",
+              "fmt": "{:,.0f}"
+            },
+            {
+              "label": "Max drawdown",
+              "value": 9.534310111778488,
+              "threshold": 12.0,
+              "direction": "max",
+              "unit": "%",
+              "status": "PASS",
+              "note": null,
+              "fmt": "{:.2f}"
+            }
+          ]
+        },
+        "gate2": {
+          "name": "GATE 2 \u00b7 Robustness",
+          "status": "NOT EVALUATED",
+          "checks": [
+            {
+              "label": "WFO efficiency",
+              "value": null,
+              "threshold": 0.5,
+              "direction": "min",
+              "unit": "",
+              "status": "NOT EVALUATED",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Monte Carlo 95% max DD",
+              "value": null,
+              "threshold": 18.0,
+              "direction": "max",
+              "unit": "%",
+              "status": "NOT EVALUATED",
+              "note": null,
+              "fmt": "{:.2f}"
+            }
+          ]
+        },
+        "gate3": {
+          "name": "GATE 3 \u00b7 OOS Holdout",
+          "status": "NOT EVALUATED",
+          "checks": [
+            {
+              "label": "Holdout Sharpe retention",
+              "value": null,
+              "threshold": 0.8,
+              "direction": "min",
+              "unit": "x",
+              "status": "NOT EVALUATED",
+              "note": "no holdout Sharpe supplied, so Sharpe retention is undefined",
+              "fmt": "{:.2f}"
+            }
+          ]
+        }
+      },
+      "status": "FAIL",
+      "passed": false,
+      "thresholds": {
+        "gate1": {
+          "min_profit_factor": 1.0,
+          "min_trades": 100,
+          "max_required_trades": 200,
+          "min_trades_per_year": 30,
+          "max_drawdown_pct": 12.0
+        },
+        "gate2": {
+          "min_wfo_efficiency": 0.5,
+          "max_mc_drawdown_pct": 18.0
+        },
+        "gate3": {
+          "min_retention": 0.8
+        }
+      },
+      "holdout_sharpe": null,
+      "in_sample_sharpe": 0.0054552520029158,
+      "sharpe_retention": null,
+      "retention": null,
+      "retention_metric": null
+    }
+  },
+  "generated_utc": "2026-08-31T14:09:52+00:00",
+  "reports": {
+    "version_a": "/mnt/backtest/artifacts/pipeline/intrinsic_alpha_engine_20260831/verify_20260831_140921/report_RB_version_a.html",
+    "version_b": "/mnt/backtest/artifacts/pipeline/intrinsic_alpha_engine_20260831/verify_20260831_140921/report_RB_version_b.html"
+  },
+  "cost_drag": {
+    "trades": 1148,
+    "total_costs": 14901.039999999854,
+    "gross_pnl": 5573.400000000143,
+    "net_pnl": -9327.639999999708,
+    "cost_per_trade": 12.979999999999873,
+    "cost_share_pct": 267.3599598090837,
+    "commission": 5257.839999999999,
+    "slippage": 9643.199999999853,
+    "split_available": true,
+    "modelled_round_turn": 12.98,
+    "by_year": [
+      {
+        "year": 2013,
+        "trades": 33,
+        "gross_pnl": 3939.59999999992,
+        "costs": 428.3399999998246,
+        "net_pnl": 3511.2600000000957,
+        "cost_per_trade": 12.979999999994686,
+        "cost_share_pct": 10.872677429176397
+      },
+      {
+        "year": 2014,
+        "trades": 20,
+        "gross_pnl": 944.9999999999707,
+        "costs": 259.59999999993386,
+        "net_pnl": 685.4000000000369,
+        "cost_per_trade": 12.979999999996693,
+        "cost_share_pct": 27.470899470893325
+      },
+      {
+        "year": 2015,
+        "trades": 92,
+        "gross_pnl": 3015.599999999985,
+        "costs": 1194.160000000106,
+        "net_pnl": 1821.4399999998786,
+        "cost_per_trade": 12.980000000001153,
+        "cost_share_pct": 39.599416368222315
+      },
+      {
+        "year": 2016,
+        "trades": 106,
+        "gross_pnl": 541.7999999999917,
+        "costs": 1375.8799999999978,
+        "net_pnl": -834.0800000000063,
+        "cost_per_trade": 12.979999999999979,
+        "cost_share_pct": 253.9461055740161
+      },
+      {
+        "year": 2017,
+        "trades": 48,
+        "gross_pnl": -226.80000000002167,
+        "costs": 623.0399999999639,
+        "net_pnl": -849.8399999999856,
+        "cost_per_trade": 12.979999999999249,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2018,
+        "trades": 41,
+        "gross_pnl": -1541.3999999999792,
+        "costs": 532.1799999999726,
+        "net_pnl": -2073.579999999952,
+        "cost_per_trade": 12.97999999999933,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2019,
+        "trades": 44,
+        "gross_pnl": -982.8000000000131,
+        "costs": 571.1199999999158,
+        "net_pnl": -1553.9199999999287,
+        "cost_per_trade": 12.979999999998086,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2020,
+        "trades": 295,
+        "gross_pnl": -251.9999999999593,
+        "costs": 3829.100000000057,
+        "net_pnl": -4081.100000000014,
+        "cost_per_trade": 12.980000000000194,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2021,
+        "trades": 64,
+        "gross_pnl": 327.59999999998286,
+        "costs": 830.7200000001283,
+        "net_pnl": -503.1200000001454,
+        "cost_per_trade": 12.980000000002004,
+        "cost_share_pct": 253.577533577586
+      },
+      {
+        "year": 2022,
+        "trades": 136,
+        "gross_pnl": 352.80000000001655,
+        "costs": 1765.2800000000798,
+        "net_pnl": -1412.48000000006,
+        "cost_per_trade": 12.980000000000587,
+        "cost_share_pct": 500.36281179138234
+      },
+      {
+        "year": 2023,
+        "trades": 79,
+        "gross_pnl": -461.99999999993065,
+        "costs": 1025.4199999999305,
+        "net_pnl": -1487.419999999861,
+        "cost_per_trade": 12.97999999999912,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2024,
+        "trades": 45,
+        "gross_pnl": -588.0000000000189,
+        "costs": 584.0999999998935,
+        "net_pnl": -1172.0999999999124,
+        "cost_per_trade": 12.979999999997633,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2025,
+        "trades": 46,
+        "gross_pnl": -1247.3999999999555,
+        "costs": 597.0800000000323,
+        "net_pnl": -1844.4799999999873,
+        "cost_per_trade": 12.980000000000702,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2026,
+        "trades": 99,
+        "gross_pnl": 1751.4000000001524,
+        "costs": 1285.0200000000173,
+        "net_pnl": 466.38000000013665,
+        "cost_per_trade": 12.980000000000175,
+        "cost_share_pct": 73.3710174717315
+      }
+    ]
+  },
+  "friction_by_regime": {
+    "available": true,
+    "attribution": "the quadrant of the trade's ENTRY bar",
+    "regime_source": "the labels RegimeProfiler classified for this run",
+    "attributed_trades": 1148,
+    "unplaced_trades": 0,
+    "unplaced_note": null,
+    "by_regime": [
+      {
+        "regime": "High Volatility / Trending",
+        "quadrant": "Q1",
+        "trades": 305,
+        "gross_pnl": 2721.6000000000404,
+        "costs": 3958.9000000000997,
+        "net_pnl": -1237.3000000000548,
+        "cost_per_trade": 12.980000000000327,
+        "cost_share_pct": 145.46222810111848
+      },
+      {
+        "regime": "High Volatility / Ranging",
+        "quadrant": "Q2",
+        "trades": 404,
+        "gross_pnl": -2683.799999999792,
+        "costs": 5243.920000000037,
+        "net_pnl": -7927.7199999998265,
+        "cost_per_trade": 12.980000000000093,
+        "cost_share_pct": null
+      },
+      {
+        "regime": "Low Volatility / Trending",
+        "quadrant": "Q3",
+        "trades": 148,
+        "gross_pnl": 2667.0000000000186,
+        "costs": 1921.0399999999645,
+        "net_pnl": 745.9600000000546,
+        "cost_per_trade": 12.97999999999976,
+        "cost_share_pct": 72.02999625046685
+      },
+      {
+        "regime": "Low Volatility / Ranging",
+        "quadrant": "Q4",
+        "trades": 291,
+        "gross_pnl": 2868.599999999875,
+        "costs": 3777.179999999751,
+        "net_pnl": -908.5799999998753,
+        "cost_per_trade": 12.979999999999144,
+        "cost_share_pct": 131.6732901066693
+      }
+    ]
+  },
+  "slippage_model": {
+    "model": "constant_ticks",
+    "slippage_ticks": 1.0,
+    "note": "ticks x that bar's tick size / price, per bar"
+  }
+}
