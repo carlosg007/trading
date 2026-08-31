@@ -19,9 +19,10 @@
       "basket": {
         "assets": [
           "MNQ",
-          "MCL"
+          "6E",
+          "6J"
         ],
-        "correlation_group": "Index_Energy_Uncorrelated",
+        "correlation_group": "Index_FX_Uncorrelated",
         "regime_quadrants": [
           "Q1_HIGH_VOL_TREND",
           "Q2_HIGH_VOL_CHOP",
@@ -40,7 +41,18 @@
         "ema_crossover_20260821_NQ_1h_VA",
         "ema_crossover_20260821_NQ_1h_VB",
         "ema_crossover_20260821_NQ_15m_VA",
-        "ma_anchoring_spread_20260820_NQ_15m_VA"
+        "ma_anchoring_spread_20260820_NQ_15m_VA",
+        "double_rsi_momentum_pullback_20260830_NQ_15m_VA",
+        "compressed_bollinger_reversion_20260901_NQ_15m_VA",
+        "keltner_trend_drift_20260901_NQ_15m_VA",
+        "keltner_trend_drift_20260901_NQ_5m_VA",
+        "keltner_trend_drift_20260901_NQ_1h_VA",
+        "keltner_trend_drift_20260901_NQ_30m_VA",
+        "keltner_trend_drift_20260901_NQ_30m_VB",
+        "double_rsi_momentum_pullback_20260830_6E_30m_VA",
+        "double_rsi_momentum_pullback_20260830_6E_30m_VB",
+        "double_rsi_momentum_pullback_20260830_6J_1h_VA",
+        "double_rsi_momentum_pullback_20260830_6J_1h_VB"
       ],
       "strategy_allocations": {
         "sma_momentum_crossover_20260818_NQ_5m_VA": {
@@ -280,9 +292,9 @@
           "regime_filter": "Q2",
           "status": "incubating",
           "path": "strategies/approved_incubator/ma_anchoring_spread_20260820_NQ_15m_VA/strat.py",
-          "registered_utc": "2026-08-29T22:45:48+00:00",
+          "registered_utc": "2026-08-30T16:45:53+00:00",
           "registered_by": "backtest/promote.py",
-          "routing_basis": "trades NQ; declares Q2; fewest active strategies (Incubator-Odd=7), ties alphabetical; certified on 15m bars",
+          "routing_basis": "already registered on Incubator-Odd; a re-promotion does not move an account",
           "resolved_from": {
             "symbol": "--symbol",
             "timeframe": "--timeframe",
@@ -298,13 +310,431 @@
               "regime_filter": "Q2",
               "status": "incubating",
               "path": "strategies/approved_incubator/ma_anchoring_spread_20260820_NQ_15m_VA/strat.py",
-              "registered_utc": "2026-08-29T22:45:48+00:00",
+              "registered_utc": "2026-08-30T16:45:53+00:00",
               "registered_by": "backtest/promote.py",
-              "routing_basis": "trades NQ; declares Q2; fewest active strategies (Incubator-Odd=7), ties alphabetical; certified on 15m bars",
+              "routing_basis": "already registered on Incubator-Odd; a re-promotion does not move an account",
               "resolved_from": {
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_NQ_15m.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "compressed_bollinger_reversion_20260901_NQ_15m_VA": {
+          "strat": "compressed_bollinger_reversion_20260901_NQ_15m_VA",
+          "symbol": "NQ",
+          "timeframe": "15m",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q2",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/compressed_bollinger_reversion_20260901_NQ_15m_VA/strat.py",
+          "registered_utc": "2026-08-31T02:08:02+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades NQ; declares Q2; fewest active strategies (Incubator-Odd=8), ties alphabetical; certified on 15m bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_NQ_15m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "compressed_bollinger_reversion_20260901_NQ_15m_VA",
+              "symbol": "NQ",
+              "timeframe": "15m",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q2",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/compressed_bollinger_reversion_20260901_NQ_15m_VA/strat.py",
+              "registered_utc": "2026-08-31T02:08:02+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades NQ; declares Q2; fewest active strategies (Incubator-Odd=8), ties alphabetical; certified on 15m bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_NQ_15m.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "keltner_trend_drift_20260901_NQ_15m_VA": {
+          "strat": "keltner_trend_drift_20260901_NQ_15m_VA",
+          "symbol": "NQ",
+          "timeframe": "15m",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q1",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/keltner_trend_drift_20260901_NQ_15m_VA/strat.py",
+          "registered_utc": "2026-08-31T02:19:26+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades NQ; declares Q1; fewest active strategies (Incubator-Odd=9), ties alphabetical; certified on 15m bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_NQ_15m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "keltner_trend_drift_20260901_NQ_15m_VA",
+              "symbol": "NQ",
+              "timeframe": "15m",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q1",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/keltner_trend_drift_20260901_NQ_15m_VA/strat.py",
+              "registered_utc": "2026-08-31T02:19:26+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades NQ; declares Q1; fewest active strategies (Incubator-Odd=9), ties alphabetical; certified on 15m bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_NQ_15m.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "keltner_trend_drift_20260901_NQ_5m_VA": {
+          "strat": "keltner_trend_drift_20260901_NQ_5m_VA",
+          "symbol": "NQ",
+          "timeframe": "5m",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q1",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/keltner_trend_drift_20260901_NQ_5m_VA/strat.py",
+          "registered_utc": "2026-08-31T02:19:52+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades NQ; declares Q1; fewest active strategies (Incubator-Odd=10), ties alphabetical; certified on 5m bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_NQ_5m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "keltner_trend_drift_20260901_NQ_5m_VA",
+              "symbol": "NQ",
+              "timeframe": "5m",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q1",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/keltner_trend_drift_20260901_NQ_5m_VA/strat.py",
+              "registered_utc": "2026-08-31T02:19:52+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades NQ; declares Q1; fewest active strategies (Incubator-Odd=10), ties alphabetical; certified on 5m bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_NQ_5m.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "keltner_trend_drift_20260901_NQ_1h_VA": {
+          "strat": "keltner_trend_drift_20260901_NQ_1h_VA",
+          "symbol": "NQ",
+          "timeframe": "1h",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q2",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/keltner_trend_drift_20260901_NQ_1h_VA/strat.py",
+          "registered_utc": "2026-08-31T02:19:59+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades NQ; declares Q2; fewest active strategies (Incubator-Odd=11), ties alphabetical; certified on 1h bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_NQ_1h.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "keltner_trend_drift_20260901_NQ_1h_VA",
+              "symbol": "NQ",
+              "timeframe": "1h",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q2",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/keltner_trend_drift_20260901_NQ_1h_VA/strat.py",
+              "registered_utc": "2026-08-31T02:19:59+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades NQ; declares Q2; fewest active strategies (Incubator-Odd=11), ties alphabetical; certified on 1h bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_NQ_1h.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "keltner_trend_drift_20260901_NQ_30m_VA": {
+          "strat": "keltner_trend_drift_20260901_NQ_30m_VA",
+          "symbol": "NQ",
+          "timeframe": "30m",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q2",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/keltner_trend_drift_20260901_NQ_30m_VA/strat.py",
+          "registered_utc": "2026-08-31T02:20:37+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades NQ; declares Q2; fewest active strategies (Incubator-Odd=12), ties alphabetical; certified on 30m bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_NQ_30m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "keltner_trend_drift_20260901_NQ_30m_VA",
+              "symbol": "NQ",
+              "timeframe": "30m",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q2",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/keltner_trend_drift_20260901_NQ_30m_VA/strat.py",
+              "registered_utc": "2026-08-31T02:20:37+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades NQ; declares Q2; fewest active strategies (Incubator-Odd=12), ties alphabetical; certified on 30m bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_NQ_30m.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "keltner_trend_drift_20260901_NQ_30m_VB": {
+          "strat": "keltner_trend_drift_20260901_NQ_30m_VB",
+          "symbol": "NQ",
+          "timeframe": "30m",
+          "version": "B",
+          "allocation": 1,
+          "regime_filter": "Q2",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/keltner_trend_drift_20260901_NQ_30m_VB/strat.py",
+          "registered_utc": "2026-08-31T02:20:40+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades NQ; declares Q2; fewest active strategies (Incubator-Odd=13), ties alphabetical; certified on 30m bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_NQ_30m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "keltner_trend_drift_20260901_NQ_30m_VB",
+              "symbol": "NQ",
+              "timeframe": "30m",
+              "version": "B",
+              "allocation": 1,
+              "regime_filter": "Q2",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/keltner_trend_drift_20260901_NQ_30m_VB/strat.py",
+              "registered_utc": "2026-08-31T02:20:40+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades NQ; declares Q2; fewest active strategies (Incubator-Odd=13), ties alphabetical; certified on 30m bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_NQ_30m.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "double_rsi_momentum_pullback_20260830_NQ_15m_VA": {
+          "strat": "double_rsi_momentum_pullback_20260830_NQ_15m_VA",
+          "symbol": "NQ",
+          "timeframe": "15m",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q1",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/double_rsi_momentum_pullback_20260830_NQ_15m_VA/strat.py",
+          "registered_utc": "2026-08-31T03:32:33+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "already registered on Incubator-Odd; a re-promotion does not move an account",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_NQ_15m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "double_rsi_momentum_pullback_20260830_NQ_15m_VA",
+              "symbol": "NQ",
+              "timeframe": "15m",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q1",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/double_rsi_momentum_pullback_20260830_NQ_15m_VA/strat.py",
+              "registered_utc": "2026-08-31T03:32:33+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "already registered on Incubator-Odd; a re-promotion does not move an account",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_NQ_15m.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "double_rsi_momentum_pullback_20260830_6J_1h_VA": {
+          "strat": "double_rsi_momentum_pullback_20260830_6J_1h_VA",
+          "symbol": "6J",
+          "timeframe": "1h",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q4",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/double_rsi_momentum_pullback_20260830_6J_1h_VA/strat.py",
+          "registered_utc": "2026-08-31T03:33:08+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "already registered on Incubator-Odd; a re-promotion does not move an account",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_6J_1h.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "double_rsi_momentum_pullback_20260830_6J_1h_VA",
+              "symbol": "6J",
+              "timeframe": "1h",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q4",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/double_rsi_momentum_pullback_20260830_6J_1h_VA/strat.py",
+              "registered_utc": "2026-08-31T03:33:08+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "already registered on Incubator-Odd; a re-promotion does not move an account",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_6J_1h.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "double_rsi_momentum_pullback_20260830_6J_1h_VB": {
+          "strat": "double_rsi_momentum_pullback_20260830_6J_1h_VB",
+          "symbol": "6J",
+          "timeframe": "1h",
+          "version": "B",
+          "allocation": 1,
+          "regime_filter": "Q4",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/double_rsi_momentum_pullback_20260830_6J_1h_VB/strat.py",
+          "registered_utc": "2026-08-31T03:33:11+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "already registered on Incubator-Odd; a re-promotion does not move an account",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_6J_1h.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "double_rsi_momentum_pullback_20260830_6J_1h_VB",
+              "symbol": "6J",
+              "timeframe": "1h",
+              "version": "B",
+              "allocation": 1,
+              "regime_filter": "Q4",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/double_rsi_momentum_pullback_20260830_6J_1h_VB/strat.py",
+              "registered_utc": "2026-08-31T03:33:11+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "already registered on Incubator-Odd; a re-promotion does not move an account",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_6J_1h.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "double_rsi_momentum_pullback_20260830_6E_30m_VA": {
+          "strat": "double_rsi_momentum_pullback_20260830_6E_30m_VA",
+          "symbol": "6E",
+          "timeframe": "30m",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q4",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/double_rsi_momentum_pullback_20260830_6E_30m_VA/strat.py",
+          "registered_utc": "2026-08-31T03:33:24+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "already registered on Incubator-Odd; a re-promotion does not move an account",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_6E_30m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "double_rsi_momentum_pullback_20260830_6E_30m_VA",
+              "symbol": "6E",
+              "timeframe": "30m",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q4",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/double_rsi_momentum_pullback_20260830_6E_30m_VA/strat.py",
+              "registered_utc": "2026-08-31T03:33:24+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "already registered on Incubator-Odd; a re-promotion does not move an account",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_6E_30m.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "double_rsi_momentum_pullback_20260830_6E_30m_VB": {
+          "strat": "double_rsi_momentum_pullback_20260830_6E_30m_VB",
+          "symbol": "6E",
+          "timeframe": "30m",
+          "version": "B",
+          "allocation": 1,
+          "regime_filter": "Q4",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/double_rsi_momentum_pullback_20260830_6E_30m_VB/strat.py",
+          "registered_utc": "2026-08-31T03:33:27+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "already registered on Incubator-Odd; a re-promotion does not move an account",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_6E_30m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "double_rsi_momentum_pullback_20260830_6E_30m_VB",
+              "symbol": "6E",
+              "timeframe": "30m",
+              "version": "B",
+              "allocation": 1,
+              "regime_filter": "Q4",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/double_rsi_momentum_pullback_20260830_6E_30m_VB/strat.py",
+              "registered_utc": "2026-08-31T03:33:27+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "already registered on Incubator-Odd; a re-promotion does not move an account",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_6E_30m.json (Gate R's certification target)"
               }
             }
           ]
@@ -351,7 +781,16 @@
         "ema_crossover_20260821_ES_30m_VA",
         "ema_crossover_20260821_ES_15m_VA",
         "ma_anchoring_spread_20260820_GC_1h_VA",
-        "ma_anchoring_spread_20260820_GC_1h_VB"
+        "ma_anchoring_spread_20260820_GC_1h_VB",
+        "double_rsi_momentum_pullback_20260830_GC_15m_VA",
+        "double_rsi_momentum_pullback_20260830_GC_1h_VA",
+        "double_rsi_momentum_pullback_20260830_GC_1h_VB",
+        "double_rsi_momentum_pullback_20260830_GC_30m_VA",
+        "compressed_bollinger_reversion_20260901_ES_15m_VA",
+        "keltner_trend_drift_20260901_GC_15m_VA",
+        "keltner_trend_drift_20260901_GC_15m_VB",
+        "keltner_trend_drift_20260901_ES_30m_VA",
+        "keltner_trend_drift_20260901_GC_30m_VA"
       ],
       "strategy_allocations": {
         "sma_momentum_crossover_20260818_GC_1h_VA": {
@@ -705,9 +1144,9 @@
           "regime_filter": "Q1",
           "status": "incubating",
           "path": "strategies/approved_incubator/ma_anchoring_spread_20260820_GC_1h_VA/strat.py",
-          "registered_utc": "2026-08-29T22:45:29+00:00",
+          "registered_utc": "2026-08-30T16:45:35+00:00",
           "registered_by": "backtest/promote.py",
-          "routing_basis": "trades GC; declares Q1; fewest active strategies (Incubator-Even=9), ties alphabetical; certified on 1h bars",
+          "routing_basis": "already registered on Incubator-Even; a re-promotion does not move an account",
           "resolved_from": {
             "symbol": "--symbol",
             "timeframe": "--timeframe",
@@ -723,9 +1162,9 @@
               "regime_filter": "Q1",
               "status": "incubating",
               "path": "strategies/approved_incubator/ma_anchoring_spread_20260820_GC_1h_VA/strat.py",
-              "registered_utc": "2026-08-29T22:45:29+00:00",
+              "registered_utc": "2026-08-30T16:45:35+00:00",
               "registered_by": "backtest/promote.py",
-              "routing_basis": "trades GC; declares Q1; fewest active strategies (Incubator-Even=9), ties alphabetical; certified on 1h bars",
+              "routing_basis": "already registered on Incubator-Even; a re-promotion does not move an account",
               "resolved_from": {
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
@@ -743,9 +1182,9 @@
           "regime_filter": "Q1",
           "status": "incubating",
           "path": "strategies/approved_incubator/ma_anchoring_spread_20260820_GC_1h_VB/strat.py",
-          "registered_utc": "2026-08-29T22:45:33+00:00",
+          "registered_utc": "2026-08-30T16:45:39+00:00",
           "registered_by": "backtest/promote.py",
-          "routing_basis": "trades GC; declares Q1; fewest active strategies (Incubator-Even=10), ties alphabetical; certified on 1h bars",
+          "routing_basis": "already registered on Incubator-Even; a re-promotion does not move an account",
           "resolved_from": {
             "symbol": "--symbol",
             "timeframe": "--timeframe",
@@ -761,13 +1200,355 @@
               "regime_filter": "Q1",
               "status": "incubating",
               "path": "strategies/approved_incubator/ma_anchoring_spread_20260820_GC_1h_VB/strat.py",
-              "registered_utc": "2026-08-29T22:45:33+00:00",
+              "registered_utc": "2026-08-30T16:45:39+00:00",
               "registered_by": "backtest/promote.py",
-              "routing_basis": "trades GC; declares Q1; fewest active strategies (Incubator-Even=10), ties alphabetical; certified on 1h bars",
+              "routing_basis": "already registered on Incubator-Even; a re-promotion does not move an account",
               "resolved_from": {
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_GC_1h.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "compressed_bollinger_reversion_20260901_ES_15m_VA": {
+          "strat": "compressed_bollinger_reversion_20260901_ES_15m_VA",
+          "symbol": "ES",
+          "timeframe": "15m",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q2",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/compressed_bollinger_reversion_20260901_ES_15m_VA/strat.py",
+          "registered_utc": "2026-08-31T02:07:58+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades ES; declares Q2; fewest active strategies (Incubator-Even=15), ties alphabetical; certified on 15m bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_ES_15m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "compressed_bollinger_reversion_20260901_ES_15m_VA",
+              "symbol": "ES",
+              "timeframe": "15m",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q2",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/compressed_bollinger_reversion_20260901_ES_15m_VA/strat.py",
+              "registered_utc": "2026-08-31T02:07:58+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades ES; declares Q2; fewest active strategies (Incubator-Even=15), ties alphabetical; certified on 15m bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_ES_15m.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "keltner_trend_drift_20260901_GC_15m_VA": {
+          "strat": "keltner_trend_drift_20260901_GC_15m_VA",
+          "symbol": "GC",
+          "timeframe": "15m",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q2",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/keltner_trend_drift_20260901_GC_15m_VA/strat.py",
+          "registered_utc": "2026-08-31T02:19:39+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades GC; declares Q2; fewest active strategies (Incubator-Even=16), ties alphabetical; certified on 15m bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_GC_15m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "keltner_trend_drift_20260901_GC_15m_VA",
+              "symbol": "GC",
+              "timeframe": "15m",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q2",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/keltner_trend_drift_20260901_GC_15m_VA/strat.py",
+              "registered_utc": "2026-08-31T02:19:39+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades GC; declares Q2; fewest active strategies (Incubator-Even=16), ties alphabetical; certified on 15m bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_GC_15m.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "keltner_trend_drift_20260901_GC_15m_VB": {
+          "strat": "keltner_trend_drift_20260901_GC_15m_VB",
+          "symbol": "GC",
+          "timeframe": "15m",
+          "version": "B",
+          "allocation": 1,
+          "regime_filter": "Q2",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/keltner_trend_drift_20260901_GC_15m_VB/strat.py",
+          "registered_utc": "2026-08-31T02:19:42+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades GC; declares Q2; fewest active strategies (Incubator-Even=17), ties alphabetical; certified on 15m bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_GC_15m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "keltner_trend_drift_20260901_GC_15m_VB",
+              "symbol": "GC",
+              "timeframe": "15m",
+              "version": "B",
+              "allocation": 1,
+              "regime_filter": "Q2",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/keltner_trend_drift_20260901_GC_15m_VB/strat.py",
+              "registered_utc": "2026-08-31T02:19:42+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades GC; declares Q2; fewest active strategies (Incubator-Even=17), ties alphabetical; certified on 15m bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_GC_15m.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "keltner_trend_drift_20260901_ES_30m_VA": {
+          "strat": "keltner_trend_drift_20260901_ES_30m_VA",
+          "symbol": "ES",
+          "timeframe": "30m",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q2",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/keltner_trend_drift_20260901_ES_30m_VA/strat.py",
+          "registered_utc": "2026-08-31T02:20:34+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades ES; declares Q2; fewest active strategies (Incubator-Even=18), ties alphabetical; certified on 30m bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_ES_30m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "keltner_trend_drift_20260901_ES_30m_VA",
+              "symbol": "ES",
+              "timeframe": "30m",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q2",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/keltner_trend_drift_20260901_ES_30m_VA/strat.py",
+              "registered_utc": "2026-08-31T02:20:34+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades ES; declares Q2; fewest active strategies (Incubator-Even=18), ties alphabetical; certified on 30m bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_ES_30m.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "keltner_trend_drift_20260901_GC_30m_VA": {
+          "strat": "keltner_trend_drift_20260901_GC_30m_VA",
+          "symbol": "GC",
+          "timeframe": "30m",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q1",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/keltner_trend_drift_20260901_GC_30m_VA/strat.py",
+          "registered_utc": "2026-08-31T02:20:50+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades GC; declares Q1; fewest active strategies (Incubator-Even=19), ties alphabetical; certified on 30m bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_GC_30m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "keltner_trend_drift_20260901_GC_30m_VA",
+              "symbol": "GC",
+              "timeframe": "30m",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q1",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/keltner_trend_drift_20260901_GC_30m_VA/strat.py",
+              "registered_utc": "2026-08-31T02:20:50+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades GC; declares Q1; fewest active strategies (Incubator-Even=19), ties alphabetical; certified on 30m bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_GC_30m.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "double_rsi_momentum_pullback_20260830_GC_15m_VA": {
+          "strat": "double_rsi_momentum_pullback_20260830_GC_15m_VA",
+          "symbol": "GC",
+          "timeframe": "15m",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q2",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/double_rsi_momentum_pullback_20260830_GC_15m_VA/strat.py",
+          "registered_utc": "2026-08-31T03:32:39+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "already registered on Incubator-Even; a re-promotion does not move an account",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_GC_15m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "double_rsi_momentum_pullback_20260830_GC_15m_VA",
+              "symbol": "GC",
+              "timeframe": "15m",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q2",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/double_rsi_momentum_pullback_20260830_GC_15m_VA/strat.py",
+              "registered_utc": "2026-08-31T03:32:39+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "already registered on Incubator-Even; a re-promotion does not move an account",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_GC_15m.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "double_rsi_momentum_pullback_20260830_GC_1h_VA": {
+          "strat": "double_rsi_momentum_pullback_20260830_GC_1h_VA",
+          "symbol": "GC",
+          "timeframe": "1h",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q1",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/double_rsi_momentum_pullback_20260830_GC_1h_VA/strat.py",
+          "registered_utc": "2026-08-31T03:32:55+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "already registered on Incubator-Even; a re-promotion does not move an account",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_GC_1h.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "double_rsi_momentum_pullback_20260830_GC_1h_VA",
+              "symbol": "GC",
+              "timeframe": "1h",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q1",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/double_rsi_momentum_pullback_20260830_GC_1h_VA/strat.py",
+              "registered_utc": "2026-08-31T03:32:55+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "already registered on Incubator-Even; a re-promotion does not move an account",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_GC_1h.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "double_rsi_momentum_pullback_20260830_GC_1h_VB": {
+          "strat": "double_rsi_momentum_pullback_20260830_GC_1h_VB",
+          "symbol": "GC",
+          "timeframe": "1h",
+          "version": "B",
+          "allocation": 1,
+          "regime_filter": "Q1",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/double_rsi_momentum_pullback_20260830_GC_1h_VB/strat.py",
+          "registered_utc": "2026-08-31T03:32:58+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "already registered on Incubator-Even; a re-promotion does not move an account",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_GC_1h.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "double_rsi_momentum_pullback_20260830_GC_1h_VB",
+              "symbol": "GC",
+              "timeframe": "1h",
+              "version": "B",
+              "allocation": 1,
+              "regime_filter": "Q1",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/double_rsi_momentum_pullback_20260830_GC_1h_VB/strat.py",
+              "registered_utc": "2026-08-31T03:32:58+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "already registered on Incubator-Even; a re-promotion does not move an account",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_GC_1h.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "double_rsi_momentum_pullback_20260830_GC_30m_VA": {
+          "strat": "double_rsi_momentum_pullback_20260830_GC_30m_VA",
+          "symbol": "GC",
+          "timeframe": "30m",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q1",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/double_rsi_momentum_pullback_20260830_GC_30m_VA/strat.py",
+          "registered_utc": "2026-08-31T03:33:21+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "already registered on Incubator-Even; a re-promotion does not move an account",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_GC_30m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "double_rsi_momentum_pullback_20260830_GC_30m_VA",
+              "symbol": "GC",
+              "timeframe": "30m",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q1",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/double_rsi_momentum_pullback_20260830_GC_30m_VA/strat.py",
+              "registered_utc": "2026-08-31T03:33:21+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "already registered on Incubator-Even; a re-promotion does not move an account",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_GC_30m.json (Gate R's certification target)"
               }
             }
           ]
@@ -790,8 +1571,7 @@
       },
       "basket": {
         "assets": [
-          "MNQ",
-          "MCL"
+          "MNQ"
         ],
         "correlation_group": "Index_Energy_Uncorrelated",
         "regime_quadrants": [
@@ -850,15 +1630,20 @@
       "tick_size": 0.25,
       "sector": "Equity_Index"
     },
-    "MCL": {
-      "point_value": 100.0,
-      "tick_size": 0.01,
-      "sector": "Energy"
-    },
     "MGC": {
       "point_value": 10.0,
       "tick_size": 0.1,
       "sector": "Metals"
+    },
+    "6E": {
+      "point_value": 125000.0,
+      "tick_size": 5e-05,
+      "sector": "FX"
+    },
+    "6J": {
+      "point_value": 12500000.0,
+      "tick_size": 5e-07,
+      "sector": "FX"
     }
   }
 }
