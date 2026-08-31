@@ -1,0 +1,889 @@
+{
+  "meta": {
+    "strategy": "keltner_trend_drift_20260901",
+    "strategy_path": "/home/cgrullon/src/trading/strategies/experimental/keltner_trend_drift_20260901.py",
+    "params": {
+      "ema_fast": 50,
+      "keltner_len": 30,
+      "keltner_mult": 2.0,
+      "session_start_et": "09:30",
+      "session_end_et": "16:00",
+      "allowed_days": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "use_baseline_filter": true,
+      "use_alpha_trigger": true,
+      "use_time_filter": false,
+      "use_day_filter": false,
+      "use_news_filter": false,
+      "sl_atr_mult": 4.0,
+      "tp_atr_mult": null,
+      "trailing": true
+    },
+    "symbol": "6S",
+    "timeframe": "30m",
+    "bars": 158784,
+    "start": "2013-01-02 11:00:00+00:00",
+    "end": "2026-08-07 20:30:00+00:00",
+    "costs_included": true,
+    "initial_capital": 100000.0,
+    "ml_threshold": 0.48,
+    "ml_evaluated": true,
+    "ml_features": [
+      "norm_atr",
+      "channel_width_norm",
+      "close_over_ema_fast_atr",
+      "ribbon_ratio",
+      "dist_upper_atr",
+      "dist_lower_atr",
+      "roc_5",
+      "roc_15",
+      "volume_z",
+      "hour_et",
+      "dow_et"
+    ],
+    "ml_refit": {
+      "long": {
+        "direction": "long",
+        "candidates": 1114,
+        "fits": 40,
+        "train_rows_max": 1069,
+        "refit_growth": 0.1,
+        "max_train_rows": 50000,
+        "threads": 1,
+        "elapsed_s": 0.966
+      },
+      "short": {
+        "direction": "short",
+        "candidates": 1234,
+        "fits": 41,
+        "train_rows_max": 1212,
+        "refit_growth": 0.1,
+        "max_train_rows": 50000,
+        "threads": 1,
+        "elapsed_s": 0.983
+      }
+    },
+    "logic": {
+      "concept": "A trend-continuation entry for a market that grinds rather than spikes. The EMA(50)/EMA(200) ribbon says which side is permitted; a close pushing through the Keltner band (EMA(30) +/- 2.0 x ATR(14)) is the entry event; and a trailing ATR stop with no target lets the drift run. Note for whoever reads the Q3 audit first: a channel break in a low-volatility regime is often the START of the market leaving Q3 for Q1, and that is expected. Trades are attributed by their ENTRY bar, never the exit, so a position opened in Q3 that earns all of its profit inside Q1 still scores as a Q3 trade under Gate R.",
+      "entry": "LONG when Close > EMA(50) > EMA(200) and Close crosses ABOVE EMA(30) + 2.0 x ATR(14). SHORT mirrors it: Close < EMA(50) < EMA(200) and Close crosses BELOW EMA(30) - 2.0 x ATR(14).",
+      "exit": "The trailing stop at 4.0 x ATR(14), ratcheting behind the best price seen since the fill, or Close crossing back through EMA(50) - whichever the bar reaches first. No take-profit is modelled (tp_atr_mult=None)."
+    }
+  },
+  "comparison": {
+    "ml_evaluated": true,
+    "entries_a": 1114,
+    "entries_b": 277,
+    "entries_suppressed": 837,
+    "sharpe_delta": 0.34197916561990727,
+    "b_beats_a": true
+  },
+  "version_a": {
+    "metrics": {
+      "ok": true,
+      "ruined": false,
+      "final_equity": 41039.90999999601,
+      "total_pnl": -58960.09000000185,
+      "gross_pnl": 1168.750000000271,
+      "total_costs": 60128.840000002165,
+      "total_return_pct": -58.960090000003994,
+      "annualized_return_pct": -5.1902487655260625,
+      "sharpe": -0.49944998860412626,
+      "sortino": -0.8463408044417778,
+      "calmar": -0.07908307480861723,
+      "metrics_basis": {
+        "frequency": "daily_close",
+        "annualization_factor": 252,
+        "risk_free_rate": 0.0,
+        "n_days": 4211
+      },
+      "max_drawdown_pct": -65.63033592316154,
+      "win_rate": 0.35178875638841567,
+      "profit_factor": 0.8650862947563371,
+      "trade_count": 2348,
+      "long_trades": 1114,
+      "short_trades": 1234,
+      "breach": {},
+      "n_days": 4211,
+      "dow_breakdown": [
+        {
+          "day": "Mon",
+          "weekday": 0,
+          "trades": 424,
+          "net_pnl": -12491.920000000773,
+          "gross_win": 66290.85999999967,
+          "gross_loss": 78782.78000000044,
+          "win_rate": 0.3136792452830189,
+          "avg_pnl": -29.462075471699936,
+          "profit_factor": 0.8414384463203672,
+          "pct_of_trades": 18.05792163543441,
+          "pct_of_net_pnl": -21.1870775638239
+        },
+        {
+          "day": "Tue",
+          "weekday": 1,
+          "trades": 489,
+          "net_pnl": 1797.8799999986545,
+          "gross_win": 77576.40999999945,
+          "gross_loss": 75778.53000000081,
+          "win_rate": 0.3537832310838446,
+          "avg_pnl": 3.6766462167661644,
+          "profit_factor": 1.0237254536344083,
+          "pct_of_trades": 20.826235093696763,
+          "pct_of_net_pnl": 3.0493169192899776
+        },
+        {
+          "day": "Wed",
+          "weekday": 2,
+          "trades": 491,
+          "net_pnl": -848.7799999994841,
+          "gross_win": 83732.71000000044,
+          "gross_loss": 84581.48999999992,
+          "win_rate": 0.38289205702647655,
+          "avg_pnl": -1.728676171078379,
+          "profit_factor": 0.9899649438665661,
+          "pct_of_trades": 20.911413969335605,
+          "pct_of_net_pnl": -1.4395839626422846
+        },
+        {
+          "day": "Thu",
+          "weekday": 3,
+          "trades": 505,
+          "net_pnl": -11137.900000000584,
+          "gross_win": 94337.72,
+          "gross_loss": 105475.62000000058,
+          "win_rate": 0.3782178217821782,
+          "avg_pnl": -22.055247524753632,
+          "profit_factor": 0.8944030857557366,
+          "pct_of_trades": 21.507666098807494,
+          "pct_of_net_pnl": -18.890574963505372
+        },
+        {
+          "day": "Fri",
+          "weekday": 4,
+          "trades": 436,
+          "net_pnl": -35803.12999999963,
+          "gross_win": 56122.970000000045,
+          "gross_loss": 91926.09999999969,
+          "win_rate": 0.32339449541284404,
+          "avg_pnl": -82.11727064220099,
+          "profit_factor": 0.6105226915968396,
+          "pct_of_trades": 18.56899488926746,
+          "pct_of_net_pnl": -60.724347605301325
+        },
+        {
+          "day": "Sun",
+          "weekday": 6,
+          "trades": 3,
+          "net_pnl": -476.24000000001456,
+          "gross_win": 0.0,
+          "gross_loss": 476.24000000001456,
+          "win_rate": 0.0,
+          "avg_pnl": -158.74666666667153,
+          "profit_factor": 0.0,
+          "pct_of_trades": 0.12776831345826234,
+          "pct_of_net_pnl": -0.807732824017059
+        }
+      ],
+      "entry_filters": {},
+      "meta": {
+        "strategy": "keltner_trend_drift_20260901",
+        "strategy_path": "/home/cgrullon/src/trading/strategies/experimental/keltner_trend_drift_20260901.py",
+        "params": {
+          "ema_fast": 50,
+          "keltner_len": 30,
+          "keltner_mult": 2.0,
+          "session_start_et": "09:30",
+          "session_end_et": "16:00",
+          "allowed_days": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "use_baseline_filter": true,
+          "use_alpha_trigger": true,
+          "use_time_filter": false,
+          "use_day_filter": false,
+          "use_news_filter": false,
+          "sl_atr_mult": 4.0,
+          "tp_atr_mult": null,
+          "trailing": true
+        },
+        "symbol": "6S",
+        "timeframe": "30m",
+        "bars": 158784,
+        "start": "2013-01-02 11:00:00+00:00",
+        "end": "2026-08-07 20:30:00+00:00",
+        "costs_included": true,
+        "initial_capital": 100000.0,
+        "ml_threshold": 0.48,
+        "ml_evaluated": true,
+        "ml_features": [
+          "norm_atr",
+          "channel_width_norm",
+          "close_over_ema_fast_atr",
+          "ribbon_ratio",
+          "dist_upper_atr",
+          "dist_lower_atr",
+          "roc_5",
+          "roc_15",
+          "volume_z",
+          "hour_et",
+          "dow_et"
+        ],
+        "ml_refit": {
+          "long": {
+            "direction": "long",
+            "candidates": 1114,
+            "fits": 40,
+            "train_rows_max": 1069,
+            "refit_growth": 0.1,
+            "max_train_rows": 50000,
+            "threads": 1,
+            "elapsed_s": 0.966
+          },
+          "short": {
+            "direction": "short",
+            "candidates": 1234,
+            "fits": 41,
+            "train_rows_max": 1212,
+            "refit_growth": 0.1,
+            "max_train_rows": 50000,
+            "threads": 1,
+            "elapsed_s": 0.983
+          }
+        },
+        "logic": {
+          "concept": "A trend-continuation entry for a market that grinds rather than spikes. The EMA(50)/EMA(200) ribbon says which side is permitted; a close pushing through the Keltner band (EMA(30) +/- 2.0 x ATR(14)) is the entry event; and a trailing ATR stop with no target lets the drift run. Note for whoever reads the Q3 audit first: a channel break in a low-volatility regime is often the START of the market leaving Q3 for Q1, and that is expected. Trades are attributed by their ENTRY bar, never the exit, so a position opened in Q3 that earns all of its profit inside Q1 still scores as a Q3 trade under Gate R.",
+          "entry": "LONG when Close > EMA(50) > EMA(200) and Close crosses ABOVE EMA(30) + 2.0 x ATR(14). SHORT mirrors it: Close < EMA(50) < EMA(200) and Close crosses BELOW EMA(30) - 2.0 x ATR(14).",
+          "exit": "The trailing stop at 4.0 x ATR(14), ratcheting behind the best price seen since the fill, or Close crossing back through EMA(50) - whichever the bar reaches first. No take-profit is modelled (tp_atr_mult=None)."
+        }
+      }
+    },
+    "gate_audit": {
+      "version": "A",
+      "name": "keltner_trend_drift_20260901",
+      "gates": {
+        "gate1": {
+          "name": "GATE 1 \u00b7 In-Sample",
+          "status": "FAIL",
+          "checks": [
+            {
+              "label": "Sharpe (not gated)",
+              "value": -0.49944998860412626,
+              "threshold": null,
+              "direction": "min",
+              "unit": "",
+              "status": "INFO",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Profit factor",
+              "value": 0.8650862947563371,
+              "threshold": 1.0,
+              "direction": "min",
+              "unit": "",
+              "status": "FAIL",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Trades",
+              "value": 2348.0,
+              "threshold": 200.0,
+              "direction": "min",
+              "unit": "",
+              "status": "PASS",
+              "note": "16.71 years at 30 trades/yr is 501; the 200-trade cap binds",
+              "fmt": "{:,.0f}"
+            },
+            {
+              "label": "Max drawdown",
+              "value": 65.63033592316154,
+              "threshold": 12.0,
+              "direction": "max",
+              "unit": "%",
+              "status": "FAIL",
+              "note": null,
+              "fmt": "{:.2f}"
+            }
+          ]
+        },
+        "gate2": {
+          "name": "GATE 2 \u00b7 Robustness",
+          "status": "NOT EVALUATED",
+          "checks": [
+            {
+              "label": "WFO efficiency",
+              "value": null,
+              "threshold": 0.5,
+              "direction": "min",
+              "unit": "",
+              "status": "NOT EVALUATED",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Monte Carlo 95% max DD",
+              "value": null,
+              "threshold": 18.0,
+              "direction": "max",
+              "unit": "%",
+              "status": "NOT EVALUATED",
+              "note": null,
+              "fmt": "{:.2f}"
+            }
+          ]
+        },
+        "gate3": {
+          "name": "GATE 3 \u00b7 OOS Holdout",
+          "status": "NOT EVALUATED",
+          "checks": [
+            {
+              "label": "Holdout Sharpe retention",
+              "value": null,
+              "threshold": 0.8,
+              "direction": "min",
+              "unit": "x",
+              "status": "NOT EVALUATED",
+              "note": "in-sample Sharpe is -0.50 (<= 0), so Sharpe retention is undefined, not passing",
+              "fmt": "{:.2f}"
+            }
+          ]
+        }
+      },
+      "status": "FAIL",
+      "passed": false,
+      "thresholds": {
+        "gate1": {
+          "min_profit_factor": 1.0,
+          "min_trades": 100,
+          "max_required_trades": 200,
+          "min_trades_per_year": 30,
+          "max_drawdown_pct": 12.0
+        },
+        "gate2": {
+          "min_wfo_efficiency": 0.5,
+          "max_mc_drawdown_pct": 18.0
+        },
+        "gate3": {
+          "min_retention": 0.8
+        }
+      },
+      "holdout_sharpe": null,
+      "in_sample_sharpe": -0.49944998860412626,
+      "sharpe_retention": null,
+      "retention": null,
+      "retention_metric": null
+    }
+  },
+  "version_b": {
+    "metrics": {
+      "ok": true,
+      "ruined": false,
+      "final_equity": 90607.05999999942,
+      "total_pnl": -9392.940000000599,
+      "gross_pnl": 7412.500000000071,
+      "total_costs": 16805.44000000068,
+      "total_return_pct": -9.392940000000582,
+      "annualized_return_pct": -0.588543585364032,
+      "sharpe": -0.15747082298421902,
+      "sortino": -0.26873368068596176,
+      "calmar": -0.03181972937018951,
+      "metrics_basis": {
+        "frequency": "daily_close",
+        "annualization_factor": 252,
+        "risk_free_rate": 0.0,
+        "n_days": 4211
+      },
+      "max_drawdown_pct": -18.49618450606347,
+      "win_rate": 0.38349514563106796,
+      "profit_factor": 0.920039656089151,
+      "trade_count": 618,
+      "long_trades": 277,
+      "short_trades": 341,
+      "breach": {},
+      "n_days": 4211,
+      "dow_breakdown": [
+        {
+          "day": "Mon",
+          "weekday": 0,
+          "trades": 89,
+          "net_pnl": -2257.619999999896,
+          "gross_win": 15090.51000000006,
+          "gross_loss": 17348.12999999996,
+          "win_rate": 0.3146067415730337,
+          "avg_pnl": -25.36651685393142,
+          "profit_factor": 0.8698637835893606,
+          "pct_of_trades": 14.401294498381876,
+          "pct_of_net_pnl": -24.03528607656125
+        },
+        {
+          "day": "Tue",
+          "weekday": 1,
+          "trades": 126,
+          "net_pnl": 5722.919999999509,
+          "gross_win": 23241.419999999678,
+          "gross_loss": 17518.500000000175,
+          "win_rate": 0.40476190476190477,
+          "avg_pnl": 45.4199999999961,
+          "profit_factor": 1.3266786539943172,
+          "pct_of_trades": 20.388349514563107,
+          "pct_of_net_pnl": 60.927888392762476
+        },
+        {
+          "day": "Wed",
+          "weekday": 2,
+          "trades": 145,
+          "net_pnl": 3360.9000000001033,
+          "gross_win": 25336.459999999963,
+          "gross_loss": 21975.559999999867,
+          "win_rate": 0.43448275862068964,
+          "avg_pnl": 23.178620689655887,
+          "profit_factor": 1.1529380821239648,
+          "pct_of_trades": 23.462783171521036,
+          "pct_of_net_pnl": 35.781129231102184
+        },
+        {
+          "day": "Thu",
+          "weekday": 3,
+          "trades": 133,
+          "net_pnl": -5284.140000000447,
+          "gross_win": 26049.33999999991,
+          "gross_loss": 31333.48000000036,
+          "win_rate": 0.39097744360902253,
+          "avg_pnl": -39.73037593985298,
+          "profit_factor": 0.8313580234305162,
+          "pct_of_trades": 21.521035598705502,
+          "pct_of_net_pnl": -56.25650754715893
+        },
+        {
+          "day": "Fri",
+          "weekday": 4,
+          "trades": 124,
+          "net_pnl": -10930.419999999865,
+          "gross_win": 18359.310000000114,
+          "gross_loss": 29289.72999999998,
+          "win_rate": 0.3467741935483871,
+          "avg_pnl": -88.14854838709569,
+          "profit_factor": 0.6268173178790015,
+          "pct_of_trades": 20.06472491909385,
+          "pct_of_net_pnl": -116.36846397399715
+        },
+        {
+          "day": "Sun",
+          "weekday": 6,
+          "trades": 1,
+          "net_pnl": -4.58,
+          "gross_win": 0.0,
+          "gross_loss": 4.58,
+          "win_rate": 0.0,
+          "avg_pnl": -4.58,
+          "profit_factor": 0.0,
+          "pct_of_trades": 0.16181229773462782,
+          "pct_of_net_pnl": -0.04876002614729476
+        }
+      ],
+      "entry_filters": {},
+      "meta": {
+        "strategy": "keltner_trend_drift_20260901",
+        "strategy_path": "/home/cgrullon/src/trading/strategies/experimental/keltner_trend_drift_20260901.py",
+        "params": {
+          "ema_fast": 50,
+          "keltner_len": 30,
+          "keltner_mult": 2.0,
+          "session_start_et": "09:30",
+          "session_end_et": "16:00",
+          "allowed_days": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "use_baseline_filter": true,
+          "use_alpha_trigger": true,
+          "use_time_filter": false,
+          "use_day_filter": false,
+          "use_news_filter": false,
+          "sl_atr_mult": 4.0,
+          "tp_atr_mult": null,
+          "trailing": true
+        },
+        "symbol": "6S",
+        "timeframe": "30m",
+        "bars": 158784,
+        "start": "2013-01-02 11:00:00+00:00",
+        "end": "2026-08-07 20:30:00+00:00",
+        "costs_included": true,
+        "initial_capital": 100000.0,
+        "ml_threshold": 0.48,
+        "ml_evaluated": true,
+        "ml_features": [
+          "norm_atr",
+          "channel_width_norm",
+          "close_over_ema_fast_atr",
+          "ribbon_ratio",
+          "dist_upper_atr",
+          "dist_lower_atr",
+          "roc_5",
+          "roc_15",
+          "volume_z",
+          "hour_et",
+          "dow_et"
+        ],
+        "ml_refit": {
+          "long": {
+            "direction": "long",
+            "candidates": 1114,
+            "fits": 40,
+            "train_rows_max": 1069,
+            "refit_growth": 0.1,
+            "max_train_rows": 50000,
+            "threads": 1,
+            "elapsed_s": 0.966
+          },
+          "short": {
+            "direction": "short",
+            "candidates": 1234,
+            "fits": 41,
+            "train_rows_max": 1212,
+            "refit_growth": 0.1,
+            "max_train_rows": 50000,
+            "threads": 1,
+            "elapsed_s": 0.983
+          }
+        },
+        "logic": {
+          "concept": "A trend-continuation entry for a market that grinds rather than spikes. The EMA(50)/EMA(200) ribbon says which side is permitted; a close pushing through the Keltner band (EMA(30) +/- 2.0 x ATR(14)) is the entry event; and a trailing ATR stop with no target lets the drift run. Note for whoever reads the Q3 audit first: a channel break in a low-volatility regime is often the START of the market leaving Q3 for Q1, and that is expected. Trades are attributed by their ENTRY bar, never the exit, so a position opened in Q3 that earns all of its profit inside Q1 still scores as a Q3 trade under Gate R.",
+          "entry": "LONG when Close > EMA(50) > EMA(200) and Close crosses ABOVE EMA(30) + 2.0 x ATR(14). SHORT mirrors it: Close < EMA(50) < EMA(200) and Close crosses BELOW EMA(30) - 2.0 x ATR(14).",
+          "exit": "The trailing stop at 4.0 x ATR(14), ratcheting behind the best price seen since the fill, or Close crossing back through EMA(50) - whichever the bar reaches first. No take-profit is modelled (tp_atr_mult=None)."
+        }
+      }
+    },
+    "gate_audit": {
+      "version": "B",
+      "name": "keltner_trend_drift_20260901",
+      "gates": {
+        "gate1": {
+          "name": "GATE 1 \u00b7 In-Sample",
+          "status": "FAIL",
+          "checks": [
+            {
+              "label": "Sharpe (not gated)",
+              "value": -0.15747082298421902,
+              "threshold": null,
+              "direction": "min",
+              "unit": "",
+              "status": "INFO",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Profit factor",
+              "value": 0.920039656089151,
+              "threshold": 1.0,
+              "direction": "min",
+              "unit": "",
+              "status": "FAIL",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Trades",
+              "value": 618.0,
+              "threshold": 200.0,
+              "direction": "min",
+              "unit": "",
+              "status": "PASS",
+              "note": "16.71 years at 30 trades/yr is 501; the 200-trade cap binds",
+              "fmt": "{:,.0f}"
+            },
+            {
+              "label": "Max drawdown",
+              "value": 18.49618450606347,
+              "threshold": 12.0,
+              "direction": "max",
+              "unit": "%",
+              "status": "FAIL",
+              "note": null,
+              "fmt": "{:.2f}"
+            }
+          ]
+        },
+        "gate2": {
+          "name": "GATE 2 \u00b7 Robustness",
+          "status": "NOT EVALUATED",
+          "checks": [
+            {
+              "label": "WFO efficiency",
+              "value": null,
+              "threshold": 0.5,
+              "direction": "min",
+              "unit": "",
+              "status": "NOT EVALUATED",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Monte Carlo 95% max DD",
+              "value": null,
+              "threshold": 18.0,
+              "direction": "max",
+              "unit": "%",
+              "status": "NOT EVALUATED",
+              "note": null,
+              "fmt": "{:.2f}"
+            }
+          ]
+        },
+        "gate3": {
+          "name": "GATE 3 \u00b7 OOS Holdout",
+          "status": "NOT EVALUATED",
+          "checks": [
+            {
+              "label": "Holdout Sharpe retention",
+              "value": null,
+              "threshold": 0.8,
+              "direction": "min",
+              "unit": "x",
+              "status": "NOT EVALUATED",
+              "note": "in-sample Sharpe is -0.16 (<= 0), so Sharpe retention is undefined, not passing",
+              "fmt": "{:.2f}"
+            }
+          ]
+        }
+      },
+      "status": "FAIL",
+      "passed": false,
+      "thresholds": {
+        "gate1": {
+          "min_profit_factor": 1.0,
+          "min_trades": 100,
+          "max_required_trades": 200,
+          "min_trades_per_year": 30,
+          "max_drawdown_pct": 12.0
+        },
+        "gate2": {
+          "min_wfo_efficiency": 0.5,
+          "max_mc_drawdown_pct": 18.0
+        },
+        "gate3": {
+          "min_retention": 0.8
+        }
+      },
+      "holdout_sharpe": null,
+      "in_sample_sharpe": -0.15747082298421902,
+      "sharpe_retention": null,
+      "retention": null,
+      "retention_metric": null
+    }
+  },
+  "generated_utc": "2026-08-31T02:15:50+00:00",
+  "reports": {
+    "version_a": "/mnt/backtest/artifacts/pipeline/keltner_trend_drift_20260901/verify_20260831_021530/report_6S_version_a.html",
+    "version_b": "/mnt/backtest/artifacts/pipeline/keltner_trend_drift_20260901/verify_20260831_021530/report_6S_version_b.html"
+  },
+  "cost_drag": {
+    "trades": 2348,
+    "total_costs": 60128.840000002165,
+    "gross_pnl": 1168.750000000271,
+    "net_pnl": -58960.09000000185,
+    "cost_per_trade": 25.608534923339935,
+    "cost_share_pct": 5144.713582886692,
+    "commission": 10753.839999999997,
+    "slippage": 49375.00000000217,
+    "split_available": true,
+    "modelled_round_turn": 17.08,
+    "by_year": [
+      {
+        "year": 2013,
+        "trades": 171,
+        "gross_pnl": 5062.50000000022,
+        "costs": 5058.180000000336,
+        "net_pnl": 4.319999999886022,
+        "cost_per_trade": 29.580000000001963,
+        "cost_share_pct": 99.91466666666896
+      },
+      {
+        "year": 2014,
+        "trades": 164,
+        "gross_pnl": -462.50000000000523,
+        "costs": 4851.119999999982,
+        "net_pnl": -5313.619999999983,
+        "cost_per_trade": 29.579999999999888,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2015,
+        "trades": 162,
+        "gross_pnl": 1737.500000000155,
+        "costs": 4791.96000000024,
+        "net_pnl": -3054.460000000081,
+        "cost_per_trade": 29.580000000001483,
+        "cost_share_pct": 275.796258992795
+      },
+      {
+        "year": 2016,
+        "trades": 157,
+        "gross_pnl": 2699.9999999999386,
+        "costs": 4644.060000000198,
+        "net_pnl": -1944.0600000002582,
+        "cost_per_trade": 29.58000000000126,
+        "cost_share_pct": 172.00222222223346
+      },
+      {
+        "year": 2017,
+        "trades": 168,
+        "gross_pnl": -487.5000000000982,
+        "costs": 4969.439999999829,
+        "net_pnl": -5456.939999999923,
+        "cost_per_trade": 29.57999999999898,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2018,
+        "trades": 180,
+        "gross_pnl": -3100.000000000118,
+        "costs": 5324.40000000003,
+        "net_pnl": -8424.400000000143,
+        "cost_per_trade": 29.580000000000165,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2019,
+        "trades": 179,
+        "gross_pnl": 7662.500000000115,
+        "costs": 5294.819999999807,
+        "net_pnl": 2367.6800000003077,
+        "cost_per_trade": 29.579999999998922,
+        "cost_share_pct": 69.10042414355273
+      },
+      {
+        "year": 2020,
+        "trades": 180,
+        "gross_pnl": 5500.000000000282,
+        "costs": 5324.400000000166,
+        "net_pnl": 175.60000000011905,
+        "cost_per_trade": 29.580000000000922,
+        "cost_share_pct": 96.80727272727079
+      },
+      {
+        "year": 2021,
+        "trades": 182,
+        "gross_pnl": -6112.499999999936,
+        "costs": 5383.560000000325,
+        "net_pnl": -11496.06000000026,
+        "cost_per_trade": 29.580000000001785,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2022,
+        "trades": 184,
+        "gross_pnl": -9699.999999999916,
+        "costs": 3880.2200000003886,
+        "net_pnl": -13580.2200000003,
+        "cost_per_trade": 21.088152173915155,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2023,
+        "trades": 177,
+        "gross_pnl": -4931.2500000000255,
+        "costs": 3023.159999999974,
+        "net_pnl": -7954.409999999994,
+        "cost_per_trade": 17.079999999999853,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2024,
+        "trades": 172,
+        "gross_pnl": -2362.500000000018,
+        "costs": 2937.7600000004195,
+        "net_pnl": -5300.260000000435,
+        "cost_per_trade": 17.08000000000244,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2025,
+        "trades": 167,
+        "gross_pnl": 4387.499999999821,
+        "costs": 2852.3600000002016,
+        "net_pnl": 1535.1399999996247,
+        "cost_per_trade": 17.080000000001206,
+        "cost_share_pct": 65.01105413106137
+      },
+      {
+        "year": 2026,
+        "trades": 105,
+        "gross_pnl": 1274.999999999861,
+        "costs": 1793.4000000002663,
+        "net_pnl": -518.4000000004036,
+        "cost_per_trade": 17.080000000002535,
+        "cost_share_pct": 140.65882352944797
+      }
+    ]
+  },
+  "friction_by_regime": {
+    "available": true,
+    "attribution": "the quadrant of the trade's ENTRY bar",
+    "regime_source": "the labels RegimeProfiler classified for this run",
+    "attributed_trades": 2348,
+    "unplaced_trades": 0,
+    "unplaced_note": null,
+    "by_regime": [
+      {
+        "regime": "High Volatility / Trending",
+        "quadrant": "Q1",
+        "trades": 644,
+        "gross_pnl": 4474.999999999911,
+        "costs": 15824.520000000415,
+        "net_pnl": -11349.520000000492,
+        "cost_per_trade": 24.572236024845367,
+        "cost_share_pct": 353.6205586592342
+      },
+      {
+        "regime": "High Volatility / Ranging",
+        "quadrant": "Q2",
+        "trades": 702,
+        "gross_pnl": 17393.750000000102,
+        "costs": 17302.660000001393,
+        "net_pnl": 91.0899999987214,
+        "cost_per_trade": 24.6476638176658,
+        "cost_share_pct": 99.47630614445586
+      },
+      {
+        "regime": "Low Volatility / Trending",
+        "quadrant": "Q3",
+        "trades": 343,
+        "gross_pnl": 1081.2500000002146,
+        "costs": 9308.440000000111,
+        "net_pnl": -8227.189999999897,
+        "cost_per_trade": 27.138309037901198,
+        "cost_share_pct": 860.8961849709377
+      },
+      {
+        "regime": "Low Volatility / Ranging",
+        "quadrant": "Q4",
+        "trades": 659,
+        "gross_pnl": -21781.249999999945,
+        "costs": 17693.22000000024,
+        "net_pnl": -39474.47000000019,
+        "cost_per_trade": 26.848588770865312,
+        "cost_share_pct": null
+      }
+    ]
+  },
+  "slippage_model": {
+    "model": "constant_ticks",
+    "slippage_ticks": 1.0,
+    "note": "ticks x that bar's tick size / price, per bar"
+  }
+}
