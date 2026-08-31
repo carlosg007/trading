@@ -287,3 +287,62 @@ def test_certified_regime_reads_only_the_certification_block():
             "certification": {"target_quadrant": "Q4",
                               "target_regime": "Low Volatility / Ranging"}}
     assert inv._certified_regime(meta) == ("Q4", "Low Volatility / Ranging")
+
+
+def test_unallocated_packages_are_found_and_marked(world):
+    """A promoted package no portfolio routes is invisible on the default
+    board, because the board is keyed on allocations.
+
+    On 2026-08-31 eighty packages were in that state and four of them were the
+    Q4 pair somebody went looking for in the CSV.
+    """
+    cfg, inc = world
+    stray = inc / "demo_ES_5m_VA"
+    stray.mkdir(parents=True)
+    (stray / "meta.json").write_text(json.dumps({
+        "strategy": "demo", "symbol": "ES", "timeframe": "5m", "version": "A",
+        "certification": {"target_quadrant": "Q3",
+                          "target_regime": "Low Volatility / Trending"}}))
+
+    assert [r["strategy_id"] for r in inv.collect_rows(cfg, inc)] == \
+        ["demo_NQ_1h_VB"], "the default board must not grow"
+
+    extra = inv.collect_unallocated_rows(cfg, inc)
+    assert [r["strategy_id"] for r in extra] == ["demo_ES_5m_VA"]
+    row, = extra
+    assert row["portfolio_name"] == inv.UNALLOCATED
+    assert row["disk_status"] == inv.EXISTS
+    # The evidence is transcribed the same way as for an allocated row.
+    assert row["target_quadrant"] == "Q3"
+    assert row["version"] == "A"
+
+
+def test_a_directory_without_meta_is_not_reported_as_a_strategy(world):
+    """A stray directory is not a promoted package, and inventing one would be
+    the same class of false finding as a guessed quadrant."""
+    cfg, inc = world
+    (inc / "not_a_package").mkdir(parents=True)
+    assert inv.collect_unallocated_rows(cfg, inc) == []
+
+
+def test_both_collectors_build_a_row_the_same_way(world):
+    """One row builder, on purpose.
+
+    An allocated row and an unallocated one differ in exactly `portfolio_name`
+    - a second builder would be free to read a different field and the two
+    tables would disagree about a package while both looked right.
+    """
+    cfg, inc = world
+    allocated, = inv.collect_rows(cfg, inc)
+    # Same package, reached the other way.
+    unrouted, = inv.collect_unallocated_rows(
+        {"portfolios": {}}, inc)
+    differing = {k for k in allocated
+                 if allocated[k] != unrouted.get(k)}
+    assert differing == {"portfolio_name"}, differing
+
+
+def test_allocated_ids_spans_every_portfolio(world):
+    cfg, _inc = world
+    cfg["portfolios"]["Second"] = {"active_strategies": ["other_GC_1h_VA"]}
+    assert inv.allocated_ids(cfg) == {"demo_NQ_1h_VB", "other_GC_1h_VA"}

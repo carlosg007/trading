@@ -188,6 +188,87 @@ def _num(value: Any, digits: int = 4) -> Any:
         return ""
 
 
+UNALLOCATED = "(unallocated)"
+
+
+def _row(portfolio_name: str, sid: str, alloc: dict,
+         incubator: Path) -> dict:
+    """
+    One row of evidence for one package, whatever brought it here.
+
+    SHARED BY BOTH COLLECTORS ON PURPOSE. An allocated row and an unallocated
+    one differ in exactly one field - `portfolio_name` - and everything else is
+    transcribed from the same two artifacts. A second row builder for the
+    `--include-unallocated` path would be free to read a different field, and
+    the two tables would disagree about a package while both looked right.
+    """
+    pkg = incubator / sid
+    meta = _read_json(pkg / "meta.json") if pkg.is_dir() else None
+    # A directory with no readable meta.json is still ON DISK. The two
+    # failures are different - a deleted package and a corrupt one -
+    # and collapsing them would send somebody looking in the wrong
+    # place.
+    disk = EXISTS if pkg.is_dir() else MISSING
+    meta = meta or {}
+
+    version = (meta.get("version") or alloc.get("version") or "")
+    audit = _read_json((meta.get("certification") or {}).get("audit_file"))
+    block = _version_block(audit, version)
+    is_m = block.get("metrics_in_sample") or {}
+    oos_m = block.get("metrics_holdout") or {}
+    profile = block.get("regime_profile_holdout") or {}
+    gate_r = (((block.get("gate_audit") or {}).get("gates") or {})
+              .get("gate_regime") or {}).get("measured") or {}
+
+    # FROM THE SEALED CERTIFICATION BLOCK, never from `profile`
+    # beside it and never from the module source. See
+    # `_certified_regime`.
+    target_quadrant, target_regime = _certified_regime(meta)
+    return {
+        "portfolio_name": portfolio_name,
+        "strategy_id": sid,
+        "strategy_family": _family(sid, meta),
+        "symbol": meta.get("symbol") or alloc.get("symbol") or "",
+        "timeframe": meta.get("timeframe") or alloc.get("timeframe") or "",
+        "version": str(version).upper(),
+        # Absent for Version A by design - promote.py writes it only
+        # for B - so the cell is empty rather than 0.48, which would
+        # claim a filter that is not there.
+        "ml_threshold": meta.get("ml_threshold", ""),
+        "target_quadrant": target_quadrant,
+        "target_regime": target_regime,
+        "kill_switch_regimes": ", ".join(
+            profile.get("kill_switch_conditions") or []),
+        "in_sample_pf": _num(is_m.get("profit_factor")),
+        "in_sample_trades": is_m.get("trade_count", ""),
+        "in_sample_win_rate": _pct(is_m.get("win_rate")),
+        # FROM THE GATE'S OWN BLOCK, not from the holdout profile
+        # beside it. Both carry an "optimal" profit factor and they
+        # are not the same measurement: `regime_profile_holdout`
+        # describes the best quadrant WITHIN THE HOLDOUT, while Gate R
+        # judges the quadrant DESIGNATED IN SAMPLE. They coincide only
+        # when the holdout's best happens to be the designated one.
+        #
+        # Reading the profile made this tool report
+        # sma_momentum GC 1h Version B as certified on 0 trades - its
+        # holdout had no dominant quadrant, so optimal_trade_count was
+        # 0 - when Gate R had measured 46 trades at PF 1.20 in Q1 and
+        # passed it on that. The gate was right; the summary was
+        # reading the wrong field, and a "certified on nothing" row is
+        # exactly the kind of false finding a read-only tool must not
+        # manufacture.
+        "gate_r_pf": _num(gate_r.get("profit_factor")),
+        "gate_r_trades": gate_r.get("trade_count", ""),
+        "oos_holdout_pf": _num(oos_m.get("profit_factor")),
+        "oos_holdout_trades": oos_m.get("trade_count", ""),
+        "gate_r_status": (meta.get("gate_audit_status")
+                          or meta.get("oos_status") or ""),
+        "report_html": _report_html(meta, version),
+        "disk_status": disk,
+        "promoted_at": meta.get("promoted_utc") or "",
+    }
+
+
 def collect_rows(portfolios: dict, incubator: Path = INCUBATOR) -> list[dict]:
     """One row per ALLOCATION, joined to its package and its gate audit."""
     rows: list[dict] = []
@@ -196,73 +277,48 @@ def collect_rows(portfolios: dict, incubator: Path = INCUBATOR) -> list[dict]:
             continue
         allocations = portfolio.get("strategy_allocations") or {}
         for sid in portfolio.get("active_strategies") or []:
-            alloc = allocations.get(sid) or {}
-            pkg = incubator / sid
-            meta = _read_json(pkg / "meta.json") if pkg.is_dir() else None
-            # A directory with no readable meta.json is still ON DISK. The two
-            # failures are different - a deleted package and a corrupt one -
-            # and collapsing them would send somebody looking in the wrong
-            # place.
-            disk = EXISTS if pkg.is_dir() else MISSING
-            meta = meta or {}
+            rows.append(_row(name, sid, allocations.get(sid) or {}, incubator))
+    return rows
 
-            version = (meta.get("version")
-                       or alloc.get("version") or "")
-            audit = _read_json((meta.get("certification") or {}).get("audit_file"))
-            block = _version_block(audit, version)
-            is_m = block.get("metrics_in_sample") or {}
-            oos_m = block.get("metrics_holdout") or {}
-            profile = block.get("regime_profile_holdout") or {}
-            gate_r = (((block.get("gate_audit") or {}).get("gates") or {})
-                      .get("gate_regime") or {}).get("measured") or {}
 
-            # FROM THE SEALED CERTIFICATION BLOCK, never from `profile`
-            # beside it and never from the module source. See
-            # `_certified_regime`.
-            target_quadrant, target_regime = _certified_regime(meta)
-            rows.append({
-                "portfolio_name": name,
-                "strategy_id": sid,
-                "strategy_family": _family(sid, meta),
-                "symbol": meta.get("symbol") or alloc.get("symbol") or "",
-                "timeframe": meta.get("timeframe") or alloc.get("timeframe") or "",
-                "version": str(version).upper(),
-                # Absent for Version A by design - promote.py writes it only
-                # for B - so the cell is empty rather than 0.48, which would
-                # claim a filter that is not there.
-                "ml_threshold": meta.get("ml_threshold", ""),
-                "target_quadrant": target_quadrant,
-                "target_regime": target_regime,
-                "kill_switch_regimes": ", ".join(
-                    profile.get("kill_switch_conditions") or []),
-                "in_sample_pf": _num(is_m.get("profit_factor")),
-                "in_sample_trades": is_m.get("trade_count", ""),
-                "in_sample_win_rate": _pct(is_m.get("win_rate")),
-                # FROM THE GATE'S OWN BLOCK, not from the holdout profile
-                # beside it. Both carry an "optimal" profit factor and they
-                # are not the same measurement: `regime_profile_holdout`
-                # describes the best quadrant WITHIN THE HOLDOUT, while Gate R
-                # judges the quadrant DESIGNATED IN SAMPLE. They coincide only
-                # when the holdout's best happens to be the designated one.
-                #
-                # Reading the profile made this tool report
-                # sma_momentum GC 1h Version B as certified on 0 trades - its
-                # holdout had no dominant quadrant, so optimal_trade_count was
-                # 0 - when Gate R had measured 46 trades at PF 1.20 in Q1 and
-                # passed it on that. The gate was right; the summary was
-                # reading the wrong field, and a "certified on nothing" row is
-                # exactly the kind of false finding a read-only tool must not
-                # manufacture.
-                "gate_r_pf": _num(gate_r.get("profit_factor")),
-                "gate_r_trades": gate_r.get("trade_count", ""),
-                "oos_holdout_pf": _num(oos_m.get("profit_factor")),
-                "oos_holdout_trades": oos_m.get("trade_count", ""),
-                "gate_r_status": (meta.get("gate_audit_status")
-                                  or meta.get("oos_status") or ""),
-                "report_html": _report_html(meta, version),
-                "disk_status": disk,
-                "promoted_at": meta.get("promoted_utc") or "",
-            })
+def allocated_ids(portfolios: dict) -> set[str]:
+    """Every strategy id named by any portfolio's `active_strategies`."""
+    out: set[str] = set()
+    for portfolio in (portfolios.get("portfolios") or {}).values():
+        if isinstance(portfolio, dict):
+            out.update(portfolio.get("active_strategies") or [])
+    return out
+
+
+def collect_unallocated_rows(portfolios: dict,
+                             incubator: Path = INCUBATOR) -> list[dict]:
+    """
+    One row per PROMOTED PACKAGE that no portfolio routes.
+
+    A package here cleared Gate R and was written to the incubator, and then
+    nothing pointed a live account at it. That is not an error - a promotion
+    records that a version was CHOSEN, not that it was armed - but it is
+    invisible in the default board, which is keyed on allocations. On
+    2026-08-31 four Q4 packages had sat promoted and unrouted since the day
+    before, and the only reason anyone noticed was that a validation step
+    looked for them in the CSV and they were not there.
+
+    `portfolio_name` is `(unallocated)` rather than blank: a parenthesised
+    sentinel cannot be mistaken for a portfolio called nothing, and it sorts
+    apart from the real ones.
+    """
+    if not incubator.is_dir():
+        return []
+    routed = allocated_ids(portfolios)
+    rows: list[dict] = []
+    for pkg in sorted(incubator.iterdir()):
+        if not pkg.is_dir() or pkg.name in routed:
+            continue
+        if not (pkg / "meta.json").is_file():
+            # A directory with no meta.json is not a promoted package - it is
+            # a stray. Reporting it as an unrouted strategy would invent one.
+            continue
+        rows.append(_row(UNALLOCATED, pkg.name, {}, incubator))
     return rows
 
 
@@ -309,11 +365,21 @@ def render_table(rows: list[dict]) -> str:
 
 def summarise(rows: list[dict]) -> str:
     missing = [r for r in rows if r["disk_status"] == MISSING]
+    unrouted = [r for r in rows if r["portfolio_name"] == UNALLOCATED]
+    allocated = [r for r in rows if r["portfolio_name"] != UNALLOCATED]
     by_version: dict[str, int] = {}
     for r in rows:
         by_version[r["version"] or "?"] = by_version.get(r["version"] or "?", 0) + 1
-    parts = [f"{len(rows)} allocation(s)",
+    parts = [f"{len(allocated)} allocation(s)",
              ", ".join(f"{n} Version {v}" for v, n in sorted(by_version.items()))]
+    if unrouted:
+        # Counted, then named up to a point. These are not a fault - a
+        # promotion records that a version was CHOSEN, not that it was armed -
+        # so they are reported plainly rather than with the `!!` a dangling
+        # allocation gets.
+        names = ", ".join(r["strategy_id"] for r in unrouted[:6])
+        more = f" (+{len(unrouted) - 6} more)" if len(unrouted) > 6 else ""
+        parts.append(f"{len(unrouted)} promoted but UNROUTED: {names}{more}")
     if missing:
         # Named, not counted. "3 dangling" sends nobody anywhere.
         parts.append(f"!! {len(missing)} MISSING_ON_DISK: "
@@ -342,6 +408,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--symbol", default=None, help="only this root symbol")
     p.add_argument("--version", default=None, choices=("A", "B", "VA", "VB"),
                    help="only this version track")
+    p.add_argument("--include-unallocated", action="store_true",
+                   help=("also list promoted packages in "
+                         "strategies/approved_incubator/ that no portfolio "
+                         "routes, under the portfolio name (unallocated). "
+                         "They cleared Gate R and were never armed, and the "
+                         "default board cannot show them because it is keyed "
+                         "on allocations."))
     p.add_argument("--no-csv", action="store_true",
                    help="print the table and write nothing")
     p.add_argument("--config", default=None,
@@ -357,8 +430,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"FAILED  could not read {config}", file=sys.stderr)
         return 2
 
-    rows = apply_filters(collect_rows(portfolios), args.portfolio,
-                         args.symbol, args.version)
+    rows = collect_rows(portfolios)
+    unrouted: list[dict] = []
+    if args.include_unallocated:
+        unrouted = collect_unallocated_rows(portfolios)
+        rows = rows + unrouted
+    rows = apply_filters(rows, args.portfolio, args.symbol, args.version)
 
     W = 100
     print("=" * W)
@@ -374,7 +451,15 @@ def main(argv: list[str] | None = None) -> int:
     # Non-zero when the routing table names a package that is not there. The
     # exit code is the whole point of running this from a check: a dangling
     # allocation cannot be imported by the live dispatcher.
-    return 1 if any(r["disk_status"] == MISSING for r in rows) else 0
+    #
+    # AN UNROUTED PACKAGE IS NOT THAT, and must not move this code. A missing
+    # package is a routing table pointing at nothing; an unrouted one is a
+    # certified strategy nobody armed. Failing a check on the second would
+    # make `--include-unallocated` unusable from CI the day anything is
+    # promoted and left for review, which is the normal case.
+    return 1 if any(r["disk_status"] == MISSING
+                    and r["portfolio_name"] != UNALLOCATED
+                    for r in rows) else 0
 
 
 if __name__ == "__main__":
