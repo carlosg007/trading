@@ -1378,13 +1378,39 @@ class LiveExecutionDispatcher:
 
         for attempt in range(1, self.max_attempts + 1):
             record["attempts"] = attempt
-            result = self._sender(body, webhook_url=self.crosstrade_url,
+            # THE TEXT COMMAND GOES ON THE WIRE, not the JSON object beside
+            # it. The configured endpoint is CrossTrade's `/v1/send/` WEBHOOK,
+            # which parses the semicolon form; `format_crosstrade_json`'s
+            # object is for the JSON endpoint. This module built both and sent
+            # the wrong one, and every live order was refused HTTP 400 - 125
+            # of them on 2026-08-31 across five symbols, none ever accepted,
+            # while dry run reported success because dry run opens no socket.
+            # `realtime/send_test_probe.py` confirmed the text form against
+            # all four accounts before this was changed. `body` is still built
+            # above and kept on the record, so a switch back is one line.
+            result = self._sender(command, webhook_url=self.crosstrade_url,
                                   timeout_seconds=self.timeout_seconds)
             # The sender echoes the full webhook URL back on every result, and
             # a webhook URL IS the credential - anyone holding it can place
             # orders on the account. The record is printed, logged and
             # serialised, so the URL is reduced to its host before it is kept.
             record["result"] = {**result, "url": _host_only(result.get("url", ""))}
+            # AND THE PAYLOAD IS NOW THE COMMAND, WHICH CARRIES `key=`. The
+            # sender echoes it back verbatim; before the text form went on the
+            # wire the echo was a JSON object with no credential in it, so
+            # this had nothing to strip. It does now.
+            #
+            # `response_body` is stripped for the same reason and it is the
+            # one that is easy to miss: an endpoint that quotes the request
+            # back in its error hands the key straight into the record. The
+            # LOG LINE redacts it too, but the record itself is serialised
+            # onward - onto the cycle report and into whatever reads that -
+            # and redacting only where it is printed leaves the credential in
+            # every other consumer.
+            for field in ("payload", "response_body"):
+                value = record["result"].get(field)
+                if isinstance(value, str):
+                    record["result"][field] = redact(value)
             record["ok"] = bool(result.get("ok"))
             record["error"] = result.get("error")
             record["http_status"] = result.get("http_status")

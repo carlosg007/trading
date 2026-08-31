@@ -711,7 +711,16 @@ def test_a_dry_run_command_is_logged_redacted(tmp_path):
     assert "REDACTED" in command
 
 
-def test_live_mode_sends_the_json_body_to_the_configured_webhook(tmp_path):
+def test_live_mode_sends_the_text_command_to_the_configured_webhook(tmp_path):
+    """The SEMICOLON TEXT command goes on the wire, not the JSON object.
+
+    This test asserted the JSON body until 2026-08-31, and it passed the whole
+    time the live loop could not place a single order: the configured endpoint
+    is CrossTrade's `/v1/send/` WEBHOOK, which parses the text form, and 125
+    consecutive live orders were refused HTTP 400 while this stayed green.
+    A test can only pin the form the code sends; it took the endpoint to say
+    which form was right, via `realtime/send_test_probe.py`.
+    """
     sender = RecordingSender()
     d = build(tmp_path,
               assignments={"Incubator-Odd": ["fixture_long"]},
@@ -724,9 +733,41 @@ def test_live_mode_sends_the_json_body_to_the_configured_webhook(tmp_path):
 
     assert len(sender.calls) == 1
     assert sender.calls[0]["url"] == "https://crosstrade.invalid/hook"
-    assert sender.calls[0]["payload"]["qty"] == EXPECTED_CONTRACTS
+    payload = sender.calls[0]["payload"]
+    assert isinstance(payload, str), (
+        f"the webhook takes the text command; got {type(payload).__name__}")
+    assert "command=place" in payload
+    assert f"qty={EXPECTED_CONTRACTS}" in payload
+    assert "key=K" in payload, "the wire form carries the key"
     assert report["dispatches"][0]["ok"] is True
     assert report["ok"] is True
+
+
+def test_the_key_never_survives_into_the_dispatch_record(tmp_path):
+    """The wire form carries `key=`, and the sender echoes the payload back.
+
+    The record is printed, logged and serialised onward, so both the echoed
+    payload and any response body that quotes the request have to be scrubbed
+    - redacting only at the log line leaves the credential in every other
+    consumer of the report.
+    """
+    sender = RecordingSender([
+        {"ok": False, "http_status": 400, "error": "HTTP 400: Bad Request",
+         "response_body": "rejected: key=K; command=place;"}])
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["fixture_long"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"fixture_long": dict(side="long")},
+              dry_run=False, sender=sender,
+              crosstrade_url="https://crosstrade.invalid/hook",
+              crosstrade_key="SEKRET")
+    report = d.process_bar_cycle({"MNQ": make_bars()})
+
+    assert sender.calls, "nothing was sent"
+    assert "key=SEKRET" in sender.calls[0]["payload"], (
+        "the real key must reach the wire")
+    blob = str(report["dispatches"])
+    assert "SEKRET" not in blob, "the key survived into the dispatch record"
 
 
 # --------------------------------------------------------------------------

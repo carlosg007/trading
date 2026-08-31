@@ -219,9 +219,25 @@ def send_execution_signal(
 
     started = time.perf_counter()
 
-    if not isinstance(payload, dict) or not payload:
+    # TWO WIRE FORMS, because CrossTrade has two endpoints and they do not
+    # take the same thing. A `str` is the semicolon plain-text command, which
+    # is what the `/v1/send/` WEBHOOK parses; a `dict` is the structured
+    # object for the JSON endpoint. Posting one to the other's URL returns
+    # HTTP 400 - 125 consecutive times on 2026-08-31, across five symbols,
+    # because this function only ever sent JSON while the configured URL was
+    # a webhook. Confirmed by `realtime/send_test_probe.py` against all four
+    # accounts before this was changed.
+    if isinstance(payload, str) and payload.strip():
+        body = payload.encode("utf-8")
+        headers = {"Content-Type": "text/plain", "Accept": "*/*"}
+    elif isinstance(payload, dict) and payload:
+        body = json.dumps(payload).encode("utf-8")
+        headers = {"Content-Type": "application/json",
+                   "Accept": "application/json"}
+    else:
         return _result(ok=False, url=str(webhook_url), payload=payload, started=started,
-                       error="payload must be a non-empty dict")
+                       error=("payload must be a non-empty dict (JSON endpoint) "
+                              "or a non-empty command string (webhook)"))
 
     if is_placeholder_url(webhook_url):
         return _result(
@@ -230,11 +246,8 @@ def send_execution_signal(
                    f"set crosstrade_webhook_url in {CONFIG_PATH}"),
         )
 
-    body = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        webhook_url, data=body, method="POST",
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
-    )
+    req = urllib.request.Request(webhook_url, data=body, method="POST",
+                                 headers=headers)
 
     try:
         with _urlopen(req, timeout=float(timeout_seconds)) as resp:
