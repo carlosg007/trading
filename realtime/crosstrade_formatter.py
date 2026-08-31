@@ -57,6 +57,7 @@ falls back to `$CROSSTRADE_KEY`; an explicit argument always wins.
 
 from __future__ import annotations
 
+import datetime as _dt
 import os
 import re
 import sys
@@ -121,6 +122,96 @@ def _clean_account(account: str) -> str:
                       f"plain-text command's field separators. The receiver "
                       f"would parse the remainder as extra fields.")
     return acct
+
+
+#: THE ROLL CALENDAR, AND ITS EXPIRY DATE.
+#:
+#: NinjaTrader refuses a bare root - "Instrument 'MNQ' not found" - so an
+#: order has to name a contract month. `_clean_instrument` declined to invent
+#: one and said why: "guessed here it would send an order to whichever
+#: contract month a stale rule named." That objection is not answered by
+#: writing the table; it is answered by giving the table an EXPIRY.
+#:
+#: So this is dated. Past `CONTRACT_TABLE_VALID_UNTIL` `resolve_contract`
+#: RAISES instead of returning a month, and the run stops with a message
+#: naming this constant. A stale table then costs a refused order, which is
+#: visible in the first cycle, rather than a filled order in an expired
+#: contract, which is not.
+#:
+#: WHY A TABLE AND NOT A COMPUTED RULE. Index and FX are honestly computable -
+#: quarterly H/M/U/Z, expiring on the third Friday - but GOLD is not. GC lists
+#: Feb/Apr/Jun/Aug/Oct/Dec and its liquidity skips months: in August 2026 the
+#: active contract is DEC26, not the nearer OCT26. A rule that took "the next
+#: listed month" would route gold into a thin contract and look correct doing
+#: it. One dated table that a human refreshes each quarter is worth more than
+#: a rule that is subtly wrong on one family.
+CONTRACT_TABLE_VALID_UNTIL = "2026-09-10"
+
+#: Root -> the contract month to trade. Micros and their full-size parents
+#: roll together, so both spellings are listed rather than aliased - the
+#: alias table is one-directional and this map is read on the way OUT.
+ACTIVE_CONTRACT: dict[str, str] = {
+    "NQ": "NQ SEP26",   "MNQ": "MNQ SEP26",
+    "ES": "ES SEP26",   "MES": "MES SEP26",
+    "RTY": "RTY SEP26", "M2K": "M2K SEP26",
+    "YM": "YM SEP26",   "MYM": "MYM SEP26",
+    "GC": "GC DEC26",   "MGC": "MGC DEC26",
+    "CL": "CL OCT26",   "MCL": "MCL OCT26",
+    "6E": "6E SEP26",
+    "6J": "6J SEP26",
+    "6B": "6B SEP26",
+    "6A": "6A SEP26",
+    "6C": "6C SEP26",
+    "6S": "6S SEP26",
+}
+
+#: A month token in an instrument already spelled out - "MNQ SEP26",
+#: "MNQ 09-26", "MNQ 1!". Matched so `resolve_contract` is IDEMPOTENT: a
+#: caller who names the contract explicitly, like `send_test_probe.py --symbol
+#: "MNQ SEP26"`, gets exactly what they typed and never "MNQ SEP26 SEP26".
+_QUALIFIED = re.compile(
+    r"(?:\s(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\d{2}"
+    r"|\s\d{2}-\d{2}|\s?\d+!)\s*$", re.IGNORECASE)
+
+
+def resolve_contract(instrument: str, on: str | None = None) -> str:
+    """
+    A tradable NinjaTrader instrument from a root symbol.
+
+        MNQ         -> MNQ SEP26
+        MNQ SEP26   -> MNQ SEP26      (already qualified; unchanged)
+        MNQ 1!      -> MNQ 1!         (continuous; unchanged)
+
+    Raises `CrossTradeFormatError` for a root this table does not carry, and
+    for ANY root once the table is out of date - see
+    `CONTRACT_TABLE_VALID_UNTIL`. Both are refusals rather than guesses: an
+    order naming the wrong contract month is filled, not rejected, and nothing
+    downstream can tell it was meant for a different one.
+
+    `on` is an ISO date for testing the staleness guard without waiting for
+    the calendar.
+    """
+    ins = str(instrument).strip().upper()
+    if not ins:
+        raise _reject("instrument is empty")
+    if _QUALIFIED.search(ins):
+        return ins
+
+    today = str(on) if on else _dt.date.today().isoformat()
+    if today > CONTRACT_TABLE_VALID_UNTIL:
+        raise _reject(
+            f"the contract table expired on {CONTRACT_TABLE_VALID_UNTIL} and "
+            f"today is {today}. Refusing to map {ins!r} onto a month that may "
+            f"have rolled - update ACTIVE_CONTRACT and "
+            f"CONTRACT_TABLE_VALID_UNTIL in realtime/crosstrade_formatter.py. "
+            f"A wrong month is FILLED, not rejected.")
+
+    if ins not in ACTIVE_CONTRACT:
+        raise _reject(
+            f"no active contract recorded for {ins!r}. Add it to "
+            f"ACTIVE_CONTRACT in realtime/crosstrade_formatter.py, or pass "
+            f"the fully qualified instrument (e.g. '{ins} SEP26').")
+    return ACTIVE_CONTRACT[ins]
 
 
 def _clean_instrument(instrument: str) -> str:
@@ -237,7 +328,11 @@ def format_crosstrade_command(account: str,
     """
     resolved_key = resolve_key(key)
     acct = _clean_account(account)
-    ins = _clean_instrument(instrument)
+    # THE ROOT IS RESOLVED TO A CONTRACT MONTH BEFORE IT IS CLEANED.
+    # NinjaTrader refuses a bare root outright - "Instrument 'MNQ' not
+    # found" - and `resolve_contract` is idempotent, so a caller who
+    # already named the month gets exactly what they typed.
+    ins = _clean_instrument(resolve_contract(instrument))
     act = _clean_action(action, allowed=PLACE_ACTIONS)
     quantity = _clean_qty(qty)
     ot = _clean_order_type(order_type)
@@ -274,7 +369,11 @@ def format_crosstrade_json(account: str,
     the body. Putting one here would publish it into every payload log.
     """
     acct = _clean_account(account)
-    ins = _clean_instrument(instrument)
+    # THE ROOT IS RESOLVED TO A CONTRACT MONTH BEFORE IT IS CLEANED.
+    # NinjaTrader refuses a bare root outright - "Instrument 'MNQ' not
+    # found" - and `resolve_contract` is idempotent, so a caller who
+    # already named the month gets exactly what they typed.
+    ins = _clean_instrument(resolve_contract(instrument))
     act = _clean_action(action, allowed=PLACE_ACTIONS)
     quantity = _clean_qty(qty)
     ot = _clean_order_type(order_type)
@@ -335,7 +434,11 @@ def format_flatten_command(account: str,
     """
     resolved_key = resolve_key(key)
     acct = _clean_account(account)
-    ins = _clean_instrument(instrument)
+    # THE ROOT IS RESOLVED TO A CONTRACT MONTH BEFORE IT IS CLEANED.
+    # NinjaTrader refuses a bare root outright - "Instrument 'MNQ' not
+    # found" - and `resolve_contract` is idempotent, so a caller who
+    # already named the month gets exactly what they typed.
+    ins = _clean_instrument(resolve_contract(instrument))
     return (f"key={resolved_key}; command=flatten; account={acct}; "
             f"instrument={ins};")
 
