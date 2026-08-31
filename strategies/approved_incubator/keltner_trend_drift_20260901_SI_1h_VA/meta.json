@@ -1,0 +1,130 @@
+{
+  "name": "keltner_trend_drift_20260901_SI_1h_VA",
+  "strategy": "keltner_trend_drift_20260901",
+  "symbol": "SI",
+  "version": "A",
+  "description": "Promoted Version A (rule-based baseline).",
+  "symbols": [
+    "SI"
+  ],
+  "timeframe": "1h",
+  "params": {
+    "ema_fast": 50,
+    "keltner_len": 20,
+    "keltner_mult": 2.0,
+    "session_start_et": "09:30",
+    "session_end_et": "16:00",
+    "allowed_days": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "use_baseline_filter": true,
+    "use_alpha_trigger": true,
+    "use_time_filter": false,
+    "use_day_filter": false,
+    "use_news_filter": false,
+    "sl_atr_mult": 3.0,
+    "tp_atr_mult": null,
+    "trailing": true
+  },
+  "params_source": "locked from dual_metrics_SI.json",
+  "params_conflict": [],
+  "risk": {
+    "sl_atr_mult": 3.0,
+    "tp_atr_mult": null,
+    "trailing": true
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/keltner_trend_drift_20260901.py",
+  "source_sha256": "da6dcbae3ef30e00684d1435c8438eff93c2d96857e2d6cd3be96bc37f69a9e7",
+  "promoted_sha256": "da6dcbae3ef30e00684d1435c8438eff93c2d96857e2d6cd3be96bc37f69a9e7",
+  "promoted_utc": "2026-08-31T02:20:03+00:00",
+  "costs_included": true,
+  "variants_tested": null,
+  "metrics_status": "RECORDED \u00b7 locked from dual_metrics_SI.json",
+  "metrics": {
+    "sharpe": 0.21146006675256568,
+    "sortino": 0.394069610303876,
+    "calmar": 0.04863145176485664,
+    "profit_factor": 1.0505052856142068,
+    "win_rate": 0.40644583706356313,
+    "max_drawdown_pct": -48.79078391299993,
+    "total_return_pct": 48.08414000000039,
+    "annualized_return_pct": 2.3727666544345993,
+    "trade_count": 1117,
+    "total_pnl": 48084.140000001724,
+    "total_costs": 60965.85999999798,
+    "final_equity": 148084.1400000004,
+    "n_days": 4219,
+    "start": "2013-01-01 23:00:00+00:00",
+    "end": "2026-08-07 20:00:00+00:00",
+    "bars": 80001,
+    "initial_capital": 100000.0
+  },
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "FAIL",
+    "gate2": "FAIL",
+    "gate3": "PASS",
+    "gate_regime": "PASS",
+    "gate_ruin": "PASS"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/keltner_trend_drift_20260901/gate_audit_SI_1h.json",
+    "audit_sha256": "cb4cf9ccd80e994a295dce454b1a86181d7103ac1d2ee3a5600fb6a2d9694a1c",
+    "audit_symbol": "SI",
+    "audit_timeframe": "1h",
+    "target_quadrant": "Q2",
+    "target_regime": "High Volatility / Ranging",
+    "audit_generated_utc": "2026-08-31T02:09:45+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "ema_fast": 50,
+      "keltner_len": 20,
+      "keltner_mult": 2.0,
+      "sl_atr_mult": 3.0,
+      "trailing": true
+    },
+    "params_source": "stage 2 winner (best_params_SI_1h.json)",
+    "variants_tested": 54,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "FAIL",
+    "agrees_with_snapshot": false
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [
+    "import from 'backtest.event_calendar' is not allowed"
+  ],
+  "notes": ""
+}
