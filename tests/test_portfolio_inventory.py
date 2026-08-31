@@ -58,7 +58,12 @@ def world(tmp_path):
         "strategy": "demo", "symbol": "NQ", "timeframe": "1h", "version": "B",
         "ml_threshold": 0.48, "promoted_utc": "2026-08-29T20:47:49+00:00",
         "gate_audit_status": "PASS",
-        "certification": {"audit_file": str(audit)}}))
+        # Q4 here DISAGREES with the audit's `regime_profile_holdout`, which
+        # says Q2. That disagreement is the point: it is the only way a test
+        # can tell which source the tool actually read.
+        "certification": {"audit_file": str(audit),
+                          "target_quadrant": "Q4",
+                          "target_regime": "Low Volatility / Ranging"}}))
     cfg = {"portfolios": {"Incubator-Odd": {
         "active_strategies": ["demo_NQ_1h_VB"],
         "strategy_allocations": {"demo_NQ_1h_VB": {"symbol": "NQ",
@@ -73,7 +78,8 @@ def test_a_row_is_transcribed_not_recomputed(world):
     assert (row["version"], row["ml_threshold"]) == ("B", 0.48)
     assert row["in_sample_pf"] == 1.0748
     assert row["in_sample_trades"] == 1719
-    assert row["optimal_regime"] == "Q2 High Volatility / Ranging"
+    assert row["target_quadrant"] == "Q4"
+    assert row["target_regime"] == "Low Volatility / Ranging"
     assert row["disk_status"] == inv.EXISTS
     assert row["promoted_at"] == "2026-08-29T20:47:49+00:00"
 
@@ -182,7 +188,8 @@ def test_unreadable_evidence_leaves_cells_empty_not_zero(tmp_path):
     row, = inv.collect_rows(cfg, inc)
     assert row["disk_status"] == inv.EXISTS, "the directory IS there"
     assert row["in_sample_pf"] == "" and row["gate_r_pf"] == ""
-    assert row["oos_holdout_pf"] == "" and row["optimal_regime"] == ""
+    assert row["oos_holdout_pf"] == ""
+    assert row["target_quadrant"] == "" and row["target_regime"] == ""
 
 
 def test_version_a_carries_no_ml_threshold(tmp_path):
@@ -226,3 +233,57 @@ def test_exit_code_flags_a_dangling_allocation(tmp_path, capsys):
         "active_strategies": ["gone_NQ_1h_VA"], "strategy_allocations": {}}}}))
     rc = inv.main(["--config", str(cfg), "--no-csv"])
     assert rc == 1, "non-zero so it chains into a pre-flight check"
+
+
+def test_the_quadrant_comes_from_the_seal_not_the_holdout_profile(world):
+    """The provenance fix of 2026-08-31.
+
+    The tool used to read `regime_profile_holdout.optimal_quadrant`, which is
+    the best-of-four quadrant WITHIN THE HOLDOUT. Gate R judges the quadrant
+    DESIGNATED IN SAMPLE, and re-picking the best of four on the holdout is
+    exactly the selection Gate R exists to prevent. Across the real incubator
+    the two disagreed on 37 of 118 packages.
+
+    The fixture's seal says Q4 and its holdout profile says Q2, so this fails
+    on any implementation that reads the profile.
+    """
+    cfg, inc = world
+    row, = inv.collect_rows(cfg, inc)
+    assert row["target_quadrant"] == "Q4", (
+        "the holdout profile's Q2 leaked into a column that names the "
+        "certified quadrant")
+
+
+def test_a_seal_with_no_quadrant_reports_empty_not_a_guess(world):
+    """No fallback, on purpose.
+
+    Two other sources are readable and both are wrong - the holdout profile
+    above, and `TARGET_QUADRANTS` in the module source, which is the premise's
+    NOMINATION rather than anything Stage 1 measured. An empty cell says
+    nobody recorded it; a guess from either would say something false in a
+    column a reader has no way to check.
+    """
+    cfg, inc = world
+    meta_path = inc / "demo_NQ_1h_VB" / "meta.json"
+    meta = json.loads(meta_path.read_text())
+    meta["certification"].pop("target_quadrant")
+    meta["certification"].pop("target_regime")
+    meta_path.write_text(json.dumps(meta))
+    row, = inv.collect_rows(cfg, inc)
+    assert row["target_quadrant"] == "", (
+        "a missing seal quadrant must be EMPTY, never filled from the "
+        "holdout profile or the module source")
+    assert row["target_regime"] == ""
+
+
+def test_certified_regime_reads_only_the_certification_block():
+    """Unit-level: the resolver ignores every other quadrant-shaped field."""
+    assert inv._certified_regime({}) == ("", "")
+    assert inv._certified_regime({"certification": None}) == ("", "")
+    # A module-source nomination and a holdout profile, both present, both
+    # ignored.
+    meta = {"TARGET_QUADRANTS": ("Q3", "Q1"),
+            "regime_profile_holdout": {"optimal_quadrant": "Q2"},
+            "certification": {"target_quadrant": "Q4",
+                              "target_regime": "Low Volatility / Ranging"}}
+    assert inv._certified_regime(meta) == ("Q4", "Low Volatility / Ranging")

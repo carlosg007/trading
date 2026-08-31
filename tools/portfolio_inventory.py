@@ -19,7 +19,8 @@ WHAT IT DOES NOT DO
 ===================
 **It recomputes nothing.** Every number is transcribed from the artifact that
 recorded it - profit factors from the gate audit's own metrics blocks, the
-designated quadrant from the regime profile beside them. A tool that re-derived
+designated quadrant from the package's own sealed certification block. A tool
+that re-derived
 a profit factor here would be free to disagree with the certification it claims
 to summarise, and the disagreement would look like a finding.
 
@@ -51,7 +52,8 @@ DEFAULT_OUT = REPO_ROOT / "reports" / "portfolio_inventory.csv"
 #: when a field is added is one nobody can compare across days.
 COLUMNS = (
     "portfolio_name", "strategy_id", "strategy_family", "symbol", "timeframe",
-    "version", "ml_threshold", "optimal_regime", "kill_switch_regimes",
+    "version", "ml_threshold", "target_quadrant", "target_regime",
+    "kill_switch_regimes",
     "in_sample_pf", "in_sample_trades", "in_sample_win_rate",
     "gate_r_pf", "gate_r_trades", "oos_holdout_pf", "oos_holdout_trades",
     "gate_r_status", "report_html",
@@ -123,6 +125,44 @@ def _report_html(meta: dict, version: str | None) -> str:
     return "MISSING"
 
 
+def _certified_regime(meta: dict) -> tuple[str, str]:
+    """
+    The quadrant this package was CERTIFIED on, from its sealed certification
+    block. `(target_quadrant, target_regime)`, or `("", "")` when the block
+    does not record them.
+
+    THE SEALED ARTIFACT IS THE ONLY AUTHORITY, AND THERE IS DELIBERATELY NO
+    FALLBACK. Two other sources are readable from here and both are wrong:
+
+      * `regime_profile_holdout.optimal_quadrant`, which this tool used until
+        2026-08-31, is the best-of-four quadrant WITHIN THE HOLDOUT. Gate R
+        judges the quadrant DESIGNATED IN SAMPLE, and re-picking the best of
+        four on the holdout is exactly the selection Gate R exists to prevent -
+        almost anything clears a profit factor of 1.00 given four attempts. The
+        two coincide only when the holdout's best happens to be the designated
+        one, and across the incubator they DISAGREE on 37 of 118 packages:
+        `double_rsi_momentum_pullback_20260830_6E_30m` is certified on Q4 and
+        was being reported as Q3, and the Q1/Q2 pair swaps twenty more times.
+      * `TARGET_QUADRANTS` in the strategy's `.py` source, which is the
+        premise's NOMINATION - what the author hoped for before Stage 1
+        measured anything. `double_rsi_momentum_pullback_20260830` declares
+        `("Q3", "Q1")` in source and holds Q4 certifications on disk. The
+        module's own comment says so: "Stage 1 designates the real one by
+        measuring all four quadrants, and nothing in this module reads these."
+
+    A package whose certification block records no quadrant returns EMPTY, and
+    the row still prints. An empty cell says nobody recorded it; a quadrant
+    guessed from either source above would say something false in a column a
+    reader has no way to check.
+    """
+    cert = meta.get("certification")
+    if not isinstance(cert, dict):
+        return "", ""
+    quadrant = str(cert.get("target_quadrant") or "").strip()
+    regime = str(cert.get("target_regime") or "").strip()
+    return quadrant, regime
+
+
 def _version_block(audit: dict | None, version: str | None) -> dict:
     """The gate audit's per-version evidence, keyed "A"/"B"."""
     if not isinstance(audit, dict) or not version:
@@ -176,8 +216,10 @@ def collect_rows(portfolios: dict, incubator: Path = INCUBATOR) -> list[dict]:
             gate_r = (((block.get("gate_audit") or {}).get("gates") or {})
                       .get("gate_regime") or {}).get("measured") or {}
 
-            quadrant = profile.get("optimal_quadrant")
-            regime = profile.get("optimal_regime")
+            # FROM THE SEALED CERTIFICATION BLOCK, never from `profile`
+            # beside it and never from the module source. See
+            # `_certified_regime`.
+            target_quadrant, target_regime = _certified_regime(meta)
             rows.append({
                 "portfolio_name": name,
                 "strategy_id": sid,
@@ -189,8 +231,8 @@ def collect_rows(portfolios: dict, incubator: Path = INCUBATOR) -> list[dict]:
                 # for B - so the cell is empty rather than 0.48, which would
                 # claim a filter that is not there.
                 "ml_threshold": meta.get("ml_threshold", ""),
-                "optimal_regime": (f"{quadrant} {regime}".strip()
-                                   if (quadrant or regime) else ""),
+                "target_quadrant": target_quadrant,
+                "target_regime": target_regime,
                 "kill_switch_regimes": ", ".join(
                     profile.get("kill_switch_conditions") or []),
                 "in_sample_pf": _num(is_m.get("profit_factor")),
