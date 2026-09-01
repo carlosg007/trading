@@ -14,17 +14,18 @@ Two forms, because CrossTrade accepts two
   the NinjaTrader add-on both parse:
 
       key=...; command=place; account=...; instrument=...; action=BUY; qty=1;
-      order_type=MARKET; tif=DAY;
+      order_type=MARKET; tif=DAY; strategy_tag=...;
 
 * The structured JSON object, for the HTTP endpoint.
 
 They are NOT the same payload with different punctuation and the difference is
 deliberate rather than cosmetic: the plain-text form carries the API `key` and
-a `tif`, the JSON form carries a `strategy_tag` and no key (the key travels in
-the request, not in the body). Casing differs too - the text command is
-upper-cased because that is what the add-on's parser compares against, the JSON
-is lower-cased because that is what the endpoint's schema declares. Neither is
-a preference. Writing one and posting it to the other's endpoint fails.
+a `tif`, the JSON form carries neither (the key travels in the request, not in
+the body). BOTH carry `strategy_tag` - see below. Casing differs too - the
+text command is upper-cased because that is what the add-on's parser compares
+against, the JSON
+object is lower-cased because that is what the endpoint's schema declares.
+Neither is a preference. Writing one and posting it to the other's endpoint fails.
 
 What is validated, and why each check exists
 --------------------------------------------
@@ -45,6 +46,28 @@ What is validated, and why each check exists
 * **`tif`.** Checked against a declared set. A typo'd time-in-force is not
   rejected by every broker; some substitute a default, which is a different
   order from the one the caller wrote.
+
+The strategy tag is a LOCK, and both forms carry it
+---------------------------------------------------
+CrossTrade keys a strategy lock on `strategy_tag`: an order carrying one may
+only act on the position that tag opened, and the lock clears when a matching
+order closes it. That makes the tag part of the ORDER, not part of the
+reporting around it - an entry tagged and an exit untagged does not close the
+position, it is refused against a lock nothing releases.
+
+So the tag is optional in both forms and, when given, is the SAME string in
+both. It used to live only in the JSON object, which is the form that is not
+on the wire: `live_dispatcher.dispatch_order` sends the semicolon command, so
+every live entry went out untagged while the tag sat on an unsent dict beside
+it.
+
+It is sanitised rather than escaped - `;`, `=` and whitespace are removed by
+`sanitize_strategy_tag`, because they are the plain-text command's field
+separators and a tag containing one would be parsed as extra fields. A tag
+that is nothing BUT separators is refused rather than reduced to the empty
+string: a caller that asked for a lock and silently got an untagged order is
+the failure this field exists to prevent. An empty or omitted tag appends no
+field at all.
 
 The key is a credential
 -----------------------
@@ -216,6 +239,41 @@ def _clean_tif(tif: str) -> str:
     return value
 
 
+#: What is stripped out of a strategy tag: the plain-text command's two field
+#: separators, and whitespace. Whitespace is included because the command is
+#: split on `;` and read as `name=value` - a tag with a space in it survives
+#: that split but reaches the receiver with the space in the value, and two
+#: spellings of one strategy are two different locks.
+_TAG_STRIP = re.compile(r"[\s;=]+")
+
+
+def sanitize_strategy_tag(strategy_tag: Any) -> str:
+    """
+    A tag safe to put in either wire form, or `""` for no tag at all.
+
+    `;`, `=` and whitespace are REMOVED rather than escaped - the plain-text
+    command has no escape syntax, so a tag carrying a separator is not a tag
+    with an odd character in it, it is extra fields the receiver will parse.
+
+    `None` and `""` mean "no tag" and return `""`; the caller then omits the
+    field entirely. A tag that is non-empty but sanitises to nothing (`"; ;"`)
+    RAISES instead, because a caller that asked for a strategy lock and
+    silently got an untagged order has the failure this field exists to
+    prevent - CrossTrade would place the order against no lock, and the exit
+    that expects one would have nothing to clear.
+    """
+    if strategy_tag is None:
+        return ""
+    raw = str(strategy_tag)
+    tag = _TAG_STRIP.sub("", raw)
+    if raw.strip() and not tag:
+        raise _reject(f"strategy_tag {raw!r} is nothing but field separators. "
+                      f"An order formatted from it would carry no tag at all, "
+                      f"and CrossTrade would hold no lock for the exit to "
+                      f"clear.")
+    return tag
+
+
 def resolve_key(key: str = "") -> str:
     """
     The API key to put on the wire: the argument when given, else
@@ -241,16 +299,26 @@ def format_crosstrade_command(account: str,
                               qty: int,
                               order_type: str = "market",
                               key: str = "",
-                              tif: str = "day") -> str:
+                              tif: str = "day",
+                              strategy_tag: str | None = None) -> str:
     """
     The semicolon-delimited plain-text place command.
 
         key={key}; command=place; account={account}; instrument={instrument};
         action={ACTION}; qty={qty}; order_type={ORDER_TYPE}; tif={TIF};
+        strategy_tag={TAG};
 
     Field ORDER is fixed and part of the contract - several NinjaTrader add-on
     builds parse positionally when a field is absent, so a reordered command is
-    not an equivalent command.
+    not an equivalent command. `strategy_tag` is therefore APPENDED, after the
+    last field of the form that existed before it, and is omitted entirely
+    rather than sent empty when no tag is given: a trailing `strategy_tag=;` is
+    a field with a value, and a receiver holding a lock on `""` is not the same
+    as one holding no lock.
+
+    The tag is CrossTrade's strategy lock - the order may act only on the
+    position that tag opened. The matching `format_flatten_command` must carry
+    the SAME tag or the exit does not clear it.
 
     Raises `CrossTradeFormatError` on an unknown side, a non-positive or
     fractional quantity, a price-bearing order type, an unknown time-in-force,
@@ -268,9 +336,12 @@ def format_crosstrade_command(account: str,
     ot = _clean_order_type(order_type)
     time_in_force = _clean_tif(tif)
 
+    tag = sanitize_strategy_tag(strategy_tag)
+
     return (f"key={resolved_key}; command=place; account={acct}; "
             f"instrument={ins}; action={act}; qty={quantity}; "
-            f"order_type={ot}; tif={time_in_force};")
+            f"order_type={ot}; tif={time_in_force};"
+            + (f" strategy_tag={tag};" if tag else ""))
 
 
 def format_crosstrade_json(account: str,
@@ -308,7 +379,10 @@ def format_crosstrade_json(account: str,
     quantity = _clean_qty(qty)
     ot = _clean_order_type(order_type)
 
-    tag = str(strategy_tag).strip()
+    # THE SAME SANITISER AS THE TEXT FORM. The tag is a lock key matched by
+    # string equality, so `keltner trend` reaching one endpoint as
+    # `keltner trend` and the other as `keltnertrend` is two locks.
+    tag = sanitize_strategy_tag(strategy_tag)
     return {
         "command": "place",
         "account": acct,
@@ -344,23 +418,40 @@ def format_flatten_json(account: str,
     return {
         "command": "flatten",
         "account": _clean_account(account),
-        "instrument": _clean_instrument(instrument),
-        "strategy_tag": str(strategy_tag).strip(),
+        # RESOLVED, like the three commands it mirrors. It was the one payload
+        # here that did not resolve a root to its contract month, which made
+        # the flatten this dispatcher keeps on the record disagree with the
+        # flatten it puts on the wire - `MNQ` against `MNQ SEP26` - about which
+        # contract was closed.
+        "instrument": _clean_instrument(resolve_contract(instrument)),
+        "strategy_tag": sanitize_strategy_tag(strategy_tag),
     }
 
 
 def format_flatten_command(account: str,
                            instrument: str,
-                           key: str = "") -> str:
+                           key: str = "",
+                           strategy_tag: str | None = None) -> str:
     """
     The plain-text flatten.
 
         key={key}; command=flatten; account={account}; instrument={instrument};
+        strategy_tag={TAG};
 
     No side and no quantity, and that is the whole point: a flatten closes
     whatever is open, and neither this module nor the caller knows what that
     is. Expressing it as `action=sell; qty=N` requires guessing the position,
     and a wrong guess does not close a position - it opens the opposite one.
+
+    `strategy_tag` IS the exception to "this flatten knows nothing about the
+    position", and it is not a contradiction: it does not describe what is
+    open, it names the lock the entry took out. It must be BYTE-IDENTICAL to
+    the tag the entry carried - CrossTrade matches the lock on the string, so
+    a flatten tagged with one contributor of a netted position, or with a
+    differently-spelled tag, does not clear the lock it was meant to release.
+    `live_dispatcher` rebuilds it from the position book for exactly that
+    reason. Omitted when no tag is given, which is an UNTAGGED flatten: it acts
+    on whatever the account holds, as it always has.
     """
     resolved_key = resolve_key(key)
     acct = _clean_account(account)
@@ -369,8 +460,42 @@ def format_flatten_command(account: str,
     # found" - and `resolve_contract` is idempotent, so a caller who
     # already named the month gets exactly what they typed.
     ins = _clean_instrument(resolve_contract(instrument))
+    tag = sanitize_strategy_tag(strategy_tag)
     return (f"key={resolved_key}; command=flatten; account={acct}; "
-            f"instrument={ins};")
+            f"instrument={ins};"
+            + (f" strategy_tag={tag};" if tag else ""))
+
+
+def format_account_flatten_command(account: str, key: str = "") -> str:
+    """
+    The ACCOUNT-LEVEL flatten: close everything on the account, full stop.
+
+        key={key}; command=flatten; account={account};
+
+    NO INSTRUMENT AND NO STRATEGY TAG, and both absences are the point. This
+    is the emergency kill: an instrument scopes a flatten to one contract and a
+    tag scopes it to one strategy's lock, so a halt built from either closes
+    the positions it can name and leaves behind the ones it cannot - which,
+    during the failure that triggered a halt, are exactly the ones nobody can
+    account for.
+
+    A SEPARATE FUNCTION FROM `format_flatten_command`, NOT AN EMPTY
+    `instrument=` ON IT. The two commands differ by one absent field and
+    differ in blast radius by the whole account, so a bug that drops an
+    instrument must not be able to silently escalate one into the other.
+    Reaching this hammer requires naming it.
+
+    **IT CLOSES POSITIONS THIS PROCESS DID NOT OPEN.** On a shared account that
+    includes anything placed by hand, by NinjaTrader, by a previous run of this
+    loop or by another tool, and it is silent, immediate and unrecoverable.
+    `realtime.lifecycle.emergency_halt` is the only caller, and it is called
+    when continuing to trade is the larger risk. Nothing on the ordinary exit
+    path may use it: `dispatch_exits` flattens per instrument, under the tag
+    the entry took out, and only for a position this process recorded opening.
+    """
+    resolved_key = resolve_key(key)
+    acct = _clean_account(account)
+    return f"key={resolved_key}; command=flatten; account={acct};"
 
 
 # --------------------------------------------------------------------------

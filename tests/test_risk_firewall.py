@@ -48,6 +48,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from portfolio.portfolio_manager import PositionBook              # noqa: E402
 from realtime.lifecycle import EngineState, emergency_halt         # noqa: E402
 from realtime.risk_firewall import (RiskFirewall,                  # noqa: E402
                                     RiskViolation,
@@ -327,6 +328,128 @@ def test_the_halt_reports_unverified_claims_rather_than_closing_them(
     out = emergency_halt("test", state=state, kill_switch=tmp_path / "KILL")
     assert out["unverified"], "the claim is surfaced"
     assert out["flattened"] == [], "and nothing was closed on it"
+
+
+class HaltDispatcher:
+    """
+    A dispatcher with a REAL `PositionBook`, which is the whole point.
+
+    The halt read `open_positions()` as a mapping - `.items()` on a list - and
+    raised `AttributeError` inside the loop, so every flatten was skipped while
+    the switch still armed and the alert still reported "flattened: none". It
+    survived because the only case that reached this path used a stand-in whose
+    `positions` was None. A hand-rolled fake would have hidden it again.
+    """
+
+    def __init__(self, accounts=None, fail=False):
+        self.positions = PositionBook()
+        self.accounts = (accounts if accounts is not None
+                         else {"Incubator-Odd": "SimIncubator1"})
+        self.fail = fail
+        self.calls: list[str] = []
+
+    def account_for(self, portfolio_id):
+        try:
+            return self.accounts[portfolio_id]
+        except KeyError:
+            raise RuntimeError(
+                f"portfolio {portfolio_id!r} declares no target_account") from None
+
+    def dispatch_account_flatten(self, account):
+        self.calls.append(account)
+        return {"account": account, "action": "FLATTEN_ACCOUNT",
+                "scope": "account", "ok": not self.fail,
+                "error": "broker refused" if self.fail else None}
+
+
+def test_the_halt_actually_reaches_the_flatten_with_a_real_position_book(
+        tmp_path: Path) -> None:
+    """
+    THE REGRESSION. `PositionBook.open_positions()` returns a LIST. Iterated as
+    a mapping it raised inside the halt, and an `AttributeError` there is the
+    worst possible place for one: the switch is armed, the alert goes out
+    saying nothing needed closing, and the positions are still open.
+    """
+    d = HaltDispatcher()
+    d.positions.record_fill("Incubator-Odd", "MNQ", "long", 1, ["t3_braid"])
+
+    out = emergency_halt("test", dispatcher=d, kill_switch=tmp_path / "KILL")
+
+    assert d.calls == ["SimIncubator1"], "the flatten was actually sent"
+    assert out["failed"] == []
+    assert out["flattened"] == [{"account": "SimIncubator1", "scope": "account",
+                                 "covered": ["MNQ"], "error": None}]
+
+
+def test_the_halt_sends_ONE_flatten_per_account_not_per_position(
+        tmp_path: Path) -> None:
+    """
+    The account command closes everything on the account, so a second one for
+    the next symbol is a duplicate kill with nothing left to close - an error
+    response to read and a `failed` entry that reads like the halt did not
+    work.
+    """
+    d = HaltDispatcher(accounts={"Incubator-Odd": "SimIncubator1",
+                                 "Incubator-Even": "SimIncubator2"})
+    d.positions.record_fill("Incubator-Odd", "MNQ", "long", 1, ["a"])
+    d.positions.record_fill("Incubator-Odd", "MGC", "short", 1, ["b"])
+    d.positions.record_fill("Incubator-Even", "MES", "long", 1, ["c"])
+
+    out = emergency_halt("test", dispatcher=d, kill_switch=tmp_path / "KILL")
+
+    assert d.calls == ["SimIncubator1", "SimIncubator2"]
+    covered = {f["account"]: f["covered"] for f in out["flattened"]}
+    assert covered == {"SimIncubator1": ["MGC", "MNQ"],
+                       "SimIncubator2": ["MES"]}
+
+
+def test_the_halt_stops_the_book_claiming_what_it_just_closed(
+        tmp_path: Path) -> None:
+    """
+    Left standing, this process believes it still holds them, and the next exit
+    flattens an account that is already flat - which on a shared account is not
+    a no-op.
+    """
+    d = HaltDispatcher()
+    d.positions.record_fill("Incubator-Odd", "MNQ", "long", 1, ["t3_braid"])
+
+    emergency_halt("test", dispatcher=d, kill_switch=tmp_path / "KILL")
+    assert d.positions.open_positions() == []
+
+
+def test_a_failed_flatten_leaves_the_book_claiming_the_position(
+        tmp_path: Path) -> None:
+    """
+    The book is cleared on a send that SUCCEEDED. Clearing it on a refusal
+    would leave this process believing it is flat while the position is open,
+    and nothing would try again.
+    """
+    d = HaltDispatcher(fail=True)
+    d.positions.record_fill("Incubator-Odd", "MNQ", "long", 1, ["t3_braid"])
+
+    out = emergency_halt("test", dispatcher=d, kill_switch=tmp_path / "KILL")
+
+    assert out["flattened"] == []
+    assert out["failed"][0]["error"] == "broker refused"
+    assert d.positions.open_positions(), "still claimed, so it is still visible"
+
+
+def test_a_portfolio_with_no_account_is_reported_not_guessed(
+        tmp_path: Path) -> None:
+    """
+    The book is keyed by PORTFOLIO and orders route to an ACCOUNT. Sending the
+    kill to a portfolio id would address an account that does not exist, and it
+    would fail at the one moment nothing else is going to stop the loop.
+    """
+    d = HaltDispatcher(accounts={})
+    d.positions.record_fill("Incubator-Odd", "MNQ", "long", 1, ["t3_braid"])
+
+    out = emergency_halt("test", dispatcher=d, kill_switch=tmp_path / "KILL")
+
+    assert d.calls == [], "nothing was sent to a guessed account"
+    assert out["flattened"] == []
+    assert "no account to flatten on" in out["failed"][0]["error"]
+    assert out["failed"][0]["portfolio_id"] == "Incubator-Odd"
 
 
 # --------------------------------------------------------------------------

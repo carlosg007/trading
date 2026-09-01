@@ -119,17 +119,50 @@ table every tier resolves symbols through.
   `live/dispatcher.py` remains the only module in this repository that puts an
   order on the wire. `format_crosstrade_command` builds the semicolon
   plain-text place order (upper-cased, carrying `key` and `tif`),
-  `format_crosstrade_json` the structured object (lower-cased, carrying
-  `strategy_tag` and no key — that endpoint takes the credential in the
-  request, and a key in the body is a key in every payload log), and
-  `format_flatten_command` the flatten, which carries no side and no quantity
-  because a flatten closes whatever is open and a wrong guess at the position
-  opens the opposite one. Field ORDER in the text form is part of the contract.
+  `format_crosstrade_json` the structured object (lower-cased, no key — that
+  endpoint takes the credential in the request, and a key in the body is a key
+  in every payload log), `format_flatten_command` the flatten, which carries
+  no side and no quantity because a flatten closes whatever is open and a wrong
+  guess at the position opens the opposite one, and
+  `format_account_flatten_command` the ACCOUNT-WIDE kill — no instrument, no
+  tag, `emergency_halt` its only caller. Field ORDER in the text form is part
+  of the contract.
+  - **THE TEXT COMMAND IS WHAT GOES ON THE WIRE, for every order without
+    exception.** The configured `/v1/send/` webhook parses the semicolon form
+    and refuses a JSON object with an HTTP 400 — 125 refused entries on
+    2026-08-31, none ever accepted, while dry run reported success because dry
+    run opens no socket. `dispatch_order` was corrected then and
+    `_send_with_retry` was not, so until 2026-09-01 every FLATTEN was still
+    POSTed as a JSON object: refused by the endpoint, reported as sent, and the
+    position left open — the failure direction that costs money, on the one
+    path whose job is to close. The JSON object is still BUILT and kept on the
+    record as evidence of what the other endpoint would have been handed; it is
+    not sent. `tests/test_live_dispatcher.wire_fields` asserts the form before
+    it asserts the contents, so a payload that reverts to a dict fails loudly.
   Legal sides and order types are IMPORTED from `live.dispatcher` rather than
   restated; MARKET only, since none of these signatures carries a price and a
   LIMIT defaulted to the market turns a bounded entry into an unbounded one.
   `redact()` exists because a log file outlives the session that wrote it and a
   command copied out of one is directly replayable.
+  - **`strategy_tag` is CrossTrade's LOCK and every form carries it.** The
+    order may act only on the position that tag opened, and the lock clears
+    when a matching order closes it — matched by STRING EQUALITY. It lived on
+    the JSON object alone until 2026-09-01, which is the form that is not on
+    the wire (see above), so every live entry went out untagged while the cycle
+    report showed a tag. An entry tagged and
+    an exit untagged, or tagged differently, does not close the position: the
+    flatten is sent, accepted and logged, and nothing is released.
+    `live_dispatcher.compose_strategy_tag` is the ONE composer — the entry
+    builds `portfolio:strategy_a+strategy_b` from the plan's contributors and
+    the exit rebuilds the identical string from the POSITION BOOK, because a
+    netted position took out one lock named for all of its contributors and
+    flattening it under the exiting strategy's own id names a lock that never
+    existed. `;`, `=` and whitespace are STRIPPED (`sanitize_strategy_tag`) —
+    they are the text form's field separators — and a tag that is nothing but
+    separators is refused rather than reduced to `""`, since an order that
+    silently lost its lock is the failure the field exists to prevent. No tag
+    appends no field at all; `strategy_tag=;` would be a lock on `""` shared by
+    every untagged order on the account.
 
 **`master_live.py` and `realtime/live_dispatcher.py`** — the end-to-end live
 execution loop, added 2026-08-23. `LiveExecutionDispatcher` is the pipeline
@@ -145,6 +178,50 @@ summary is the half a caller reads. `orders` IS `payloads`, the same list, so
 the two cannot disagree about what was sent; a FLAT record is an evaluation
 that produced no entry and is never counted as an approval.
 
+- **`realtime/position_book.py` is the ENTRY gate, and it is a SUBCLASS of
+  the netted book rather than a second one.** Added 2026-09-01.
+  `dispatch_order` consulted nothing on the way in, so a strategy whose signal
+  stayed true did not enter once — it entered on EVERY cycle, one position per
+  interval, none of which this loop could see as one position. `can_execute`
+  is keyed by `(portfolio_id, symbol)` exactly as the book it extends: BUY is
+  permitted on FLAT or SHORT, SELL on FLAT or LONG, CLOSE/FLATTEN on anything
+  but FLAT, and an unrecognised action is refused. The refusal is a record and
+  a console line — `HOLD {portfolio}/{symbol} {action} — position already
+  active. Preventing stack.` — on `report["held"]`, because a cycle that held
+  every entry and a cycle that produced no signal both print no dispatch line
+  and are different facts about the account.
+  - **It had to be the SAME OBJECT the exit path writes.** `record_fill`,
+    `record_flat` and `plan_exits` belong to `PositionBook`; a second
+    dictionary of positions — even one keyed identically — would be written by
+    the entry path and not by the exit path, and would be wrong from the first
+    flatten onward, refusing entries on a position already closed with every
+    log line reading correctly.
+  - **The key is the PAIR, never the strategy.** Sixteen strategies trade NQ
+    inside Incubator-Odd and they net to ONE position, so strategy B's BUY on a
+    pair strategy A opened is the same stack under a different name. A
+    strategy-keyed book would have permitted it and called the result two
+    positions.
+  - **It knows only what THIS PROCESS opened**, so a restart permits an entry
+    on a position a previous run opened. The firewall's
+    `max_contracts_per_symbol` reads the durable `EngineState` and is what
+    covers that; the two are complementary and neither replaces the other.
+  - **A reversal is permitted and has a sharp edge.** A BUY of one contract
+    against a short of one NETS FLAT at the broker rather than opening a long,
+    so the book recording LONG after it is a claim about intent, not about the
+    account. Reverse by flattening and then entering.
+- **`MAX_QTY = 1` REJECTS, it does not clamp.** A clamp sends a different order
+  from the one the sizer computed and reports success — a position sized
+  against a 3-contract stop goes on at 1 and the risk model no longer describes
+  the trade. The refusal record is `{ok: False, rule: "MAX_QTY", detail:
+  "sizer asked N, cap is 1"}`, it lands on `risk_refusals`, and nothing is
+  formatted. **THE ATR SIZER ROUTINELY ASKS FOR MORE THAN ONE** — 5 contracts
+  on the test fixture's MNQ — so this cap drops most correctly-sized entries
+  and is a deliberate incident-response setting, not a neutral guard. It
+  duplicates the firewall's configurable `max_contracts_per_order` on purpose:
+  the firewall is OPTIONAL (`firewall=None` is the default and every
+  construction outside `master_live.py` leaves it there) and this cap is in the
+  send path itself. `max_qty=` on the constructor exists only so the suite can
+  exercise the wire; nothing in production passes it.
 - **THE PIPELINE OPENS POSITIONS AND CANNOT CLOSE THEM.** `PortfolioManager`
   does not know what is open and never emits FLATTEN, and nothing here invents
   the position state it would need to. An EXIT signal on the last bar is
@@ -350,6 +427,23 @@ that produced no entry and is never counted as an approval.
 - **`live/dispatcher.py` is still the only module that sends.** This one calls
   `send_execution_signal`, retries it under the rule above, and accepts an
   injected sender only so the tests stay off the network.
+- **`emergency_halt` flattens the ACCOUNT, not the instrument.** The switch is
+  armed FIRST and unconditionally, so a failed flatten still stops the next
+  entry. Then `command=flatten; account=...;` — no instrument, no tag, ONE per
+  account, because the account command closes everything and a second for the
+  next symbol is a duplicate kill that reads as a failure. **It closes
+  positions this process did not open**, which the ordinary exit path refuses
+  to do; a halt inverts that trade-off deliberately, since a kill that closes
+  only what this loop can name leaves behind exactly the positions nobody can
+  account for. WHICH accounts is still decided by the position book, so a halt
+  cannot reach an account this loop was not trading, and unverified claims from
+  a previous run are still reported rather than acted on. `open_positions()`
+  returns a LIST — it was iterated as `.items()`, raising `AttributeError`
+  inside the halt: every flatten skipped, the switch armed, and the alert
+  reporting "flattened: none". The book is cleared only for a flatten that
+  SUCCEEDED. `dispatcher.account_for()` maps portfolio → account, because the
+  book is keyed by portfolio and a kill addressed to a portfolio id names an
+  account that does not exist.
 - **SIGINT/SIGTERM set a flag and never interrupt a cycle** — an exception
   between the send and the print leaves an order on a broker with no line in
   the log saying so. The cycle finishes, the sleep is skipped, and the last

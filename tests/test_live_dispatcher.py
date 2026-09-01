@@ -48,6 +48,7 @@ if str(REPO_ROOT) not in sys.path:
 from portfolio.config_loader import clear_cache                     # noqa: E402
 from portfolio.portfolio_manager import PortfolioManager            # noqa: E402
 from realtime.contract_resolver import resolve_contract             # noqa: E402
+from realtime.position_book import MAX_QTY                          # noqa: E402
 from realtime.live_dispatcher import (                              # noqa: E402
     LiveDispatchError,
     LiveExecutionDispatcher,
@@ -247,6 +248,27 @@ def make_bars(n: int = 60, symbol: str = "MNQ",
                          "low": close - 2.0, "close": close, "volume": 100})
 
 
+def wire_fields(payload) -> dict:
+    """
+    The semicolon command as `{name: value}`, and an ASSERTION that it is one.
+
+    Every order this loop sends - entry, flatten, account flatten - goes to the
+    `/v1/send/` webhook, which parses the semicolon text form and refuses a
+    JSON object with an HTTP 400. Cases assert through this helper so a payload
+    that reverted to a dict fails on the form before it fails on the contents.
+    """
+    assert isinstance(payload, str), (
+        f"the webhook parses the semicolon text form; got {type(payload).__name__}")
+    out = {}
+    for part in payload.split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        name, _, value = part.partition("=")
+        out[name.strip()] = value.strip()
+    return out
+
+
 class RecordingSender:
     """A stand-in for `live.dispatcher.send_execution_signal`."""
 
@@ -271,11 +293,22 @@ class ExplodingSender:
 
 
 def build(tmp_path: Path, *, assignments, state, dry_run=True, sender=None,
-          strategies=None, **kwargs) -> LiveExecutionDispatcher:
+          strategies=None, max_qty=99, **kwargs) -> LiveExecutionDispatcher:
+    """
+    A dispatcher for one case.
+
+    `max_qty` DEFAULTS ABOVE THE PRODUCTION CAP, and that is deliberate. The
+    ATR sizer asks for 5 contracts on this fixture's MNQ, so with the real
+    `MAX_QTY` of 1 every case in this file would be testing the size cap and
+    none of them would reach the wire. Cases about the cap itself pass
+    `max_qty=MAX_QTY` and assert against the real value; everything else opts
+    out of it so it can test the thing it is about.
+    """
     root = tmp_path / "strategies"
     for strategy_id, spec in (strategies or {}).items():
         write_strategy(root, strategy_id, **spec)
     return LiveExecutionDispatcher(
+        max_qty=max_qty,
         config_path=str(write_config(tmp_path, assignments)),
         state_file=str(write_state(tmp_path, state)),
         dry_run=dry_run,
@@ -711,7 +744,10 @@ def test_a_dry_run_command_is_logged_redacted(tmp_path):
         dry_run=True, strategy_root=str(root),
         ml_model_dir=str(tmp_path / "models"),
         env_file=str(tmp_path / "none.env"),
-        crosstrade_key="SUPER_SECRET_KEY", sender=ExplodingSender())
+        crosstrade_key="SUPER_SECRET_KEY", sender=ExplodingSender(),
+        # Above the production cap: the sizer asks for 5 on this fixture and
+        # this case is about redaction, not about the size limit.
+        max_qty=99)
     report = d.process_bar_cycle({"MNQ": make_bars()})
 
     command = report["dispatches"][0]["command"]
@@ -1176,6 +1212,291 @@ def test_the_strategy_tag_names_every_contributor(tmp_path):
                                           "orderType", "quantity"}
 
 
+def test_the_tag_travels_on_the_command_that_is_actually_sent(tmp_path):
+    """
+    THE TEXT COMMAND IS THE PAYLOAD ON THE WIRE - `dispatch_order` sends it and
+    keeps the JSON object beside it unsent. The tag lived only on that object
+    for as long as it existed, so every live entry went out untagged while the
+    cycle report showed a tag: CrossTrade held no lock, and the flatten that
+    expected one had nothing to clear.
+    """
+    sender = RecordingSender()
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["alpha_one", "beta_two"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"alpha_one": dict(side="long"),
+                          "beta_two": dict(side="long")},
+              dry_run=False, sender=sender,
+              crosstrade_url="https://crosstrade.invalid/hooks/T",
+              crosstrade_key="K")
+    report = d.process_bar_cycle({"MNQ": make_bars()})
+
+    tag = "Incubator-Odd:alpha_one+beta_two"
+    assert len(sender.calls) == 1
+    assert f"strategy_tag={tag};" in sender.calls[0]["payload"]
+    # ...and the two wire forms agree, so a switch back to the JSON endpoint
+    # does not silently change which lock the order takes out.
+    assert report["dispatches"][0]["json"]["strategy_tag"] == tag
+
+
+def test_the_flatten_carries_THE_ENTRY_S_TAG_and_not_the_exiting_strategy_s(tmp_path):
+    """
+    THE LOCK IS RELEASED BY STRING EQUALITY, so the flatten has to repeat the
+    tag the entry took out - which for a netted position names EVERY
+    contributor. Tagging the exit with the id of whichever strategy signalled
+    it presents CrossTrade with a tag that locked nothing: the flatten is sent,
+    accepted and logged, and the position stays open.
+
+    The tag is therefore rebuilt from the POSITION BOOK - this process's record
+    of who opened it - and this case drives a real entry cycle and a real exit
+    cycle so the two strings are the ones the dispatcher actually produced.
+    """
+    sender = RecordingSender()
+    root = tmp_path / "strategies"
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["alpha_one", "beta_two"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"alpha_one": dict(side="long"),
+                          "beta_two": dict(side="long")},
+              dry_run=False, sender=sender,
+              crosstrade_url="https://crosstrade.invalid/hooks/T",
+              crosstrade_key="K")
+
+    entry = d.process_bar_cycle({"MNQ": make_bars()})["dispatches"][0]
+    assert entry["ok"] is True
+    entry_tag = entry["json"]["strategy_tag"]
+
+    # The same two strategies now signal EXIT and neither claims a position,
+    # which is what `plan_exits` requires before a flatten is a flatten.
+    for strategy_id in ("alpha_one", "beta_two"):
+        write_strategy(root, strategy_id, side="flat", exit_on_last=True)
+    d.strategies = []
+    d._load_active_strategies()
+
+    report = d.process_bar_cycle({"MNQ": make_bars()})
+    emitted = [e for e in report["exit_orders"] if e["emitted"]]
+    assert len(emitted) == 1, report["exit_orders"]
+    assert emitted[0]["ok"] is True
+
+    assert emitted[0]["strategy_tag"] == entry_tag == \
+        "Incubator-Odd:alpha_one+beta_two"
+    # On the wire too. BOTH are the text command - the entry and the exit go
+    # to the same webhook in the same form - and one lock spans both.
+    assert wire_fields(sender.calls[-1]["payload"])["strategy_tag"] == entry_tag
+
+
+def test_an_untagged_flatten_is_still_available_to_an_operator(tmp_path):
+    """
+    `dispatch_flatten` is also the manual entry point, and there an UNTAGGED
+    flatten - act on whatever the account holds - is the honest thing to send.
+    It is `dispatch_exits` that must never leave the tag empty.
+    """
+    sender = RecordingSender()
+    d = build(tmp_path, assignments={},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              dry_run=False, sender=sender,
+              crosstrade_url="https://crosstrade.invalid/hooks/T",
+              crosstrade_key="K")
+    record = d.dispatch_flatten(ODD_EXECUTION_ACCOUNT, "MNQ")
+    assert "strategy_tag" not in record["command"]
+    assert "strategy_tag" not in wire_fields(sender.calls[0]["payload"])
+
+
+def test_the_account_flatten_names_no_instrument_and_no_tag(tmp_path):
+    """
+    THE EMERGENCY KILL. An instrument scopes a flatten to one contract and a
+    tag scopes it to one strategy's lock, so a halt built from either closes
+    what it can name and leaves behind what it cannot - which during the
+    failure that triggered the halt is exactly the set nobody can account for.
+
+    It reaches the wire as text, like every other order, and its key is
+    redacted on the record like every other order's.
+    """
+    sender = RecordingSender()
+    d = build(tmp_path, assignments={},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              dry_run=False, sender=sender,
+              crosstrade_url="https://crosstrade.invalid/hooks/T",
+              crosstrade_key="SECRET-KEY")
+
+    record = d.dispatch_account_flatten(ODD_EXECUTION_ACCOUNT)
+
+    fields = wire_fields(sender.calls[0]["payload"])
+    assert fields["command"] == "flatten"
+    assert fields["account"] == ODD_EXECUTION_ACCOUNT
+    assert "instrument" not in fields
+    assert "strategy_tag" not in fields
+    assert record["ok"] is True and record["scope"] == "account"
+    assert "SECRET-KEY" not in json.dumps(record, default=str)
+
+
+def test_a_dry_run_account_flatten_opens_no_socket(tmp_path):
+    """
+    The kill is the last command an operator wants to discover is malformed,
+    and it is formatted and validated in dry run exactly like every other.
+    """
+    d = build(tmp_path, assignments={},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              sender=ExplodingSender())
+    record = d.dispatch_account_flatten(ODD_EXECUTION_ACCOUNT)
+    assert record["ok"] is True
+    assert "command=flatten" in record["command"]
+
+
+# --------------------------------------------------------------------------
+# 8b. The entry gate: one position per (portfolio, symbol), and no stacking
+# --------------------------------------------------------------------------
+def test_a_second_cycle_on_a_held_position_is_dropped_not_stacked(tmp_path):
+    """
+    THE 62-SECOND LOOP, END TO END. The strategies signal long on every cycle
+    because the signal has not gone away. The first cycle opens the position;
+    the second must send NOTHING, because `aggregate_signals` nets the signals
+    arriving in one cycle against each other and knows nothing about what the
+    previous cycle opened.
+
+    Both strategies are in Incubator-Odd on MNQ, which is the case the gate is
+    keyed for: they net to ONE position, so strategy B's BUY on a pair strategy
+    A already opened is the same stack arriving under a different name.
+    """
+    sender = RecordingSender()
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["alpha_one", "beta_two"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"alpha_one": dict(side="long"),
+                          "beta_two": dict(side="long")},
+              dry_run=False, sender=sender,
+              crosstrade_url="https://crosstrade.invalid/hooks/T",
+              crosstrade_key="K")
+
+    first = d.process_bar_cycle({"MNQ": make_bars()})
+    assert first["dispatches"][0]["ok"] is True
+    assert first["held"] == [], "nothing to hold against on an empty book"
+    assert d.positions.state("Incubator-Odd", "MNQ") == "long"
+
+    second = d.process_bar_cycle({"MNQ": make_bars()})
+
+    assert len(sender.calls) == 1, "the second cycle sent nothing"
+    assert second["dispatches"][0]["ok"] is False
+    assert second["dispatches"][0]["rule"] == "position_open"
+    assert second["held"] == [second["dispatches"][0]]
+    assert second["held"][0]["error"] == (
+        "HOLD Incubator-Odd/MNQ BUY — position already active. "
+        "Preventing stack.")
+    assert second["held"][0]["held_direction"] == "long"
+    # No command was even formatted: the gate is BEFORE the formatter, so a
+    # dropped order never becomes a string that could be sent by mistake.
+    assert "command" not in second["dispatches"][0]
+
+
+def test_the_gate_reopens_the_pair_once_the_position_is_closed(tmp_path):
+    """
+    The half a gate that only ever refused would also pass. A flatten clears
+    the book, and the next signal on that pair is a new entry rather than a
+    stack.
+    """
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["alpha_one"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"alpha_one": dict(side="long")},
+              dry_run=False, sender=RecordingSender(),
+              crosstrade_url="https://crosstrade.invalid/hooks/T",
+              crosstrade_key="K")
+
+    assert d.process_bar_cycle({"MNQ": make_bars()})["dispatches"][0]["ok"]
+    assert d.process_bar_cycle({"MNQ": make_bars()})["held"], "held while open"
+
+    d.positions.record_flat("Incubator-Odd", "MNQ")
+
+    third = d.process_bar_cycle({"MNQ": make_bars()})
+    assert third["dispatches"][0]["ok"] is True
+    assert third["held"] == []
+
+
+def test_the_gate_is_per_portfolio_and_does_not_stand_down_the_other_basket(
+        tmp_path):
+    """
+    The baskets route to different accounts. Incubator-Odd holding MNQ says
+    nothing about what Incubator-Even may do, and a gate that stood down a
+    whole account for another's position would be worse than no gate.
+    """
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["alpha_one"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"alpha_one": dict(side="long")},
+              dry_run=False, sender=RecordingSender(),
+              crosstrade_url="https://crosstrade.invalid/hooks/T",
+              crosstrade_key="K")
+    # The OTHER basket is long the same contract, on its own account.
+    d.positions.record_fill("Incubator-Even", "MNQ", "long", 1,
+                            ["someone_else"])
+
+    report = d.process_bar_cycle({"MNQ": make_bars()})
+    assert report["held"] == [], "another basket's position is not this one's"
+    assert report["dispatches"][0]["ok"] is True
+
+
+# --------------------------------------------------------------------------
+# 8c. The size cap: reject, never clamp
+# --------------------------------------------------------------------------
+def test_an_order_over_the_cap_is_rejected_with_a_record_and_not_clamped(
+        tmp_path):
+    """
+    A clamp sends a DIFFERENT order from the one the sizer computed and reports
+    success, so a position sized against a 3-contract stop goes on at 1 and the
+    risk model no longer describes the trade. The rejection names what was
+    asked for, so the drop is visible rather than silent.
+    """
+    sender = RecordingSender()
+    d = build(tmp_path, assignments={},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              dry_run=False, sender=sender, max_qty=MAX_QTY,
+              crosstrade_url="https://crosstrade.invalid/hooks/T",
+              crosstrade_key="K")
+
+    record = d.dispatch_order({"account": ODD_EXECUTION_ACCOUNT,
+                               "action": "BUY", "symbol": "MNQ",
+                               "orderType": "MARKET", "quantity": 3},
+                              portfolio_id="Incubator-Odd")
+
+    assert sender.calls == [], "nothing reached the wire"
+    assert record["ok"] is False
+    assert record["rule"] == "MAX_QTY"
+    assert record["detail"] == "sizer asked 3, cap is 1"
+    assert record["quantity"] == 3, "what was ASKED for, not what was sent"
+    assert "command" not in record, "never formatted, so never sendable"
+    assert d.risk_refusals[-1] is record
+
+
+def test_an_order_at_the_cap_still_goes_out(tmp_path):
+    """The cap must not be a gate that refuses everything — that would pass the
+    case above for the wrong reason."""
+    sender = RecordingSender()
+    d = build(tmp_path, assignments={},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              dry_run=False, sender=sender, max_qty=MAX_QTY,
+              crosstrade_url="https://crosstrade.invalid/hooks/T",
+              crosstrade_key="K")
+
+    record = d.dispatch_order({"account": ODD_EXECUTION_ACCOUNT,
+                               "action": "BUY", "symbol": "MNQ",
+                               "orderType": "MARKET", "quantity": MAX_QTY},
+                              portfolio_id="Incubator-Odd")
+    assert record["ok"] is True
+    assert wire_fields(sender.calls[0]["payload"])["qty"] == str(MAX_QTY)
+
+
+def test_the_production_default_cap_is_one(tmp_path):
+    """
+    `master_live.py` passes no `max_qty`, so what a live dispatcher enforces is
+    whatever the default is. A test suite that always raised the cap would
+    never notice it changing.
+    """
+    d = build(tmp_path, assignments={},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              max_qty=MAX_QTY)
+    assert d.max_qty == 1
+
+
 def test_the_webhook_url_never_survives_into_the_attempt_record(tmp_path):
     """
     A webhook URL is a bearer credential - anyone holding it can place orders
@@ -1238,12 +1559,23 @@ def test_a_muted_strategy_still_flattens_a_position_this_process_opened(tmp_path
 
     # It reached the wire, on the account the entries use, with no side and no
     # quantity - a flatten that guessed either would open the opposite position.
+    # AS TEXT: the webhook parses the semicolon form and refuses JSON with a
+    # 400, so a flatten posted as an object is an open position and a report
+    # that says it was closed.
     assert len(sender.calls) == 1
-    body = sender.calls[0]["payload"]
-    assert body["command"] == "flatten"
-    assert body["account"] == ODD_EXECUTION_ACCOUNT
-    assert body["instrument"] == "MNQ"
-    assert "action" not in body and "qty" not in body
+    sent = sender.calls[0]["payload"]
+    assert isinstance(sent, str), "the webhook parses the semicolon form"
+    fields = wire_fields(sent)
+    assert fields["command"] == "flatten"
+    assert fields["account"] == ODD_EXECUTION_ACCOUNT
+    # RESOLVED TO A CONTRACT MONTH, because NinjaTrader refuses a bare root
+    # outright. Read through the resolver rather than pinned to a month, so
+    # this case does not start failing on the roll date.
+    assert fields["instrument"] == resolve_contract("MNQ")
+    assert "action" not in fields and "qty" not in fields
+    # ...and the JSON object is still on the record, unsent, as the evidence
+    # of what the other endpoint would have been handed.
+    assert emitted[0]["json"]["command"] == "flatten"
 
     # And the book no longer claims it, so a repeat exit does not re-flatten.
     assert d.positions.direction("Incubator-Odd", "MNQ") == "flat"

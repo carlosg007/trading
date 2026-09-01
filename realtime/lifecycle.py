@@ -377,11 +377,30 @@ def emergency_halt(reason: str, dispatcher: Any | None = None,
     start. A halt that flattened first and armed second could send an entry in
     between on the next cycle.
 
-    **It flattens only what this process recorded opening.** A blind flatten
-    closes whatever is on a shared account, including positions placed by hand
-    or by another tool, and that is silent, immediate and unrecoverable. If
-    there are unverified claims from a previous run, they are REPORTED for a
-    human rather than closed.
+    **THE FLATTEN IS ACCOUNT-WIDE, AND THAT IS A DELIBERATE CHANGE.** The
+    ordinary exit path closes one instrument, under the tag its entry took out,
+    and only for a position this process recorded opening - because on a shared
+    account a blind flatten also closes positions placed by hand, by
+    NinjaTrader, by a previous run of this loop or by another tool, and that is
+    silent, immediate and unrecoverable. A HALT INVERTS THAT TRADE-OFF. It runs
+    when continuing to trade is the larger risk, and a kill that closes only
+    what this process can name leaves behind exactly the positions nobody can
+    account for - a per-instrument flatten cannot close a position opened by a
+    run that died before it recorded anything.
+
+    So: `command=flatten; account=...;` with no instrument and no tag, one per
+    account, and it WILL close positions this process did not open.
+
+    **WHICH ACCOUNTS is still decided by the book.** An account with nothing
+    recorded on it is not touched, so a halt cannot reach across to an account
+    this loop was not trading. `open_positions()` returns a LIST of position
+    records - it used to be iterated as `.items()`, which raised
+    `AttributeError` inside the halt and skipped every flatten while the switch
+    still armed and the alert still went out saying "flattened: none".
+
+    Unverified claims from a previous run are still REPORTED rather than used
+    to pick an account: this process cannot vouch for them, and a claim is a
+    record of what was sent, not of what filled.
     """
     outcome: dict[str, Any] = {
         "at": _utcnow(), "reason": reason, "switch": None,
@@ -395,18 +414,60 @@ def emergency_halt(reason: str, dispatcher: Any | None = None,
 
     if dispatcher is not None:
         book = getattr(dispatcher, "positions", None)
-        held = list(book.open_positions().items()) if book is not None and hasattr(
-            book, "open_positions") else []
-        for (account, symbol), position in held:
+        held = (book.open_positions()
+                if book is not None and hasattr(book, "open_positions") else [])
+
+        # ONE FLATTEN PER ACCOUNT, NOT PER POSITION. The account command closes
+        # everything on the account, so a second one for the next symbol on the
+        # same account is a duplicate kill: nothing to close, an error response
+        # to read, and a `failed` entry that reads like the halt did not work.
+        # The book is keyed by PORTFOLIO and orders route to an ACCOUNT, so the
+        # dispatcher is asked - `portfolio_id` is not an account name, and a
+        # kill command addressed to one that does not exist fails at the single
+        # moment nothing else is going to stop the loop.
+        accounts: dict[str, list[dict]] = {}
+        for position in held:
+            portfolio_id = str(position.get("portfolio_id") or "")
             try:
-                record = dispatcher.dispatch_flatten(account, symbol)
-                (outcome["flattened"] if record.get("ok")
-                 else outcome["failed"]).append(
-                    {"account": account, "symbol": symbol,
-                     "error": record.get("error")})
+                account = dispatcher.account_for(portfolio_id)
             except Exception as exc:                                # noqa: BLE001
-                outcome["failed"].append({"account": account, "symbol": symbol,
-                                          "error": f"{type(exc).__name__}: {exc}"})
+                outcome["failed"].append({
+                    "portfolio_id": portfolio_id,
+                    "symbol": position.get("symbol"),
+                    "error": (f"no account to flatten on: "
+                              f"{type(exc).__name__}: {exc}")})
+                continue
+            accounts.setdefault(account, []).append(position)
+
+        for account, positions in sorted(accounts.items()):
+            covered = sorted({str(p.get("symbol")) for p in positions})
+            try:
+                record = dispatcher.dispatch_account_flatten(account)
+            except Exception as exc:                                # noqa: BLE001
+                outcome["failed"].append({
+                    "account": account, "scope": "account",
+                    "covered": covered,
+                    "error": f"{type(exc).__name__}: {exc}"})
+                continue
+
+            if record.get("ok"):
+                outcome["flattened"].append({
+                    "account": account, "scope": "account",
+                    "covered": covered, "error": None})
+                # The book must stop claiming what was just closed. Left
+                # standing, this process believes it still holds them and the
+                # next exit would flatten an account that is already flat -
+                # which on a shared account is not a no-op.
+                for position in positions:
+                    try:
+                        book.record_flat(position.get("portfolio_id"),
+                                         position.get("symbol"))
+                    except Exception:                               # noqa: BLE001
+                        pass
+            else:
+                outcome["failed"].append({
+                    "account": account, "scope": "account",
+                    "covered": covered, "error": record.get("error")})
 
     if alert is not None:
         try:

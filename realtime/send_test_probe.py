@@ -63,6 +63,7 @@ from realtime.crosstrade_formatter import (  # noqa: E402
     format_crosstrade_command,
     format_flatten_command,
     redact,
+    sanitize_strategy_tag,
 )
 from realtime.live_dispatcher import (  # noqa: E402
     _host_only,
@@ -93,6 +94,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--order-type", default="MARKET",
                    help="MARKET only - nothing here carries a price")
     p.add_argument("--tif", default="DAY", help="DAY or GTC (default: DAY)")
+    p.add_argument("--strategy-tag", default=None,
+                   help=("CrossTrade strategy tag to lock the order to "
+                         "(default: none, an untagged order). Pass the SAME "
+                         "tag to the BUY/SELL and to the CLOSE - the lock is "
+                         "matched by string equality, so a differently-tagged "
+                         "flatten does not release it. `;`, `=` and spaces "
+                         "are stripped: they are the wire format's field "
+                         "separators."))
     p.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_S,
                    help=f"seconds (default: {DEFAULT_TIMEOUT_S})")
     p.add_argument("--send", action="store_true",
@@ -141,7 +150,8 @@ def main(argv: list[str] | None = None) -> int:
                       "no quantity")
             command = format_flatten_command(account=args.account,
                                              instrument=args.symbol,
-                                             key=api_key)
+                                             key=api_key,
+                                             strategy_tag=args.strategy_tag)
         else:
             command = format_crosstrade_command(account=args.account,
                                                 instrument=args.symbol,
@@ -149,7 +159,8 @@ def main(argv: list[str] | None = None) -> int:
                                                 qty=args.qty,
                                                 order_type=args.order_type,
                                                 key=api_key,
-                                                tif=args.tif)
+                                                tif=args.tif,
+                                                strategy_tag=args.strategy_tag)
     except CrossTradeFormatError as exc:
         # Refused before the socket. The formatter's message never contains
         # the key - see `_reject` - so it is safe to print as-is.
@@ -170,6 +181,17 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  instrument : {args.symbol}")
     print(f"  action     : {args.action}"
           + ("" if args.action == "CLOSE" else f"   qty: {args.qty}"))
+    # THE SANITISED TAG, not what was typed. `--strategy-tag "my strat"`
+    # goes on the wire as `mystrat`, and that is the string CrossTrade
+    # matches - an operator pairing a BUY with a CLOSE has to be looking at
+    # the tag that is actually locked, not the one they typed.
+    wire_tag = sanitize_strategy_tag(args.strategy_tag)
+    print(f"  strategy   : "
+          + (f"{wire_tag}   (locked)"
+             + (f"   [typed: {args.strategy_tag!r}]"
+                if wire_tag != (args.strategy_tag or "") else "")
+             if wire_tag
+             else "untagged - acts on whatever the account holds"))
     print(f"  wire form  : semicolon plain text, sent as text/plain")
     print(f"  command    : {_scrub(command, webhook_url)}")
     print("-" * W)

@@ -123,17 +123,26 @@ from live.dispatcher import send_execution_signal                  # noqa: E402
 from portfolio.config_loader import (DEFAULT_CONFIG_PATH,          # noqa: E402
                                      PortfolioConfigError,
                                      load_portfolio_config)
-from portfolio.portfolio_manager import (PositionBook,             # noqa: E402
+from portfolio.portfolio_manager import (                          # noqa: E402
                                         LONG, SHORT, FLAT,
                                          PortfolioError,
                                          PortfolioManager)
+# THE SUBCLASS, not `portfolio_manager`'s own. Same state, same key, same
+# `record_fill`/`record_flat`/`plan_exits` - plus `can_execute`, the gate on
+# the way IN. See `realtime/position_book.py` for why the gate had to live on
+# the object the fill and the flatten already update rather than beside it.
+from realtime.position_book import (MAX_QTY,                       # noqa: E402
+                                    PositionBook,
+                                    quantity_refusal)
 from realtime.crosstrade_formatter import (                        # noqa: E402
     CrossTradeFormatError,
     format_crosstrade_command,
     format_crosstrade_json,
+    format_account_flatten_command,
     format_flatten_command,
     format_flatten_json,
     redact,
+    sanitize_strategy_tag,
 )
 from realtime.contract_alias import resolve_parent                 # noqa: E402
 from realtime.regime_daemon import (MasterRegimeDaemon,            # noqa: E402
@@ -421,6 +430,7 @@ class LiveExecutionDispatcher:
                  max_age_s: float | None = None,
                  timeout_seconds: float = DEFAULT_TIMEOUT_S,
                  max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+                 max_qty: int = MAX_QTY,
                  sender: Callable | None = None,
                  verify_code_hash: bool = True,
                  firewall: Any | None = None,
@@ -431,6 +441,12 @@ class LiveExecutionDispatcher:
         self.max_age_s = max_age_s
         self.timeout_seconds = float(timeout_seconds)
         self.max_attempts = max(1, int(max_attempts))
+        # THE HARD SIZE CAP. The default IS `MAX_QTY` and nothing in
+        # `master_live.py` overrides it, so every dispatcher that trades gets
+        # 1. It is a parameter only so a test can raise it and still exercise
+        # the send path - a suite that had to keep every fixture under the cap
+        # would be testing the cap in every case and the wire in none.
+        self.max_qty = int(max_qty)
         self.verify_code_hash = bool(verify_code_hash)
         # The default IS `live.dispatcher`. An injected sender is how the tests
         # stay off the network; it is not an alternative transport.
@@ -443,6 +459,12 @@ class LiveExecutionDispatcher:
         self.firewall = firewall
         self.state = state
         self.risk_refusals: list[dict[str, Any]] = []
+        # Entries the netted book refused as a stack. A SEPARATE LIST from
+        # `risk_refusals`: a risk refusal is a limit being hit and wants an
+        # operator's attention, while a HOLD is the gate working normally on
+        # every cycle a position stays open. Folded together, the one that
+        # matters would be buried under the one that does not.
+        self.held_orders: list[dict[str, Any]] = []
 
         self.config = load_portfolio_config(config_path)
         self.portfolios = self.config["portfolios"]
@@ -712,6 +734,12 @@ class LiveExecutionDispatcher:
             "exit_signals": [], "exit_orders": [], "errors": [],
             "regime_readings": {}, "regime_missing": {},
             "plan": [], "payloads": [], "dispatches": [],
+            # Entries the netted book refused as a stack. On the report because
+            # an order that was NOT sent has to be as visible as one that was:
+            # a cycle that held everything and a cycle that signalled nothing
+            # produce the same empty `dispatches`, and they are different facts
+            # about the account.
+            "held": [],
             # Declared here rather than grown by `setdefault` in the evaluator,
             # so a reader of this dict sees the full shape in one place and an
             # empty cycle carries the keys rather than omitting them.
@@ -773,11 +801,14 @@ class LiveExecutionDispatcher:
         # byte-comparable with what the manager produces for the same input.
         for record in report["plan"]:
             if record["payload"] is not None:
+                before_held = len(self.held_orders)
                 attempt = self.dispatch_order(
                     record["payload"],
                     strategy_tag=_strategy_tag(record),
-                    bar_ts=str(record.get("bar_ts") or ""))
+                    bar_ts=str(record.get("bar_ts") or ""),
+                    portfolio_id=record.get("portfolio_id", ""))
                 report["dispatches"].append(attempt)
+                report["held"].extend(self.held_orders[before_held:])
                 # The book records a position only on a send that SUCCEEDED,
                 # and only for a real side and size. Recording on intent would
                 # leave this process believing it holds a position a refused
@@ -791,7 +822,7 @@ class LiveExecutionDispatcher:
                         self.positions.record_fill(
                             record["portfolio_id"], record["symbol"],
                             direction, int(record["payload"]["quantity"]),
-                            strategies=record.get("strategies"))
+                            strategies=_contributor_ids(record))
                     except PortfolioError as exc:
                         report["errors"].append({
                             "stage": "position_book",
@@ -1025,9 +1056,15 @@ class LiveExecutionDispatcher:
                 "direction": direction}
         return claims
 
-    def _account_for(self, portfolio_id: str) -> str:
+    def account_for(self, portfolio_id: str) -> str:
         """
         The broker account a portfolio's orders go to.
+
+        PUBLIC because `lifecycle.emergency_halt` has to ask it. The halt holds
+        position records keyed by PORTFOLIO and has to flatten on an ACCOUNT,
+        and a halt that read `portfolio_id` as an account name would send its
+        kill command to an account that does not exist - failing at the one
+        moment nothing else is going to stop the loop.
 
         `target_account` from the routing table - the SAME field
         `PortfolioManager.build_order_payloads` puts on every entry. Exits must
@@ -1043,6 +1080,26 @@ class LiveExecutionDispatcher:
                 f"there is no account to flatten on")
         return account
 
+    def _safe_result(self, result: dict) -> dict:
+        """
+        A sender result with both credentials taken out of it.
+
+        THE WEBHOOK URL IS A CREDENTIAL - anyone holding it can place orders on
+        the account - and so is the `key=` field the text command carries. The
+        sender echoes the URL back on every result and echoes the request
+        payload back beside it, and an endpoint that quotes the request in its
+        error hands the key straight into `response_body`. The record is
+        printed, logged and serialised onward, so both are stripped HERE, in
+        the one place every send path passes through, rather than at each
+        place a record is displayed.
+        """
+        safe = {**result, "url": _host_only(result.get("url", ""))}
+        for field in ("payload", "response_body"):
+            value = safe.get(field)
+            if isinstance(value, str):
+                safe[field] = redact(value)
+        return safe
+
     def _send_with_retry(self, record: dict, command: str,
                          started: float) -> dict:
         """
@@ -1055,15 +1112,24 @@ class LiveExecutionDispatcher:
         because two retry policies is how the stricter one quietly stops
         applying to the path that needed it.
         """
-        body = format_flatten_json(account=record["account"],
-                                   instrument=record["symbol"],
-                                   strategy_tag=record.get("strategy_id") or "")
+        # THE TEXT COMMAND, exactly as `dispatch_order` sends for an entry -
+        # and it is now the CALLER that has built it, because this loop has no
+        # business knowing which kind of flatten it is carrying.
+        #
+        # It used to build a JSON object here and POST that instead, which is
+        # the form the `/v1/send/` WEBHOOK does not parse: the same mismatch
+        # that had every entry refused HTTP 400 on 2026-08-31, left in place on
+        # the one path whose job is to CLOSE a position. A flatten refused by
+        # the endpoint is an open position with a cycle report saying it was
+        # sent, which is the direction of failure that costs money.
         for attempt in range(1, self.max_attempts + 1):
             record["attempts"] = attempt
-            result = self._sender(body, webhook_url=self.crosstrade_url,
+            result = self._sender(command, webhook_url=self.crosstrade_url,
                                   timeout_seconds=self.timeout_seconds)
-            record["result"] = {**result,
-                                "url": _host_only(result.get("url", ""))}
+            # AND THE PAYLOAD IS NOW THE COMMAND, WHICH CARRIES `key=`. While
+            # this loop posted a JSON body there was no credential in the echo
+            # for it to strip; there is now.
+            record["result"] = self._safe_result(result)
             record["ok"] = bool(result.get("ok"))
             record["error"] = result.get("error")
             record["http_status"] = result.get("http_status")
@@ -1154,9 +1220,21 @@ class LiveExecutionDispatcher:
                     "portfolio_id": intent["portfolio_id"],
                     "emitted": False, "reason": intent["reason"]})
                 continue
-            account = self._account_for(intent["portfolio_id"])
-            record = self.dispatch_flatten(account, intent["symbol"],
-                                           intent["portfolio_id"])
+            account = self.account_for(intent["portfolio_id"])
+            # THE EXIT CARRIES THE ENTRY'S TAG, rebuilt from the position
+            # book - which is this process's record of WHO opened it - and not
+            # from the exiting strategy's own id. A netted position opened by
+            # two strategies took out ONE lock named for both; flattening it
+            # under the name of whichever one signalled the exit presents
+            # CrossTrade with a tag that locked nothing, and the position stays
+            # open behind a flatten that was sent, accepted and logged. Read
+            # BEFORE the send, because `record_flat` below forgets it.
+            held = self.positions.get(intent["portfolio_id"],
+                                      intent["symbol"]) or {}
+            record = self.dispatch_flatten(
+                account, intent["symbol"], intent["portfolio_id"],
+                strategy_tag=compose_strategy_tag(intent["portfolio_id"],
+                                                  held.get("strategies")))
             record.update({"strategy_id": intent.get("strategy_id"),
                            "portfolio_id": intent["portfolio_id"],
                            "emitted": True, "reason": intent["reason"],
@@ -1174,7 +1252,8 @@ class LiveExecutionDispatcher:
         return sent
 
     def dispatch_flatten(self, account: str, symbol: str,
-                         portfolio_id: str = "") -> dict:
+                         portfolio_id: str = "",
+                         strategy_tag: str = "") -> dict:
         """
         Format one FLATTEN and put it on the wire.
 
@@ -1183,17 +1262,73 @@ class LiveExecutionDispatcher:
         every entry goes through. `dry_run` formats and validates everything
         and opens no socket; the logged command is REDACTED, because the key is
         a bearer credential for a live account.
+
+        `strategy_tag` MUST be the tag the entry carried - see
+        `compose_strategy_tag`. It defaults to empty because this method is
+        also the manual/operator entry point, where an untagged flatten (act on
+        whatever the account holds) is the honest thing to send; `dispatch_exits`
+        never leaves it empty.
         """
         started = time.perf_counter()
         record: dict[str, Any] = {
             "timestamp": _utcnow(), "dry_run": self.dry_run,
             "account": account, "symbol": symbol, "action": "FLATTEN",
             "quantity": None, "attempts": 0, "ok": False, "error": None,
+            # ON THE RECORD BEFORE THE SEND, and read back by
+            # `_send_with_retry` for the JSON body - so the two wire forms of
+            # one flatten cannot carry different tags.
+            "strategy_tag": strategy_tag,
         }
         try:
             command = format_flatten_command(account=account,
                                              instrument=symbol,
-                                             key=self.crosstrade_key)
+                                             key=self.crosstrade_key,
+                                             strategy_tag=strategy_tag)
+        except Exception as exc:                                  # noqa: BLE001
+            record["error"] = f"{type(exc).__name__}: {exc}"
+            return record
+        record["command"] = redact(command)
+        # KEPT ON THE RECORD, NOT SENT - exactly as `dispatch_order` keeps its
+        # own. It is the evidence of what the JSON endpoint would have been
+        # given, and a switch back is one line. `strategy_tag` comes off the
+        # record rather than from `strategy_id`, which `dispatch_exits`
+        # attaches only AFTER this method returns.
+        record["json"] = format_flatten_json(
+            account=account, instrument=symbol,
+            strategy_tag=record.get("strategy_tag") or "")
+
+        if self.dry_run:
+            record.update({"ok": True, "attempts": 0,
+                           "note": "dry run — formatted, validated, not sent"})
+            return record
+        return self._send_with_retry(record, command, started)
+
+    def dispatch_account_flatten(self, account: str) -> dict:
+        """
+        Close EVERYTHING on one account. The emergency kill, and nothing else.
+
+        No instrument and no strategy tag: see
+        `crosstrade_formatter.format_account_flatten_command` for why both
+        absences are the point, and for what this closes that this process
+        never opened. `realtime.lifecycle.emergency_halt` is the only caller.
+
+        It is a SEPARATE METHOD from `dispatch_flatten` rather than that method
+        with an empty symbol, so nothing on the ordinary exit path can reach
+        the account-wide hammer by dropping a field.
+
+        Same sender, same retry rule, same redaction as every other order this
+        class puts on the wire.
+        """
+        started = time.perf_counter()
+        record: dict[str, Any] = {
+            "timestamp": _utcnow(), "dry_run": self.dry_run,
+            "account": account, "symbol": None, "action": "FLATTEN_ACCOUNT",
+            "scope": "account", "quantity": None, "strategy_tag": "",
+            "attempts": 0, "ok": False, "error": None,
+        }
+        try:
+            command = format_account_flatten_command(account=account,
+                                                     key=self.crosstrade_key)
         except Exception as exc:                                  # noqa: BLE001
             record["error"] = f"{type(exc).__name__}: {exc}"
             return record
@@ -1280,7 +1415,7 @@ class LiveExecutionDispatcher:
 
     # -- dispatch ---------------------------------------------------------
     def dispatch_order(self, payload: dict, strategy_tag: str = "",
-                       bar_ts: str = "") -> dict:
+                       bar_ts: str = "", portfolio_id: str = "") -> dict:
         """
         Format one `PortfolioManager` payload for CrossTrade and send it.
 
@@ -1309,6 +1444,7 @@ class LiveExecutionDispatcher:
             "timestamp": _utcnow(), "dry_run": self.dry_run,
             "account": payload.get("account"), "symbol": payload.get("symbol"),
             "action": payload.get("action"), "quantity": payload.get("quantity"),
+            "portfolio_id": portfolio_id, "strategy_tag": strategy_tag,
             "attempts": 0, "ok": False, "error": None,
         }
 
@@ -1340,6 +1476,46 @@ class LiveExecutionDispatcher:
                 self.risk_refusals.append(record)
                 return record
 
+        # THE SIZE CAP, IN THE SEND PATH. It REJECTS and never clamps: a
+        # clamped order is a different order from the one the sizer computed,
+        # sent with a report saying success, so a position sized against a
+        # 3-contract stop goes on at 1 and the risk model no longer describes
+        # the trade. The firewall carries a configurable `max_contracts_per_order`
+        # too, but the firewall is OPTIONAL - `firewall=None` is the default and
+        # every construction outside `master_live.py` leaves it there - so this
+        # cap is here as well, where nothing can be armed incorrectly.
+        refusal = quantity_refusal(payload.get("quantity"), self.max_qty)
+        if refusal is not None:
+            record.update({
+                **refusal,
+                "blocked_by": refusal["rule"],
+                "error": f"REJECTED [{refusal['rule']}] {refusal['detail']}",
+                "elapsed_ms": round((time.perf_counter() - started) * 1000, 1)})
+            self.risk_refusals.append(record)
+            return record
+
+        # THE STACK GATE. `aggregate_signals` nets the signals arriving in ONE
+        # cycle against each other and knows nothing about the position the
+        # PREVIOUS cycle opened, so a strategy that stays long-signalled did not
+        # enter once - it entered on every pass, one position per interval,
+        # none of which this loop could see as one position. The book that
+        # answers is the same object `record_fill` and `record_flat` update.
+        action = str(payload.get("action") or "")
+        symbol = str(payload.get("symbol") or "")
+        if not self.positions.can_execute(portfolio_id, symbol, action):
+            hold = self.positions.hold_reason(portfolio_id, symbol, action)
+            record.update({
+                "ok": False, "blocked_by": "position_open", "rule": "position_open",
+                "held_direction": self.positions.state(portfolio_id, symbol),
+                "detail": hold, "error": hold,
+                "elapsed_ms": round((time.perf_counter() - started) * 1000, 1)})
+            # A RECORD, not a print. Every other refusal in this method is one
+            # too - `describe_cycle` is what puts them on the console, and
+            # printing here as well is the same line three times: once
+            # directly, once as a failed dispatch, once as a hold.
+            self.held_orders.append(record)
+            return record
+
         if self.state is not None and strategy_tag and bar_ts:
             # Recorded BEFORE the socket. If the process dies between the two,
             # the restart declines to re-send: a missed entry is a trade not
@@ -1354,7 +1530,13 @@ class LiveExecutionDispatcher:
                 action=payload["action"],
                 qty=payload["quantity"],
                 order_type=payload.get("orderType", "MARKET"),
-                key=self.crosstrade_key)
+                key=self.crosstrade_key,
+                # THE TEXT COMMAND IS THE ONE THAT IS SENT (see the loop
+                # below), so the tag has to be here. It was on `body` alone
+                # from the day it was added, which meant every live entry
+                # went out untagged and CrossTrade held no lock for the
+                # flatten to clear.
+                strategy_tag=strategy_tag)
             body = format_crosstrade_json(
                 account=payload["account"],
                 instrument=payload["symbol"],
@@ -1390,27 +1572,11 @@ class LiveExecutionDispatcher:
             # above and kept on the record, so a switch back is one line.
             result = self._sender(command, webhook_url=self.crosstrade_url,
                                   timeout_seconds=self.timeout_seconds)
-            # The sender echoes the full webhook URL back on every result, and
-            # a webhook URL IS the credential - anyone holding it can place
-            # orders on the account. The record is printed, logged and
-            # serialised, so the URL is reduced to its host before it is kept.
-            record["result"] = {**result, "url": _host_only(result.get("url", ""))}
-            # AND THE PAYLOAD IS NOW THE COMMAND, WHICH CARRIES `key=`. The
-            # sender echoes it back verbatim; before the text form went on the
-            # wire the echo was a JSON object with no credential in it, so
-            # this had nothing to strip. It does now.
-            #
-            # `response_body` is stripped for the same reason and it is the
-            # one that is easy to miss: an endpoint that quotes the request
-            # back in its error hands the key straight into the record. The
-            # LOG LINE redacts it too, but the record itself is serialised
-            # onward - onto the cycle report and into whatever reads that -
-            # and redacting only where it is printed leaves the credential in
-            # every other consumer.
-            for field in ("payload", "response_body"):
-                value = record["result"].get(field)
-                if isinstance(value, str):
-                    record["result"][field] = redact(value)
+            # Both credentials out - the webhook URL and the `key=` field the
+            # command carries. See `_safe_result`, which is shared with the
+            # flatten path so the two cannot drift apart on which of them
+            # scrubs what.
+            record["result"] = self._safe_result(result)
             record["ok"] = bool(result.get("ok"))
             record["error"] = result.get("error")
             record["http_status"] = result.get("http_status")
@@ -1442,6 +1608,12 @@ class LiveExecutionDispatcher:
                  f"{report.get('elapsed_ms', 0)}ms"]
 
         for d in report["dispatches"]:
+            # A HELD ORDER IS NOT A FAILED ONE. It gets its own line below;
+            # printed here as well it reads as an order that was attempted and
+            # rejected by the broker, which is a different thing to go and
+            # investigate.
+            if d.get("rule") == "position_open":
+                continue
             status = "OK  " if d["ok"] else "FAIL"
             # THE RESPONSE BODY, ON FAILURE ONLY. `send_execution_signal`
             # captures it on every 4xx/5xx and it was being thrown away here,
@@ -1471,6 +1643,12 @@ class LiveExecutionDispatcher:
                          f"{d['symbol']:<5} x{d['quantity']}"
                          + (f"   {d['error']}" if d.get("error") else "")
                          + detail)
+        for h in report.get("held", []):
+            # AN ORDER THAT WAS NOT SENT, on the same summary as the ones that
+            # were. A cycle that held every entry and a cycle that produced no
+            # signal both print no dispatch line, and they are different facts
+            # about the account.
+            lines.append(f"       {h['error']}")
         if report["plan"] and not report["payloads"]:
             lines.append("  no orders — every net position was declined:")
         for r in report["plan"]:
@@ -1532,22 +1710,53 @@ class LiveExecutionDispatcher:
         return "\n".join(lines)
 
 
-def _strategy_tag(plan_record: dict) -> str:
+def _contributor_ids(plan_record: dict) -> list[str]:
+    """
+    The strategy ids behind one netted position, sorted and de-duplicated.
+
+    THE SAME NORMALISATION `PositionBook.record_fill` APPLIES to the list it
+    stores, so a tag composed from the plan and a tag composed from the book
+    for that position are the same string. That equality is what
+    `compose_strategy_tag` relies on to tag an exit with the tag its entry
+    carried.
+    """
+    return sorted({str(c.get("strategy_id"))
+                   for c in plan_record.get("contributors", [])
+                   if c.get("strategy_id")})
+
+
+def compose_strategy_tag(portfolio_id: str, strategy_ids) -> str:
     """
     `portfolio:strategy_a+strategy_b` - what ties an NT8 fill back to what
-    asked for it (`live.dispatcher.evaluate_incubator_sync` reconciles on it).
+    asked for it (`live.dispatcher.evaluate_incubator_sync` reconciles on it)
+    and, since it now travels on the wire, the CrossTrade strategy LOCK.
 
     A NETTED POSITION BELONGS TO EVERY CONTRIBUTOR, so all of them are named.
     Tagging it with one would attribute the whole position to a strategy that
     asked for part of it, and the reconciliation would then report the others
     as having placed nothing.
+
+    ONE FUNCTION, BOTH SIDES OF THE TRADE. The entry composes it from the plan
+    and the exit from the position book, and CrossTrade matches a lock by
+    string equality - so an exit that spelled the tag even slightly differently
+    would not release what the entry took out, and the position would sit there
+    with every log line reporting a flatten that was sent and accepted.
     """
-    contributors = sorted({str(c.get("strategy_id"))
-                           for c in plan_record.get("contributors", [])
-                           if c.get("strategy_id")})
-    tag = f"{plan_record.get('portfolio_id', '')}:{'+'.join(contributors)}"
-    # The plain-text command is `;`/`=` delimited and the tag is free text.
-    return tag.replace(";", "_").replace("=", "_")
+    ids = sorted({str(sid) for sid in (strategy_ids or []) if sid})
+    tag = f"{portfolio_id}:{'+'.join(ids)}"
+    # `;` and `=` are the plain-text command's field separators and the tag is
+    # free text. They are mapped to `_` HERE rather than left to the
+    # formatter, which deletes them: two ids differing only in a separator
+    # would otherwise collapse onto one lock. `sanitize_strategy_tag` still
+    # runs after this and is what the wire form is guaranteed by - it is asked
+    # here too so the tag on the cycle report is the tag on the wire.
+    return sanitize_strategy_tag(tag.replace(";", "_").replace("=", "_"))
+
+
+def _strategy_tag(plan_record: dict) -> str:
+    """The tag for one netted ENTRY, composed from its plan record."""
+    return compose_strategy_tag(plan_record.get("portfolio_id", ""),
+                                _contributor_ids(plan_record))
 
 
 def _is_safe_to_retry(result: dict) -> bool:
