@@ -597,6 +597,43 @@ def promote(strat: str,
     # Forward-only. Every id already in config/portfolios.json and on disk was
     # written without a version and keeps its exact spelling; `strategy_id`
     # appends nothing when no version is passed.
+    # `--strat` IS ACCEPTED IN EITHER SPELLING, and normalising it here is what
+    # makes that true. `strategy_id` concatenates, so handing it an id that is
+    # already qualified produced
+    # `keltner_trend_drift_20260901_6J_1h_VA_6J_1h_VA` - a second directory for
+    # a pair that already had one, under a name nothing else resolves.
+    # `base_strategy` splits on a KNOWN timeframe token, so a bare name passes
+    # through unchanged and this is idempotent.
+    strat = base_strategy(strat)
+
+    # A CERTIFIED PROMOTION MUST NAME ITS PAIR. `strategy_id` returns the bare
+    # strategy name when the symbol or the timeframe is unknown, which is
+    # correct for the `bt-run` dual-version workflow - that run is not scoped
+    # to a certified pair and there is nothing to name - and WRONG here the
+    # moment an audit file is supplied. It registered
+    # `dual_ema_slope_scalp_20260831` beside the
+    # `dual_ema_slope_scalp_20260831_6J_1h_VA` that already held the same
+    # certification, with its meta.json's top-level `symbol`/`timeframe` filled
+    # from the MODULE's declarations (NQ/ES at 5m) while `certification.*`
+    # correctly read 6J at 1h. One file, two answers, and a duplicate
+    # registration of one configuration - the live registry then refused both
+    # for disagreeing with each other.
+    #
+    # Raised rather than patched around, because every value that could fill
+    # the gap is a guess: the module's SYMBOLS is every contract it targets and
+    # its TIMEFRAME is the one it prefers, and a promotion is ONE pair.
+    if cert_audit is not None and not (scope_symbol and scope_tf):
+        missing = [n for n, v in (("symbol", scope_symbol),
+                                  ("timeframe", scope_tf)) if not v]
+        raise ValueError(
+            f"{strat} was promoted against a certification but its "
+            f"{' and '.join(missing)} could not be resolved from "
+            f"{audit_path}. A certified promotion is ONE contract at ONE "
+            f"timeframe and its id has to say which; without the pair this "
+            f"registers a bare name beside whatever already holds that "
+            f"certification, and the two disagree. Pass --symbol/--timeframe, "
+            f"or point --audit-file at an audit that records them.")
+
     promoted_id = strategy_id(strat, scope_symbol, scope_tf, version)
     dest = Path(incubator) / promoted_id
     dest.mkdir(parents=True, exist_ok=True)

@@ -1305,3 +1305,69 @@ def test_render_unrouted_leads_with_the_biggest_contract():
     assert order == ["PL", "NG", "SI"], order
     assert "6 promoted package(s) are NOT routed" in card
     assert "--include-unallocated" in card
+
+
+# --------------------------------------------------------------------------
+# The canonical promotion id
+#
+# TWO WAYS ONE CERTIFIED PAIR ENDED UP WITH TWO IDS, both silent, both fixed
+# in `promote()` rather than in `strategy_id` - the bare fallback there is
+# correct for the `bt-run` dual-version workflow, which is not scoped to a
+# pair and has nothing to name.
+#
+#   * A promotion carrying an AUDIT FILE whose pair could not be resolved fell
+#     back to the bare strategy name. On 2026-09-02 that registered
+#     `dual_ema_slope_scalp_20260831` beside the
+#     `dual_ema_slope_scalp_20260831_6J_1h_VA` already holding the same
+#     certification, with meta.json's top-level symbol/timeframe filled from
+#     the MODULE (NQ/ES at 5m) while `certification.*` read 6J at 1h. The live
+#     registry then refused BOTH for disagreeing with each other.
+#   * Passing an already-qualified `--strat` concatenated a second suffix:
+#     `..._6J_1h_VA_6J_1h_VA`.
+# --------------------------------------------------------------------------
+def test_an_already_qualified_strat_does_not_gain_a_second_suffix() -> None:
+    """`--strat` is accepted in either spelling and resolves to one id."""
+    bare = "keltner_trend_drift_20260901"
+    canonical = strategy_id(bare, "6J", "1h", "A")
+    assert canonical == "keltner_trend_drift_20260901_6J_1h_VA"
+
+    # What `promote()` now does to whatever it was handed.
+    for spelling in (bare, canonical):
+        assert strategy_id(base_strategy(spelling), "6J", "1h", "A") == \
+            canonical, f"{spelling} did not normalise to the canonical id"
+
+
+def test_normalising_a_bare_name_is_a_no_op() -> None:
+    """The `bt-run` id has to survive untouched — nothing is renamed."""
+    for bare in ("keltner_trend_drift_20260901", "sma_momentum_crossover_20260818",
+                 "ma_anchoring_spread_20260820"):
+        assert base_strategy(bare) == bare
+
+
+def test_strategy_id_still_falls_back_to_bare_without_a_pair() -> None:
+    """
+    The fallback itself is NOT removed. It is the documented `bt-run` id, and
+    the fix is that `promote()` refuses to USE it once an audit file is
+    supplied — not that the composer stops producing it.
+    """
+    assert strategy_id("some_strategy", "", "", "A") == "some_strategy"
+    assert strategy_id("some_strategy", "NQ", "", "A") == "some_strategy"
+    assert strategy_id("some_strategy", "", "1h", "A") == "some_strategy"
+
+
+def test_a_certified_promotion_without_a_resolvable_pair_is_refused() -> None:
+    """
+    THE ORPHAN GUARD. Every value that could fill the gap is a guess: a
+    module's SYMBOLS is every contract it targets and its TIMEFRAME is the one
+    it prefers, while a promotion is ONE pair. So it raises and names what is
+    missing rather than registering a bare id beside the real one.
+    """
+    import inspect
+    from backtest import promote as P
+
+    src = inspect.getsource(P.promote)
+    assert "cert_audit is not None and not (scope_symbol and scope_tf)" in src, (
+        "the certified-promotion pair guard is gone")
+    assert "base_strategy(strat)" in src, (
+        "the --strat normalisation is gone; an already-qualified id would "
+        "gain a second suffix")
