@@ -423,6 +423,29 @@ one environment they cleared.
   Written on EVERY run — a screen where nothing survived is the run whose
   detail matters most — and rewritten from scratch after each configuration, so
   one killed at 14 of 108 leaves a complete report of 14.
+- **A MODULE'S `TARGET_QUADRANTS` RESTRICTS THE DESIGNATION, from 2026-09-02.**
+  When a module declares one (`keltner_trend_drift_20260901` declares
+  `("Q3",)`), Stage 1 designates only from that set: the strategy is judged in
+  the environment its premise is about rather than in whichever quadrant scored
+  highest. **A configuration that misses the bars there is DROPPED, not
+  re-homed.** Before this it was silently re-homed — 20 of 20 instances of the
+  three trend-drift archetypes were certified into Q1 or Q2, the Q3-declaring
+  module included, because a high-volatility quadrant swings larger dollars
+  under a fixed-size engine (see the profiler's score bullet). The declaration
+  decides which environment the strategy is JUDGED in and **never whether it
+  passed**: every bar still binds on the declared quadrant exactly as on any
+  other, including Stage 1's own sample floor of `max(50, 10%)` — which is NOT
+  Gate R's holdout floor of 30, and a declaration that also relaxed it would be
+  a way to certify on thinner evidence by writing a constant in a module. Both
+  spellings are accepted (`("Q3",)` or `("Low Volatility / Trending",)`) and an
+  unknown name RAISES rather than reducing to "no declaration", which would
+  screen the module on dollar alpha exactly as if it had declared nothing. The
+  handoff carries `declared_quadrants`, `designation_restricted` and
+  `unrestricted_primary` — the last naming the quadrant that DID qualify and
+  was deliberately not substituted, so a policy drop is never mistaken for "no
+  quadrant cleared". A module declaring nothing keeps the unrestricted
+  best-of-four unchanged. Stage 3 then reads the declared quadrant off the
+  handoff natively, with no `--regime` override.
 - **Survival is one QUADRANT, on either version** — `optimal_regime_PF >= 1.00`
   over `>= max(50, 10% of placed trades)` trades in that same quadrant, with
   **positive net P&L** there, and among the quadrants that clear, the one

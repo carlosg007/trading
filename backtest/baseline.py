@@ -204,7 +204,7 @@ from backtest.profiler import (DESIGNATION_MIN_TRADE_FRACTION,       # noqa: E40
                                DESIGNATION_MIN_TRADES, DESIGNATION_RULE,
                                QUADRANT_TO_REGIME, REGIME_TO_QUADRANT,
                                REGIMES, SCORE_MODES, RegimeProfiler,
-                               designate)
+                               designate, normalize_target_quadrants)
 from backtest.report import day_of_week_breakdown                   # noqa: E402
 from backtest.run import (load_bars, parse_param, parse_symbols,    # noqa: E402
                           parse_timeframes, resolve_strategy)
@@ -347,7 +347,8 @@ def best_quadrant(profile: dict | None,
                   min_profit_factor: float = MIN_REGIME_PROFIT_FACTOR,
                   min_trades: int = STAGE1_MIN_TRADES,
                   min_trade_fraction: float = STAGE1_MIN_TRADE_FRACTION,
-                  score_mode: str = "alpha") -> dict | None:
+                  score_mode: str = "alpha",
+                  target_quadrants=None) -> dict | None:
     """
     The TRUE HOME REGIME of one version's profile - the quadrant that clears
     every designation bar and contributes the most alpha - or None.
@@ -401,7 +402,8 @@ def best_quadrant(profile: dict | None,
                          min_trades=min_trades,
                          fraction=min_trade_fraction,
                          min_profit_factor=min_profit_factor,
-                         score_mode=score_mode)
+                         score_mode=score_mode,
+                         target_quadrants=target_quadrants)
     primary = decision["primary"]
     if not primary:
         return None
@@ -422,6 +424,9 @@ def best_quadrant(profile: dict | None,
             # so a disagreement is never buried in an always-populated field.
             "score_mode": decision["score_mode"],
             "would_designate": decision["would_designate"],
+            "declared_quadrants": decision["declared_quadrants"],
+            "designation_restricted": decision["designation_restricted"],
+            "unrestricted_primary": decision["unrestricted_primary"],
             "sample_floor": decision["sample_floor"],
             "secondaries": decision["secondaries"],
             "scores": {r["regime"]: r for r in decision["scores"]}}
@@ -468,7 +473,8 @@ def screen(profiles: dict | None,
            min_profit_factor: float = MIN_REGIME_PROFIT_FACTOR,
            min_trades: int = STAGE1_MIN_TRADES,
            min_trade_fraction: float = STAGE1_MIN_TRADE_FRACTION,
-           score_mode: str = "alpha") -> tuple[bool, str, dict | None]:
+           score_mode: str = "alpha",
+           target_quadrants=None) -> tuple[bool, str, dict | None]:
     """
     Did this configuration carry an edge in ANY ONE regime? Returns
     `(survived, reason, best)`.
@@ -509,7 +515,7 @@ def screen(profiles: dict | None,
     clearing = []
     for label, prof in views:
         q = best_quadrant(prof, min_profit_factor, min_trades,
-                          min_trade_fraction, score_mode)
+                          min_trade_fraction, score_mode, target_quadrants)
         if q:
             clearing.append({**q, "version": label})
     if clearing:
@@ -525,6 +531,31 @@ def screen(profiles: dict | None,
                       f"{best['profit_factor']:.2f} over "
                       f"{best['trade_count']:,} trades in "
                       f"{best['regime']}"), best
+
+    # A DECLARED TARGET OWNS THE DROP REASON. The fallback below hunts for the
+    # best quadrant on the whole table and explains why THAT one missed, which
+    # is the wrong sentence entirely once a module has declared its
+    # environment: it reports "Version A clears 1.00 in High Volatility /
+    # Trending but clears no other designation bar" for a pair dropped because
+    # its own Q3 failed - naming a quadrant that PASSED as the thing that went
+    # wrong, and sending the reader to fix a strategy that is working where it
+    # said it would not. `designate` already writes this sentence correctly
+    # under the restriction, including which quadrant qualified and was
+    # deliberately not substituted.
+    if target_quadrants:
+        for label, prof in views:
+            breakdown = (prof or {}).get("regime_breakdown") or {}
+            placed = (prof or {}).get("trades_profiled")
+            if placed is None:
+                placed = sum(int((v or {}).get("trade_count", 0) or 0)
+                             for v in breakdown.values())
+            d = designate(breakdown, int(placed or 0), min_trades=min_trades,
+                          fraction=min_trade_fraction,
+                          min_profit_factor=min_profit_factor,
+                          score_mode=score_mode,
+                          target_quadrants=target_quadrants)
+            if d["primary"] is None:
+                return False, f"Version {label}: {d['reason']}", None
 
     near = [(t, label) for label, prof in views
             if (t := _top_quadrant(prof)) is not None]
@@ -694,6 +725,16 @@ def _row(symbol: str, tf: str, metrics_a: dict, metrics_b: dict | None,
         "regime_sample_floor": (best or {}).get("sample_floor"),
         "regime_scores": (best or {}).get("scores") or {},
         "secondary_regimes": (best or {}).get("secondaries") or [],
+        # THE MODULE'S DECLARATION, as it was applied. Carried onto the handoff
+        # so Stage 3 and a reader can both see that this quadrant was DECLARED
+        # rather than won on score - and, when the pair was dropped, that a
+        # different quadrant qualified and was deliberately not substituted.
+        # Without it a Q3 designation is indistinguishable from a Q3 that
+        # happened to out-score the other three.
+        "declared_quadrants": (best or {}).get("declared_quadrants") or [],
+        "designation_restricted": bool(
+            (best or {}).get("designation_restricted")),
+        "unrestricted_primary": (best or {}).get("unrestricted_primary"),
         "kill_switch_regimes": kill_switch_regimes(optimal),
     }
 
@@ -1132,10 +1173,11 @@ def run_symbol(symbol: str, path: Path, tf: str, params: dict,
     survived, reason, best = screen(
         profiles, args.min_profit_factor, args.min_trades,
         args.min_trade_fraction,
-        # `getattr` so a caller building an args namespace by hand - several
-        # tests do - keeps the shipped default rather than raising on a flag
-        # that did not exist when it was written.
-        getattr(args, "score_mode", "alpha"))
+        # `getattr` on both so a caller building an args namespace by hand -
+        # several tests do - keeps the shipped defaults rather than raising on
+        # a flag that did not exist when it was written.
+        score_mode=getattr(args, "score_mode", "alpha"),
+        target_quadrants=getattr(args, "target_quadrants", ()))
 
     # Version A's trades, deliberately, even when --ml ran: the weekday table
     # describes what the RULES did, and attributing it on Version B's surviving
@@ -1606,6 +1648,25 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as e:                                        # noqa: BLE001
         print(f"{type(e).__name__}: {e}", file=sys.stderr)
         return 1
+
+    # THE MODULE'S DECLARED TARGET, resolved ONCE and carried on `args` so it
+    # reaches every worker. `ScreenUnit` pickles `args` to a `--jobs > 1`
+    # process and this is a tuple of strings, so it crosses that boundary as a
+    # plain value. Normalised here rather than per configuration: a typo in
+    # TARGET_QUADRANTS must stop the run at the top, not 40 configurations in,
+    # and it must stop it in exactly one place.
+    try:
+        args.target_quadrants = normalize_target_quadrants(
+            info.get("target_quadrants"))
+    except ValueError as e:
+        print(f"{type(e).__name__}: {e}", file=sys.stderr)
+        return 1
+    if args.target_quadrants:
+        print(f"[stage1] {strat_name} declares TARGET_QUADRANTS="
+              f"{'/'.join(args.target_quadrants)}; designation is RESTRICTED "
+              f"to it. A configuration that misses the bars there is DROPPED "
+              f"rather than re-homed into whichever quadrant scored highest.",
+              flush=True)
 
     try:
         cfg_kwargs = filter_config_kwargs(args)

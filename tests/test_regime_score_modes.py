@@ -217,3 +217,148 @@ def test_stage1_threads_the_mode_through_to_the_handoff():
         == "Q3"
     assert best_quadrant(profile)["score_mode"] == "alpha"
     assert best_quadrant(profile)["would_designate"]["quadrant"] == "Q3"
+
+
+# --------------------------------------------------------------------------
+# 5. TARGET_QUADRANTS restricts the designation
+#
+# A module declares the environment its premise is about. Before this, Stage 1
+# measured all four and designated whichever scored highest, so
+# `keltner_trend_drift_20260901` - which declares `TARGET_QUADRANTS = ("Q3",)`
+# - was certified into Q1 or Q2 on all eight of its instances, and 20 of 20
+# across the three trend-drift archetypes. The declaration now decides which
+# quadrant the strategy is JUDGED in. It never decides that it passed.
+# --------------------------------------------------------------------------
+def test_a_declared_quadrant_wins_over_a_higher_scoring_one():
+    """(a) Q3 declared, Q1 has the higher alpha, Q3 clears the bars."""
+    d = designate(_breakdown(), 990, target_quadrants=("Q3",))
+    assert d["primary"]["quadrant"] == "Q3"
+    assert d["designation_restricted"] is True
+    assert d["declared_quadrants"] == ["Q3"]
+    # And the unrestricted screen really would have said Q1 — otherwise this
+    # case proves nothing.
+    assert designate(_breakdown(), 990)["primary"]["quadrant"] == "Q1"
+
+
+def test_a_declared_quadrant_that_fails_drops_the_pair(caplog=None):
+    """
+    (b) THE HALF THAT MATTERS. Q3 declared and failing must DROP the pair, not
+    re-home it into Q1 because higher volatility swung larger dollars.
+    """
+    d = designate(_breakdown(q3_pf=0.90), 990, target_quadrants=("Q3",))
+    assert d["primary"] is None, (
+        "the pair was re-homed into a quadrant the module does not claim")
+    assert "declared target Q3" in d["reason"]
+    # The quadrant that DID qualify is named, so the drop is legible.
+    assert d["unrestricted_primary"]["quadrant"] == "Q1"
+    assert "NOT substituted" in d["reason"]
+
+
+def test_an_undeclared_strategy_keeps_the_existing_behaviour():
+    """(c) No declaration — the unrestricted best-of-four, exactly as before."""
+    d = designate(_breakdown(), 990)
+    assert d["primary"]["quadrant"] == "Q1"
+    assert d["designation_restricted"] is False
+    assert d["declared_quadrants"] == []
+    assert d["unrestricted_primary"] is None
+
+
+def test_the_declaration_restricts_candidates_and_relaxes_no_bar():
+    """
+    THE LINE THIS MUST NOT CROSS. Stage 1's sample floor is max(50, 10% of
+    placed) - NOT Gate R's holdout floor of 30 - and a declaration must not
+    lower it. Otherwise a module could certify on thinner evidence by writing
+    a constant in itself.
+    """
+    thin = {
+        "Low Volatility / Trending": dict(
+            trade_count=35, profit_factor=2.00, win_rate=50.0,
+            net_pnl=35 * 31.0, avg_trade_abs_pnl=31.0),
+    }
+    # 35 trades clears Gate R's 30 but not Stage 1's floor of 50.
+    d = designate(thin, 350, target_quadrants=("Q3",))
+    assert d["sample_floor"] == 50
+    assert d["primary"] is None, (
+        "the declaration lowered the sample floor to Gate R's")
+    assert "below the sample floor" in d["reason"]
+
+
+def test_both_declaration_spellings_designate_identically():
+    for declared in (("Q3",), ("Low Volatility / Trending",)):
+        d = designate(_breakdown(), 990, target_quadrants=declared)
+        assert d["primary"]["quadrant"] == "Q3"
+        assert d["declared_quadrants"] == ["Q3"]
+
+
+def test_a_declaration_naming_several_quadrants_picks_the_best_among_them():
+    """A module may declare more than one; the score still orders WITHIN the
+    declared set rather than being ignored."""
+    d = designate(_breakdown(), 990, target_quadrants=("Q2", "Q3"))
+    assert d["primary"]["quadrant"] == "Q3", "Q3 outscores Q2 among the two"
+    assert set(d["declared_quadrants"]) == {"Q2", "Q3"}
+
+
+def test_the_declaration_composes_with_vol_normalized_scoring():
+    """The two mechanisms are independent: one picks the candidate set, the
+    other orders it."""
+    d = designate(_breakdown(), 990, score_mode="vol_normalized",
+                  target_quadrants=("Q3",))
+    assert d["primary"]["quadrant"] == "Q3"
+    assert d["score_mode"] == "vol_normalized"
+
+
+def test_stage1_reads_the_declaration_off_the_module():
+    """
+    `load_strategy` has to surface `TARGET_QUADRANTS`, or the flag would exist
+    and no module would ever reach it. Checked against the real module that
+    started this: `keltner_trend_drift_20260901` declares Q3.
+    """
+    from agents.tier3_workers import load_strategy
+
+    _fn, info = load_strategy(
+        str(REPO_ROOT / "strategies" / "experimental"
+            / "keltner_trend_drift_20260901.py"))
+    assert info["target_quadrants"] == ("Q3",)
+
+
+def test_stage1_best_quadrant_threads_the_declaration():
+    from backtest.baseline import best_quadrant
+
+    profile = {"regime_breakdown": _breakdown(), "trades_profiled": 990}
+    assert best_quadrant(profile)["quadrant"] == "Q1"
+    assert best_quadrant(profile, target_quadrants=("Q3",))["quadrant"] == "Q3"
+
+    failing = {"regime_breakdown": _breakdown(q3_pf=0.90),
+               "trades_profiled": 990}
+    assert best_quadrant(failing, target_quadrants=("Q3",)) is None, (
+        "Stage 1 re-homed a pair that missed its own declared target")
+
+
+def test_stage1_screen_drops_a_pair_that_misses_its_declared_target():
+    """`screen` is what decides PROMOTED vs DROPPED, so the drop has to survive
+    the whole way out rather than only inside `designate`."""
+    from backtest.baseline import screen
+
+    profiles = {"A": {"regime_breakdown": _breakdown(q3_pf=0.90),
+                      "trades_profiled": 990}}
+    survived, reason, best = screen(profiles, target_quadrants=("Q3",))
+    assert survived is False
+    assert best is None
+    assert "Q3" in reason
+
+    ok = {"A": {"regime_breakdown": _breakdown(), "trades_profiled": 990}}
+    survived, _reason, best = screen(ok, target_quadrants=("Q3",))
+    assert survived is True
+    assert best["quadrant"] == "Q3"
+
+
+def test_a_misspelled_declaration_raises_rather_than_being_ignored():
+    """
+    Reduced to an empty set it would restore the unrestricted best-of-four and
+    the module would be screened on dollar alpha exactly as if it had declared
+    nothing — the failure this mechanism exists to remove, with every log line
+    reading correctly.
+    """
+    for bad in (("Q5",), ("Low Vol Trend",), ("q3 ",)[:0] + ("Quadrant 3",)):
+        with pytest.raises(ValueError, match="TARGET_QUADRANTS"):
+            designate(_breakdown(), 990, target_quadrants=bad)

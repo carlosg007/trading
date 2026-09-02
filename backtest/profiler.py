@@ -108,6 +108,56 @@ def _score_num(value):
     return None if out != out else out
 
 
+#: `Q1`..`Q4` -> the regime label, inverted from the integer map rather than
+#: spelled out again.
+QUADRANT_TO_REGIME_CODE = {f"Q{q}": label
+                           for q, label in QUADRANT_TO_REGIME.items()}
+
+
+def normalize_target_quadrants(declared) -> tuple[str, ...]:
+    """
+    A module's `TARGET_QUADRANTS` as canonical `Q1`..`Q4` codes.
+
+    BOTH SPELLINGS ARE ACCEPTED, because both are already in the tree: modules
+    declare `("Q3",)` beside a `TARGET_REGIMES = ("Low Volatility / Trending",)`
+    and either is the same statement. They resolve through
+    `REGIME_TO_QUADRANT`/`QUADRANT_TO_REGIME`, so no spelling of a regime name
+    is written down a second time here.
+
+    AN UNKNOWN NAME RAISES. Left alone it would silently reduce to an empty set
+    and restore the unrestricted best-of-four - a module that declared `Q5` or
+    `"Low Vol Trend"` would be screened exactly as if it had declared nothing,
+    with its designation quietly decided by dollar alpha and every log line
+    reading correctly. That is the failure this whole mechanism exists to
+    remove, so a typo has to be loud.
+
+    An empty or absent declaration returns `()`, which every caller reads as
+    "no restriction".
+    """
+    if not declared:
+        return ()
+    if isinstance(declared, str):
+        declared = (declared,)
+    out: list[str] = []
+    for item in declared:
+        name = str(item).strip()
+        if name in REGIME_TO_QUADRANT:                 # a full regime label
+            code = REGIME_TO_QUADRANT[name]
+        elif name.upper() in QUADRANT_TO_REGIME_CODE:  # a Q1..Q4 code
+            code = name.upper()
+        else:
+            raise ValueError(
+                f"TARGET_QUADRANTS names {item!r}, which is neither a quadrant "
+                f"code {sorted(QUADRANT_TO_REGIME_CODE)} nor a regime label "
+                f"{sorted(REGIME_TO_QUADRANT)}. Refusing to reduce it to 'no "
+                f"declaration' - that would screen this module on dollar alpha "
+                f"exactly as if it had declared nothing.")
+        if code not in out:
+            out.append(code)
+    return tuple(out)
+
+
+
 def _would_designate(rows: list[dict], score_mode: str) -> dict | None:
     """
     What the OTHER ranking rule would have designated from the same table.
@@ -328,7 +378,8 @@ def designate(breakdown: dict | None, total_profiled: int,
               min_trades: int = DESIGNATION_MIN_TRADES,
               fraction: float = DESIGNATION_MIN_TRADE_FRACTION,
               min_profit_factor: float = DESIGNATION_MIN_PROFIT_FACTOR,
-              score_mode: str = "alpha") -> dict:
+              score_mode: str = "alpha",
+              target_quadrants=None) -> dict:
     """
     The TRUE HOME REGIME: one primary quadrant, its positive-expectancy
     runners-up, and the whole scored table that produced them.
@@ -350,6 +401,19 @@ def designate(breakdown: dict | None, total_profiled: int,
     floor = designation_floor(total_profiled, min_trades, fraction)
     rows = rank_quadrants(breakdown, floor, min_profit_factor, score_mode)
     eligible = [r for r in rows if r["eligible"]]
+
+    # THE MODULE'S DECLARATION RESTRICTS THE CANDIDATES, AND NOTHING ELSE.
+    # Every bar above still binds on the declared quadrant exactly as it binds
+    # on any other - positive net P&L, profit factor, and the same sample floor
+    # of max(50, 10% of placed). The declaration decides which environment the
+    # strategy is JUDGED in; it can never decide that it passed. A restriction
+    # that also relaxed a bar would be a way to certify on thinner evidence by
+    # writing a constant in a module.
+    declared = normalize_target_quadrants(target_quadrants)
+    unrestricted = eligible[0] if eligible else None
+    if declared:
+        eligible = [r for r in eligible if r["quadrant"] in declared]
+
     primary = eligible[0] if eligible else None
 
     secondaries = [
@@ -364,6 +428,25 @@ def designate(breakdown: dict | None, total_profiled: int,
                   f"{primary['score']:,.2f} (net P&L {primary['net_pnl']:,.2f} "
                   f"x PF {primary['profit_factor']:.2f}) over "
                   f"{primary['trade_count']} trades")
+        if declared:
+            reason += f" — declared target {'/'.join(declared)}"
+    elif declared:
+        # DROPPED, and the reason says so IN FULL. "no quadrant clears the
+        # bars" would be false here: one may well have, and the strategy was
+        # dropped because it was not the one the module said it was for.
+        # Silently re-homing it is the behaviour this replaces - a Q3 module
+        # certified into Q1 because higher volatility swung larger dollars,
+        # with every log line reading correctly.
+        missed = [r for r in rows if r["quadrant"] in declared]
+        detail = ("; ".join(f"{r['quadrant']} {r['reason']}" for r in missed)
+                  if missed
+                  else f"{'/'.join(declared)} holds no trades at all")
+        reason = (f"declared target {'/'.join(declared)} did not clear the "
+                  f"designation bars: {detail}")
+        if unrestricted is not None:
+            reason += (f". {unrestricted['quadrant']} DID clear them and was "
+                       f"NOT substituted — the module declares which "
+                       f"environment it is for")
     elif rows:
         near = rows[0]
         reason = (f"no quadrant clears the designation bars; the closest is "
@@ -381,6 +464,21 @@ def designate(breakdown: dict | None, total_profiled: int,
             f"{int(total_profiled or 0)} trades placed in a quadrant)"),
         "min_profit_factor": float(min_profit_factor),
         "score_mode": score_mode,
+        # The declaration as it was APPLIED, and what an unrestricted screen
+        # would have designated instead. Both travel onto the handoff: a pair
+        # dropped for missing its own target while another quadrant qualified
+        # is a specific, actionable finding, and it is invisible if only the
+        # verdict is recorded.
+        "declared_quadrants": list(declared),
+        "designation_restricted": bool(declared),
+        "unrestricted_primary": (
+            {"regime": unrestricted["regime"],
+             "quadrant": unrestricted["quadrant"],
+             "score": unrestricted["score"]}
+            if declared and unrestricted is not None
+            and (primary is None
+                 or unrestricted["quadrant"] != primary["quadrant"])
+            else None),
         # WHAT THE OTHER RULE WOULD HAVE DESIGNATED, on the same table. A
         # disagreement is the finding - it says this configuration's home
         # quadrant is an artefact of which scale the score is measured on -

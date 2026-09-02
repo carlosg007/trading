@@ -234,6 +234,14 @@ def load_strategy(strategy_path: str | Path,
         # place that knows what its own parameters mean, and a grid written
         # anywhere else would drift from the signature it has to bind against.
         "param_grid": dict(getattr(module, "PARAM_GRID", {}) or {}),
+        # THE QUADRANT(S) THE MODULE DECLARES IT IS FOR. Read here for the same
+        # reason as SYMBOLS and TIMEFRAME: the module is the one place that
+        # knows what its premise is about. Stage 1 restricts its DESIGNATION to
+        # this set when it is non-empty - the declaration decides which
+        # environment the strategy is judged in, and never whether it passes.
+        # A module that declares nothing keeps the unrestricted best-of-four
+        # exactly as before.
+        "target_quadrants": tuple(getattr(module, "TARGET_QUADRANTS", ()) or ()),
     }
 
     factory = getattr(module, "make_signal_fn", None)
