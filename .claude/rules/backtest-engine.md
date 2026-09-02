@@ -128,6 +128,29 @@ nothing raising.
   the product is exactly 0.0 and would outrank a quadrant that lost $5,000 at
   0.50. Requiring it removes the inversion from the selection path rather than
   patching the formula, and every quadrant is still scored and reported.
+- **The score has a MEASURED DIRECTION, and `--score-mode vol_normalized` is
+  the alternative.** The engine is fixed-size (`BacktestConfig.contracts = 1`,
+  `size_type="amount"`), so per-trade P&L moves with the size of the move.
+  Measured 2026-09-02 across 6E/6J/ES/NQ/GC/CL: Q3's mean ATR is **0.28x Q1's**
+  (0.18x on NQ) and Q3 holds **0.67x** the bars, so at an EQUAL profit factor a
+  Q3 quadrant scores about **0.19x** a Q1 one — it has to reach **PF 1.74** to
+  outscore a Q1 running 1.20, before Gate R has looked at anything. That is why
+  **20 of 20** instances of the three trend-drift archetypes were designated
+  into a high-volatility quadrant, `keltner_trend_drift_20260901` included — a
+  module that declares `TARGET_QUADRANTS = ("Q3",)`. `vol_normalized_score`
+  divides net P&L by the quadrant's **own average absolute trade**
+  (`avg_trade_abs_pnl`, measured from the same trades the profit factor is),
+  which expresses the quadrant's expectancy in R-multiples and removes the
+  scale. **NOT `theta_vol`** — that is one scalar per (symbol, TIMEFRAME), the
+  boundary rather than a per-quadrant statistic, so dividing all four by it
+  leaves the ranking exactly as it was. **`alpha` REMAINS THE DEFAULT**: every
+  strategy in `config/portfolios.json` was designated under it, and a switched
+  default would leave the live registry's quadrants and the rule that produced
+  them disagreeing with nothing raising. BOTH scores are computed and reported
+  on every row whichever one sorts, the handoff records `score_mode`, and
+  `would_designate` names what the other rule would have picked — `None` when
+  they agree, so a disagreement is never buried in an always-populated field.
+  Neither mode moves a designation BAR; the rule decides the order only.
 - **The floor scales.** 50 is meaningless once a run places 5,000 trades — a
   quadrant holding 1% of the sample is a corner of the window, not an
   environment. `total_profiled` is the trades PLACED in a quadrant, never the

@@ -108,6 +108,35 @@ def _score_num(value):
     return None if out != out else out
 
 
+def _would_designate(rows: list[dict], score_mode: str) -> dict | None:
+    """
+    What the OTHER ranking rule would have designated from the same table.
+
+    Reported, never applied. A disagreement between the two is the finding
+    worth surfacing - it says this configuration's home quadrant is an artefact
+    of which scale the score is measured on, which is exactly the question the
+    Q3 audit asked - and a reader who had to re-derive it downstream would be
+    free to apply a different floor than the one that made the decision.
+
+    `None` when the two agree, so a disagreement is never buried in a field
+    that is always populated.
+    """
+    other = "vol_normalized" if score_mode == "alpha" else "alpha"
+    key = "vol_normalized_score" if other == "vol_normalized" else "alpha_score"
+    eligible = [r for r in rows if r["eligible"] and r.get(key) is not None]
+    if not eligible:
+        return None
+    winner = max(eligible, key=lambda r: (r[key], r["trade_count"]))
+    current = next((r for r in rows if r["eligible"]), None)
+    if current is not None and winner["regime"] == current["regime"]:
+        return None
+    return {"score_mode": other, "regime": winner["regime"],
+            "quadrant": winner["quadrant"], "score": winner[key],
+            "note": (f"under {other} scoring the home regime would be "
+                     f"{winner['regime']} rather than "
+                     f"{(current or {}).get('regime')}")}
+
+
 def designation_floor(total_profiled: int,
                       min_trades: int = DESIGNATION_MIN_TRADES,
                       fraction: float = DESIGNATION_MIN_TRADE_FRACTION) -> int:
@@ -155,9 +184,74 @@ def quadrant_score(stats: dict | None) -> float | None:
     return net * min(pf, SCORE_PF_CEILING)
 
 
+def vol_normalized_score(stats: dict | None) -> float | None:
+    """
+    The same alpha contribution with the DOLLAR SIZE of the regime divided out:
+    `(net_pnl / avg_trade_abs_pnl) x min(PF, ceiling)`.
+
+    WHY THE DEFAULT SCORE HAS A DIRECTION, measured 2026-09-02 across
+    6E/6J/ES/NQ/GC/CL. The engine is fixed-size (`BacktestConfig.contracts = 1`,
+    `size_type="amount"`), so per-trade P&L moves with the size of the move.
+    Q3's mean ATR is 0.28x Q1's - 0.18x on NQ - and Q3 holds 0.67x the bars, so
+    at an EQUAL profit factor a Q3 quadrant scores about 0.19x a Q1 one. To
+    outscore a Q1 quadrant running PF 1.20 a Q3 quadrant has to reach PF 1.74,
+    before Gate R has looked at anything. That is why 20 of 20 instances of the
+    three trend-drift archetypes were designated into a high-volatility
+    quadrant, `keltner_trend_drift_20260901` included - a module that declares
+    `TARGET_QUADRANTS = ("Q3",)`.
+
+    `net_pnl / avg_trade_abs_pnl` is the quadrant's expectancy in units of ITS
+    OWN average trade - R-multiples - so a regime whose trades are a third the
+    size no longer scores a third as well for the same edge. The divisor is
+    measured from the same trades the profit factor is measured from rather
+    than from an indicator, so it needs no new plumbing and cannot disagree
+    with the rest of the row.
+
+    NOT theta_vol, which the request suggested. `theta_vol` is ONE scalar per
+    (symbol, TIMEFRAME) - the boundary between high and low volatility, not a
+    per-quadrant statistic - so dividing all four quadrants by it is dividing
+    by a constant and leaves the ranking exactly as it was.
+
+    THIS IS NOT THE DEFAULT. `designate(score_mode=...)` selects, both scores
+    are computed and reported on every row either way, and `alpha` remains what
+    sorts unless a caller asks otherwise. Every strategy in
+    `config/portfolios.json` was designated under `alpha`, and a rule that
+    silently re-designated them would leave the live registry's quadrants and
+    the rule that produced them disagreeing with nothing raising.
+
+    `None` when either term is missing, or when the average trade is 0.0 - a
+    quadrant whose trades all closed exactly flat has no scale to divide by,
+    and 0/0 is not a ranking.
+    """
+    if not stats:
+        return None
+    pf = _score_num(stats.get("profit_factor"))
+    net = _score_num(stats.get("net_pnl"))
+    scale = _score_num(stats.get("avg_trade_abs_pnl"))
+    if pf is None or net is None or scale is None or scale <= 0.0:
+        return None
+    return (net / scale) * min(pf, SCORE_PF_CEILING)
+
+
+#: The two ranking rules, and the only place their names are written down.
+#: `alpha` is the shipped default; see `vol_normalized_score`.
+SCORE_MODES = ("alpha", "vol_normalized")
+
+
+def score_for(stats: dict | None, mode: str = "alpha") -> float | None:
+    """The score `mode` ranks on. An unknown mode RAISES rather than falling
+    back to the default - a run that silently ranked on something other than
+    what was asked for is a designation nobody can check."""
+    if mode not in SCORE_MODES:
+        raise ValueError(f"score_mode must be one of {SCORE_MODES}; got "
+                         f"{mode!r}")
+    return (quadrant_score(stats) if mode == "alpha"
+            else vol_normalized_score(stats))
+
+
 def rank_quadrants(breakdown: dict | None, floor: int,
-                   min_profit_factor: float = DESIGNATION_MIN_PROFIT_FACTOR
-                   ) -> list[dict]:
+                   min_profit_factor: float = DESIGNATION_MIN_PROFIT_FACTOR,
+                   score_mode: str = "alpha") -> list[dict]:
     """
     Every quadrant in `breakdown`, scored and sorted best first, each carrying
     whether it is ELIGIBLE to be designated and - when it is not - which bar
@@ -174,6 +268,9 @@ def rank_quadrants(breakdown: dict | None, floor: int,
     equal scores the better-evidenced one is the honest winner rather than
     whichever the quadrant order happened to put first.
     """
+    if score_mode not in SCORE_MODES:
+        raise ValueError(f"score_mode must be one of {SCORE_MODES}; got "
+                         f"{score_mode!r}")
     rows = []
     for regime in REGIMES:
         stats = (breakdown or {}).get(regime)
@@ -182,7 +279,13 @@ def rank_quadrants(breakdown: dict | None, floor: int,
         pf = _score_num(stats.get("profit_factor"))
         net = _score_num(stats.get("net_pnl"))
         n = int(stats.get("trade_count", 0) or 0)
-        score = quadrant_score(stats)
+        # BOTH ARE ALWAYS COMPUTED, whichever one sorts. A reader comparing the
+        # two columns can see what the other rule would have designated without
+        # re-running anything, which is the whole point of shipping this as a
+        # reported alternative rather than as a switched default.
+        alpha = quadrant_score(stats)
+        vol_norm = vol_normalized_score(stats)
+        score = score_for(stats, score_mode)
 
         reasons = []
         if score is None:
@@ -204,6 +307,12 @@ def rank_quadrants(breakdown: dict | None, floor: int,
             "net_pnl": net,
             "win_rate": _score_num(stats.get("win_rate")),
             "score": score,
+            # The score that SORTED, named, plus both candidates. Without the
+            # name a reader cannot tell which column produced the order.
+            "score_mode": score_mode,
+            "alpha_score": alpha,
+            "vol_normalized_score": vol_norm,
+            "avg_trade_abs_pnl": _score_num(stats.get("avg_trade_abs_pnl")),
             "pf_capped": bool(pf is not None and pf > SCORE_PF_CEILING),
             "eligible": not reasons,
             "reason": "; ".join(reasons) or "clears every designation bar",
@@ -218,8 +327,8 @@ def rank_quadrants(breakdown: dict | None, floor: int,
 def designate(breakdown: dict | None, total_profiled: int,
               min_trades: int = DESIGNATION_MIN_TRADES,
               fraction: float = DESIGNATION_MIN_TRADE_FRACTION,
-              min_profit_factor: float = DESIGNATION_MIN_PROFIT_FACTOR
-              ) -> dict:
+              min_profit_factor: float = DESIGNATION_MIN_PROFIT_FACTOR,
+              score_mode: str = "alpha") -> dict:
     """
     The TRUE HOME REGIME: one primary quadrant, its positive-expectancy
     runners-up, and the whole scored table that produced them.
@@ -239,7 +348,7 @@ def designate(breakdown: dict | None, total_profiled: int,
     the best-of-four selection Gate R exists to avoid.
     """
     floor = designation_floor(total_profiled, min_trades, fraction)
-    rows = rank_quadrants(breakdown, floor, min_profit_factor)
+    rows = rank_quadrants(breakdown, floor, min_profit_factor, score_mode)
     eligible = [r for r in rows if r["eligible"]]
     primary = eligible[0] if eligible else None
 
@@ -271,8 +380,18 @@ def designate(breakdown: dict | None, total_profiled: int,
             f"max({int(min_trades)} trades, {float(fraction):.0%} of the "
             f"{int(total_profiled or 0)} trades placed in a quadrant)"),
         "min_profit_factor": float(min_profit_factor),
-        "score_formula": "net_pnl * min(profit_factor, "
-                         f"{SCORE_PF_CEILING:.1f})",
+        "score_mode": score_mode,
+        # WHAT THE OTHER RULE WOULD HAVE DESIGNATED, on the same table. A
+        # disagreement is the finding - it says this configuration's home
+        # quadrant is an artefact of which scale the score is measured on -
+        # and re-deriving it downstream would let a reader apply a different
+        # floor than the one that made the decision.
+        "would_designate": _would_designate(rows, score_mode),
+        "score_formula": (
+            "net_pnl * min(profit_factor, "
+            f"{SCORE_PF_CEILING:.1f})" if score_mode == "alpha" else
+            "(net_pnl / avg_trade_abs_pnl) * min(profit_factor, "
+            f"{SCORE_PF_CEILING:.1f})"),
         "rule": DESIGNATION_RULE,
         "reason": reason,
     }
@@ -597,7 +716,17 @@ class RegimeProfiler:
                 "trade_count": count,
                 "profit_factor": round(pf, 2),
                 "win_rate": round(win_rate, 2),
-                "net_pnl": round(net_pnl, 2)
+                "net_pnl": round(net_pnl, 2),
+                # THE DOLLAR SCALE OF THIS QUADRANT'S TRADES, and the divisor
+                # `vol_normalized_score` uses. The engine is fixed-size, so an
+                # average trade in Low-Vol/Trending is about a third the size
+                # of one in High-Vol/Trending on the same contract - which is
+                # why the default alpha score prefers the high-volatility
+                # quadrants whatever the edge. Measured from the SAME trades
+                # the profit factor is measured from, so the two cannot
+                # disagree about which population they describe.
+                "avg_trade_abs_pnl": round(
+                    float(regime_trades['pnl'].abs().mean()), 2),
             }
             
             self._say(f" {regime:<30} | {count:<8} | {win_rate:>5.1f}%  | {pf:>13.2f} | ${net_pnl:,.2f}")

@@ -203,7 +203,8 @@ from backtest.pipeline import (ML_THRESHOLD_DEFAULT,
 from backtest.profiler import (DESIGNATION_MIN_TRADE_FRACTION,       # noqa: E402
                                DESIGNATION_MIN_TRADES, DESIGNATION_RULE,
                                QUADRANT_TO_REGIME, REGIME_TO_QUADRANT,
-                               REGIMES, RegimeProfiler, designate)
+                               REGIMES, SCORE_MODES, RegimeProfiler,
+                               designate)
 from backtest.report import day_of_week_breakdown                   # noqa: E402
 from backtest.run import (load_bars, parse_param, parse_symbols,    # noqa: E402
                           parse_timeframes, resolve_strategy)
@@ -345,8 +346,8 @@ def quadrant_id(regime: str | None) -> str | None:
 def best_quadrant(profile: dict | None,
                   min_profit_factor: float = MIN_REGIME_PROFIT_FACTOR,
                   min_trades: int = STAGE1_MIN_TRADES,
-                  min_trade_fraction: float = STAGE1_MIN_TRADE_FRACTION
-                  ) -> dict | None:
+                  min_trade_fraction: float = STAGE1_MIN_TRADE_FRACTION,
+                  score_mode: str = "alpha") -> dict | None:
     """
     The TRUE HOME REGIME of one version's profile - the quadrant that clears
     every designation bar and contributes the most alpha - or None.
@@ -399,7 +400,8 @@ def best_quadrant(profile: dict | None,
     decision = designate(breakdown, int(placed or 0),
                          min_trades=min_trades,
                          fraction=min_trade_fraction,
-                         min_profit_factor=min_profit_factor)
+                         min_profit_factor=min_profit_factor,
+                         score_mode=score_mode)
     primary = decision["primary"]
     if not primary:
         return None
@@ -415,6 +417,11 @@ def best_quadrant(profile: dict | None,
             # where they are free to apply a different floor than the one that
             # made the decision.
             "score": primary["score"],
+            # The rule that SORTED, and what the other rule would have picked
+            # from the same table. `would_designate` is None when they agree,
+            # so a disagreement is never buried in an always-populated field.
+            "score_mode": decision["score_mode"],
+            "would_designate": decision["would_designate"],
             "sample_floor": decision["sample_floor"],
             "secondaries": decision["secondaries"],
             "scores": {r["regime"]: r for r in decision["scores"]}}
@@ -460,8 +467,8 @@ def kill_switch_regimes(optimal_regime: str | None) -> list[str]:
 def screen(profiles: dict | None,
            min_profit_factor: float = MIN_REGIME_PROFIT_FACTOR,
            min_trades: int = STAGE1_MIN_TRADES,
-           min_trade_fraction: float = STAGE1_MIN_TRADE_FRACTION
-           ) -> tuple[bool, str, dict | None]:
+           min_trade_fraction: float = STAGE1_MIN_TRADE_FRACTION,
+           score_mode: str = "alpha") -> tuple[bool, str, dict | None]:
     """
     Did this configuration carry an edge in ANY ONE regime? Returns
     `(survived, reason, best)`.
@@ -502,7 +509,7 @@ def screen(profiles: dict | None,
     clearing = []
     for label, prof in views:
         q = best_quadrant(prof, min_profit_factor, min_trades,
-                          min_trade_fraction)
+                          min_trade_fraction, score_mode)
         if q:
             clearing.append({**q, "version": label})
     if clearing:
@@ -1122,8 +1129,13 @@ def run_symbol(symbol: str, path: Path, tf: str, params: dict,
     print(f"{tag} TIMING    {_pair_label(symbol, tf)} | "
           f"load {t_load:.1f}s | sim {t_sim:.1f}s | profile {t_profile:.1f}s"
           f"{_ml_timing(out)}", flush=True)
-    survived, reason, best = screen(profiles, args.min_profit_factor,
-                                    args.min_trades, args.min_trade_fraction)
+    survived, reason, best = screen(
+        profiles, args.min_profit_factor, args.min_trades,
+        args.min_trade_fraction,
+        # `getattr` so a caller building an args namespace by hand - several
+        # tests do - keeps the shipped default rather than raising on a flag
+        # that did not exist when it was written.
+        getattr(args, "score_mode", "alpha"))
 
     # Version A's trades, deliberately, even when --ml ran: the weekday table
     # describes what the RULES did, and attributing it on Version B's surviving
@@ -1297,6 +1309,20 @@ def build_parser() -> argparse.ArgumentParser:
                         f"{STAGE1_MIN_TRADE_FRACTION * 100:.0f}%%). 0 reduces "
                         f"the floor to the flat --min-trades count, which is "
                         f"the pre-2026-08-21 behaviour.")
+    p.add_argument("--score-mode", default="alpha",
+                   choices=list(SCORE_MODES),
+                   help="Which score DESIGNATES the home quadrant. `alpha` "
+                        "(default) is net P&L x profit factor, the rule every "
+                        "strategy in config/portfolios.json was designated "
+                        "under. `vol_normalized` divides net P&L by the "
+                        "quadrant's own average trade size first, which "
+                        "removes the structural preference for high-volatility "
+                        "quadrants the fixed-size engine creates - Q3's mean "
+                        "ATR is 0.28x Q1's, so at an EQUAL profit factor a Q3 "
+                        "quadrant scores ~0.19x a Q1 one. BOTH scores are "
+                        "computed and reported whichever is selected, and the "
+                        "handoff records which one sorted plus what the other "
+                        "would have designated.")
     p.add_argument("--jobs", default="1",
                    help="configurations to screen in parallel: an integer, or "
                         "'auto' to size from cores and AVAILABLE memory "
