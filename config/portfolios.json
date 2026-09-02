@@ -52,7 +52,16 @@
         "double_rsi_momentum_pullback_20260830_6E_30m_VA",
         "double_rsi_momentum_pullback_20260830_6E_30m_VB",
         "double_rsi_momentum_pullback_20260830_6J_1h_VA",
-        "double_rsi_momentum_pullback_20260830_6J_1h_VB"
+        "double_rsi_momentum_pullback_20260830_6J_1h_VB",
+        "intrinsic_alpha_engine_20260831_NQ_30m_VA",
+        "dual_ema_slope_scalp_20260831_NQ_1h_VA",
+        "dual_ema_slope_scalp_20260831_6J_1h_VA",
+        "dual_ema_slope_scalp_20260831_6J_30m_VA",
+        "dual_ema_slope_scalp_20260831_6J_30m_VB",
+        "energy_intraday_nonlinear_ar_20260902_NQ_15m_VA",
+        "energy_intraday_nonlinear_ar_20260902_NQ_30m_VA",
+        "keltner_trend_drift_20260901_6J_30m_VB",
+        "keltner_trend_drift_20260901_6J_1h_VA"
       ],
       "strategy_allocations": {
         "sma_momentum_crossover_20260818_NQ_5m_VA": {
@@ -738,6 +747,348 @@
               }
             }
           ]
+        },
+        "intrinsic_alpha_engine_20260831_NQ_30m_VA": {
+          "strat": "intrinsic_alpha_engine_20260831_NQ_30m_VA",
+          "symbol": "NQ",
+          "timeframe": "30m",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q2",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/intrinsic_alpha_engine_20260831_NQ_30m_VA/strat.py",
+          "registered_utc": "2026-08-31T14:12:07+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades NQ; declares Q2; fewest active strategies (Incubator-Odd=18), ties alphabetical; certified on 30m bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_NQ_30m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "intrinsic_alpha_engine_20260831_NQ_30m_VA",
+              "symbol": "NQ",
+              "timeframe": "30m",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q2",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/intrinsic_alpha_engine_20260831_NQ_30m_VA/strat.py",
+              "registered_utc": "2026-08-31T14:12:07+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades NQ; declares Q2; fewest active strategies (Incubator-Odd=18), ties alphabetical; certified on 30m bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_NQ_30m.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "dual_ema_slope_scalp_20260831_NQ_1h_VA": {
+          "strat": "dual_ema_slope_scalp_20260831_NQ_1h_VA",
+          "symbol": "NQ",
+          "timeframe": "1h",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q2",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/dual_ema_slope_scalp_20260831_NQ_1h_VA/strat.py",
+          "registered_utc": "2026-08-31T15:11:44+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades NQ; declares Q2; fewest active strategies (Incubator-Odd=19), ties alphabetical; certified on 1h bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_NQ_1h.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "dual_ema_slope_scalp_20260831_NQ_1h_VA",
+              "symbol": "NQ",
+              "timeframe": "1h",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q2",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/dual_ema_slope_scalp_20260831_NQ_1h_VA/strat.py",
+              "registered_utc": "2026-08-31T15:11:44+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades NQ; declares Q2; fewest active strategies (Incubator-Odd=19), ties alphabetical; certified on 1h bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_NQ_1h.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "dual_ema_slope_scalp_20260831_6J_1h_VA": {
+          "strat": "dual_ema_slope_scalp_20260831_6J_1h_VA",
+          "symbol": "6J",
+          "timeframe": "1h",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q3",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/dual_ema_slope_scalp_20260831_6J_1h_VA/strat.py",
+          "registered_utc": "2026-08-31T15:12:00+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades 6J; certified Q3 (Low Volatility / Trending) by gate_audit_6J_1h.json under --regime override; --portfolio incubator-odd; certified on 1h bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_6J_1h.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "dual_ema_slope_scalp_20260831_6J_1h_VA",
+              "symbol": "6J",
+              "timeframe": "1h",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q3",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/dual_ema_slope_scalp_20260831_6J_1h_VA/strat.py",
+              "registered_utc": "2026-08-31T15:12:00+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades 6J; certified Q3 (Low Volatility / Trending) by gate_audit_6J_1h.json under --regime override; --portfolio incubator-odd; certified on 1h bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_6J_1h.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "dual_ema_slope_scalp_20260831_6J_30m_VA": {
+          "strat": "dual_ema_slope_scalp_20260831_6J_30m_VA",
+          "symbol": "6J",
+          "timeframe": "30m",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q1",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/dual_ema_slope_scalp_20260831_6J_30m_VA/strat.py",
+          "registered_utc": "2026-08-31T15:12:30+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades 6J; declares Q1; fewest active strategies (Incubator-Odd=21), ties alphabetical; certified on 30m bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_6J_30m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "dual_ema_slope_scalp_20260831_6J_30m_VA",
+              "symbol": "6J",
+              "timeframe": "30m",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q1",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/dual_ema_slope_scalp_20260831_6J_30m_VA/strat.py",
+              "registered_utc": "2026-08-31T15:12:30+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades 6J; declares Q1; fewest active strategies (Incubator-Odd=21), ties alphabetical; certified on 30m bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_6J_30m.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "dual_ema_slope_scalp_20260831_6J_30m_VB": {
+          "strat": "dual_ema_slope_scalp_20260831_6J_30m_VB",
+          "symbol": "6J",
+          "timeframe": "30m",
+          "version": "B",
+          "allocation": 1,
+          "regime_filter": "Q1",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/dual_ema_slope_scalp_20260831_6J_30m_VB/strat.py",
+          "registered_utc": "2026-08-31T15:12:33+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades 6J; declares Q1; fewest active strategies (Incubator-Odd=22), ties alphabetical; certified on 30m bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_6J_30m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "dual_ema_slope_scalp_20260831_6J_30m_VB",
+              "symbol": "6J",
+              "timeframe": "30m",
+              "version": "B",
+              "allocation": 1,
+              "regime_filter": "Q1",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/dual_ema_slope_scalp_20260831_6J_30m_VB/strat.py",
+              "registered_utc": "2026-08-31T15:12:33+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades 6J; declares Q1; fewest active strategies (Incubator-Odd=22), ties alphabetical; certified on 30m bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_6J_30m.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "energy_intraday_nonlinear_ar_20260902_NQ_15m_VA": {
+          "strat": "energy_intraday_nonlinear_ar_20260902_NQ_15m_VA",
+          "symbol": "NQ",
+          "timeframe": "15m",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q1",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/energy_intraday_nonlinear_ar_20260902_NQ_15m_VA/strat.py",
+          "registered_utc": "2026-09-02T15:06:56+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades NQ; declares Q1; fewest active strategies (Incubator-Odd=23), ties alphabetical; certified on 15m bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_NQ_15m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "energy_intraday_nonlinear_ar_20260902_NQ_15m_VA",
+              "symbol": "NQ",
+              "timeframe": "15m",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q1",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/energy_intraday_nonlinear_ar_20260902_NQ_15m_VA/strat.py",
+              "registered_utc": "2026-09-02T15:06:56+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades NQ; declares Q1; fewest active strategies (Incubator-Odd=23), ties alphabetical; certified on 15m bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_NQ_15m.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "energy_intraday_nonlinear_ar_20260902_NQ_30m_VA": {
+          "strat": "energy_intraday_nonlinear_ar_20260902_NQ_30m_VA",
+          "symbol": "NQ",
+          "timeframe": "30m",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q1",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/energy_intraday_nonlinear_ar_20260902_NQ_30m_VA/strat.py",
+          "registered_utc": "2026-09-02T15:07:17+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades NQ; declares Q1; fewest active strategies (Incubator-Odd=24), ties alphabetical; certified on 30m bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_NQ_30m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "energy_intraday_nonlinear_ar_20260902_NQ_30m_VA",
+              "symbol": "NQ",
+              "timeframe": "30m",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q1",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/energy_intraday_nonlinear_ar_20260902_NQ_30m_VA/strat.py",
+              "registered_utc": "2026-09-02T15:07:17+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades NQ; declares Q1; fewest active strategies (Incubator-Odd=24), ties alphabetical; certified on 30m bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_NQ_30m.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "keltner_trend_drift_20260901_6J_30m_VB": {
+          "strat": "keltner_trend_drift_20260901_6J_30m_VB",
+          "symbol": "6J",
+          "timeframe": "30m",
+          "version": "B",
+          "allocation": 1,
+          "regime_filter": "Q3",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/keltner_trend_drift_20260901_6J_30m_VB/strat.py",
+          "registered_utc": "2026-09-02T20:39:32+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "--portfolio incubator-odd",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_6J_30m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "keltner_trend_drift_20260901_6J_30m_VB",
+              "symbol": "6J",
+              "timeframe": "30m",
+              "version": "B",
+              "allocation": 1,
+              "regime_filter": "Q3",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/keltner_trend_drift_20260901_6J_30m_VB/strat.py",
+              "registered_utc": "2026-09-02T20:39:32+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "--portfolio incubator-odd",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_6J_30m.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "keltner_trend_drift_20260901_6J_1h_VA": {
+          "strat": "keltner_trend_drift_20260901_6J_1h_VA",
+          "symbol": "6J",
+          "timeframe": "1h",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q3",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/keltner_trend_drift_20260901_6J_1h_VA/strat.py",
+          "registered_utc": "2026-09-02T20:42:55+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "--portfolio incubator-odd",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_6J_1h.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "keltner_trend_drift_20260901_6J_1h_VA",
+              "symbol": "6J",
+              "timeframe": "1h",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q3",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/keltner_trend_drift_20260901_6J_1h_VA/strat.py",
+              "registered_utc": "2026-09-02T20:42:55+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "--portfolio incubator-odd",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_6J_1h.json (Gate R's certification target)"
+              }
+            }
+          ]
         }
       }
     },
@@ -763,7 +1114,9 @@
         "correlation_group": "Index_Metals_Uncorrelated",
         "regime_quadrants": [
           "Q1_HIGH_VOL_TREND",
-          "Q2_HIGH_VOL_CHOP"
+          "Q2_HIGH_VOL_CHOP",
+          "Q3_LOW_VOL_TREND",
+          "Q4_LOW_VOL_MEAN_REVERSION"
         ],
         "structures": [
           "BREAKOUT_EXPANSION",
@@ -790,7 +1143,12 @@
         "keltner_trend_drift_20260901_GC_15m_VA",
         "keltner_trend_drift_20260901_GC_15m_VB",
         "keltner_trend_drift_20260901_ES_30m_VA",
-        "keltner_trend_drift_20260901_GC_30m_VA"
+        "keltner_trend_drift_20260901_GC_30m_VA",
+        "intrinsic_alpha_engine_20260831_ES_5m_VA",
+        "dual_ema_slope_scalp_20260831_GC_1h_VA",
+        "dual_ema_slope_scalp_20260831_GC_30m_VA",
+        "energy_intraday_nonlinear_ar_20260902_ES_30m_VA",
+        "energy_intraday_nonlinear_ar_20260902_ES_30m_VB"
       ],
       "strategy_allocations": {
         "sma_momentum_crossover_20260818_GC_1h_VA": {
@@ -1552,6 +1910,196 @@
               }
             }
           ]
+        },
+        "intrinsic_alpha_engine_20260831_ES_5m_VA": {
+          "strat": "intrinsic_alpha_engine_20260831_ES_5m_VA",
+          "symbol": "ES",
+          "timeframe": "5m",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q2",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/intrinsic_alpha_engine_20260831_ES_5m_VA/strat.py",
+          "registered_utc": "2026-08-31T14:12:17+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades ES; declares Q2; fewest active strategies (Incubator-Even=20), ties alphabetical; certified on 5m bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_ES_5m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "intrinsic_alpha_engine_20260831_ES_5m_VA",
+              "symbol": "ES",
+              "timeframe": "5m",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q2",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/intrinsic_alpha_engine_20260831_ES_5m_VA/strat.py",
+              "registered_utc": "2026-08-31T14:12:17+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades ES; declares Q2; fewest active strategies (Incubator-Even=20), ties alphabetical; certified on 5m bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_ES_5m.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "dual_ema_slope_scalp_20260831_GC_1h_VA": {
+          "strat": "dual_ema_slope_scalp_20260831_GC_1h_VA",
+          "symbol": "GC",
+          "timeframe": "1h",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q2",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/dual_ema_slope_scalp_20260831_GC_1h_VA/strat.py",
+          "registered_utc": "2026-08-31T15:11:54+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades GC; declares Q2; fewest active strategies (Incubator-Even=21), ties alphabetical; certified on 1h bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_GC_1h.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "dual_ema_slope_scalp_20260831_GC_1h_VA",
+              "symbol": "GC",
+              "timeframe": "1h",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q2",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/dual_ema_slope_scalp_20260831_GC_1h_VA/strat.py",
+              "registered_utc": "2026-08-31T15:11:54+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades GC; declares Q2; fewest active strategies (Incubator-Even=21), ties alphabetical; certified on 1h bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_GC_1h.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "dual_ema_slope_scalp_20260831_GC_30m_VA": {
+          "strat": "dual_ema_slope_scalp_20260831_GC_30m_VA",
+          "symbol": "GC",
+          "timeframe": "30m",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q1",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/dual_ema_slope_scalp_20260831_GC_30m_VA/strat.py",
+          "registered_utc": "2026-08-31T15:12:20+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades GC; declares Q1; fewest active strategies (Incubator-Even=22), ties alphabetical; certified on 30m bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_GC_30m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "dual_ema_slope_scalp_20260831_GC_30m_VA",
+              "symbol": "GC",
+              "timeframe": "30m",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q1",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/dual_ema_slope_scalp_20260831_GC_30m_VA/strat.py",
+              "registered_utc": "2026-08-31T15:12:20+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades GC; declares Q1; fewest active strategies (Incubator-Even=22), ties alphabetical; certified on 30m bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_GC_30m.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "energy_intraday_nonlinear_ar_20260902_ES_30m_VA": {
+          "strat": "energy_intraday_nonlinear_ar_20260902_ES_30m_VA",
+          "symbol": "ES",
+          "timeframe": "30m",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q1",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/energy_intraday_nonlinear_ar_20260902_ES_30m_VA/strat.py",
+          "registered_utc": "2026-09-02T15:07:10+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades ES; declares Q1; fewest active strategies (Incubator-Even=23), ties alphabetical; certified on 30m bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_ES_30m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "energy_intraday_nonlinear_ar_20260902_ES_30m_VA",
+              "symbol": "ES",
+              "timeframe": "30m",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q1",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/energy_intraday_nonlinear_ar_20260902_ES_30m_VA/strat.py",
+              "registered_utc": "2026-09-02T15:07:10+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades ES; declares Q1; fewest active strategies (Incubator-Even=23), ties alphabetical; certified on 30m bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_ES_30m.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "energy_intraday_nonlinear_ar_20260902_ES_30m_VB": {
+          "strat": "energy_intraday_nonlinear_ar_20260902_ES_30m_VB",
+          "symbol": "ES",
+          "timeframe": "30m",
+          "version": "B",
+          "allocation": 1,
+          "regime_filter": "Q1",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/energy_intraday_nonlinear_ar_20260902_ES_30m_VB/strat.py",
+          "registered_utc": "2026-09-02T15:07:13+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades ES; declares Q1; fewest active strategies (Incubator-Even=24), ties alphabetical; certified on 30m bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_ES_30m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "energy_intraday_nonlinear_ar_20260902_ES_30m_VB",
+              "symbol": "ES",
+              "timeframe": "30m",
+              "version": "B",
+              "allocation": 1,
+              "regime_filter": "Q1",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/energy_intraday_nonlinear_ar_20260902_ES_30m_VB/strat.py",
+              "registered_utc": "2026-09-02T15:07:13+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades ES; declares Q1; fewest active strategies (Incubator-Even=24), ties alphabetical; certified on 30m bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_ES_30m.json (Gate R's certification target)"
+              }
+            }
+          ]
         }
       }
     },
@@ -1609,7 +2157,9 @@
         "correlation_group": "Index_Metals_Uncorrelated",
         "regime_quadrants": [
           "Q1_HIGH_VOL_TREND",
-          "Q2_HIGH_VOL_CHOP"
+          "Q2_HIGH_VOL_CHOP",
+          "Q3_LOW_VOL_TREND",
+          "Q4_LOW_VOL_MEAN_REVERSION"
         ],
         "structures": [
           "BREAKOUT_EXPANSION",

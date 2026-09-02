@@ -101,6 +101,23 @@ def temp_config(mutate=None, *, clear=True) -> Path:
     return path
 
 
+def narrow(pid: str, quadrants: list[str]):
+    """
+    A `temp_config` mutation that RESTRICTS one portfolio's quadrants.
+
+    The cases below test what registration does when an account does not trade
+    the certified quadrant. They used the LIVE table's Even track as that
+    fixture, which held Q1/Q2 - so widening the real config to admit Q3
+    (2026-09-02) left them asserting a config state instead of the guard, and
+    they failed on an operator's config edit rather than on a code change. The
+    helper's own docstring already names that class of defect. The guard is
+    real and is still tested; only the fixture moved out of the live file.
+    """
+    def _mutate(blob):
+        blob["portfolios"][pid]["basket"]["regime_quadrants"] = list(quadrants)
+    return _mutate
+
+
 def read(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -413,16 +430,17 @@ def test_a_quadrant_the_account_does_not_trade_is_flagged_not_widened() -> None:
     strategy on it. Widening it to admit this promotion would hand every other
     strategy on that account a quadrant nobody certified it for.
 
-    Incubator-Even trades Q1/Q2. A Q3 certification registered there must be
-    reported and must leave the basket alone.
+    A Q3 certification registered onto an account that trades only Q1/Q2 must
+    be reported and must leave the basket alone.
 
-    Measured on the EVEN track: Incubator-Odd declares all four quadrants
-    since 2026-08-24, so there is no quadrant it does not trade and nothing to
-    flag. That widening is exactly what this case guards against happening
-    again by accident - the basket is the ACCOUNT's permission, and every
-    strategy on it inherits anything added there.
+    THE NARROWED ACCOUNT IS A FIXTURE, not the live table. Every portfolio in
+    `config/portfolios.json` was widened to all four quadrants on 2026-09-02,
+    so reading the real Even track here would assert a config state rather
+    than the guard - and would fail on an operator's config edit rather than
+    on a code change. `narrow()` pins the starting point.
     """
-    path = temp_config()
+    path = temp_config(narrow("Incubator-Even",
+                              ["Q1_HIGH_VOL_TREND", "Q2_HIGH_VOL_CHOP"]))
     out = register_portfolio(STRAT, version="A",
                              scope=scope(symbol="ES", quadrant="Q3"),
                              portfolio="incubator-even", config_path=path)
@@ -456,7 +474,10 @@ def test_the_loader_reports_the_conflict_too() -> None:
     """
     from portfolio.config_loader import clear_cache, load_portfolio_config
 
-    path = temp_config()
+    # Narrowed as a FIXTURE — the live table permits all four quadrants
+    # everywhere since 2026-09-02, so there is no conflict to report there.
+    path = temp_config(narrow("Incubator-Even",
+                              ["Q1_HIGH_VOL_TREND", "Q2_HIGH_VOL_CHOP"]))
     register_portfolio(STRAT, version="A",
                        scope=scope(symbol="ES", quadrant="Q3"),
                        portfolio="incubator-even", config_path=path)
@@ -1099,13 +1120,24 @@ def test_retiring_the_bare_id_does_not_swallow_the_new_one() -> None:
 
 def test_the_certified_quadrant_routes_to_an_account_that_permits_it() -> None:
     """
-    An id is now ONE pair with ONE quadrant, and the two incubator accounts
-    hold DISJOINT permissions. Balancing purely by headcount sends about half
-    of every campaign to an account that forbids the quadrant it was certified
+    An id is ONE pair with ONE quadrant. When the incubator accounts hold
+    DISJOINT permissions, balancing purely by headcount sends about half of
+    every campaign to an account that forbids the quadrant it was certified
     in, and the live gate stands those down forever - every count still adding
     up, the symptom being silence.
+
+    THE DISJOINT SPLIT IS A FIXTURE. Every portfolio in the live table permits
+    all four quadrants since 2026-09-02, so the quadrant no longer narrows the
+    choice there and routing correctly falls back to the headcount rule (see
+    `test_an_unroutable_quadrant_falls_back_to_the_headcount_rule`). The
+    preference itself still has to work the moment any account is narrowed
+    again.
     """
-    path = temp_config()
+    path = temp_config(lambda blob: (
+        narrow("Incubator-Even", ["Q1_HIGH_VOL_TREND",
+                                  "Q2_HIGH_VOL_CHOP"])(blob),
+        narrow("Incubator-Odd", ["Q3_LOW_VOL_TREND",
+                                 "Q4_LOW_VOL_MEAN_REVERSION"])(blob)))
     portfolios = read(path)["portfolios"]
     for quad, expected in (("Q1", "Incubator-Even"), ("Q3", "Incubator-Odd")):
         pid, basis = resolve_portfolio(portfolios, None, None, quad)

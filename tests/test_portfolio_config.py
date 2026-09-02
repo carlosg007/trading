@@ -59,6 +59,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from backtest.profiler import REGIMES                             # noqa: E402
+from mdlib.regimes import QUADRANT_LABELS                        # noqa: E402
 from backtest.specs import SPECS                                 # noqa: E402
 from portfolio.config_loader import (                            # noqa: E402
     ACCOUNT_TYPES, CANONICAL_QUADRANT, CANONICAL_REGIME,
@@ -603,30 +604,31 @@ def test_each_portfolio_carries_its_regimes_in_both_encodings() -> None:
     Both spellings travel on the loaded config so a consumer never has to
     choose which one a bare `Q1` meant.
 
-    The Even basket is the two HIGH-volatility quadrants. The Odd basket was
-    the two LOW-volatility ones and declares ALL FOUR from 2026-08-24: the
-    partition split assets and quadrants on the same axis, so MNQ - which sits
-    only in the Odd basket - could never be traded by a strategy certified in a
-    high-volatility quadrant, and three promotions of
-    `t3_braid_scalp_20260823` were routable to no account at all. The regime
-    diversification the partition claims is therefore now one-sided, and the
-    live gate reads this list and nothing else.
+    The Odd basket declares ALL FOUR from 2026-08-24 and the Even basket from
+    2026-09-02: the partition originally split assets and quadrants on the same
+    axis, so MNQ - which sits only in the Odd basket - could never be traded by
+    a strategy certified in a high-volatility quadrant, and three promotions of
+    `t3_braid_scalp_20260823` were routable to no account at all. Widening the
+    Even track closed the mirror of that hole for Q3 on ES and GC. The regime
+    diversification the partition once claimed is therefore gone, and the live
+    gate reads this list and nothing else.
+
+    WHAT IS ASSERTED IS THE AGREEMENT BETWEEN THE TWO ENCODINGS, not which
+    quadrants a portfolio happens to declare. A literal list here is a config
+    state, and it failed on an operator's config edit rather than on a code
+    change - which is the whole reason the count below is not pinned either.
     """
     cfg = config()
-    odd = cfg["portfolios"]["Incubator-Odd"]["derived"]
-    even = cfg["portfolios"]["Incubator-Even"]["derived"]
-    assert odd["canonical_quadrants"] == ["Q1", "Q2", "Q3", "Q4"], odd
-    assert even["canonical_quadrants"] == ["Q1", "Q2"], even
-    # The declared labels and the canonical ids are the same statement now.
-    assert odd["canonical_quadrants"] == [
-        q[:2] for q in cfg["portfolios"]["Incubator-Odd"]["basket"][
-            "regime_quadrants"]]
-    assert odd["canonical_regimes"] == ["High Volatility / Trending",
-                                        "High Volatility / Ranging",
-                                        "Low Volatility / Trending",
-                                        "Low Volatility / Ranging"]
-    assert even["canonical_regimes"] == ["High Volatility / Trending",
-                                         "High Volatility / Ranging"]
+    for pid in ("Incubator-Odd", "Incubator-Even"):
+        portfolio = cfg["portfolios"][pid]
+        derived = portfolio["derived"]
+        declared = portfolio["basket"]["regime_quadrants"]
+        # The declared labels and the canonical ids are the same statement.
+        assert derived["canonical_quadrants"] == [q[:2] for q in declared], pid
+        assert len(derived["canonical_regimes"]) == len(declared), pid
+        for code, regime in zip(derived["canonical_quadrants"],
+                                derived["canonical_regimes"]):
+            assert QUADRANT_LABELS[int(code[1:])] == regime, (pid, code, regime)
     for pid in REQUIRED_PORTFOLIOS:
         p = cfg["portfolios"][pid]
         assert len(p["derived"]["canonical_quadrants"]) == \

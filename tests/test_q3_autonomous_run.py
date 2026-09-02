@@ -67,23 +67,67 @@ def _plan(tmp_path, **over) -> list[str]:
 # --------------------------------------------------------------------------
 # 1. Routing — the failure that is silent
 # --------------------------------------------------------------------------
-def test_q3_routes_only_where_the_basket_and_the_scope_both_allow_it():
+def test_every_target_symbol_routes_to_a_portfolio_that_permits_q3():
     """
     Two conditions and both are silent when wrong. `promote.py` will register
     a strategy certified outside a portfolio's basket and warn that it "will
     never place an order"; a portfolio whose regime scope excludes Q3 stands a
     Q3 strategy down in the one environment it was certified for.
-    """
-    for symbol in ("6E", "6J", "NQ"):
-        portfolio, why = route_for(symbol)
-        assert portfolio == "incubator-odd", f"{symbol}: {why}"
 
-    for symbol in ("ES", "GC"):
-        portfolio, why = route_for(symbol)
-        assert portfolio is None, (
-            f"{symbol} was routed to {portfolio}, where a Q3 strategy cannot "
-            f"trade")
+    Every portfolio was widened to all four quadrants on 2026-09-02, so all
+    five target contracts now route. This asserts the OUTCOME against the live
+    table on purpose - it is the check that would catch a portfolio being
+    narrowed again, or a contract dropping out of a basket, which is exactly
+    when a Q3 campaign would start registering strategies that can never
+    trade. `test_a_narrowed_portfolio_is_still_refused` pins the guard itself
+    on a fixture that cannot move.
+    """
+    from portfolio.config_loader import clear_cache
+
+    clear_cache()
+    expected = {"6E": "incubator-odd", "6J": "incubator-odd",
+                "NQ": "incubator-odd", "ES": "incubator-even",
+                "GC": "incubator-even"}
+    for symbol, portfolio in expected.items():
+        got, why = route_for(symbol)
+        assert got == portfolio, f"{symbol} -> {got} ({why})"
+
+
+def test_a_narrowed_portfolio_is_still_refused(monkeypatch, tmp_path):
+    """
+    THE GUARD, on a fixture that cannot move. The case above reads the live
+    table and would stop testing anything the moment every account permits
+    everything - which is now true. This narrows one and checks the refusal
+    still fires, so the routing check cannot quietly become a no-op.
+    """
+    import json
+
+    import scripts.q3_autonomous_run as R
+    from portfolio.config_loader import clear_cache
+
+    blob = json.loads((REPO_ROOT / "config" / "portfolios.json").read_text())
+    for pid, portfolio in blob["portfolios"].items():
+        if "Incubator" in pid:
+            portfolio["basket"]["regime_quadrants"] = [
+                "Q1_HIGH_VOL_TREND", "Q2_HIGH_VOL_CHOP"]
+    narrowed = tmp_path / "portfolios.json"
+    narrowed.write_text(json.dumps(blob, indent=2) + "\n")
+
+    real = R.PROJECT_ROOT
+    monkeypatch.setattr(R, "PROJECT_ROOT", tmp_path.parent)
+    clear_cache()
+    try:
+        # route_for builds the path from PROJECT_ROOT/config/portfolios.json,
+        # so stand that tree up rather than patching the resolver.
+        (tmp_path.parent / "config").mkdir(exist_ok=True)
+        (tmp_path.parent / "config" / "portfolios.json").write_text(
+            narrowed.read_text())
+        portfolio, why = R.route_for("ES")
+        assert portfolio is None, f"ES routed to {portfolio} on a Q1/Q2 table"
         assert "Q1" in why and "Q2" in why, why
+    finally:
+        monkeypatch.setattr(R, "PROJECT_ROOT", real)
+        clear_cache()
 
 
 def test_an_unroutable_certification_is_recorded_not_promoted():

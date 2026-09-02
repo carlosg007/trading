@@ -76,9 +76,16 @@ PERMITTED_LABEL = "Q4_LOW_VOL_MEAN_REVERSION"
 ODD_EXECUTION_ACCOUNT = json.loads(REAL_CONFIG.read_text())[
     "portfolios"]["Incubator-Odd"]["target_account"]
 
-# The stand-down cases therefore run on the EVEN track, which still declares
-# two. MGC rather than MES because the sizing constants above are MNQ's and
-# these cases assert a DECLINE - no contract count is reached at all.
+# The stand-down cases therefore run on the EVEN track, NARROWED BY THE FIXTURE
+# to the two high-volatility quadrants. It declared exactly those until
+# 2026-09-02, when every portfolio was widened to all four so a Q3
+# certification could be routed at all - and inheriting that would leave these
+# cases unable to stand anything down, passing while testing nothing.
+# `write_config` pins the scope for the same reason it clears
+# `active_strategies`: the fixture fixes the starting point rather than
+# inheriting the operator's. MGC rather than MES because the sizing constants
+# above are MNQ's and these cases assert a DECLINE - no contract count is
+# reached at all.
 GATED_PORTFOLIO = "Incubator-Even"
 GATED_SYMBOL = "MGC"
 # ...and the fixture has to be CERTIFIED on that contract, or it is declined by
@@ -199,6 +206,13 @@ def write_config(tmp_path: Path, assignments: dict) -> Path:
     for portfolio in blob["portfolios"].values():
         portfolio["active_strategies"] = []
         portfolio.pop("strategy_allocations", None)
+    # THE STAND-DOWN TRACK'S SCOPE IS PART OF THE FIXTURE. Every portfolio in
+    # the live table permits all four quadrants since 2026-09-02, so a case
+    # that inherited it could not stand ANYTHING down on regime - it would
+    # pass while testing nothing, which is the failure mode this whole helper
+    # exists to prevent.
+    blob["portfolios"][GATED_PORTFOLIO]["basket"]["regime_quadrants"] = [
+        "Q1_HIGH_VOL_TREND", "Q2_HIGH_VOL_CHOP"]
     for pid, strategies in assignments.items():
         blob["portfolios"][pid]["active_strategies"] = list(strategies)
     path = tmp_path / "portfolios.json"
