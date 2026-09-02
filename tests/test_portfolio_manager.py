@@ -48,7 +48,9 @@ WHAT THIS COVERS, and why each one is here rather than assumed:
 
 from __future__ import annotations
 
+import json
 import sys
+import tempfile
 import traceback
 from pathlib import Path
 
@@ -84,6 +86,32 @@ EVEN_QUADRANTS = ("Q1", "Q2")       # the two HIGH-volatility quadrants
 def manager() -> PortfolioManager:
     clear_cache()
     return PortfolioManager()
+
+
+def narrowed_manager(pid: str, quadrants: list[str]) -> PortfolioManager:
+    """
+    A manager on a temp config where ONE portfolio forbids a quadrant.
+
+    The regime gate can only be tested against an account that declines
+    something. Every portfolio in `config/portfolios.json` declares all four
+    quadrants since 2026-09-02 - Odd was widened on 2026-08-24 and Even
+    followed so a Q3-certified ES or GC could be routed at all - so a case
+    reading the live table has nothing left to stand down and would pass while
+    testing nothing.
+
+    The gate itself is unchanged and is what this pins: `build_order_plan`
+    reads `basket.regime_quadrants` and nothing else, so an account declaring
+    all four permits every strategy on it everywhere. That is a real property
+    of the current config and the reason this case has to keep being tested on
+    a fixture rather than on the file.
+    """
+    blob = json.loads(REPO.joinpath("config", "portfolios.json")
+                      .read_text(encoding="utf-8"))
+    blob["portfolios"][pid]["basket"]["regime_quadrants"] = list(quadrants)
+    path = Path(tempfile.mkdtemp(prefix="pm_narrow_")) / "portfolios.json"
+    path.write_text(json.dumps(blob, indent=2) + "\n", encoding="utf-8")
+    clear_cache()
+    return PortfolioManager(str(path))
 
 
 def regimes(**overrides) -> dict:
@@ -538,16 +566,17 @@ def test_a_basket_outside_its_quadrant_stands_down() -> None:
     basket is a strategy in the environment nobody certified it for - so it
     produces NO order rather than a smaller one.
 
-    Measured on the EVEN track, which still declares two quadrants. The Odd
-    track was widened to all four on 2026-08-24 to let a Nasdaq strategy
-    certified in a HIGH-volatility quadrant route at all (MNQ sits in the Odd
-    basket, and the partition split assets and quadrants on the same axis), so
-    there is no forbidden quadrant left on that account to stand anything down
-    in. That widening is exactly why this case has to keep being tested
-    somewhere: the live gate reads `basket.regime_quadrants` and nothing else,
-    so an account declaring all four permits every strategy on it everywhere.
+    NARROWED AS A FIXTURE. Every portfolio in the live table declares all four
+    quadrants - Odd from 2026-08-24 so a Nasdaq strategy certified in a
+    HIGH-volatility quadrant could route at all, Even from 2026-09-02 so a
+    Q3-certified ES or GC could - so there is no forbidden quadrant left in
+    the file to stand anything down in, and a case reading it would pass while
+    testing nothing. That widening is exactly why this has to keep being
+    tested: the live gate reads `basket.regime_quadrants` and nothing else, so
+    an account declaring all four permits every strategy on it everywhere.
     """
-    pm = manager()
+    pm = narrowed_manager("Prop-Even", ["Q1_HIGH_VOL_TREND",
+                                        "Q2_HIGH_VOL_CHOP"])
     assert tuple(pm.portfolios["Incubator-Odd"]["derived"][
         "canonical_quadrants"]) == ODD_QUADRANTS
     assert tuple(pm.portfolios["Prop-Even"]["derived"][
