@@ -507,3 +507,30 @@ complete -F _bt_inventory_complete bt-inventory inv-portfolios
 # portfolio is a legitimate state, not a failure.
 alias portfolio-check="${_TRADING_PY} ${_TRADING_REPO}/realtime/check_portfolio_assets.py"
 alias assets-check='portfolio-check'
+
+# --------------------------------------------------------------------------
+# 9. What market are we actually in, and who does that let trade?
+#
+# The other cards ask about the LOOP — are bars arriving, what did it decide,
+# who is allowed where. This one asks about the MARKET: classify each active
+# contract into the four-quadrant standard from the last closed bar, and show
+# which of the registered strategies that permits to open a position.
+#
+# READ-ONLY, and that is the point. `realtime/regime_daemon.py --publish` is
+# what writes `data/live_regime_state.json`; this classifies in-process and
+# prints. A diagnostic that can move the file every other tier reads would
+# race the live daemon rather than describe it.
+#
+# The quadrants are VOLATILITY x TREND and are not directional — there is no
+# Bull or Bear quadrant. Direction is reported separately as Trend Bias, from
+# ROC, and it gates nothing.
+#
+# Defaults come from the strategy registry rather than a hardcoded list: a
+# symbol or timeframe left out of the scan leaves its strategies reporting
+# "no regime published", which reads exactly like a market that never entered
+# their quadrant.
+#
+# Exits non-zero only when NOTHING could be classified. A quadrant that suits
+# no strategy is a real state of the market, not a failure.
+alias regime-check="${_TRADING_PY} ${_TRADING_REPO}/scripts/check_market_regime.py"
+alias quadrant-check='regime-check'

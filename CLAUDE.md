@@ -188,7 +188,9 @@ crosstrade-check # = .venv/bin/python3 ~/src/trading/realtime/check_crosstrade_c
 ct-check     # the same tool
 portfolio-check # = .venv/bin/python3 ~/src/trading/realtime/check_portfolio_assets.py
 assets-check # the same tool
-             # (all twelve from deploy/shell/trading_helpers.sh)
+regime-check # = .venv/bin/python3 ~/src/trading/scripts/check_market_regime.py
+quadrant-check # the same tool
+             # (all fourteen from deploy/shell/trading_helpers.sh)
 ```
 
 ## Working style
