@@ -1436,15 +1436,12 @@ def test_the_gate_is_per_portfolio_and_does_not_stand_down_the_other_basket(
 
 
 # --------------------------------------------------------------------------
-# 8c. The size cap: reject, never clamp
+# 8c. The size cap: clamp, never drop
 # --------------------------------------------------------------------------
-def test_an_order_over_the_cap_is_rejected_with_a_record_and_not_clamped(
-        tmp_path):
+def test_an_order_over_the_cap_is_clamped_to_one_and_still_dispatched(tmp_path):
     """
-    A clamp sends a DIFFERENT order from the one the sizer computed and reports
-    success, so a position sized against a 3-contract stop goes on at 1 and the
-    risk model no longer describes the trade. The rejection names what was
-    asked for, so the drop is visible rather than silent.
+    The ATR sizer routinely asks for 5 contracts on this fixture's MNQ. The cap
+    reduces the order to 1 and SENDS IT; it does not drop the entry.
     """
     sender = RecordingSender()
     d = build(tmp_path, assignments={},
@@ -1455,16 +1452,80 @@ def test_an_order_over_the_cap_is_rejected_with_a_record_and_not_clamped(
 
     record = d.dispatch_order({"account": ODD_EXECUTION_ACCOUNT,
                                "action": "BUY", "symbol": "MNQ",
-                               "orderType": "MARKET", "quantity": 3},
+                               "orderType": "MARKET", "quantity": 5},
+                              strategy_tag="Incubator-Odd:fixture_long",
                               portfolio_id="Incubator-Odd")
 
-    assert sender.calls == [], "nothing reached the wire"
-    assert record["ok"] is False
+    assert record["ok"] is True
+    assert len(sender.calls) == 1, "the order was sent, not dropped"
+    fields = wire_fields(sender.calls[0]["payload"])
+    assert fields["qty"] == str(MAX_QTY) == "1"
+    # THE TAG SURVIVES THE CLAMP. It is CrossTrade's lock and the flatten is
+    # matched to it by string equality, so a clamped entry that lost its tag
+    # would open a position nothing could later close.
+    assert fields["strategy_tag"] == "Incubator-Odd:fixture_long"
+    assert record["strategy_tag"] == "Incubator-Odd:fixture_long"
+
+
+def test_a_clamped_order_carries_both_sizes_and_says_so(tmp_path, capsys):
+    """
+    A clamped order goes out at 1 against a stop drawn for 5, so the record has
+    to hold what was ASKED for as well as what was sent - otherwise the only
+    artifact of the trade describes a 1-lot the sizer never computed.
+    """
+    sender = RecordingSender()
+    d = build(tmp_path, assignments={},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              dry_run=False, sender=sender, max_qty=MAX_QTY,
+              crosstrade_url="https://crosstrade.invalid/hooks/T",
+              crosstrade_key="K")
+
+    record = d.dispatch_order({"account": ODD_EXECUTION_ACCOUNT,
+                               "action": "BUY", "symbol": "MNQ",
+                               "orderType": "MARKET", "quantity": 5},
+                              portfolio_id="Incubator-Odd")
+
+    assert record["clamped"] is True
+    assert record["quantity"] == 1, "what was SENT"
+    assert record["requested_quantity"] == 5, "what the sizer ASKED for"
     assert record["rule"] == "MAX_QTY"
-    assert record["detail"] == "sizer asked 3, cap is 1"
-    assert record["quantity"] == 3, "what was ASKED for, not what was sent"
-    assert "command" not in record, "never formatted, so never sendable"
-    assert d.risk_refusals[-1] is record
+    assert record["detail"] == "sizer asked 5, cap is 1"
+    assert record["warning"] == (
+        "CLAMPED MNQ order from 5 to 1 due to MAX_QTY cap.")
+    assert "CLAMPED MNQ order from 5 to 1" in capsys.readouterr().err
+
+    # NOT A RISK REFUSAL. `master_live` prints everything on that list as
+    # "RISK BLOCKED" and counts it a failure; a clamped order was sent.
+    assert d.risk_refusals == []
+
+    # AND VISIBLE ON THE CONSOLE SUMMARY, which otherwise prints `x1` for a
+    # clamped 5-lot and a genuine 1-lot alike.
+    line = d.describe_cycle({"started_at": "t", "dry_run": False,
+                             "symbols": ["MNQ"], "dispatches": [record],
+                             "plan": [], "payloads": [], "ml_vetoes": [],
+                             "declines": [], "held": [], "errors": [],
+                             "exit_signals": []})
+    assert "CLAMPED from 5" in line
+
+
+def test_clamping_does_not_rewrite_the_caller_s_payload(tmp_path):
+    """
+    The payload dicts are the cycle report's `orders`. Clamping in place would
+    make the report claim the sizer asked for 1, erasing the evidence that
+    anything was reduced.
+    """
+    sender = RecordingSender()
+    d = build(tmp_path, assignments={},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              dry_run=False, sender=sender, max_qty=MAX_QTY,
+              crosstrade_url="https://crosstrade.invalid/hooks/T",
+              crosstrade_key="K")
+
+    payload = {"account": ODD_EXECUTION_ACCOUNT, "action": "BUY",
+               "symbol": "MNQ", "orderType": "MARKET", "quantity": 5}
+    d.dispatch_order(payload, portfolio_id="Incubator-Odd")
+
+    assert payload["quantity"] == 5
 
 
 def test_an_order_at_the_cap_still_goes_out(tmp_path):

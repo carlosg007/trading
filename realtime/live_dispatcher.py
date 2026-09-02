@@ -1476,23 +1476,51 @@ class LiveExecutionDispatcher:
                 self.risk_refusals.append(record)
                 return record
 
-        # THE SIZE CAP, IN THE SEND PATH. It REJECTS and never clamps: a
-        # clamped order is a different order from the one the sizer computed,
-        # sent with a report saying success, so a position sized against a
-        # 3-contract stop goes on at 1 and the risk model no longer describes
-        # the trade. The firewall carries a configurable `max_contracts_per_order`
-        # too, but the firewall is OPTIONAL - `firewall=None` is the default and
-        # every construction outside `master_live.py` leaves it there - so this
-        # cap is here as well, where nothing can be armed incorrectly.
-        refusal = quantity_refusal(payload.get("quantity"), self.max_qty)
+        # THE SIZE CAP, IN THE SEND PATH. It CLAMPS to `max_qty` rather than
+        # dropping the order. The firewall carries a configurable
+        # `max_contracts_per_order` too, but the firewall is OPTIONAL -
+        # `firewall=None` is the default and every construction outside
+        # `master_live.py` leaves it there - so this cap is here as well, where
+        # nothing can be armed incorrectly.
+        #
+        # WHAT A CLAMP COSTS, since it is not free and the next reader will ask.
+        # The order that goes out is NOT the order the sizer computed: the ATR
+        # sizer routinely asks for 5 contracts on MNQ, and the position that
+        # results is sized against a stop drawn for five. The risk model no
+        # longer describes the trade, and it does so while the record reports
+        # success. That is the trade accepted here - a 1-lot expression of the
+        # edge is preferred to no expression of it - and it is survivable only
+        # because both sizes are kept on the record and the console says so on
+        # every clamp. Do not let `requested_quantity` or the warning quietly
+        # drop out; they are the whole difference between this and a silent
+        # mis-size.
+        requested_qty = payload.get("quantity")
+        refusal = quantity_refusal(requested_qty, self.max_qty)
         if refusal is not None:
+            order_qty = min(int(requested_qty), self.max_qty)
+            # THE MESSAGE NAMES `self.max_qty`, NOT THE MODULE CONSTANT. They
+            # are the same value in production - nothing outside the suite
+            # passes `max_qty=` - but a line that reported a cap other than the
+            # one it clamped to would be worse than no line at all.
+            warning = (f"CLAMPED {payload.get('symbol')} order from "
+                       f"{requested_qty} to {self.max_qty} due to MAX_QTY cap.")
+            print(f"[live_dispatcher] {warning}", file=sys.stderr, flush=True)
+            # BOTH SIZES STAY ON THE RECORD. `quantity` is what went to the
+            # broker, because everything downstream reads it as the size of the
+            # position; `requested_quantity` is what the sizer computed, and
+            # without it the clamp is invisible in the one artifact that says
+            # what happened. `clamped` is the flag an audit can filter on.
             record.update({
-                **refusal,
-                "blocked_by": refusal["rule"],
-                "error": f"REJECTED [{refusal['rule']}] {refusal['detail']}",
-                "elapsed_ms": round((time.perf_counter() - started) * 1000, 1)})
-            self.risk_refusals.append(record)
-            return record
+                "quantity": order_qty,
+                "requested_quantity": requested_qty,
+                "clamped": True,
+                "rule": refusal["rule"],
+                "detail": refusal["detail"],
+                "warning": warning})
+            # A COPY, never a mutation of the caller's dict. The plan's payload
+            # list is the cycle report's `orders`, and rewriting the size in
+            # place would make the report claim the sizer asked for 1.
+            payload = {**payload, "quantity": order_qty}
 
         # THE STACK GATE. `aggregate_signals` nets the signals arriving in ONE
         # cycle against each other and knows nothing about the position the
@@ -1639,6 +1667,13 @@ class LiveExecutionDispatcher:
                     if path:
                         detail = detail.replace(path, "/<redacted>")
                     detail = f"  <- {detail[:400]}"
+            # A CLAMPED ORDER PRINTS `x1` AND IS NOT A 1-LOT THE SIZER ASKED
+            # FOR. Without this the console cannot tell the two apart, and the
+            # one that matters is the one where a 5-contract position went on
+            # at 1 against a stop drawn for five.
+            if d.get("clamped"):
+                detail += (f"  (CLAMPED from {d.get('requested_quantity')} "
+                           f"— MAX_QTY cap)")
             lines.append(f"  {status} {d['account']:<16} {d['action']:<5} "
                          f"{d['symbol']:<5} x{d['quantity']}"
                          + (f"   {d['error']}" if d.get("error") else "")

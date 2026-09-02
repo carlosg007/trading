@@ -209,14 +209,24 @@ that produced no entry and is never counted as an approval.
     against a short of one NETS FLAT at the broker rather than opening a long,
     so the book recording LONG after it is a claim about intent, not about the
     account. Reverse by flattening and then entering.
-- **`MAX_QTY = 1` REJECTS, it does not clamp.** A clamp sends a different order
-  from the one the sizer computed and reports success — a position sized
-  against a 3-contract stop goes on at 1 and the risk model no longer describes
-  the trade. The refusal record is `{ok: False, rule: "MAX_QTY", detail:
-  "sizer asked N, cap is 1"}`, it lands on `risk_refusals`, and nothing is
-  formatted. **THE ATR SIZER ROUTINELY ASKS FOR MORE THAN ONE** — 5 contracts
-  on the test fixture's MNQ — so this cap drops most correctly-sized entries
-  and is a deliberate incident-response setting, not a neutral guard. It
+- **`MAX_QTY = 1` CLAMPS, it does not reject.** Changed 2026-09-02; it
+  rejected until then. An order asking for more is reduced to `max_qty` and
+  SENT, carrying its `strategy_tag`. **THE ATR SIZER ROUTINELY ASKS FOR MORE
+  THAN ONE** — 5 contracts on the test fixture's MNQ — so this is the normal
+  path, not an edge case, and what goes on the broker is NOT the order the
+  sizer computed: the position is sized against a stop drawn for five and the
+  risk model no longer describes the trade, while the record reports success.
+  That is the accepted trade-off — a 1-lot expression of the edge over none —
+  and it is survivable only because the reduction is never silent. The dispatch
+  record carries `quantity` (what was SENT), `requested_quantity` (what the
+  sizer ASKED for), `clamped: True`, `rule: "MAX_QTY"`, `detail: "sizer asked
+  N, cap is 1"` and the `warning` line; the console prints `CLAMPED {symbol}
+  order from {N} to 1 due to MAX_QTY cap.` on stderr and annotates the cycle
+  summary's dispatch line, which would otherwise show `x1` for a clamped 5-lot
+  and a genuine 1-lot alike. **A clamp does NOT land on `risk_refusals`** —
+  `master_live` prints everything on that list as `RISK BLOCKED` and counts it
+  a failure, and this order was sent. The caller's payload dict is COPIED, not
+  rewritten, so the cycle report's `orders` still shows what was asked for. It
   duplicates the firewall's configurable `max_contracts_per_order` on purpose:
   the firewall is OPTIONAL (`firewall=None` is the default and every
   construction outside `master_live.py` leaves it there) and this cap is in the
