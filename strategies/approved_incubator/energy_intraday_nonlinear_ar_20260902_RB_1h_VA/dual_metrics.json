@@ -1,0 +1,800 @@
+{
+  "meta": {
+    "strategy": "energy_intraday_nonlinear_ar_20260902",
+    "strategy_path": "/home/cgrullon/src/trading/strategies/experimental/energy_intraday_nonlinear_ar_20260902.py",
+    "params": {
+      "sma_L_len": 10,
+      "adx_thresh": 20.0,
+      "vol_sma_len": 20,
+      "session_start_et": "09:00",
+      "session_end_et": "14:30",
+      "use_baseline_filter": true,
+      "use_alpha_trigger": true,
+      "use_volume_filter": true,
+      "use_news_filter": false,
+      "sl_atr_mult": 2.0,
+      "tp_atr_mult": 3.0,
+      "trailing": false
+    },
+    "symbol": "RB",
+    "timeframe": "1h",
+    "bars": 77009,
+    "start": "2013-01-01 23:00:00+00:00",
+    "end": "2026-08-07 20:00:00+00:00",
+    "costs_included": true,
+    "initial_capital": 100000.0,
+    "ml_threshold": 0.48,
+    "ml_evaluated": true,
+    "ml_features": [
+      "norm_atr",
+      "volume_z",
+      "adx_14",
+      "vol_pct_rank",
+      "ut_atr",
+      "ar1_ret",
+      "hour_et"
+    ],
+    "ml_refit": {
+      "long": {
+        "direction": "long",
+        "candidates": 1476,
+        "fits": 43,
+        "train_rows_max": 1466,
+        "refit_growth": 0.1,
+        "max_train_rows": 50000,
+        "threads": 1,
+        "elapsed_s": 1.08
+      },
+      "short": {}
+    },
+    "logic": {
+      "concept": "Wang & Yang (2009): 30-minute energy futures show nonlinear directional predictability ONLY in bull states. Long-only by construction. A macro uptrend (Close > EMA(200)) and a trending tape (ADX(14) > 20.0) say the state is right; an autoregressive momentum trigger (this bar's return positive) with a functional-coefficient proxy Ut = Close - SMA(10) > 0 is the entry event; and the trade is confined to the NYMEX open-outcry window 09:00-14:30 ET, where the hedging flow the premise rests on actually transacts. The asymmetry is the fragile part of the premise and the 2023+ holdout is what settles it.",
+      "entry": "LONG when Close > EMA(200) and ADX(14) > 20.0 and the bar stamp is inside [09:00, 14:30) ET, AND Close > Close[1] and Ut = Close - SMA(10) > 0, AND Volume > SMA(Volume, 20) and ATR(14)/Close > 0.0005. SHORT: never - the premise is bull-state only.",
+      "exit": "Close crossing back BELOW SMA(10), the bracket at 2.0 x ATR(14) (trailing=False) or 3.0 x ATR(14) as a target, or the 14:30 ET session flatten - whichever the bar reaches first. Every exit is filled at the NEXT bar's open, so the flatten leaves at 15:00 ET."
+    }
+  },
+  "comparison": {
+    "ml_evaluated": true,
+    "entries_a": 1476,
+    "entries_b": 695,
+    "entries_suppressed": 781,
+    "sharpe_delta": -0.37286963457213845,
+    "b_beats_a": false
+  },
+  "version_a": {
+    "metrics": {
+      "ok": true,
+      "ruined": false,
+      "final_equity": 150208.71999999977,
+      "total_pnl": 50208.7200000007,
+      "gross_pnl": 69367.20000000017,
+      "total_costs": 19158.479999999523,
+      "total_return_pct": 50.208719999999765,
+      "annualized_return_pct": 2.458728940033139,
+      "sharpe": 0.39482191394177163,
+      "sortino": 0.6764907200478245,
+      "calmar": 0.1634487810221281,
+      "metrics_basis": {
+        "frequency": "daily_close",
+        "annualization_factor": 252,
+        "risk_free_rate": 0.0,
+        "n_days": 4221
+      },
+      "max_drawdown_pct": -15.042809892233278,
+      "win_rate": 0.46070460704607047,
+      "profit_factor": 1.1240101534327034,
+      "trade_count": 1476,
+      "long_trades": 1476,
+      "short_trades": 0,
+      "breach": {},
+      "n_days": 4221,
+      "dow_breakdown": [
+        {
+          "day": "Mon",
+          "weekday": 0,
+          "trades": 240,
+          "net_pnl": 3756.00000000032,
+          "gross_win": 67590.02000000034,
+          "gross_loss": 63834.02000000002,
+          "win_rate": 0.42083333333333334,
+          "avg_pnl": 15.650000000001334,
+          "profit_factor": 1.0588400981169652,
+          "pct_of_trades": 16.260162601626018,
+          "pct_of_net_pnl": 7.480772264260606
+        },
+        {
+          "day": "Tue",
+          "weekday": 1,
+          "trades": 286,
+          "net_pnl": -4447.2799999997815,
+          "gross_win": 66490.82000000024,
+          "gross_loss": 70938.1,
+          "win_rate": 0.458041958041958,
+          "avg_pnl": -15.549930069929307,
+          "profit_factor": 0.9373075963410387,
+          "pct_of_trades": 19.37669376693767,
+          "pct_of_net_pnl": -8.857584897602885
+        },
+        {
+          "day": "Wed",
+          "weekday": 2,
+          "trades": 328,
+          "net_pnl": 29951.559999999954,
+          "gross_win": 124801.02000000003,
+          "gross_loss": 94849.46000000008,
+          "win_rate": 0.5213414634146342,
+          "avg_pnl": 91.31573170731693,
+          "profit_factor": 1.3157799738659548,
+          "pct_of_trades": 22.22222222222222,
+          "pct_of_net_pnl": 59.65409992527102
+        },
+        {
+          "day": "Thu",
+          "weekday": 3,
+          "trades": 322,
+          "net_pnl": 9936.639999999972,
+          "gross_win": 103191.2200000001,
+          "gross_loss": 93254.58000000013,
+          "win_rate": 0.468944099378882,
+          "avg_pnl": 30.85913043478252,
+          "profit_factor": 1.106553908665933,
+          "pct_of_trades": 21.81571815718157,
+          "pct_of_net_pnl": 19.790665844498392
+        },
+        {
+          "day": "Fri",
+          "weekday": 4,
+          "trades": 300,
+          "net_pnl": 11011.800000000228,
+          "gross_win": 93011.52000000014,
+          "gross_loss": 81999.71999999991,
+          "win_rate": 0.42,
+          "avg_pnl": 36.70600000000076,
+          "profit_factor": 1.13429070245606,
+          "pct_of_trades": 20.32520325203252,
+          "pct_of_net_pnl": 21.93204686357285
+        }
+      ],
+      "entry_filters": {},
+      "meta": {
+        "strategy": "energy_intraday_nonlinear_ar_20260902",
+        "strategy_path": "/home/cgrullon/src/trading/strategies/experimental/energy_intraday_nonlinear_ar_20260902.py",
+        "params": {
+          "sma_L_len": 10,
+          "adx_thresh": 20.0,
+          "vol_sma_len": 20,
+          "session_start_et": "09:00",
+          "session_end_et": "14:30",
+          "use_baseline_filter": true,
+          "use_alpha_trigger": true,
+          "use_volume_filter": true,
+          "use_news_filter": false,
+          "sl_atr_mult": 2.0,
+          "tp_atr_mult": 3.0,
+          "trailing": false
+        },
+        "symbol": "RB",
+        "timeframe": "1h",
+        "bars": 77009,
+        "start": "2013-01-01 23:00:00+00:00",
+        "end": "2026-08-07 20:00:00+00:00",
+        "costs_included": true,
+        "initial_capital": 100000.0,
+        "ml_threshold": 0.48,
+        "ml_evaluated": true,
+        "ml_features": [
+          "norm_atr",
+          "volume_z",
+          "adx_14",
+          "vol_pct_rank",
+          "ut_atr",
+          "ar1_ret",
+          "hour_et"
+        ],
+        "ml_refit": {
+          "long": {
+            "direction": "long",
+            "candidates": 1476,
+            "fits": 43,
+            "train_rows_max": 1466,
+            "refit_growth": 0.1,
+            "max_train_rows": 50000,
+            "threads": 1,
+            "elapsed_s": 1.08
+          },
+          "short": {}
+        },
+        "logic": {
+          "concept": "Wang & Yang (2009): 30-minute energy futures show nonlinear directional predictability ONLY in bull states. Long-only by construction. A macro uptrend (Close > EMA(200)) and a trending tape (ADX(14) > 20.0) say the state is right; an autoregressive momentum trigger (this bar's return positive) with a functional-coefficient proxy Ut = Close - SMA(10) > 0 is the entry event; and the trade is confined to the NYMEX open-outcry window 09:00-14:30 ET, where the hedging flow the premise rests on actually transacts. The asymmetry is the fragile part of the premise and the 2023+ holdout is what settles it.",
+          "entry": "LONG when Close > EMA(200) and ADX(14) > 20.0 and the bar stamp is inside [09:00, 14:30) ET, AND Close > Close[1] and Ut = Close - SMA(10) > 0, AND Volume > SMA(Volume, 20) and ATR(14)/Close > 0.0005. SHORT: never - the premise is bull-state only.",
+          "exit": "Close crossing back BELOW SMA(10), the bracket at 2.0 x ATR(14) (trailing=False) or 3.0 x ATR(14) as a target, or the 14:30 ET session flatten - whichever the bar reaches first. Every exit is filled at the NEXT bar's open, so the flatten leaves at 15:00 ET."
+        }
+      }
+    },
+    "gate_audit": {
+      "version": "A",
+      "name": "energy_intraday_nonlinear_ar_20260902",
+      "gates": {
+        "gate1": {
+          "name": "GATE 1 \u00b7 In-Sample",
+          "status": "FAIL",
+          "checks": [
+            {
+              "label": "Sharpe (not gated)",
+              "value": 0.39482191394177163,
+              "threshold": null,
+              "direction": "min",
+              "unit": "",
+              "status": "INFO",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Profit factor",
+              "value": 1.1240101534327034,
+              "threshold": 1.0,
+              "direction": "min",
+              "unit": "",
+              "status": "PASS",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Trades",
+              "value": 1476.0,
+              "threshold": 200.0,
+              "direction": "min",
+              "unit": "",
+              "status": "PASS",
+              "note": "16.75 years at 30 trades/yr is 502; the 200-trade cap binds",
+              "fmt": "{:,.0f}"
+            },
+            {
+              "label": "Max drawdown",
+              "value": 15.042809892233278,
+              "threshold": 12.0,
+              "direction": "max",
+              "unit": "%",
+              "status": "FAIL",
+              "note": null,
+              "fmt": "{:.2f}"
+            }
+          ]
+        },
+        "gate2": {
+          "name": "GATE 2 \u00b7 Robustness",
+          "status": "NOT EVALUATED",
+          "checks": [
+            {
+              "label": "WFO efficiency",
+              "value": null,
+              "threshold": 0.5,
+              "direction": "min",
+              "unit": "",
+              "status": "NOT EVALUATED",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Monte Carlo 95% max DD",
+              "value": null,
+              "threshold": 18.0,
+              "direction": "max",
+              "unit": "%",
+              "status": "NOT EVALUATED",
+              "note": null,
+              "fmt": "{:.2f}"
+            }
+          ]
+        },
+        "gate3": {
+          "name": "GATE 3 \u00b7 OOS Holdout",
+          "status": "NOT EVALUATED",
+          "checks": [
+            {
+              "label": "Holdout Sharpe retention",
+              "value": null,
+              "threshold": 0.8,
+              "direction": "min",
+              "unit": "x",
+              "status": "NOT EVALUATED",
+              "note": "no holdout Sharpe supplied, so Sharpe retention is undefined",
+              "fmt": "{:.2f}"
+            }
+          ]
+        }
+      },
+      "status": "FAIL",
+      "passed": false,
+      "thresholds": {
+        "gate1": {
+          "min_profit_factor": 1.0,
+          "min_trades": 100,
+          "max_required_trades": 200,
+          "min_trades_per_year": 30,
+          "max_drawdown_pct": 12.0
+        },
+        "gate2": {
+          "min_wfo_efficiency": 0.5,
+          "max_mc_drawdown_pct": 18.0
+        },
+        "gate3": {
+          "min_retention": 0.8
+        }
+      },
+      "holdout_sharpe": null,
+      "in_sample_sharpe": 0.39482191394177163,
+      "sharpe_retention": null,
+      "retention": null,
+      "retention_metric": null
+    }
+  },
+  "version_b": {
+    "metrics": {
+      "ok": true,
+      "ruined": false,
+      "final_equity": 99236.10000000012,
+      "total_pnl": -763.8999999998014,
+      "gross_pnl": 8257.20000000011,
+      "total_costs": 9021.099999999926,
+      "total_return_pct": -0.763899999999873,
+      "annualized_return_pct": -0.045770576442061284,
+      "sharpe": 0.021952279369633166,
+      "sortino": 0.03531886934356747,
+      "calmar": -0.0018601106090740528,
+      "metrics_basis": {
+        "frequency": "daily_close",
+        "annualization_factor": 252,
+        "risk_free_rate": 0.0,
+        "n_days": 4221
+      },
+      "max_drawdown_pct": -24.606373523586043,
+      "win_rate": 0.4618705035971223,
+      "profit_factor": 0.9963080230974027,
+      "trade_count": 695,
+      "long_trades": 695,
+      "short_trades": 0,
+      "breach": {},
+      "n_days": 4221,
+      "dow_breakdown": [
+        {
+          "day": "Mon",
+          "weekday": 0,
+          "trades": 111,
+          "net_pnl": -16233.179999999931,
+          "gross_win": 23815.98000000006,
+          "gross_loss": 40049.16,
+          "win_rate": 0.35135135135135137,
+          "avg_pnl": -146.24486486486424,
+          "profit_factor": 0.5946686522264152,
+          "pct_of_trades": 15.971223021582734,
+          "pct_of_net_pnl": -2125.0399266925187
+        },
+        {
+          "day": "Tue",
+          "weekday": 1,
+          "trades": 135,
+          "net_pnl": -1672.49999999981,
+          "gross_win": 33317.960000000094,
+          "gross_loss": 34990.45999999991,
+          "win_rate": 0.5037037037037037,
+          "avg_pnl": -12.38888888888748,
+          "profit_factor": 0.9522012571426662,
+          "pct_of_trades": 19.424460431654676,
+          "pct_of_net_pnl": -218.94226993065124
+        },
+        {
+          "day": "Wed",
+          "weekday": 2,
+          "trades": 154,
+          "net_pnl": 5153.679999999914,
+          "gross_win": 57296.160000000025,
+          "gross_loss": 52142.48000000013,
+          "win_rate": 0.5064935064935064,
+          "avg_pnl": 33.46545454545399,
+          "profit_factor": 1.0988384135161942,
+          "pct_of_trades": 22.158273381294965,
+          "pct_of_net_pnl": 674.6537504910661
+        },
+        {
+          "day": "Thu",
+          "weekday": 3,
+          "trades": 159,
+          "net_pnl": 1711.9799999998668,
+          "gross_win": 45237.57999999996,
+          "gross_loss": 43525.6000000001,
+          "win_rate": 0.4968553459119497,
+          "avg_pnl": 10.767169811319917,
+          "profit_factor": 1.039332714540405,
+          "pct_of_trades": 22.87769784172662,
+          "pct_of_net_pnl": 224.11048566570386
+        },
+        {
+          "day": "Fri",
+          "weekday": 4,
+          "trades": 136,
+          "net_pnl": 10276.120000000159,
+          "gross_win": 46476.540000000045,
+          "gross_loss": 36200.4199999999,
+          "win_rate": 0.41911764705882354,
+          "avg_pnl": 75.55970588235411,
+          "profit_factor": 1.2838674247425907,
+          "pct_of_trades": 19.568345323741006,
+          "pct_of_net_pnl": 1345.2179604664002
+        }
+      ],
+      "entry_filters": {},
+      "meta": {
+        "strategy": "energy_intraday_nonlinear_ar_20260902",
+        "strategy_path": "/home/cgrullon/src/trading/strategies/experimental/energy_intraday_nonlinear_ar_20260902.py",
+        "params": {
+          "sma_L_len": 10,
+          "adx_thresh": 20.0,
+          "vol_sma_len": 20,
+          "session_start_et": "09:00",
+          "session_end_et": "14:30",
+          "use_baseline_filter": true,
+          "use_alpha_trigger": true,
+          "use_volume_filter": true,
+          "use_news_filter": false,
+          "sl_atr_mult": 2.0,
+          "tp_atr_mult": 3.0,
+          "trailing": false
+        },
+        "symbol": "RB",
+        "timeframe": "1h",
+        "bars": 77009,
+        "start": "2013-01-01 23:00:00+00:00",
+        "end": "2026-08-07 20:00:00+00:00",
+        "costs_included": true,
+        "initial_capital": 100000.0,
+        "ml_threshold": 0.48,
+        "ml_evaluated": true,
+        "ml_features": [
+          "norm_atr",
+          "volume_z",
+          "adx_14",
+          "vol_pct_rank",
+          "ut_atr",
+          "ar1_ret",
+          "hour_et"
+        ],
+        "ml_refit": {
+          "long": {
+            "direction": "long",
+            "candidates": 1476,
+            "fits": 43,
+            "train_rows_max": 1466,
+            "refit_growth": 0.1,
+            "max_train_rows": 50000,
+            "threads": 1,
+            "elapsed_s": 1.08
+          },
+          "short": {}
+        },
+        "logic": {
+          "concept": "Wang & Yang (2009): 30-minute energy futures show nonlinear directional predictability ONLY in bull states. Long-only by construction. A macro uptrend (Close > EMA(200)) and a trending tape (ADX(14) > 20.0) say the state is right; an autoregressive momentum trigger (this bar's return positive) with a functional-coefficient proxy Ut = Close - SMA(10) > 0 is the entry event; and the trade is confined to the NYMEX open-outcry window 09:00-14:30 ET, where the hedging flow the premise rests on actually transacts. The asymmetry is the fragile part of the premise and the 2023+ holdout is what settles it.",
+          "entry": "LONG when Close > EMA(200) and ADX(14) > 20.0 and the bar stamp is inside [09:00, 14:30) ET, AND Close > Close[1] and Ut = Close - SMA(10) > 0, AND Volume > SMA(Volume, 20) and ATR(14)/Close > 0.0005. SHORT: never - the premise is bull-state only.",
+          "exit": "Close crossing back BELOW SMA(10), the bracket at 2.0 x ATR(14) (trailing=False) or 3.0 x ATR(14) as a target, or the 14:30 ET session flatten - whichever the bar reaches first. Every exit is filled at the NEXT bar's open, so the flatten leaves at 15:00 ET."
+        }
+      }
+    },
+    "gate_audit": {
+      "version": "B",
+      "name": "energy_intraday_nonlinear_ar_20260902",
+      "gates": {
+        "gate1": {
+          "name": "GATE 1 \u00b7 In-Sample",
+          "status": "FAIL",
+          "checks": [
+            {
+              "label": "Sharpe (not gated)",
+              "value": 0.021952279369633166,
+              "threshold": null,
+              "direction": "min",
+              "unit": "",
+              "status": "INFO",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Profit factor",
+              "value": 0.9963080230974027,
+              "threshold": 1.0,
+              "direction": "min",
+              "unit": "",
+              "status": "FAIL",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Trades",
+              "value": 695.0,
+              "threshold": 200.0,
+              "direction": "min",
+              "unit": "",
+              "status": "PASS",
+              "note": "16.75 years at 30 trades/yr is 502; the 200-trade cap binds",
+              "fmt": "{:,.0f}"
+            },
+            {
+              "label": "Max drawdown",
+              "value": 24.606373523586043,
+              "threshold": 12.0,
+              "direction": "max",
+              "unit": "%",
+              "status": "FAIL",
+              "note": null,
+              "fmt": "{:.2f}"
+            }
+          ]
+        },
+        "gate2": {
+          "name": "GATE 2 \u00b7 Robustness",
+          "status": "NOT EVALUATED",
+          "checks": [
+            {
+              "label": "WFO efficiency",
+              "value": null,
+              "threshold": 0.5,
+              "direction": "min",
+              "unit": "",
+              "status": "NOT EVALUATED",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Monte Carlo 95% max DD",
+              "value": null,
+              "threshold": 18.0,
+              "direction": "max",
+              "unit": "%",
+              "status": "NOT EVALUATED",
+              "note": null,
+              "fmt": "{:.2f}"
+            }
+          ]
+        },
+        "gate3": {
+          "name": "GATE 3 \u00b7 OOS Holdout",
+          "status": "NOT EVALUATED",
+          "checks": [
+            {
+              "label": "Holdout Sharpe retention",
+              "value": null,
+              "threshold": 0.8,
+              "direction": "min",
+              "unit": "x",
+              "status": "NOT EVALUATED",
+              "note": "no holdout Sharpe supplied, so Sharpe retention is undefined",
+              "fmt": "{:.2f}"
+            }
+          ]
+        }
+      },
+      "status": "FAIL",
+      "passed": false,
+      "thresholds": {
+        "gate1": {
+          "min_profit_factor": 1.0,
+          "min_trades": 100,
+          "max_required_trades": 200,
+          "min_trades_per_year": 30,
+          "max_drawdown_pct": 12.0
+        },
+        "gate2": {
+          "min_wfo_efficiency": 0.5,
+          "max_mc_drawdown_pct": 18.0
+        },
+        "gate3": {
+          "min_retention": 0.8
+        }
+      },
+      "holdout_sharpe": null,
+      "in_sample_sharpe": 0.021952279369633166,
+      "sharpe_retention": null,
+      "retention": null,
+      "retention_metric": null
+    }
+  },
+  "generated_utc": "2026-09-02T15:06:06+00:00",
+  "reports": {
+    "version_a": "/mnt/backtest/artifacts/pipeline/energy_intraday_nonlinear_ar_20260902/verify_20260902_150546/report_RB_version_a.html",
+    "version_b": "/mnt/backtest/artifacts/pipeline/energy_intraday_nonlinear_ar_20260902/verify_20260902_150546/report_RB_version_b.html"
+  },
+  "cost_drag": {
+    "trades": 1476,
+    "total_costs": 19158.479999999523,
+    "gross_pnl": 69367.20000000017,
+    "net_pnl": 50208.7200000007,
+    "cost_per_trade": 12.979999999999677,
+    "cost_share_pct": 27.618932290764906,
+    "commission": 6760.079999999998,
+    "slippage": 12398.399999999523,
+    "split_available": true,
+    "modelled_round_turn": 12.98,
+    "by_year": [
+      {
+        "year": 2013,
+        "trades": 82,
+        "gross_pnl": 3838.8000000000807,
+        "costs": 1064.3599999999321,
+        "net_pnl": 2774.4400000001515,
+        "cost_per_trade": 12.979999999999173,
+        "cost_share_pct": 27.726372824838748
+      },
+      {
+        "year": 2014,
+        "trades": 54,
+        "gross_pnl": 3351.599999999986,
+        "costs": 700.9199999999994,
+        "net_pnl": 2650.6799999999885,
+        "cost_per_trade": 12.979999999999988,
+        "cost_share_pct": 20.912996777658503
+      },
+      {
+        "year": 2015,
+        "trades": 95,
+        "gross_pnl": 9735.599999999962,
+        "costs": 1233.099999999993,
+        "net_pnl": 8502.499999999973,
+        "cost_per_trade": 12.979999999999928,
+        "cost_share_pct": 12.665886026541742
+      },
+      {
+        "year": 2016,
+        "trades": 132,
+        "gross_pnl": 3406.19999999998,
+        "costs": 1713.359999999939,
+        "net_pnl": 1692.8400000000433,
+        "cost_per_trade": 12.979999999999537,
+        "cost_share_pct": 50.301215430683726
+      },
+      {
+        "year": 2017,
+        "trades": 115,
+        "gross_pnl": -172.1999999999706,
+        "costs": 1492.6999999999223,
+        "net_pnl": -1664.8999999998914,
+        "cost_per_trade": 12.979999999999324,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2018,
+        "trades": 112,
+        "gross_pnl": -2267.9999999999764,
+        "costs": 1453.7599999999625,
+        "net_pnl": -3721.7599999999356,
+        "cost_per_trade": 12.979999999999665,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2019,
+        "trades": 135,
+        "gross_pnl": 835.8000000000208,
+        "costs": 1752.2999999999647,
+        "net_pnl": -916.4999999999416,
+        "cost_per_trade": 12.97999999999974,
+        "cost_share_pct": 209.65541995691808
+      },
+      {
+        "year": 2020,
+        "trades": 118,
+        "gross_pnl": -1272.600000000006,
+        "costs": 1531.6400000000767,
+        "net_pnl": -2804.2400000000775,
+        "cost_per_trade": 12.98000000000065,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2021,
+        "trades": 121,
+        "gross_pnl": 11965.800000000034,
+        "costs": 1570.5799999999797,
+        "net_pnl": 10395.220000000058,
+        "cost_per_trade": 12.979999999999832,
+        "cost_share_pct": 13.125574554145775
+      },
+      {
+        "year": 2022,
+        "trades": 108,
+        "gross_pnl": 22054.19999999999,
+        "costs": 1401.8400000000106,
+        "net_pnl": 20652.35999999997,
+        "cost_per_trade": 12.980000000000098,
+        "cost_share_pct": 6.356340288924609
+      },
+      {
+        "year": 2023,
+        "trades": 121,
+        "gross_pnl": 4262.999999999987,
+        "costs": 1570.5799999998617,
+        "net_pnl": 2692.4200000001288,
+        "cost_per_trade": 12.979999999998856,
+        "cost_share_pct": 36.84212995542732
+      },
+      {
+        "year": 2024,
+        "trades": 110,
+        "gross_pnl": 2835.0000000000246,
+        "costs": 1427.8000000000209,
+        "net_pnl": 1407.2000000000062,
+        "cost_per_trade": 12.98000000000019,
+        "cost_share_pct": 50.36331569664933
+      },
+      {
+        "year": 2025,
+        "trades": 95,
+        "gross_pnl": -8874.599999999986,
+        "costs": 1233.0999999998617,
+        "net_pnl": -10107.699999999842,
+        "cost_per_trade": 12.979999999998544,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2026,
+        "trades": 78,
+        "gross_pnl": 19668.60000000005,
+        "costs": 1012.4399999999972,
+        "net_pnl": 18656.160000000047,
+        "cost_per_trade": 12.979999999999965,
+        "cost_share_pct": 5.147493975168516
+      }
+    ]
+  },
+  "friction_by_regime": {
+    "available": true,
+    "attribution": "the quadrant of the trade's ENTRY bar",
+    "regime_source": "the labels RegimeProfiler classified for this run",
+    "attributed_trades": 1476,
+    "unplaced_trades": 0,
+    "unplaced_note": null,
+    "by_regime": [
+      {
+        "regime": "High Volatility / Trending",
+        "quadrant": "Q1",
+        "trades": 604,
+        "gross_pnl": 46930.800000000134,
+        "costs": 7839.919999999724,
+        "net_pnl": 39090.88000000043,
+        "cost_per_trade": 12.979999999999542,
+        "cost_share_pct": 16.70527670527607
+      },
+      {
+        "regime": "High Volatility / Ranging",
+        "quadrant": "Q2",
+        "trades": 378,
+        "gross_pnl": 23343.599999999988,
+        "costs": 4906.440000000059,
+        "net_pnl": 18437.15999999994,
+        "cost_per_trade": 12.980000000000155,
+        "cost_share_pct": 21.018351925153194
+      },
+      {
+        "regime": "Low Volatility / Trending",
+        "quadrant": "Q3",
+        "trades": 306,
+        "gross_pnl": 5350.799999999963,
+        "costs": 3971.8799999998464,
+        "net_pnl": 1378.9200000001179,
+        "cost_per_trade": 12.979999999999498,
+        "cost_share_pct": 74.22964790311494
+      },
+      {
+        "regime": "Low Volatility / Ranging",
+        "quadrant": "Q4",
+        "trades": 188,
+        "gross_pnl": -6257.999999999897,
+        "costs": 2440.239999999894,
+        "net_pnl": -8698.239999999789,
+        "cost_per_trade": 12.979999999999436,
+        "cost_share_pct": null
+      }
+    ]
+  },
+  "slippage_model": {
+    "model": "constant_ticks",
+    "slippage_ticks": 1.0,
+    "note": "ticks x that bar's tick size / price, per bar"
+  }
+}
