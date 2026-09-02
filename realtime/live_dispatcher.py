@@ -1532,8 +1532,16 @@ class LiveExecutionDispatcher:
         symbol = str(payload.get("symbol") or "")
         if not self.positions.can_execute(portfolio_id, symbol, action):
             hold = self.positions.hold_reason(portfolio_id, symbol, action)
+            # TWO RULES, NOT ONE. `position_open` is a stack - the strategy is
+            # already in the trade it is asking for. `exit_cooldown` is a
+            # churn - it was taken OUT of that trade earlier in this same
+            # cycle and is asking straight back in. They send an operator to
+            # different places, so anything filtering on `rule` has to be able
+            # to tell them apart.
+            cooling = self.positions.exited_this_cycle(portfolio_id, symbol)
+            rule = "exit_cooldown" if cooling else "position_open"
             record.update({
-                "ok": False, "blocked_by": "position_open", "rule": "position_open",
+                "ok": False, "blocked_by": rule, "rule": rule,
                 "held_direction": self.positions.state(portfolio_id, symbol),
                 "detail": hold, "error": hold,
                 "elapsed_ms": round((time.perf_counter() - started) * 1000, 1)})
@@ -1640,7 +1648,7 @@ class LiveExecutionDispatcher:
             # printed here as well it reads as an order that was attempted and
             # rejected by the broker, which is a different thing to go and
             # investigate.
-            if d.get("rule") == "position_open":
+            if d.get("rule") in ("position_open", "exit_cooldown"):
                 continue
             status = "OK  " if d["ok"] else "FAIL"
             # THE RESPONSE BODY, ON FAILURE ONLY. `send_execution_signal`
@@ -1710,6 +1718,25 @@ class LiveExecutionDispatcher:
             # which completed.
             lines.append(f"       IND? {e['strategy_id']} {e['symbol']} — "
                          f"indicators unavailable: {e['error']}")
+        # THE EXIT ACTUATOR'S ORDERS. Absent from this card until 2026-09-02,
+        # which is why the MES churn took a log audit to find: the FLATTEN that
+        # closed the position every cycle left NO LINE ANYWHERE, so the console
+        # showed a bare re-entry with no explanation and the loop looked like a
+        # stack gate that had stopped working. A flatten is the one order whose
+        # job is to close a position; it is the last thing that should be
+        # invisible. Refusals print too - "declined to flatten" and "never
+        # signalled an exit" are different facts about an account.
+        for x in report.get("exit_orders", []):
+            if x.get("emitted"):
+                status = "OK  " if x.get("ok") else "FAIL"
+                lines.append(
+                    f"  {status} {x.get('portfolio_id','')}/"
+                    f"{x.get('symbol','')} FLATTEN"
+                    f"  ({x.get('reason')})"
+                    + (f"   {x['error']}" if x.get("error") else ""))
+            else:
+                lines.append(f"       NO-EXIT {x.get('portfolio_id','')}/"
+                             f"{x.get('symbol','')} — {x.get('reason')}")
         for e in report["errors"]:
             lines.append(f"       ERROR {e}")
         for s in report["exit_signals"]:

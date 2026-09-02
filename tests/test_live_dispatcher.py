@@ -48,7 +48,8 @@ if str(REPO_ROOT) not in sys.path:
 from portfolio.config_loader import clear_cache                     # noqa: E402
 from portfolio.portfolio_manager import PortfolioManager            # noqa: E402
 from realtime.contract_resolver import resolve_contract             # noqa: E402
-from realtime.position_book import MAX_QTY                          # noqa: E402
+from realtime.position_book import (COOLDOWN_TEMPLATE,             # noqa: E402
+                                    MAX_QTY)
 from realtime.live_dispatcher import (                              # noqa: E402
     LiveDispatchError,
     LiveExecutionDispatcher,
@@ -1990,3 +1991,267 @@ def test_a_strategy_declaring_no_timeframe_is_still_evaluated(tmp_path):
     assert report["timeframe_skipped"] == []
     assert report["payloads"], "it trades, as it did before the guard"
 
+
+
+# --------------------------------------------------------------------------
+# 14. The same-cycle churn loop
+#
+# THE INCIDENT THIS SECTION EXISTS FOR. MES, 2026-09-02 15:30-15:59: a BUY
+# every ~62 seconds, thirty of them, with no hold in between - while the same
+# setup an hour earlier held correctly thirteen times running.
+#
+# The cause was NOT a strategy exiting every bar and it was NOT the stack gate
+# failing. `master_live` calls `process_bar_cycle` once per TIMEFRAME BUCKET
+# against ONE shared position book, and `plan_exits` builds its "still claimed"
+# set from the bucket it was handed. So a 15m strategy's exit signal arrived in
+# a bucket where the 30m strategies that actually opened the position were
+# never evaluated, their claim was absent, the pair looked unclaimed, and the
+# exit flattened a position it was not in. The next bucket re-opened it.
+#
+# 29 of the 30 re-entry cycles carried an MES exit signal that minute; 0 of the
+# 13 held cycles did.
+#
+# Two guards, and the first is the fix: an exit may only flatten a position it
+# OWNS, and a pair flattened earlier in a cycle cannot be re-entered on it.
+# --------------------------------------------------------------------------
+def test_an_exit_cannot_flatten_a_position_it_did_not_open(tmp_path):
+    """
+    THE ROOT CAUSE, at the level it actually happened. The 30m strategy opens
+    MNQ; a 15m strategy that is not in the position signals an exit while its
+    own bucket nets flat. Before the fix that emitted a FLATTEN.
+    """
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["alpha_one"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"alpha_one": dict(side="long")})
+
+    d.positions.begin_cycle(1)
+    d.positions.record_fill("Incubator-Odd", "MNQ", "long", 1,
+                            strategies=["thirty_minute_strategy"])
+
+    intents = d.positions.plan_exits(
+        [{"portfolio_id": "Incubator-Odd", "symbol": "MNQ",
+          "strategy_id": "fifteen_minute_strategy"}],
+        net_positions={})           # this bucket evaluated no 30m strategy
+
+    assert intents[0]["emit"] is False, (
+        "a strategy outside the position flattened it - this is the MES churn")
+    assert "did not open" in intents[0]["reason"]
+    assert d.positions.state("Incubator-Odd", "MNQ") == "long", (
+        "the position survived an exit from a strategy that is not in it")
+
+
+def test_an_owner_can_still_flatten_the_position_it_opened(tmp_path):
+    """
+    The half a guard that only ever refused would also pass. An exit from a
+    strategy that IS in the position must still close it, or the loop
+    accumulates inventory it can never leave.
+    """
+    d = build(tmp_path, assignments={}, state={})
+    d.positions.begin_cycle(1)
+    d.positions.record_fill("Incubator-Odd", "MNQ", "long", 1,
+                            strategies=["alpha_one", "beta_two"])
+
+    intents = d.positions.plan_exits(
+        [{"portfolio_id": "Incubator-Odd", "symbol": "MNQ",
+          "strategy_id": "alpha_one"}],
+        net_positions={})
+    assert intents[0]["emit"] is True
+    assert "unclaimed" in intents[0]["reason"]
+
+
+def test_a_position_with_no_recorded_owners_stays_closeable(tmp_path):
+    """
+    An older record, or a fill whose plan carried no contributors, must not
+    become inventory nothing can flatten. A flatten that cannot fire strands a
+    position, which is the expensive direction to be wrong in.
+    """
+    d = build(tmp_path, assignments={}, state={})
+    d.positions.record_fill("Incubator-Odd", "MNQ", "long", 1, strategies=[])
+    intents = d.positions.plan_exits(
+        [{"portfolio_id": "Incubator-Odd", "symbol": "MNQ",
+          "strategy_id": "anyone_at_all"}],
+        net_positions={})
+    assert intents[0]["emit"] is True
+
+
+def test_the_exit_executes_and_the_same_cycle_re_entry_is_blocked(tmp_path):
+    """
+    THE REQUESTED CASE, END TO END, across two buckets of ONE cycle - which is
+    the only shape the churn actually takes. `process_bar_cycle` dispatches
+    entries before it runs the exit actuator, so an exit and a re-entry cannot
+    meet inside a single call; they meet when `master_live` calls it again for
+    the next timeframe bucket without a new cycle having begun.
+
+    Both halves are asserted: the exit really goes out, and the re-entry really
+    does not.
+    """
+    sender = RecordingSender()
+    root = tmp_path / "strategies"
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["alpha_one"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"alpha_one": dict(side="long")},
+              dry_run=False, sender=sender,
+              crosstrade_url="https://crosstrade.invalid/hooks/T",
+              crosstrade_key="K")
+
+    # Cycle 1: the position is opened.
+    d.positions.begin_cycle(1)
+    opened = d.process_bar_cycle({"MNQ": make_bars()})
+    assert opened["dispatches"][0]["ok"] is True
+    assert d.positions.state("Incubator-Odd", "MNQ") == "long"
+
+    # Cycle 2, first bucket: the SAME strategy - the position's owner - exits.
+    d.positions.begin_cycle(2)
+    write_strategy(root, "alpha_one", side="flat", exit_on_last=True)
+    d.strategies = []
+    d._load_active_strategies()
+    exited = d.process_bar_cycle({"MNQ": make_bars()})
+
+    emitted = [e for e in exited["exit_orders"] if e["emitted"]]
+    assert len(emitted) == 1, f"the exit did not execute: {exited['exit_orders']}"
+    assert emitted[0]["ok"] is True, "the flatten was not sent"
+    assert d.positions.state("Incubator-Odd", "MNQ") == "flat"
+    sends_after_exit = len(sender.calls)
+
+    # Cycle 2, SECOND bucket: it signals long again, on the same cycle.
+    write_strategy(root, "alpha_one", side="long")
+    d.strategies = []
+    d._load_active_strategies()
+    churn = d.process_bar_cycle({"MNQ": make_bars()})
+
+    assert len(sender.calls) == sends_after_exit, (
+        "the re-entry reached the wire - this is the churn loop")
+    blocked = churn["dispatches"][0]
+    assert blocked["ok"] is False
+    assert blocked["rule"] == "exit_cooldown"
+    assert blocked["error"] == (
+        "HOLD Incubator-Odd/MNQ BUY — exit occurred in current cycle. "
+        "Cooldown active.")
+    assert churn["held"] == [blocked]
+    assert "command" not in blocked, "never formatted, so never sendable"
+
+
+def test_the_cooldown_expires_with_the_cycle(tmp_path):
+    """
+    A cooldown that never lifted would be worse than the churn: the strategy
+    would be flattened once and then locked out of every re-entry for the life
+    of the process, which reads on a console exactly like a market that stopped
+    setting up.
+    """
+    d = build(tmp_path, assignments={}, state={})
+    d.positions.begin_cycle(1)
+    d.positions.record_fill("P", "MNQ", "long", 1, strategies=["a"])
+    d.positions.record_flat("P", "MNQ")
+
+    assert d.positions.can_execute("P", "MNQ", "BUY") is False
+    assert d.positions.exited_this_cycle("P", "MNQ") is True
+
+    d.positions.begin_cycle(2)
+    assert d.positions.exited_this_cycle("P", "MNQ") is False
+    assert d.positions.can_execute("P", "MNQ", "BUY") is True
+
+
+def test_the_cooldown_is_inert_until_a_cycle_is_declared(tmp_path):
+    """
+    `_cycle` starts None and the guard reads as a no-op until an outer loop
+    mints a token. A one-off script or an older caller that never declares a
+    cycle keeps exactly the behaviour it had, rather than locking itself out of
+    every re-entry after its first exit - which a cooldown with no way to
+    expire would do.
+    """
+    d = build(tmp_path, assignments={}, state={})
+    d.positions.record_fill("P", "MNQ", "long", 1, strategies=["a"])
+    d.positions.record_flat("P", "MNQ")
+    assert d.positions.exited_this_cycle("P", "MNQ") is False
+    assert d.positions.can_execute("P", "MNQ", "BUY") is True
+
+
+def test_the_cooldown_never_blocks_a_flatten(tmp_path):
+    """
+    It gates ENTRIES only. A cooldown that could refuse a second closing order
+    would strand inventory, and `can_execute`'s own state check already refuses
+    a CLOSE on a flat book.
+    """
+    d = build(tmp_path, assignments={}, state={})
+    d.positions.begin_cycle(1)
+    d.positions.record_fill("P", "MNQ", "long", 1, strategies=["a"])
+    d.positions.record_flat("P", "MNQ")
+    # Flat, so a CLOSE is refused for having nothing to close — not by the
+    # cooldown.
+    assert d.positions.can_execute("P", "MNQ", "FLATTEN") is False
+
+    d.positions.record_fill("P", "MNQ", "long", 1, strategies=["a"])
+    assert d.positions.can_execute("P", "MNQ", "FLATTEN") is True, (
+        "the cooldown blocked a flatten on an open position")
+
+
+def test_a_stack_and_a_churn_are_different_rules(tmp_path):
+    """
+    "Already in it" and "just taken out of it" send an operator to different
+    places, so anything filtering on `rule` has to tell them apart. One wording
+    for both is what made the MES churn read as an ordinary stack.
+    """
+    d = build(tmp_path, assignments={}, state={})
+    d.positions.begin_cycle(1)
+    d.positions.record_fill("P", "MNQ", "long", 1, strategies=["a"])
+
+    stacking = d.positions.hold_reason("P", "MNQ", "BUY")
+    assert "position already active" in stacking
+
+    d.positions.record_flat("P", "MNQ")
+    churning = d.positions.hold_reason("P", "MNQ", "BUY")
+    assert churning == COOLDOWN_TEMPLATE.format(
+        portfolio_id="P", symbol="MNQ", action="BUY")
+    assert stacking != churning
+
+
+def test_a_still_claimed_position_is_never_closed_and_reopened(tmp_path):
+    """
+    TARGET-DELTA NETTING. Held LONG and the cycle still wants LONG is a HOLD,
+    not a close followed by a re-open: the round trip pays the spread twice for
+    a position the portfolio ends the cycle holding either way.
+    """
+    d = build(tmp_path, assignments={}, state={})
+    d.positions.begin_cycle(1)
+    d.positions.record_fill("Incubator-Odd", "MNQ", "long", 1,
+                            strategies=["alpha_one"])
+
+    intents = d.positions.plan_exits(
+        [{"portfolio_id": "Incubator-Odd", "symbol": "MNQ",
+          "strategy_id": "alpha_one"}],
+        net_positions={"Incubator-Odd": {"MNQ": {"direction": "long"}}})
+
+    assert intents[0]["emit"] is False
+    assert "still holds" in intents[0]["reason"]
+    assert d.positions.state("Incubator-Odd", "MNQ") == "long"
+
+
+def test_the_flatten_appears_on_the_console_card(tmp_path):
+    """
+    Every FLATTEN this loop sent was ABSENT from `describe_cycle` until
+    2026-09-02, which is why the MES churn took a log audit to find: the order
+    that closed the position each cycle left no line anywhere, so the console
+    showed a bare re-entry and the loop looked like a stack gate that had
+    stopped working.
+    """
+    sender = RecordingSender()
+    root = tmp_path / "strategies"
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["alpha_one"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"alpha_one": dict(side="long")},
+              dry_run=False, sender=sender,
+              crosstrade_url="https://crosstrade.invalid/hooks/T",
+              crosstrade_key="K")
+
+    d.process_bar_cycle({"MNQ": make_bars()})
+    write_strategy(root, "alpha_one", side="flat", exit_on_last=True)
+    d.strategies = []
+    d._load_active_strategies()
+    report = d.process_bar_cycle({"MNQ": make_bars()})
+
+    card = d.describe_cycle(report)
+    assert "FLATTEN" in card, f"the flatten is invisible on the card:\n{card}"
+    assert "Incubator-Odd/MNQ" in card

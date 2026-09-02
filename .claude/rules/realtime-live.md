@@ -209,6 +209,39 @@ that produced no entry and is never counted as an approval.
     against a short of one NETS FLAT at the broker rather than opening a long,
     so the book recording LONG after it is a claim about intent, not about the
     account. Reverse by flattening and then entering.
+  - **AN EXIT MAY ONLY FLATTEN A POSITION IT OPENED.** Added 2026-09-02 after
+    the MES churn loop: a BUY every ~62 seconds, thirty of them, no hold in
+    between, while the identical setup an hour earlier held correctly thirteen
+    times running. `master_live` calls `process_bar_cycle` once per TIMEFRAME
+    BUCKET against ONE shared book, and `plan_exits` builds its "still claimed"
+    set from the bucket it was handed — so a 15m strategy's exit arrived in a
+    bucket where the 30m strategies that opened the position were never
+    evaluated, their claim was absent, the pair looked unclaimed, and the exit
+    flattened a position it was not in. The next bucket re-opened it. 29 of the
+    30 re-entry cycles carried an MES exit signal that minute; 0 of the 13 held
+    cycles did. `PositionBook.record_fill` already stores the contributor ids,
+    so `_owns()` compares the exiting strategy against them. **An UNKNOWN owner
+    set still permits the flatten** — an older record must stay closeable,
+    because a flatten that cannot fire strands inventory, which is the
+    expensive direction to be wrong in.
+  - **A pair flattened earlier in a cycle cannot be re-entered on it.**
+    `begin_cycle(token)` / `exited_this_cycle()` / `COOLDOWN_TEMPLATE`, and the
+    refusal carries `rule="exit_cooldown"` rather than `position_open`: a stack
+    is "you are already in it" and a churn is "you were just taken out of it",
+    which send an operator to different places. **THE TOKEN IS MINTED IN
+    `master_live`'s outer loop, never in `process_bar_cycle`** — that method
+    runs once per bucket, so a per-bucket token would reset between the 15m
+    exit and the 30m re-entry and the guard would be blind to the exact pair it
+    exists to catch. **The cooldown is INERT until a cycle is declared**
+    (`_cycle` starts `None`), so a one-off script keeps the behaviour it had
+    rather than locking itself out of every re-entry after its first exit. It
+    gates ENTRIES only; blocking a second flatten would strand inventory.
+  - **`describe_cycle` PRINTS `exit_orders`.** It did not until 2026-09-02, and
+    that is why the churn took a log audit to find: the FLATTEN that closed the
+    position every cycle left no line anywhere, so the console showed a bare
+    re-entry and the loop read as a stack gate that had stopped working. A
+    flatten is the one order whose job is to close a position; it is the last
+    thing that should be invisible.
 - **`MAX_QTY = 1` CLAMPS, it does not reject.** Changed 2026-09-02; it
   rejected until then. An order asking for more is reduced to `max_qty` and
   SENT, carrying its `strategy_tag`. **THE ATR SIZER ROUTINELY ASKS FOR MORE

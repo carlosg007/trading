@@ -201,6 +201,22 @@ class PositionBook:
         return [dict(v) for _, v in sorted(self._open.items())]
 
     # ------------------------------------------------------------------
+    def _owns(self, portfolio_id: str, symbol: str,
+              strategy_id: object) -> bool:
+        """
+        Is `strategy_id` one of the strategies this position was opened by?
+
+        TRUE WHEN THE OWNER SET IS UNKNOWN. A position recorded without
+        contributors - an older record, or a fill whose plan carried none -
+        must stay closeable, because a flatten that cannot fire strands
+        inventory and that is the expensive direction to be wrong in.
+        """
+        held = self._open.get(self._key(portfolio_id, symbol)) or {}
+        owners = held.get("strategies") or []
+        if not owners:
+            return True
+        return str(strategy_id) in set(owners)
+
     def plan_exits(self, exit_signals: list[dict],
                    net_positions: dict | None = None) -> list[dict]:
         """
@@ -248,6 +264,35 @@ class PositionBook:
                     "no position opened by this process for "
                     f"{pid}/{symbol}; declining to flatten an account this "
                     "loop cannot vouch for")
+            elif not self._owns(pid, symbol, signal.get("strategy_id")):
+                # THE CROSS-BUCKET GUARD. `claimed` above is built from ONE
+                # call's `net_positions`, and `master_live` calls the loop once
+                # per TIMEFRAME BUCKET against a book that is shared by all of
+                # them. So a 15m strategy's exit arrives in a cycle where the
+                # 30m strategies that actually opened the position were never
+                # evaluated, their claim is absent, and the pair looks
+                # unclaimed. Measured on MES 2026-09-02 15:30-15:59: the 15m
+                # bucket flattened the position the 30m bucket had opened
+                # seconds earlier, every 60-second cycle, and the 30m bucket
+                # re-opened it on the next pass - 30 entries, no holds, while
+                # the identical setup an hour earlier with no 15m exit signal
+                # held correctly 13 times running.
+                #
+                # A flatten closes the WHOLE netted position, so the only
+                # strategy entitled to ask for one is a strategy that is in it.
+                # An unknown owner set falls through to the claim check
+                # unchanged: refusing there would strand inventory this process
+                # cannot otherwise close, which is the failure direction that
+                # costs money.
+                held = self.get(pid, symbol) or {}
+                base["reason"] = (
+                    f"{signal.get('strategy_id')} did not open "
+                    f"{pid}/{symbol} - it is held by "
+                    f"{held.get('strategies')}, and a flatten closes the whole "
+                    f"netted position. An exit from a strategy outside that "
+                    f"set is an exit from a position it is not in, which on a "
+                    f"multi-timeframe loop is one bucket closing another "
+                    f"bucket's trade.")
             elif key in claimed:
                 base["reason"] = (
                     f"another strategy still holds {pid}/{symbol} this cycle; "

@@ -98,6 +98,13 @@ CLOSING_ACTIONS = frozenset({"CLOSE", "FLATTEN"})
 HOLD_TEMPLATE = ("HOLD {portfolio_id}/{symbol} {action} — position already "
                  "active. Preventing stack.")
 
+#: The line for an entry refused because the position was closed EARLIER IN
+#: THIS SAME CYCLE. A different refusal from the one above and it says so: a
+#: stack is "you are already in it", a cooldown is "you were just taken out of
+#: it", and an operator reading a churn loop needs to tell those apart.
+COOLDOWN_TEMPLATE = ("HOLD {portfolio_id}/{symbol} {action} — exit occurred in "
+                     "current cycle. Cooldown active.")
+
 
 class PositionBook(NettedPositionBook):
     """
@@ -108,6 +115,64 @@ class PositionBook(NettedPositionBook):
     `portfolio.portfolio_manager.PositionBook`. This class adds the entry gate
     and nothing else, so there is exactly one record of what this process holds.
     """
+
+    #: The cycle token this book is currently inside, and the pairs flattened
+    #: during it. `None` means no caller has declared a cycle, and the cooldown
+    #: is then INERT - see `begin_cycle`.
+    _cycle: object = None
+
+    def begin_cycle(self, cycle_id: object = None) -> object:
+        """
+        Declare a new cycle, clearing the same-cycle exit cooldown.
+
+        THE TOKEN HAS TO COME FROM THE OUTER LOOP, not from
+        `process_bar_cycle`. `master_live` calls that once per TIMEFRAME BUCKET
+        - 5m, 15m, 30m, 1h - against one shared book, so a token minted per
+        bucket would reset between the 15m bucket's exit and the 30m bucket's
+        re-entry and the cooldown would be blind to the exact churn it exists
+        to stop.
+
+        THE COOLDOWN IS INERT UNTIL THIS IS CALLED. `_cycle` starts `None` and
+        `can_execute` refuses on it only when a token is set, so a one-off
+        script or a test that never declares a cycle keeps the behaviour it
+        always had rather than locking itself out of every re-entry after the
+        first exit - which is what a cooldown with no way to expire would do.
+
+        Returns the token now in force.
+        """
+        self._cycle = object() if cycle_id is None else cycle_id
+        self._exited_this_cycle: dict[tuple[str, str], object] = {}
+        return self._cycle
+
+    def record_flat(self, portfolio_id: str, symbol: str) -> dict | None:
+        """
+        Close a position, and STAMP the pair with the cycle it closed in.
+
+        The stamp is what `can_execute` reads to refuse a re-entry on the same
+        cycle. Written here rather than at the dispatcher's call site because
+        this is the one place a position stops being open, and a cooldown
+        recorded anywhere else would miss a closure that took another path.
+        """
+        if self._cycle is not None:
+            if not hasattr(self, "_exited_this_cycle"):
+                self._exited_this_cycle = {}
+            self._exited_this_cycle[self._key(portfolio_id, symbol)] = \
+                self._cycle
+        return super().record_flat(portfolio_id, symbol)
+
+    def exited_this_cycle(self, portfolio_id: str, symbol: str) -> bool:
+        """
+        Was this pair flattened during the cycle currently in force?
+
+        Plain membership: `begin_cycle` empties the dict, so anything still in
+        it was stamped during the current cycle by construction. Comparing the
+        stored token against `_cycle` as well would be a second answer to a
+        question the reset already settles, and the two could disagree.
+        """
+        if self._cycle is None:
+            return False
+        return self._key(portfolio_id, symbol) in getattr(
+            self, "_exited_this_cycle", {})
 
     def state(self, portfolio_id: str, symbol: str) -> str:
         """
@@ -150,6 +215,17 @@ class PositionBook(NettedPositionBook):
         current = self.state(portfolio_id, symbol)
         act = str(action).strip().upper()
 
+        # THE SAME-CYCLE COOLDOWN, and it gates ENTRIES ONLY. A pair flattened
+        # earlier in this cycle cannot be re-entered on it: an exit and a
+        # re-entry one second apart is not two decisions, it is one decision
+        # the loop made twice, and it pays the spread both ways for a position
+        # it still holds at the end. Closing actions are deliberately NOT
+        # gated - the state check below already refuses a CLOSE on a flat book,
+        # and a cooldown that could block a second flatten would be a cooldown
+        # that strands inventory.
+        if act in (BUY, SELL) and self.exited_this_cycle(portfolio_id, symbol):
+            return False
+
         if act == BUY:
             return current in (FLAT, SHORT)
         if act == SELL:
@@ -168,8 +244,17 @@ class PositionBook(NettedPositionBook):
         pair and naming one of them would report the block against a strategy
         that may not even have signalled this cycle.
         """
+        act = str(action).strip().upper()
+        # THE COOLDOWN GETS ITS OWN LINE. "Already in it" and "just taken out
+        # of it" send an operator to different places - the first to the
+        # strategy that will not stop signalling, the second to whatever
+        # flattened the position a second earlier - and one wording for both
+        # would have made the MES churn read as an ordinary stack.
+        if act in (BUY, SELL) and self.exited_this_cycle(portfolio_id, symbol):
+            return COOLDOWN_TEMPLATE.format(portfolio_id=portfolio_id,
+                                            symbol=symbol, action=act)
         return HOLD_TEMPLATE.format(portfolio_id=portfolio_id, symbol=symbol,
-                                    action=str(action).strip().upper())
+                                    action=act)
 
 
 def quantity_refusal(quantity: object, cap: int | None = None) -> dict | None:
@@ -200,5 +285,6 @@ def quantity_refusal(quantity: object, cap: int | None = None) -> dict | None:
             "detail": f"sizer asked {quantity}, cap is {cap}"}
 
 
-__all__ = ["BUY", "CLOSING_ACTIONS", "FLAT", "HOLD_TEMPLATE", "LONG",
-           "MAX_QTY", "PositionBook", "SELL", "SHORT", "quantity_refusal"]
+__all__ = ["BUY", "CLOSING_ACTIONS", "COOLDOWN_TEMPLATE", "FLAT",
+           "HOLD_TEMPLATE", "LONG", "MAX_QTY", "PositionBook", "SELL",
+           "SHORT", "quantity_refusal"]

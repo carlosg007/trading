@@ -397,6 +397,14 @@ def main(argv: list[str] | None = None) -> int:
     cycles = failures = 0
     while True:
         cycles += 1
+        # THE CYCLE TOKEN, AND IT IS MINTED HERE RATHER THAN IN
+        # `process_bar_cycle`. That method runs once per TIMEFRAME BUCKET
+        # against ONE shared position book, so a token minted per bucket would
+        # reset between the 15m bucket's exit and the 30m bucket's re-entry -
+        # which is exactly the pair the cooldown exists to catch. Declaring it
+        # here is what makes "the same cycle" mean the same 60 seconds the
+        # operator sees on the console.
+        dispatcher.positions.begin_cycle(cycles)
         # ONE BUCKET PER BAR WIDTH THE ROSTER NEEDS, resolved every cycle
         # rather than once at startup: `active_strategies` can be edited under
         # a running loop, and a bucket list fixed at boot would keep feeding a
