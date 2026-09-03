@@ -1092,6 +1092,72 @@
         }
       }
     },
+    "Eval-Odd": {
+      "portfolio_id": "Eval-Odd",
+      "account_type": "prop_evaluation",
+      "target_account": "SimPropSim",
+      "default_account_size": 50000,
+      "risk_profile": {
+        "fixed_risk_budget_usd": 250.0,
+        "max_trailing_drawdown_usd": 2500.0,
+        "max_forward_incubation_dd_pct": 0.4,
+        "clamping": {
+          "min_contracts": 1,
+          "max_contracts": 1
+        }
+      },
+      "basket": {
+        "assets": [
+          "MNQ",
+          "6E",
+          "6J"
+        ],
+        "correlation_group": "Index_FX_Uncorrelated",
+        "regime_quadrants": [
+          "Q1_HIGH_VOL_TREND",
+          "Q2_HIGH_VOL_CHOP",
+          "Q3_LOW_VOL_TREND",
+          "Q4_LOW_VOL_MEAN_REVERSION"
+        ],
+        "structures": [
+          "MOMENTUM_TREND",
+          "MEAN_REVERSION_SCALP"
+        ]
+      },
+      "active_strategies": []
+    },
+    "Prop-Odd": {
+      "portfolio_id": "Prop-Odd",
+      "account_type": "prop_eval",
+      "target_account": "SimProp1",
+      "default_account_size": 50000,
+      "risk_profile": {
+        "fixed_risk_budget_usd": 250.0,
+        "max_trailing_drawdown_usd": 2500.0,
+        "max_forward_incubation_dd_pct": 0.4,
+        "clamping": {
+          "min_contracts": 1,
+          "max_contracts": 5
+        }
+      },
+      "basket": {
+        "assets": [
+          "MNQ"
+        ],
+        "correlation_group": "Index_Energy_Uncorrelated",
+        "regime_quadrants": [
+          "Q1_HIGH_VOL_TREND",
+          "Q2_HIGH_VOL_CHOP",
+          "Q3_LOW_VOL_TREND",
+          "Q4_LOW_VOL_MEAN_REVERSION"
+        ],
+        "structures": [
+          "MOMENTUM_TREND",
+          "MEAN_REVERSION_SCALP"
+        ]
+      },
+      "active_strategies": []
+    },
     "Incubator-Even": {
       "portfolio_id": "Incubator-Even",
       "account_type": "incubator_sim",
@@ -2103,10 +2169,10 @@
         }
       }
     },
-    "Prop-Odd": {
-      "portfolio_id": "Prop-Odd",
-      "account_type": "prop_eval",
-      "target_account": "SimProp1",
+    "Eval-Even": {
+      "portfolio_id": "Eval-Even",
+      "account_type": "prop_evaluation",
+      "target_account": "Sim101",
       "default_account_size": 50000,
       "risk_profile": {
         "fixed_risk_budget_usd": 250.0,
@@ -2114,14 +2180,15 @@
         "max_forward_incubation_dd_pct": 0.4,
         "clamping": {
           "min_contracts": 1,
-          "max_contracts": 5
+          "max_contracts": 1
         }
       },
       "basket": {
         "assets": [
-          "MNQ"
+          "MES",
+          "MGC"
         ],
-        "correlation_group": "Index_Energy_Uncorrelated",
+        "correlation_group": "Index_Metals_Uncorrelated",
         "regime_quadrants": [
           "Q1_HIGH_VOL_TREND",
           "Q2_HIGH_VOL_CHOP",
@@ -2129,8 +2196,8 @@
           "Q4_LOW_VOL_MEAN_REVERSION"
         ],
         "structures": [
-          "MOMENTUM_TREND",
-          "MEAN_REVERSION_SCALP"
+          "BREAKOUT_EXPANSION",
+          "VOLATILITY_PULLBACK"
         ]
       },
       "active_strategies": []

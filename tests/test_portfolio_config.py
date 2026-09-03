@@ -82,9 +82,14 @@ CONFIG_PATH = REPO / DEFAULT_CONFIG_PATH
 # off the file instead, this case would pass whatever the accounts were
 # renamed to — and an order sent to an account NinjaTrader does not have is
 # rejected on a config that loads perfectly.
+# The NT8 account each rung executes on. Two streams of three since
+# 2026-09-03: the evaluation accounts sit between incubation and a funded
+# book, and `promotion_daemon.PROMOTION_ROUTES` walks the same ladder.
 EXECUTION_ACCOUNTS = {"Incubator-Odd": "SimIncubator1",
-                      "Incubator-Even": "SimIncubator2",
+                      "Eval-Odd": "SimPropSim",
                       "Prop-Odd": "SimProp1",
+                      "Incubator-Even": "SimIncubator2",
+                      "Eval-Even": "Sim101",
                       "Prop-Even": "SimProp2"}
 
 # The strategies the shipped routing table is EXPECTED to hold, named one by
@@ -692,7 +697,7 @@ def test_an_unassigned_strategy_raises_rather_than_being_routed() -> None:
 
     msg = raises(get_portfolio_for_strategy, "double_rsi_macd_scalp",
                  is_incubating=False, config=cfg)
-    assert "not assigned to any prop portfolio" in msg, msg
+    assert "not assigned to any evaluation or prop portfolio" in msg, msg
     assert "Prop-Even" in msg and "Prop-Odd" in msg, msg
 
 
@@ -712,7 +717,7 @@ def test_an_assigned_strategy_routes_by_track() -> None:
                                       config=cfg) == "Prop-Odd"
     assert get_portfolio_for_strategy("strat_b", config=cfg) == "Incubator-Even"
     # `strat_b` was never promoted to the prop track.
-    assert "not assigned to any prop portfolio" in raises(
+    assert "not assigned to any evaluation or prop portfolio" in raises(
         get_portfolio_for_strategy, "strat_b", is_incubating=False, config=cfg)
 
 

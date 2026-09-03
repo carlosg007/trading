@@ -100,6 +100,7 @@ from portfolio.config_loader import (  # noqa: E402
 from portfolio.promotion_daemon import (  # noqa: E402
     DEFAULT_LEDGER_PATH,
     PROMOTION_ROUTES,
+    GRADUATED_STATUSES,
     STATUS_GRADUATED,
     STATUS_INCUBATING,
     PromotionError,
@@ -213,7 +214,7 @@ def evaluate_all(ledger: dict, config: dict) -> list[dict[str, Any]]:
         account, provenance = resolve_account(strategy_id, entry, assignments)
         row["account"] = account or "—"
 
-        if ledger_status == STATUS_GRADUATED:
+        if ledger_status in GRADUATED_STATUSES:
             row["status"] = "GRADUATED"
             row["account"] = entry.get("target_portfolio") or row["account"]
             row["note"] = f"graduated {entry.get('graduated_at', 'at an unrecorded time')}"

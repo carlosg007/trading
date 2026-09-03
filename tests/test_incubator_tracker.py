@@ -37,7 +37,7 @@ WHAT THIS COVERS, and why each case is here rather than assumed:
     unfilled ledger, not a strategy that placed no trades, and defaulting it
     would make those indistinguishable at the moment an account is handed over.
   * **THE PROMOTION MOVES BOTH FILES OR NEITHER.** `Incubator-Odd` ->
-    `Prop-Odd` in `portfolios.json` AND `INCUBATING` -> `GRADUATED_PROP` in the
+    `Eval-Odd` in `portfolios.json` AND `INCUBATING` -> `GRADUATED_EVAL` in the
     ledger, with the strategy REMOVED from the source list — an append that
     left it in place would be a second live assignment of the same strategy,
     which is the one outcome that doubles a position.
@@ -68,6 +68,7 @@ from portfolio.promotion_daemon import (                           # noqa: E402
     MIN_PROFIT_FACTOR,
     MIN_TRADE_COUNT,
     STATUS_GRADUATED,
+    STATUS_GRADUATED_EVAL,
     STATUS_INCUBATING,
     PromotionError,
     allowable_forward_dd,
@@ -463,8 +464,10 @@ def _read(path: Path) -> dict:
 
 
 def test_promotion_updates_both_files(workspace) -> None:
-    """`Incubator-Odd` -> `Prop-Odd` in the routing table, and INCUBATING ->
-    GRADUATED_PROP in the ledger. The removal from the source list is as much
+    """`Incubator-Odd` -> `Eval-Odd` in the routing table, and INCUBATING ->
+    GRADUATED_EVAL in the ledger. ONE HOP: the ladder gained an evaluation
+    rung on 2026-09-03, and a strategy that cleared incubation has not
+    reached a funded book. The removal from the source list is as much
     the point as the append to the target: leaving it on both would be a second
     live assignment of the same strategy against the same signal."""
     config_path, ledger_path = workspace
@@ -474,7 +477,9 @@ def test_promotion_updates_both_files(workspace) -> None:
 
     portfolios = _read(config_path)["portfolios"]
     assert portfolios["Incubator-Odd"]["active_strategies"] == []
-    assert portfolios["Prop-Odd"]["active_strategies"] == ["alpha_x"]
+    assert portfolios["Eval-Odd"]["active_strategies"] == ["alpha_x"]
+    assert portfolios["Prop-Odd"]["active_strategies"] == [], (
+        "the first hop reached the funded book, skipping evaluation")
     # THE OTHER ACCOUNTS ARE UNTOUCHED: a promotion moves one strategy.
     #
     # Compared against what the REAL routing table holds, not against `[]`.
@@ -483,15 +488,15 @@ def test_promotion_updates_both_files(workspace) -> None:
     # nothing to the other accounts — true until the first one was, and a fact
     # about the config rather than about `promote_strategy`.
     live = json.loads(CONFIG_PATH.read_text())["portfolios"]
-    for pid in ("Incubator-Even", "Prop-Even"):
+    for pid in ("Incubator-Even", "Eval-Even", "Prop-Even"):
         assert (portfolios[pid]["active_strategies"]
                 == (live[pid].get("active_strategies") or [])), (
             f"{pid} changed; a promotion moves one strategy and leaves every "
             f"other account exactly as it was")
 
     record = _read(ledger_path)["strategies"]["alpha_x"]
-    assert record["status"] == STATUS_GRADUATED
-    assert record["target_portfolio"] == "Prop-Odd"
+    assert record["status"] == STATUS_GRADUATED_EVAL
+    assert record["target_portfolio"] == "Eval-Odd"
     assert record["source_portfolio"] == "Incubator-Odd"
     assert record["graduated_at"].startswith("20")
     # The forward evidence the decision rested on survives the stamp.
@@ -508,7 +513,7 @@ def test_the_written_config_still_loads(workspace) -> None:
     reloaded = config_loader.load_portfolio_config(str(config_path),
                                                    use_cache=False)
     assert config_loader.get_portfolio_for_strategy(
-        "alpha_x", is_incubating=False, config=reloaded) == "Prop-Odd"
+        "alpha_x", is_incubating=False, config=reloaded) == "Eval-Odd"
 
 
 def test_promotion_is_idempotent(workspace) -> None:
@@ -523,7 +528,7 @@ def test_promotion_is_idempotent(workspace) -> None:
     assert promote_strategy("alpha_x", "Incubator-Odd",
                             config_path=str(config_path),
                             ledger_path=str(ledger_path)) is False
-    assert _read(config_path)["portfolios"]["Prop-Odd"][
+    assert _read(config_path)["portfolios"]["Eval-Odd"][
         "active_strategies"] == ["alpha_x"]
 
 
@@ -563,9 +568,11 @@ def test_the_route_is_a_table_not_a_name() -> None:
     """`Prop-` + suffix would promote `Incubator-Test` onto a `Prop-Test`
     account that does not exist, and the failure would surface as a KeyError
     several layers from the typo."""
-    assert target_portfolio_for("Incubator-Odd") == "Prop-Odd"
-    assert target_portfolio_for("Incubator-Even") == "Prop-Even"
-    for bad in ("Prop-Odd", "Incubator-Test", "incubator-odd", ""):
+    assert target_portfolio_for("Incubator-Odd") == "Eval-Odd"
+    assert target_portfolio_for("Eval-Odd") == "Prop-Odd"
+    assert target_portfolio_for("Incubator-Even") == "Eval-Even"
+    assert target_portfolio_for("Eval-Even") == "Prop-Even"
+    for bad in ("Incubator-Test", "incubator-odd", ""):
         with pytest.raises(PromotionError):
             target_portfolio_for(bad)
 
@@ -729,10 +736,10 @@ def test_cli_auto_promote_moves_the_strategy(workspace) -> None:
                     "--auto-promote")
     assert proc.returncode == 0, proc.stderr
     assert "PROMOTED" in proc.stdout
-    assert _read(config_path)["portfolios"]["Prop-Odd"][
+    assert _read(config_path)["portfolios"]["Eval-Odd"][
         "active_strategies"] == ["alpha_x"]
     assert _read(ledger_path)["strategies"]["alpha_x"]["status"] == \
-        STATUS_GRADUATED
+        STATUS_GRADUATED_EVAL
 
 
 def test_a_strategy_the_routing_table_does_not_name_is_unrouted(
@@ -755,13 +762,13 @@ def test_a_strategy_the_routing_table_does_not_name_is_unrouted(
     assert proc.returncode == 0, proc.stderr
     assert "UNROUTED" in proc.stdout
     assert "Incubator-Even" in proc.stdout
-    assert _read(config_path)["portfolios"]["Prop-Even"][
+    assert _read(config_path)["portfolios"]["Eval-Even"][
         "active_strategies"] == []
     assert _read(ledger_path)["strategies"]["unrouted"]["status"] == \
         STATUS_INCUBATING
     # The qualifying strategy on the same run still promoted: one unroutable
     # row must not stall the evening's audit.
-    assert _read(config_path)["portfolios"]["Prop-Odd"][
+    assert _read(config_path)["portfolios"]["Eval-Odd"][
         "active_strategies"] == ["alpha_x"]
 
 

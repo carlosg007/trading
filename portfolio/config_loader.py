@@ -123,12 +123,28 @@ DEFAULT_CONFIG_PATH = "config/portfolios.json"
 # happens to contain: a config missing `Prop-Even` is a routing table with a
 # hole in it, and the hole would only surface when a strategy needed that
 # account.
-REQUIRED_PORTFOLIOS = ("Incubator-Odd", "Incubator-Even",
-                       "Prop-Odd", "Prop-Even")
+#: The lifecycle, two streams of three. `Eval-*` was added 2026-09-03 for the
+#: evaluation accounts (SimPropSim, Sim101) that sit between incubation and a
+#: funded book; `promotion_daemon.PROMOTION_ROUTES` walks the same ladder in
+#: two hops. They carry `prop_eval` - the enum already had it, so no account
+#: type was invented for them.
+REQUIRED_PORTFOLIOS = ("Incubator-Odd", "Eval-Odd", "Prop-Odd",
+                       "Incubator-Even", "Eval-Even", "Prop-Even")
 
 INCUBATOR_ACCOUNT_TYPE = "incubator_sim"
 PROP_ACCOUNT_TYPE = "prop_eval"
-ACCOUNT_TYPES = (INCUBATOR_ACCOUNT_TYPE, PROP_ACCOUNT_TYPE)
+#: The middle rung, added 2026-09-03. An evaluation account is not a funded
+#: book and it is not an incubator: it trades the prop firm's rules on the
+#: firm's terms with nothing funded behind it yet.
+#:
+#: IT NEEDED ITS OWN TYPE RATHER THAN REUSING `prop_eval`, and the reason is
+#: the orthogonality check below. That check reads `account_type` as the
+#: LADDER STAGE - its own comment says mirroring the same basket across tracks
+#: is the intended design - so with evaluation and prop sharing one type it
+#: compared two STAGES of one stream and refused `Eval-Odd` beside `Prop-Odd`
+#: for both holding MNQ, which is the ladder working rather than a fault.
+EVAL_ACCOUNT_TYPE = "prop_evaluation"
+ACCOUNT_TYPES = (INCUBATOR_ACCOUNT_TYPE, EVAL_ACCOUNT_TYPE, PROP_ACCOUNT_TYPE)
 
 # The schema's regime labels mapped onto `mdlib.regimes` / `backtest.profiler`
 # ids. FROM SCHEMA VERSION 1.1.0 THE DIGITS AGREE, and this table is what keeps
@@ -962,16 +978,24 @@ def get_portfolio_for_strategy(strategy_id: str,
     parameter rather than a search across all four.
     """
     cfg = _config(config, config_path)
-    wanted = INCUBATOR_ACCOUNT_TYPE if is_incubating else PROP_ACCOUNT_TYPE
+    # NOT INCUBATING MEANS EITHER GRADUATED RUNG. The ladder gained an
+    # evaluation stage on 2026-09-03, so a strategy that has left incubation
+    # sits in `Eval-*` first and reaches `Prop-*` only on the second hop.
+    # Matching `prop_eval` alone reported a strategy in evaluation as
+    # "not assigned to any prop portfolio" - which is true and useless, since
+    # it IS assigned, one rung down. The boolean stays because every caller
+    # asks the same question: is this still incubating, or has it moved on.
+    wanted = ((INCUBATOR_ACCOUNT_TYPE,) if is_incubating
+              else (EVAL_ACCOUNT_TYPE, PROP_ACCOUNT_TYPE))
     matches = [pid for pid, p in cfg["portfolios"].items()
-               if p["account_type"] == wanted
+               if p["account_type"] in wanted
                and strategy_id in (p.get("active_strategies") or [])]
     if len(matches) == 1:
         return matches[0]
-    track = "incubator" if is_incubating else "prop"
+    track = "incubator" if is_incubating else "evaluation or prop"
     if not matches:
         candidates = sorted(pid for pid, p in cfg["portfolios"].items()
-                            if p["account_type"] == wanted)
+                            if p["account_type"] in wanted)
         raise PortfolioConfigError(
             f"{strategy_id!r} is not assigned to any {track} portfolio. Add it "
             f"to `active_strategies` on one of {candidates} in "

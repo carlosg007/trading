@@ -579,9 +579,14 @@ def test_untouched_portfolios_are_byte_identical() -> None:
 # ==========================================================================
 def test_graduation_moves_the_allocation_record_with_the_permission() -> None:
     """
-    `portfolio/promotion_daemon.py` moves Incubator -> Prop. Moving only
+    `portfolio/promotion_daemon.py` moves ONE HOP of the ladder. Moving only
     `active_strategies` would leave the record on an account that no longer
     holds the strategy, beside one holding it with nothing describing it.
+
+    THE FIRST HOP IS INCUBATOR -> EVAL since 2026-09-03, not Incubator ->
+    Prop, and the status says so: a strategy that cleared incubation has
+    reached an EVALUATION account and stamping it `GRADUATED_PROP` would
+    report it as trading a funded book.
     """
     from portfolio.promotion_daemon import promote_strategy
 
@@ -597,10 +602,40 @@ def test_graduation_moves_the_allocation_record_with_the_permission() -> None:
                      ledger_path=str(ledger_path))
     blob = read(path)["portfolios"]
     assert STRAT not in (blob["Incubator-Odd"].get(ALLOCATIONS_KEY) or {})
-    moved = blob["Prop-Odd"][ALLOCATIONS_KEY][STRAT]
-    assert moved["status"] == "GRADUATED_PROP", moved["status"]
+    assert STRAT not in (blob["Prop-Odd"].get(ALLOCATIONS_KEY) or {}), (
+        "the first hop reached the funded book, skipping evaluation")
+    moved = blob["Eval-Odd"][ALLOCATIONS_KEY][STRAT]
+    assert moved["status"] == "GRADUATED_EVAL", moved["status"]
     assert moved["source_portfolio"] == "Incubator-Odd"
     assert moved["symbol"] == "NQ"
+
+
+def test_the_second_hop_reaches_the_funded_book() -> None:
+    """
+    Eval -> Prop, graded on the forward trades the EVALUATION account
+    produced. A strategy that cleared incubation has said nothing yet about
+    whether it clears a prop firm's own rules, which is the whole reason the
+    rung exists.
+    """
+    from portfolio.promotion_daemon import promote_strategy
+
+    path = temp_config()
+    register_portfolio(STRAT, version="A", scope=scope(quadrant="Q4"),
+                       portfolio="incubator-odd", config_path=path)
+    ledger_path = path.parent / "incubator_ledger.json"
+    ledger_path.write_text(json.dumps({"strategies": {STRAT: {
+        "status": "INCUBATING", "portfolio": "Incubator-Odd"}}}), "utf-8")
+
+    promote_strategy(STRAT, "Incubator-Odd", config_path=str(path),
+                     ledger_path=str(ledger_path))
+    promote_strategy(STRAT, "Eval-Odd", config_path=str(path),
+                     ledger_path=str(ledger_path))
+
+    blob = read(path)["portfolios"]
+    assert STRAT not in (blob["Eval-Odd"].get(ALLOCATIONS_KEY) or {})
+    moved = blob["Prop-Odd"][ALLOCATIONS_KEY][STRAT]
+    assert moved["status"] == "GRADUATED_PROP", moved["status"]
+    assert moved["source_portfolio"] == "Eval-Odd"
 
 
 # ==========================================================================
@@ -620,8 +655,8 @@ def test_a_missing_routing_table_is_created_rather_than_failing_a_promotion() ->
     out = register_portfolio(STRAT, version="A", scope=scope(),
                              config_path=path)
     blob = read(path)
-    assert set(blob["portfolios"]) == {"Incubator-Odd", "Incubator-Even",
-                                       "Prop-Odd", "Prop-Even"}
+    from portfolio.config_loader import REQUIRED_PORTFOLIOS
+    assert set(blob["portfolios"]) == set(REQUIRED_PORTFOLIOS)
     assert out["portfolio_id"] in incubator_portfolios(blob["portfolios"])
     # The one account that did NOT take the strategy is empty, which is what
     # "initialised to []" has to mean for it to be worth anything.
@@ -654,8 +689,11 @@ def test_a_bootstrapped_table_still_loads_through_the_real_loader() -> None:
     path = Path(tempfile.mkdtemp(prefix="promote_boot_")) / "portfolios.json"
     register_portfolio(STRAT, version="A", scope=scope(), config_path=path)
     cfg = load_portfolio_config(path)
-    assert set(cfg["portfolios"]) == {"Incubator-Odd", "Incubator-Even",
-                                      "Prop-Odd", "Prop-Even"}
+    # Compared against the LOADER's own requirement rather than a literal set:
+    # the ladder gained an evaluation rung on 2026-09-03 and a hardcoded four
+    # here would fail on the config change instead of on a bootstrap defect.
+    from portfolio.config_loader import REQUIRED_PORTFOLIOS
+    assert set(cfg["portfolios"]) == set(REQUIRED_PORTFOLIOS)
 
 
 def test_a_group_missing_from_an_existing_table_is_created_alone() -> None:

@@ -944,6 +944,22 @@ INCUBATOR_TRACK_TEMPLATE: dict[str, dict[str, Any]] = {
                        "correlation_group": "Index_Metals_Uncorrelated",
                        "regime_quadrants": ["Q1_HIGH_VOL_TREND",
                                             "Q2_HIGH_VOL_CHOP"]},
+    # The evaluation rung, added 2026-09-03. Its own `account_type` because
+    # the loader's orthogonality check reads that field as the LADDER STAGE:
+    # sharing `prop_eval` with the funded book made it compare two stages of
+    # one stream and refuse Eval-Odd beside Prop-Odd for both holding MNQ.
+    "Eval-Odd":       {"account_type": "prop_evaluation",
+                       "execution_account": "SimPropSim",
+                       "assets": ["MNQ", "MCL"],
+                       "correlation_group": "Index_Energy_Uncorrelated",
+                       "regime_quadrants": ["Q3_LOW_VOL_TREND",
+                                            "Q4_LOW_VOL_MEAN_REVERSION"]},
+    "Eval-Even":      {"account_type": "prop_evaluation",
+                       "execution_account": "Sim101",
+                       "assets": ["MES", "MGC"],
+                       "correlation_group": "Index_Metals_Uncorrelated",
+                       "regime_quadrants": ["Q1_HIGH_VOL_TREND",
+                                            "Q2_HIGH_VOL_CHOP"]},
     "Prop-Odd":       {"account_type": "prop_eval",
                        "execution_account": "SimProp1",
                        "assets": ["MNQ", "MCL"],

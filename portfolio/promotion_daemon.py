@@ -136,14 +136,52 @@ MIN_PROFIT_FACTOR = 1.00      # STRICT: 1.00 is break-even, not expectancy
 # a token nobody here defined is a decision somebody else made.
 STATUS_INCUBATING = "INCUBATING"
 STATUS_GRADUATED = "GRADUATED_PROP"
+#: The FIRST hop of the ladder, added 2026-09-03 with the evaluation tier. A
+#: strategy that has cleared incubation has reached an EVALUATION account, not
+#: a funded book, and stamping it `GRADUATED_PROP` would say on the ledger and
+#: on the tracker card that it is trading a funded account when it is not -
+#: the exact class of mislabelling this file's own header is about.
+STATUS_GRADUATED_EVAL = "GRADUATED_EVAL"
+#: Both, for the checks that ask "has this already moved" rather than "where
+#: did it move to". An equality test against one token treats a strategy in
+#: evaluation as still incubating and promotes it a second time.
+GRADUATED_STATUSES = (STATUS_GRADUATED_EVAL, STATUS_GRADUATED)
+
+
+def graduation_status(target_portfolio: str, portfolios: dict) -> str:
+    """
+    The status token for a move INTO `target_portfolio`.
+
+    Derived from the target's `account_type` rather than from which hop this
+    is, because the account type IS the ladder stage - a caller adding a rung
+    gets the right token without touching this function.
+    """
+    from portfolio.config_loader import EVAL_ACCOUNT_TYPE   # noqa: PLC0415
+    target = (portfolios or {}).get(target_portfolio) or {}
+    return (STATUS_GRADUATED_EVAL
+            if target.get("account_type") == EVAL_ACCOUNT_TYPE
+            else STATUS_GRADUATED)
 
 # The routing table, spelled out rather than derived from the name. Deriving
 # `Prop-` + suffix would promote a portfolio called `Incubator-Test` onto a
 # `Prop-Test` account that does not exist, and the failure would surface as a
 # KeyError several layers away from the typo.
+#: THE LADDER, ONE HOP PER ENTRY. Incubation proves an edge on paper,
+#: evaluation proves it on the prop firm's own rules, and only then is there a
+#: funded book. Written as a chain rather than a two-stage map so each hop is
+#: graded on its OWN forward trades: a strategy that cleared incubation has
+#: said nothing yet about whether it clears an evaluation account, and routing
+#: it straight to `Prop-*` would promote on evidence from a different account
+#: under different constraints.
+#:
+#: `target_portfolio_for` resolves ONE hop. A caller wanting the end of the
+#: chain walks it; nothing here collapses the two, because a strategy sitting
+#: in `Eval-Odd` is not a strategy that has been promoted twice.
 PROMOTION_ROUTES = {
-    "Incubator-Odd": "Prop-Odd",
-    "Incubator-Even": "Prop-Even",
+    "Incubator-Odd": "Eval-Odd",
+    "Eval-Odd": "Prop-Odd",
+    "Incubator-Even": "Eval-Even",
+    "Eval-Even": "Prop-Even",
 }
 
 # Metric aliases accepted on a ledger entry, canonical name first. Kept short
@@ -747,7 +785,8 @@ def promote_strategy(strategy_id: str,
             f"graduation stamp onto a record of the forward trades it rests "
             f"on; there is nothing here to stamp.")
 
-    already_graduated = (str(entry.get("status", "")).upper() == STATUS_GRADUATED
+    already_graduated = (str(entry.get("status", "")).upper()
+                         in GRADUATED_STATUSES
                          and strategy_id in target_list
                          and strategy_id not in source_list)
     if already_graduated:
@@ -790,7 +829,7 @@ def promote_strategy(strategy_id: str,
     src_allocs = source.get(ALLOCATIONS_KEY)
     if isinstance(src_allocs, dict) and strategy_id in src_allocs:
         moved = copy.deepcopy(src_allocs.pop(strategy_id))
-        moved["status"] = STATUS_GRADUATED
+        moved["status"] = graduation_status(target_portfolio, portfolios)
         moved["graduated_at"] = stamped_at
         moved["source_portfolio"] = source_portfolio
         tgt_allocs = target.get(ALLOCATIONS_KEY)
@@ -800,7 +839,7 @@ def promote_strategy(strategy_id: str,
         tgt_allocs[strategy_id] = moved
 
     stamped = copy.deepcopy(entry)
-    stamped["status"] = STATUS_GRADUATED
+    stamped["status"] = graduation_status(target_portfolio, portfolios)
     stamped["graduated_at"] = stamped_at
     stamped["target_portfolio"] = target_portfolio
     # What it was promoted FROM, kept beside where it went. Without it the
