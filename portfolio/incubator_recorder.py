@@ -87,9 +87,15 @@ export that grew by three rows adds three trades and not a duplicate of every
 earlier one. Duplicates are the failure that makes a strategy look like it
 cleared the 14-trade bar twice as fast as it did.
 
-A GRADUATED entry is never appended to. Its forward trades are being taken on
-a prop account and are not incubation evidence for a decision that has already
-been made.
+A `GRADUATED_PROP` entry is never appended to: its forward trades are being
+taken on a funded account and are not evidence for a decision already made.
+
+A `GRADUATED_EVAL` entry IS still appended to, and that is the point of the
+middle rung. A strategy that cleared incubation has reached an evaluation
+account and has said nothing yet about whether it clears the prop firm's own
+rules; the trades it takes on SimPropSim or Sim101 are exactly the evidence
+the second hop is graded on. The skip below is an equality test against
+`GRADUATED_PROP` for that reason, not a test for "has graduated at all".
 """
 
 from __future__ import annotations
@@ -132,16 +138,26 @@ from portfolio.promotion_daemon import (                           # noqa: E402
 # itself first, so a log already written in routing-table names needs no entry
 # here.
 #
-# These are the same four names `config/portfolios.json` carries as
+# These are the same SIX names `config/portfolios.json` carries as
 # `target_account` — the field the live loop sends as the CrossTrade `account`
 # — and `tests/test_incubator_recorder.py` reconciles the two on every run. A
 # fill recorded under an account no portfolio claims is unattributed; an order
 # sent to one NinjaTrader does not have is rejected. The two failures are at
 # opposite ends of the same day.
+#
+# THE EVALUATION ACCOUNTS ARE HERE BECAUSE THE SECOND HOP IS GRADED ON THEM.
+# Added 2026-09-03 with the three-stage ladder: a strategy in `Eval-Odd` earns
+# its move to `Prop-Odd` on forward trades taken on SimPropSim, so a fill from
+# that account that arrived UNATTRIBUTED would be evidence the promotion gate
+# never sees - and the strategy would sit in evaluation forever with its
+# ledger entry reading zero trades, which is indistinguishable from an edge
+# that stopped trading.
 NT8_ACCOUNT_ALIASES: dict[str, str] = {
     "SIMINCUBATOR1": "Incubator-Odd",
-    "SIMINCUBATOR2": "Incubator-Even",
+    "SIMPROPSIM": "Eval-Odd",
     "SIMPROP1": "Prop-Odd",
+    "SIMINCUBATOR2": "Incubator-Even",
+    "SIM101": "Eval-Even",
     "SIMPROP2": "Prop-Even",
 }
 

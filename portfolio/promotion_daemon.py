@@ -131,9 +131,18 @@ MIN_ACTIVE_SESSIONS = 10      # CME sessions inside that window (>=)
 MIN_TRADE_COUNT = 14          # closed forward trades (>=), ~1 per day
 MIN_PROFIT_FACTOR = 1.00      # STRICT: 1.00 is break-even, not expectancy
 
-# Status tokens. A strategy this module has never seen is INCUBATING; the one
-# it writes is GRADUATED_PROP. Anything else is left alone and reported as-is —
-# a token nobody here defined is a decision somebody else made.
+# THE SAME FOUR BARS GOVERN BOTH HOPS. `evaluate_strategy_promotion` reads no
+# source portfolio, so Incubator -> Eval and Eval -> Prop clear identical
+# criteria. That is deliberate for the first hop - "loose governance, on
+# purpose", a wide net onto a simulated evaluation account - and it is worth
+# an operator knowing it applies unchanged to the second, which hands over a
+# funded book. Tightening the second hop means keying the thresholds on the
+# SOURCE rung; nothing here does that today.
+
+# Status tokens. A strategy this module has never seen is INCUBATING; what it
+# writes depends on the rung it lands on - see `graduation_status`. Anything
+# else is left alone and reported as-is — a token nobody here defined is a
+# decision somebody else made.
 STATUS_INCUBATING = "INCUBATING"
 STATUS_GRADUATED = "GRADUATED_PROP"
 #: The FIRST hop of the ladder, added 2026-09-03 with the evaluation tier. A

@@ -111,6 +111,50 @@ CONFIG = {"portfolios": {
     },
 }}
 
+# THE FULL LADDER, for the cases that are about it. `CONFIG` above stays as it
+# is: those cases are about attribution with ONE candidate strategy, and
+# widening them would change what they test. Each rung holds exactly one
+# strategy, because a row with no `strategy` column is attributed only when
+# the account has exactly one candidate on that contract.
+LADDER_CONFIG = {"portfolios": {
+    "Incubator-Odd":  {"portfolio_id": "Incubator-Odd",
+                       "target_account": "SimIncubator1",
+                       "account_type": "incubator_sim",
+                       "active_strategies": ["alpha"],
+                       "strategy_allocations": {"alpha": {"symbol": "NQ"}},
+                       "basket": {"assets": ["MNQ", "MCL"]}},
+    "Eval-Odd":       {"portfolio_id": "Eval-Odd",
+                       "target_account": "SimPropSim",
+                       "account_type": "prop_evaluation",
+                       "active_strategies": ["beta"],
+                       "strategy_allocations": {"beta": {"symbol": "NQ"}},
+                       "basket": {"assets": ["MNQ", "MCL"]}},
+    "Prop-Odd":       {"portfolio_id": "Prop-Odd",
+                       "target_account": "SimProp1",
+                       "account_type": "prop_eval",
+                       "active_strategies": ["gamma"],
+                       "strategy_allocations": {"gamma": {"symbol": "NQ"}},
+                       "basket": {"assets": ["MNQ", "MCL"]}},
+    "Incubator-Even": {"portfolio_id": "Incubator-Even",
+                       "target_account": "SimIncubator2",
+                       "account_type": "incubator_sim",
+                       "active_strategies": ["delta"],
+                       "strategy_allocations": {"delta": {"symbol": "NQ"}},
+                       "basket": {"assets": ["MNQ", "MCL"]}},
+    "Eval-Even":      {"portfolio_id": "Eval-Even",
+                       "target_account": "Sim101",
+                       "account_type": "prop_evaluation",
+                       "active_strategies": ["epsilon"],
+                       "strategy_allocations": {"epsilon": {"symbol": "NQ"}},
+                       "basket": {"assets": ["MNQ", "MCL"]}},
+    "Prop-Even":      {"portfolio_id": "Prop-Even",
+                       "target_account": "SimProp2",
+                       "account_type": "prop_eval",
+                       "active_strategies": ["zeta"],
+                       "strategy_allocations": {"zeta": {"symbol": "NQ"}},
+                       "basket": {"assets": ["MNQ", "MCL"]}},
+}}
+
 EXEC_HEADER = "Time,Instrument,Account,Action,Quantity,Price\n"
 
 
@@ -687,3 +731,75 @@ def test_cli_exits_2_when_rows_could_not_be_used(cli_workspace) -> None:
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# --------------------------------------------------------------------------
+# The three-stage ladder: fills from all six accounts
+#
+# A strategy earns its move to a funded book on forward trades taken on the
+# EVALUATION account. A fill from SimPropSim or Sim101 that arrived
+# unattributed would be evidence the promotion gate never sees - and the
+# strategy would sit in evaluation forever with a ledger entry reading zero
+# trades, which is indistinguishable from an edge that stopped trading.
+# --------------------------------------------------------------------------
+SIX_ACCOUNTS = {
+    "SimIncubator1": "Incubator-Odd", "SimPropSim": "Eval-Odd",
+    "SimProp1": "Prop-Odd", "SimIncubator2": "Incubator-Even",
+    "Sim101": "Eval-Even", "SimProp2": "Prop-Even",
+}
+
+
+def test_a_fill_from_every_account_attributes_to_its_portfolio(
+        tmp_path: Path) -> None:
+    """One round turn per account, each landing on the right rung."""
+    rows = []
+    for i, account in enumerate(SIX_ACCOUNTS):
+        rows.append(fill(f"2026-09-03 14:0{i}:00", "Buy", 1, 100.0,
+                         account=account))
+        rows.append(fill(f"2026-09-03 14:1{i}:00", "Sell", 1, 110.0,
+                         account=account))
+    path = write_exec_log(tmp_path, "six.csv", rows)
+    built = built_for(path, LADDER_CONFIG)
+
+    # `portfolios` maps strategy -> rung; it is what the promotion gate reads.
+    seen = set(built["portfolios"].values())
+    assert seen == set(SIX_ACCOUNTS.values()), (
+        f"missing rungs: {set(SIX_ACCOUNTS.values()) - seen}")
+    assert not built["unattributed"], built["unattributed"]
+    assert len(built["trades"]) == 6, sorted(built["trades"])
+
+
+def test_an_evaluation_fill_is_not_unattributed(tmp_path: Path) -> None:
+    """
+    THE CASE THE LADDER ADDED. Before SimPropSim and Sim101 were registered
+    these landed in `unattributed` - real trades on a real account that the
+    second promotion hop could not see.
+    """
+    for account in ("SimPropSim", "Sim101"):
+        path = write_exec_log(tmp_path, f"{account}.csv", [
+            fill("2026-09-03 14:00:00", "Buy", 1, 100.0, account=account),
+            fill("2026-09-03 14:30:00", "Sell", 1, 105.0, account=account),
+        ])
+        built = built_for(path, LADDER_CONFIG)
+        assert not built["unattributed"], (account, built["unattributed"])
+        assert set(built["portfolios"].values()) == {SIX_ACCOUNTS[account]}
+        assert built["trades"], "the fill paired into no trade at all"
+
+
+def test_an_evaluation_entry_still_accumulates_forward_trades() -> None:
+    """
+    A `GRADUATED_EVAL` entry keeps recording - that is what the middle rung is
+    FOR. Only `GRADUATED_PROP` stops, because those trades are being taken on
+    a funded account and the decision they would inform is already made.
+    """
+    from portfolio.promotion_daemon import (STATUS_GRADUATED,
+                                            STATUS_GRADUATED_EVAL)
+    import inspect
+
+    from portfolio import incubator_recorder as R
+
+    src = inspect.getsource(R)
+    # The skip is an equality test against the FUNDED token, not a test for
+    # "has graduated at all" - which would freeze the ledger one rung early.
+    assert f'== STATUS_GRADUATED:' in src
+    assert STATUS_GRADUATED_EVAL != STATUS_GRADUATED
