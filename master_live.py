@@ -100,7 +100,8 @@ from realtime.lifecycle import (EngineState,                     # noqa: E402
                                 emergency_halt,
                                 startup_report)
 from realtime.risk_firewall import RiskFirewall                  # noqa: E402
-from realtime.regime_reader import DEFAULT_STATE_FILE            # noqa: E402
+from realtime.regime_reader import (DEFAULT_STATE_FILE,          # noqa: E402
+                                    RegimeStateError, get_all_regimes)
 
 DEFAULT_INTERVAL_S = 60
 
@@ -274,6 +275,15 @@ def build_parser() -> argparse.ArgumentParser:
                          "only")
     ap.add_argument("--lookback-bars", type=int, default=500,
                     help="bars handed to each strategy per cycle")
+    ap.add_argument("--max-regime-write-age-sec", type=float, default=900.0,
+                    help="CRITICAL and stand every strategy down when the "
+                         "regime daemon has not WRITTEN for this long "
+                         "(default 900). This is the publisher's own clock, "
+                         "not the market's, so it is timeframe-independent - "
+                         "unlike --max-regime-age-sec, which compares "
+                         "max(write age, bar age) and cannot be defaulted "
+                         "because a 1h bar is legitimately ~3,600s old before "
+                         "it closes. 0 disables the guard.")
     ap.add_argument("--max-regime-age-sec", type=float, default=None,
                     help="refuse a regime reading older than this. Left unset, "
                          "ages are reported and nothing is refused - how old "
@@ -320,6 +330,42 @@ def resolve_dry_run(args: argparse.Namespace) -> bool:
     if args.live and args.dry_run:
         raise ValueError("--dry-run and --live contradict each other; pass one")
     return not args.live
+
+
+def regime_write_age(state_file: str) -> tuple[float | None, str]:
+    """
+    How long ago the regime daemon last WROTE, in seconds, over every symbol.
+
+    THE WRITE AGE, NOT THE BAR AGE, and the distinction is the whole guard.
+    `age_seconds` is the DAEMON's clock - how long since it published - and is
+    the same number whatever timeframe the loop runs. `bar_age_seconds` is the
+    MARKET's, and on a 1h feed it climbs to ~3,600s in the ordinary course of
+    an hour that has not finished yet. A single threshold over `max(write,
+    bar)` - which is what `--max-regime-age-sec` compares - therefore cannot
+    be defaulted: at 900s it would refuse every 1h reading for three quarters
+    of every hour, and at 3,600s it would not notice a publisher that died
+    fifty minutes ago. That is why that flag ships as None and this one is
+    separate.
+
+    Returns `(worst age, description)`; `(None, why)` when no record carries a
+    readable write timestamp, which is treated as stale by the caller - an
+    unreadable clock is not evidence of freshness.
+    """
+    try:
+        state = get_all_regimes(state_file)
+    except RegimeStateError as exc:
+        return None, f"regime state unreadable: {exc}"
+    if not state:
+        return None, "regime state holds no symbols"
+    ages = {sym: rec.get("age_seconds") for sym, rec in state.items()}
+    readable = {s: a for s, a in ages.items() if a is not None}
+    if not readable:
+        return None, (f"no symbol carries a readable write timestamp "
+                      f"({sorted(ages)})")
+    worst_symbol = max(readable, key=lambda s: readable[s])
+    worst = float(readable[worst_symbol])
+    return worst, (f"oldest write {worst:.0f}s ago ({worst_symbol}); "
+                   f"{len(readable)} of {len(ages)} symbols timestamped")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -405,6 +451,38 @@ def main(argv: list[str] | None = None) -> int:
         # here is what makes "the same cycle" mean the same 60 seconds the
         # operator sees on the console.
         dispatcher.positions.begin_cycle(cycles)
+
+        # THE STALENESS GUARD. A regime reading is a PERMISSION, and one
+        # granted on a snapshot nobody has refreshed is a permission for a
+        # market that has since moved. The loop reads the file the daemon
+        # publishes and cannot tell a quiet tape from a dead publisher by
+        # looking at the quadrant - only the write clock separates them.
+        #
+        # It stands the WHOLE CYCLE down rather than declining per symbol:
+        # every symbol reads the same file, so a stale file is not a fact
+        # about one contract. Exits are unaffected - nothing here closes a
+        # position, and `dispatch_exits` is not reached because no bars are
+        # loaded, so open inventory keeps whatever brackets it already has.
+        stale_limit = float(getattr(args, "max_regime_write_age_sec", 0) or 0)
+        if stale_limit > 0:
+            age, detail = regime_write_age(args.state_file)
+            if age is None or age > stale_limit:
+                # CRITICAL, on stderr, EVERY cycle it persists. Printed rather
+                # than counted once: a guard that announced itself only on the
+                # transition would be silent for the hours that matter, and
+                # this line is what an operator greps for.
+                print(f"[master_live] CRITICAL regime state is STALE — "
+                      f"{detail}; limit {stale_limit:.0f}s. Standing ALL "
+                      f"{len(dispatcher.strategies)} strategies down for this "
+                      f"cycle: no entries, no exits, nothing sent. The "
+                      f"publisher is trading-regime-daemon; check its timer.",
+                      file=sys.stderr, flush=True)
+                failures += 1
+                if args.once or shutdown.requested:
+                    break
+                shutdown.sleep(args.interval_sec)
+                continue
+
         # ONE BUCKET PER BAR WIDTH THE ROSTER NEEDS, resolved every cycle
         # rather than once at startup: `active_strategies` can be edited under
         # a running loop, and a bucket list fixed at boot would keep feeding a

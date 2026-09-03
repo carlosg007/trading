@@ -75,7 +75,20 @@ ExecStart=/home/cgrullon/src/trading/.venv/bin/python3 \
     --feed auto \
     --interval-sec 60 \
     --session-cutoff-utc 20:55 \
-    --max-session-loss-usd 1000
+    --max-session-loss-usd 1000 \
+    --max-regime-write-age-sec 900
+
+# THE STALENESS GUARD, and it is the PUBLISHER's clock rather than the
+# market's. `trading-regime-daemon.timer` writes data/live_regime_state.json;
+# if that stops, the quadrant this loop reads freezes at whatever it last said
+# and every permission granted on it is a permission for a market that has
+# since moved. At 900s the loop prints CRITICAL and stands every strategy down
+# for the cycle rather than trading a snapshot nobody refreshed.
+#
+# NOT `--max-regime-age-sec`, which compares max(write age, BAR age) and
+# therefore cannot be defaulted: this unit runs --tf 1h, and a 1h bar is
+# legitimately ~3,600s old in the ordinary course of an hour that has not
+# finished. A 900s limit there would refuse three quarters of every hour.
 
 # SIGTERM, then time to finish the cycle it is in. A cycle is signals -> gates
 # -> sizing -> dispatch, and killing it between the send and the record leaves
