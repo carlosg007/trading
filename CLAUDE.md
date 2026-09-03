@@ -190,7 +190,9 @@ portfolio-check # = .venv/bin/python3 ~/src/trading/realtime/check_portfolio_ass
 assets-check # the same tool
 regime-check # = .venv/bin/python3 ~/src/trading/scripts/check_market_regime.py
 quadrant-check # the same tool
-             # (all fourteen from deploy/shell/trading_helpers.sh)
+strat-perf   # = .venv/bin/python3 ~/src/trading/scripts/report_strategy_performance.py
+perf-report  # the same tool
+             # (all sixteen from deploy/shell/trading_helpers.sh)
 ```
 
 ## Working style

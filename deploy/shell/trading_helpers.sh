@@ -534,3 +534,28 @@ alias assets-check='portfolio-check'
 # no strategy is a real state of the market, not a failure.
 alias regime-check="${_TRADING_PY} ${_TRADING_REPO}/scripts/check_market_regime.py"
 alias quadrant-check='regime-check'
+
+# --------------------------------------------------------------------------
+# 10. What has everything I ever certified actually scored?
+#
+# The other cards describe NOW - what the market is doing, what the loop
+# decided, who is allowed to trade. This one is the record: every
+# gate_audit_<SYMBOL>_<TF>.json under $BT_ARTIFACTS, as one table and one CSV.
+#
+# It TRANSCRIBES and re-scores nothing, so it can never disagree with the
+# verdicts it indexes. Metrics come from the HOLDOUT block by default -
+# `--in-sample` reports the other one and the footer says which ran, because
+# an in-sample profit factor and an out-of-sample one are different claims.
+#
+# Sorting on profit factor puts the THINNEST samples first: a quadrant that
+# never lost prints a huge factor over a handful of trades. `--min-trades 30`
+# is Gate R's own floor and is the flag that makes the table worth reading.
+#
+# The unsuffixed gate_audit_<SYMBOL>.json files are SKIPPED - each duplicates
+# whichever timeframe ran last, beside a per-pair audit, and counting both
+# puts one configuration on the leaderboard twice.
+#
+# Writes backtest/reports/strategy_performance_<stamp>.csv and refreshes
+# strategy_performance_latest.csv beside it. --no-csv prints only.
+alias strat-perf="${_TRADING_PY} ${_TRADING_REPO}/scripts/report_strategy_performance.py"
+alias perf-report='strat-perf'
