@@ -360,3 +360,129 @@ def test_the_snapshot_is_read_every_cycle_not_once_at_startup():
     src = inspect.getsource(M.main)
     assert src.index("load_snapshot(args.positions_snapshot)") > src.index(
         "while True:"), "reconciliation sits outside the cycle loop"
+
+
+# --------------------------------------------------------------------------
+# 6. Six accounts, and nothing in the code knows how many there are
+#
+# The account matrix the operator runs is two streams of three:
+#
+#     Odd    SimIncubator1 (incubator)  SimPropSim (evaluation)  SimProp1 (prop)
+#     Even   SimIncubator2 (incubator)  Sim101     (evaluation)  SimProp2 (prop)
+#
+# `config/portfolios.json` declares FOUR of those six; SimPropSim and Sim101
+# have no portfolio. That is a CONFIGURATION gap and not a code one: every
+# account in the chain is resolved through `target_account` on the routing
+# table - `build_order_payloads` puts it on each entry, `account_for` reads the
+# same field for each exit, and `reconcile` inverts it - so nothing counts
+# accounts or names one. These cases prove that by running the real functions
+# over a six-portfolio table.
+# --------------------------------------------------------------------------
+SIX = {
+    "Incubator-Odd": "SimIncubator1", "Eval-Odd": "SimPropSim",
+    "Prop-Odd": "SimProp1",
+    "Incubator-Even": "SimIncubator2", "Eval-Even": "Sim101",
+    "Prop-Even": "SimProp2",
+}
+
+
+def six_account_for(pid: str) -> str:
+    return SIX[pid]
+
+
+def test_all_six_accounts_are_adopted_when_all_six_are_configured(tmp_path):
+    """
+    THE CASE THE REQUEST ASKS FOR. With a portfolio per account, every one of
+    the six is adopted into `PositionBook` and none is skipped.
+    """
+    rows = [_pos(symbol="MNQ", account=a) for a in SIX.values()]
+    book = PositionBook()
+    result = reconcile(book, load_snapshot(_write(tmp_path, rows)),
+                       six_account_for, list(SIX))
+
+    assert len(result["adopted"]) == 6, result
+    assert result["skipped"] == [], result["skipped"]
+    held = {(r["portfolio_id"], r["symbol"]) for r in book.open_positions()}
+    assert held == {(pid, "MNQ") for pid in SIX}
+
+
+def test_each_account_lands_in_its_own_portfolio(tmp_path):
+    """
+    Two accounts on the same contract must not collapse into one book entry.
+    The key is (portfolio, symbol), so six accounts holding MNQ are six
+    positions - and flattening one must not touch the other five.
+    """
+    rows = [_pos(symbol="MNQ", account=a) for a in SIX.values()]
+    book = PositionBook()
+    reconcile(book, load_snapshot(_write(tmp_path, rows)), six_account_for,
+              list(SIX))
+
+    book.record_flat("Eval-Odd", "MNQ")
+    still = {r["portfolio_id"] for r in book.open_positions()}
+    assert "Eval-Odd" not in still
+    assert len(still) == 5, "flattening one account moved another"
+
+
+def test_a_flatten_routes_to_the_account_that_holds_it(tmp_path):
+    """
+    `account_for` reads `target_account` off the routing table - the SAME
+    field entries carry - so an exit lands on the account its entry opened.
+    A flatten reaching the wrong account leaves the position it meant to
+    close still open, on an account nobody was watching.
+    """
+    rows = [_pos(symbol="MNQ", account=a) for a in SIX.values()]
+    book = PositionBook()
+    reconcile(book, load_snapshot(_write(tmp_path, rows)), six_account_for,
+              list(SIX))
+
+    for pid, account in SIX.items():
+        intents = book.plan_exits(
+            [{"portfolio_id": pid, "symbol": "MNQ", "strategy_id": "s"}], {})
+        assert intents[0]["emit"] is True, (pid, intents[0]["reason"])
+        assert six_account_for(intents[0]["portfolio_id"]) == account
+
+
+def test_the_two_unconfigured_accounts_are_reported_not_dropped(tmp_path):
+    """
+    AGAINST THE LIVE TABLE, which declares four of the six. SimPropSim and
+    Sim101 are `skipped` WITH A REASON rather than silently ignored - an
+    account the loop cannot route is a configuration gap somebody has to see,
+    and a position on it is real money nothing is tracking.
+    """
+    from portfolio.config_loader import clear_cache, load_portfolio_config
+
+    clear_cache()
+    cfg = load_portfolio_config(str(REPO_ROOT / "config" / "portfolios.json"))
+    live_accounts = {p["target_account"] for p in cfg["portfolios"].values()}
+
+    rows = [_pos(symbol="MNQ", account=a) for a in SIX.values()]
+    result = reconcile(PositionBook(), load_snapshot(_write(tmp_path, rows)),
+                       lambda p: cfg["portfolios"][p]["target_account"],
+                       list(cfg["portfolios"]))
+
+    skipped = {r["account"] for r in result["skipped"]}
+    assert skipped == set(SIX.values()) - live_accounts
+    for row in result["skipped"]:
+        assert "no portfolio routes" in row["reason"]
+
+
+def test_nothing_in_the_reconciler_names_an_account():
+    """
+    The mapping comes from the routing table, so adding an account is a config
+    edit. A hardcoded name here would make every new account a code change -
+    and, worse, would silently skip the ones nobody remembered to add.
+    """
+    import io
+    import tokenize
+
+    source = (REPO_ROOT / "realtime" / "nt8_positions.py").read_text()
+    # CODE ONLY. The module docstring carries an EXAMPLE payload naming
+    # SimIncubator1, which is documentation rather than a branch - and a check
+    # over the whole file would fail on the example and be "fixed" by deleting
+    # the thing that tells a publisher what to send.
+    code = "".join(
+        tok.string for tok in tokenize.generate_tokens(
+            io.StringIO(source).readline)
+        if tok.type not in (tokenize.COMMENT, tokenize.STRING))
+    for account in SIX.values():
+        assert account not in code, f"{account} is hardcoded in the reconciler"
