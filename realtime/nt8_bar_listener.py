@@ -613,8 +613,56 @@ def create_app(spool: BarSpool | None = None, token: str | None = None):
         code = 503 if report["status"] == "STARVED" else 200
         return JSONResponse(report, status_code=code)
 
+    async def post_positions(request):
+        """
+        The BROKER's open positions, written where `realtime.nt8_positions`
+        reads them.
+
+        A SNAPSHOT REPLACES, it does not append - unlike `/api/bars`, which
+        accumulates a spool. A position list is a claim about NOW and merging
+        two of them produces a book that is neither. The whole payload is
+        written atomically (temp file, `os.replace`) so a reader sees the
+        previous complete snapshot or the new one, never half of either.
+
+        The body is passed through UNVALIDATED beyond being an object with a
+        `positions` list: `nt8_positions.parse_position` is the one validator,
+        and a second one here would be free to disagree with it about what a
+        position is. What this endpoint owns is the transport.
+        """
+        if not authorized(request):
+            return JSONResponse(
+                {"status": "rejected",
+                 "reason": f"missing or wrong X-NT8-Token (${TOKEN_VAR} is "
+                           f"set on this listener)"}, status_code=401)
+        try:
+            payload = json.loads(await request.body() or b"")
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            return JSONResponse({"status": "rejected",
+                                 "reason": f"body is not JSON: {exc}"},
+                                status_code=400)
+        if not isinstance(payload, dict) or not isinstance(
+                payload.get("positions"), list):
+            return JSONResponse(
+                {"status": "rejected",
+                 "reason": "expected {\"published_utc\": ..., "
+                           "\"positions\": [...]}"}, status_code=400)
+
+        payload.setdefault(
+            "published_utc",
+            datetime.now(timezone.utc).isoformat(timespec="seconds"))
+        from realtime.nt8_positions import snapshot_path  # noqa: PLC0415
+        target = snapshot_path()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        os.replace(tmp, target)
+        return JSONResponse({"status": "accepted",
+                             "positions": len(payload["positions"]),
+                             "written": str(target)})
+
     app = Starlette(routes=[
         Route("/api/bars", post_bars, methods=["POST"]),
+        Route("/api/positions", post_positions, methods=["POST"]),
         Route("/health", health, methods=["GET"]),
     ])
     app.state.spool = buffer

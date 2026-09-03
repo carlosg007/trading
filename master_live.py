@@ -100,6 +100,9 @@ from realtime.lifecycle import (EngineState,                     # noqa: E402
                                 emergency_halt,
                                 startup_report)
 from realtime.risk_firewall import RiskFirewall                  # noqa: E402
+from realtime.nt8_positions import (PositionSnapshotError,       # noqa: E402
+                                    describe as describe_positions,
+                                    load_snapshot, reconcile)
 from realtime.regime_reader import (DEFAULT_STATE_FILE,          # noqa: E402
                                     RegimeStateError, get_all_regimes)
 
@@ -275,6 +278,19 @@ def build_parser() -> argparse.ArgumentParser:
                          "only")
     ap.add_argument("--lookback-bars", type=int, default=500,
                     help="bars handed to each strategy per cycle")
+    ap.add_argument("--positions-snapshot", default=None,
+                    help="broker position snapshot to reconcile the book "
+                         "against each cycle (default $BT_NT8_POSITIONS, else "
+                         "/mnt/backtest/artifacts/nt8_positions/positions.json). "
+                         "ABSENT IS NOT AN ERROR: with no publisher the loop "
+                         "keeps only what it opened itself, exactly as before.")
+    ap.add_argument("--no-position-reconcile", dest="reconcile_positions",
+                    action="store_false",
+                    help="do not read the broker snapshot. The loop then "
+                         "cannot flatten a position it did not open in this "
+                         "process - which is the pre-2026-09-03 behaviour and "
+                         "is why every exit read 'position state is not known "
+                         "here' after a restart.")
     ap.add_argument("--max-regime-write-age-sec", type=float, default=900.0,
                     help="CRITICAL and stand every strategy down when the "
                          "regime daemon has not WRITTEN for this long "
@@ -451,6 +467,43 @@ def main(argv: list[str] | None = None) -> int:
         # here is what makes "the same cycle" mean the same 60 seconds the
         # operator sees on the console.
         dispatcher.positions.begin_cycle(cycles)
+
+        # RECONCILE THE BOOK AGAINST THE BROKER, BEFORE ANY SIGNAL IS READ.
+        # `PositionBook` holds what THIS PROCESS opened, so after a restart it
+        # is empty while the account still holds inventory - and
+        # `plan_exits`' first condition is `is_open`, so every stop the
+        # strategies computed was dropped with "position state is not known
+        # here". Reconciling first is what lets the loop close what it did not
+        # open.
+        #
+        # EVERY CYCLE, not once at startup: a position closed by hand, by a
+        # bracket or by the prop-firm layer between cycles has to be dropped
+        # from the book too, or the loop keeps trying to flatten something
+        # that is already gone.
+        if getattr(args, "reconcile_positions", True):
+            try:
+                snapshot = load_snapshot(args.positions_snapshot)
+                outcome = reconcile(dispatcher.positions, snapshot,
+                                    dispatcher.account_for,
+                                    dispatcher.portfolios,
+                                    state=getattr(dispatcher, "state", None))
+                # Printed only when it CHANGED something, or on the first
+                # cycle. A reconciliation that confirmed the book is the
+                # ordinary case and printing it every 60s would bury the one
+                # that adopted a position.
+                moved = any(outcome[k] for k in
+                            ("adopted", "conflicts", "closed_elsewhere",
+                             "skipped"))
+                if moved or cycles == 1:
+                    print(describe_positions(outcome), flush=True)
+            except PositionSnapshotError as exc:
+                # A publisher that is RUNNING and wrong is a fact about the
+                # account. Reading it as "no positions" would be the loop
+                # deciding it is flat because a file was malformed, so the
+                # cycle proceeds on the unreconciled book and says so.
+                print(f"[master_live] position snapshot REFUSED: {exc}",
+                      file=sys.stderr, flush=True)
+                failures += 1
 
         # THE STALENESS GUARD. A regime reading is a PERMISSION, and one
         # granted on a snapshot nobody has refreshed is a permission for a
