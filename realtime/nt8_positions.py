@@ -63,6 +63,28 @@ FLAT row may be sent explicitly (`quantity: 0`) and is how a publisher says
 "this pair is closed" rather than leaving the reader to infer it from
 absence.
 
+**`accounts` DECLARES WHAT THE SNAPSHOT COVERS, and an all-flat publisher
+needs it.** Coverage used to be inferred from the rows: an account that
+appeared was covered, and a book entry on it that the snapshot did not
+mention was closed. That reads an EMPTY `positions` list as covering
+nothing - so a publisher reporting "everything is flat", which is exactly
+what a freshly flattened account sends, cleared nothing and left the book
+holding phantom positions for the life of the process. The loop then
+declines every entry as a stack and tries to flatten inventory that is not
+there.
+
+    {"published_utc": "...",
+     "accounts": ["SimIncubator1", "SimPropSim"],
+     "positions": []}
+
+means both accounts are flat and says so unambiguously. With `accounts`
+absent the rows are still used, which keeps an older publisher working -
+but an empty `positions` with no `accounts` is genuinely ambiguous between
+"everything is flat" and "this publisher sent nothing", and reconcile
+reports it as such rather than guessing. Guessing "flat" there would drop
+the loop's record of a live position; guessing "no coverage" is the safe
+half and is what it does.
+
 WHY A SNAPSHOT IS REFUSED WHEN STALE
 ====================================
 A snapshot is a claim about NOW. Acting on one written an hour ago is acting
@@ -232,9 +254,19 @@ def load_snapshot(path: str | Path | None = None,
         raise PositionSnapshotError(
             f"{target} carries no `positions` list")
 
+    declared = blob.get("accounts")
+    if declared is not None and not isinstance(declared, list):
+        raise PositionSnapshotError(
+            f"{target} carries `accounts` as {type(declared).__name__}; it "
+            f"declares which accounts the snapshot COVERS and must be a list.")
     return {"published_utc": published.isoformat(),
             "age_seconds": age,
             "source": str(target),
+            # None (not an empty list) when undeclared: "covers nothing" and
+            # "did not say" are different claims and only one of them is safe
+            # to clear a book on.
+            "accounts": ([str(a).strip() for a in declared]
+                         if declared is not None else None),
             "positions": [parse_position(r) for r in rows]}
 
 
@@ -291,6 +323,23 @@ def reconcile(book, snapshot: dict[str, Any] | None,
         except Exception:                                          # noqa: BLE001
             continue
 
+    # WHAT THIS SNAPSHOT COVERS. Declared if the publisher said so, else
+    # inferred from the rows - and an empty list with no declaration covers
+    # NOTHING, which is the ambiguous case reported below rather than read as
+    # "everything is flat".
+    declared = snapshot.get("accounts")
+    covered = (set(declared) if declared is not None
+               else {r["account"] for r in snapshot["positions"]})
+    result["covered_accounts"] = sorted(covered)
+    result["coverage_source"] = ("declared" if declared is not None
+                                 else "inferred from rows")
+    if declared is None and not snapshot["positions"]:
+        result["ambiguous"] = (
+            "the snapshot is EMPTY and declares no `accounts`, so it cannot "
+            "say whether every account is flat or this publisher sent "
+            "nothing. Nothing was closed. Add \"accounts\": [...] to the "
+            "payload and an all-flat snapshot will clear the book.")
+
     seen: set[tuple[str, str]] = set()
     for row in snapshot["positions"]:
         pids = by_account.get(row["account"]) or []
@@ -342,11 +391,11 @@ def reconcile(book, snapshot: dict[str, Any] | None,
             account = account_for(record.get("portfolio_id"))
         except Exception:                                          # noqa: BLE001
             pass
-        # Only for accounts the snapshot actually covered. A publisher that
-        # sent one account's positions says nothing about another's, and
-        # clearing a book entry on that silence would flatten the loop's own
-        # record of a live position.
-        if account not in {r["account"] for r in snapshot["positions"]}:
+        # Only for accounts the snapshot COVERED. A publisher that sent one
+        # account's positions says nothing about another's, and clearing a
+        # book entry on that silence would flatten the loop's own record of a
+        # live position.
+        if account not in covered:
             continue
         book.record_flat(record["portfolio_id"], record["symbol"])
         result["closed_elsewhere"].append(
@@ -384,6 +433,8 @@ def describe(result: dict[str, Any]) -> str:
                              f"{row.get('direction')} x{row.get('quantity')}"
                              + (f"  ({row['reason']})" if row.get("reason")
                                 else ""))
+    if result.get("ambiguous"):
+        parts.append(f"   AMBIGUOUS — {result['ambiguous']}")
     if result.get("conflicts"):
         parts.append("   CONFLICTS were resolved in the BROKER's favour — it "
                      "is the account. Check what opened them.")

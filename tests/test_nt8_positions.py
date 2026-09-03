@@ -486,3 +486,91 @@ def test_nothing_in_the_reconciler_names_an_account():
         if tok.type not in (tokenize.COMMENT, tokenize.STRING))
     for account in SIX.values():
         assert account not in code, f"{account} is hardcoded in the reconciler"
+
+
+# --------------------------------------------------------------------------
+# 7. An all-flat snapshot, and the coverage it has to declare
+#
+# THE BUG THIS PINS, found 2026-09-03 when the operator flattened everything
+# by hand and positions.json became `{"positions": []}`. Coverage was inferred
+# from the ROWS, so an empty list covered no account and cleared nothing - the
+# book kept phantom positions for the life of the process, declining every
+# entry as a stack and trying to flatten inventory that was not there. An
+# empty snapshot is the ONE case where inference cannot work, and it is
+# exactly what a freshly flattened account sends.
+# --------------------------------------------------------------------------
+def _snapshot(tmp_path: Path, payload: dict) -> Path:
+    payload = {"published_utc": datetime.now(timezone.utc).isoformat(),
+               **payload}
+    path = tmp_path / "positions.json"
+    path.write_text(json.dumps(payload))
+    return path
+
+
+def _held_book() -> PositionBook:
+    book = PositionBook()
+    book.record_fill("Incubator-Odd", "MNQ", "long", 1, strategies=[])
+    return book
+
+
+def test_an_all_flat_snapshot_clears_the_book_when_it_declares_coverage(
+        tmp_path):
+    book = _held_book()
+    result = reconcile(book, load_snapshot(_snapshot(
+        tmp_path, {"accounts": ["SimIncubator1"], "positions": []})),
+        account_for, PORTFOLIOS)
+
+    assert book.state("Incubator-Odd", "MNQ") == "flat"
+    assert len(result["closed_elsewhere"]) == 1
+    assert result["coverage_source"] == "declared"
+    assert not result.get("ambiguous")
+
+
+def test_an_empty_snapshot_with_no_coverage_is_ambiguous_not_flat(tmp_path):
+    """
+    "Everything is flat" and "this publisher sent nothing" are the same bytes
+    without a declaration. Guessing FLAT would drop the loop's record of a
+    live position - the expensive direction - so it clears nothing and says
+    why, loudly enough that the fix is obvious.
+    """
+    book = _held_book()
+    result = reconcile(book, load_snapshot(_snapshot(
+        tmp_path, {"positions": []})), account_for, PORTFOLIOS)
+
+    assert book.state("Incubator-Odd", "MNQ") == "long", (
+        "an ambiguous empty snapshot cleared the book")
+    assert result["closed_elsewhere"] == []
+    assert "accounts" in result["ambiguous"]
+    assert "AMBIGUOUS" in describe(result)
+
+
+def test_declared_coverage_still_protects_an_account_it_omits(tmp_path):
+    """
+    The silence rule survives the fix: a publisher that declares only
+    SimIncubator2 says nothing about SimIncubator1, and the book keeps it.
+    """
+    book = _held_book()
+    reconcile(book, load_snapshot(_snapshot(
+        tmp_path, {"accounts": ["SimIncubator2"], "positions": []})),
+        account_for, PORTFOLIOS)
+    assert book.state("Incubator-Odd", "MNQ") == "long"
+
+
+def test_inferred_coverage_is_unchanged_for_a_non_empty_snapshot(tmp_path):
+    """A publisher that sends rows and no declaration keeps working exactly as
+    it did - the fix is additive."""
+    book = _held_book()
+    result = reconcile(book, load_snapshot(_snapshot(tmp_path, {"positions": [
+        _pos(symbol="6J")]})), account_for, PORTFOLIOS)
+
+    assert book.state("Incubator-Odd", "MNQ") == "flat"
+    assert result["coverage_source"] == "inferred from rows"
+    assert not result.get("ambiguous")
+
+
+def test_a_malformed_accounts_field_is_refused(tmp_path):
+    """It decides what gets CLEARED. A string where a list belongs would
+    iterate as characters and cover nothing that exists."""
+    with pytest.raises(PositionSnapshotError, match="accounts"):
+        load_snapshot(_snapshot(tmp_path, {"accounts": "SimIncubator1",
+                                           "positions": []}))
