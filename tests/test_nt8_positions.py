@@ -321,3 +321,42 @@ def test_the_listener_exposes_the_positions_route():
     from realtime.nt8_bar_listener import create_app
 
     assert "/api/positions" in {r.path for r in create_app().routes}
+
+
+def test_a_refused_snapshot_does_not_become_the_processes_exit_code():
+    """
+    THE REGRESSION THIS PINS. `failures` is `main`'s return value and it is
+    CUMULATIVE over the run, so one refusal at hour one made the SIGTERM at
+    hour twelve exit 1 and systemd report a clean shutdown as
+    `status=1/FAILURE`. Observed on 2026-09-03.
+
+    A stale snapshot is a degraded INPUT the loop is built to handle - the
+    book stays unreconciled, which is the state it was in before this feed
+    existed. It belongs on stderr and in the watchdog, not in the exit code.
+    """
+    import inspect
+
+    import master_live as M
+
+    src = inspect.getsource(M.main)
+    handler = src.index("position snapshot REFUSED")
+    # The next `failures += 1` after the handler must not belong to it. The
+    # bar-load failure below is pre-existing and IS a run failure.
+    following = src[handler:handler + 900]
+    assert "failures += 1" not in following, (
+        "a refused snapshot still increments the exit-code counter")
+
+
+def test_the_snapshot_is_read_every_cycle_not_once_at_startup():
+    """
+    A position closed by hand, by a bracket or by the prop-firm layer between
+    cycles has to leave the book too, or the loop keeps trying to flatten
+    something already gone.
+    """
+    import inspect
+
+    import master_live as M
+
+    src = inspect.getsource(M.main)
+    assert src.index("load_snapshot(args.positions_snapshot)") > src.index(
+        "while True:"), "reconciliation sits outside the cycle loop"

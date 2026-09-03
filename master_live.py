@@ -501,9 +501,16 @@ def main(argv: list[str] | None = None) -> int:
                 # account. Reading it as "no positions" would be the loop
                 # deciding it is flat because a file was malformed, so the
                 # cycle proceeds on the unreconciled book and says so.
+                # LOUD, BUT NOT A RUN FAILURE. `failures` becomes the
+                # process's exit code, and it is CUMULATIVE over the run - one
+                # refusal at hour one makes the SIGTERM at hour twelve exit 1
+                # and systemd report the shutdown as FAILURE. A stale snapshot
+                # is a degraded INPUT the loop is designed to handle, not a
+                # fault in the run: the book stays unreconciled, which is the
+                # state it was in before this feed existed. stderr and the
+                # watchdog are the right channel; the exit code is not.
                 print(f"[master_live] position snapshot REFUSED: {exc}",
                       file=sys.stderr, flush=True)
-                failures += 1
 
         # THE STALENESS GUARD. A regime reading is a PERMISSION, and one
         # granted on a snapshot nobody has refreshed is a permission for a
@@ -530,7 +537,6 @@ def main(argv: list[str] | None = None) -> int:
                       f"cycle: no entries, no exits, nothing sent. The "
                       f"publisher is trading-regime-daemon; check its timer.",
                       file=sys.stderr, flush=True)
-                failures += 1
                 if args.once or shutdown.requested:
                     break
                 shutdown.sleep(args.interval_sec)

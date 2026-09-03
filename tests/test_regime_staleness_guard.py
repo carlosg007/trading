@@ -204,3 +204,22 @@ def test_the_shipped_unit_does_not_set_the_bar_age_flag():
     assert "--max-regime-write-age-sec 900" in exec_start
     assert "--max-regime-age-sec" not in exec_start.replace(
         "--max-regime-write-age-sec", "")
+
+
+def test_a_stale_regime_does_not_become_the_processes_exit_code():
+    """
+    Same reasoning as the position snapshot: `failures` is `main`'s return
+    value and is cumulative, so a transient staleness at hour one would make
+    every later shutdown report FAILURE. The guard already stands the cycle
+    down and prints CRITICAL - that is the signal, and it is a handled
+    degradation rather than a fault in the run.
+    """
+    import inspect
+
+    import master_live as M
+
+    src = inspect.getsource(M.main)
+    handler = src.index("CRITICAL regime state is STALE")
+    following = src[handler:handler + 900]
+    assert "failures += 1" not in following, (
+        "the staleness guard still increments the exit-code counter")
