@@ -1387,19 +1387,31 @@ def test_strategy_id_still_falls_back_to_bare_without_a_pair() -> None:
     assert strategy_id("some_strategy", "", "1h", "A") == "some_strategy"
 
 
-def test_a_certified_promotion_without_a_resolvable_pair_is_refused() -> None:
+def test_a_certified_promotion_resolves_its_pair_through_the_certification():
     """
-    THE ORPHAN GUARD. Every value that could fill the gap is a guess: a
-    module's SYMBOLS is every contract it targets and its TIMEFRAME is the one
-    it prefers, while a promotion is ONE pair. So it raises and names what is
-    missing rather than registering a bare id beside the real one.
+    THE ORPHAN FIX. `scope_symbol`/`scope_tf` read the audit BODY's top-level
+    keys, which `dual_ema_slope_scalp_20260831`'s audit did not carry - so the
+    id fell back to the bare name beside the canonical one already holding the
+    same certification. `certified_scope` is the authority on that pair (it
+    reads the certification block and falls back to the audit FILENAME) and is
+    now consulted before giving up.
+
+    IT WARNS RATHER THAN RAISING when the certification genuinely names no
+    pair. An unsuffixed `gate_audit_<SYMBOL>.json` from a dual-version
+    `bt-run` is a real artifact and promoting from it is documented, so a
+    raise there would break a path that predates the bug - it broke
+    `tests/test_pipeline_filters.py::test_promote_certification` exactly that
+    way. The id stays bare, as it always did, and the note is the visible half
+    the duplicate registration never had.
     """
     import inspect
     from backtest import promote as P
 
     src = inspect.getsource(P.promote)
-    assert "cert_audit is not None and not (scope_symbol and scope_tf)" in src, (
-        "the certified-promotion pair guard is gone")
+    assert "certified_scope(certification, None, audit_path)" in src, (
+        "the certification is no longer consulted for the pair")
+    assert "pair_notes.append" in src, (
+        "a bare certified id is registered with no note at all")
     assert "base_strategy(strat)" in src, (
         "the --strat normalisation is gone; an already-qualified id would "
         "gain a second suffix")

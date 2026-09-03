@@ -606,33 +606,53 @@ def promote(strat: str,
     # through unchanged and this is idempotent.
     strat = base_strategy(strat)
 
-    # A CERTIFIED PROMOTION MUST NAME ITS PAIR. `strategy_id` returns the bare
-    # strategy name when the symbol or the timeframe is unknown, which is
-    # correct for the `bt-run` dual-version workflow - that run is not scoped
-    # to a certified pair and there is nothing to name - and WRONG here the
-    # moment an audit file is supplied. It registered
-    # `dual_ema_slope_scalp_20260831` beside the
+    # Collected here and folded into `audit_warnings` below, because that is
+    # the list the CLI prints and `meta.json` records - a note about a bare id
+    # has to reach the same place a reader already looks.
+    pair_notes: list[str] = []
+
+    # A CERTIFIED PROMOTION TAKES ITS PAIR FROM THE CERTIFICATION.
+    # `scope_symbol`/`scope_tf` above read the audit BODY's top-level keys,
+    # which `dual_ema_slope_scalp_20260831`'s audit did not carry - so
+    # `strategy_id` fell back to the bare name and registered it beside the
     # `dual_ema_slope_scalp_20260831_6J_1h_VA` that already held the same
-    # certification, with its meta.json's top-level `symbol`/`timeframe` filled
+    # certification, with meta.json's top-level `symbol`/`timeframe` filled
     # from the MODULE's declarations (NQ/ES at 5m) while `certification.*`
-    # correctly read 6J at 1h. One file, two answers, and a duplicate
-    # registration of one configuration - the live registry then refused both
-    # for disagreeing with each other.
+    # correctly read 6J at 1h. One file, two answers, and the live registry
+    # refused both for disagreeing with each other.
     #
-    # Raised rather than patched around, because every value that could fill
-    # the gap is a guess: the module's SYMBOLS is every contract it targets and
-    # its TIMEFRAME is the one it prefers, and a promotion is ONE pair.
+    # `certified_scope` is the authority on that pair - it reads the
+    # certification block and falls back to the audit's FILENAME - so consult
+    # it before giving up. The module's declarations are still never used
+    # here: its SYMBOLS is every contract it targets and its TIMEFRAME the one
+    # it prefers, and a promotion is ONE pair.
+    if cert_audit is not None and not (scope_symbol and scope_tf):
+        resolved = certified_scope(certification, None, audit_path)
+        from_cert_sym = resolved.get("symbol")
+        from_cert_tf = resolved.get("timeframe")
+        scope_symbol = scope_symbol or (
+            from_cert_sym if from_cert_sym != NOT_RESOLVED else None)
+        scope_tf = scope_tf or (
+            from_cert_tf if from_cert_tf != NOT_RESOLVED else None)
+
+    # NOT AN ERROR WHEN THE CERTIFICATION GENUINELY NAMES NO PAIR. An
+    # unsuffixed `gate_audit_<SYMBOL>.json` from a dual-version `bt-run` is a
+    # real artifact and promoting from it is a documented workflow, so raising
+    # here would break a path that predates the bug above. The id stays bare,
+    # as it always did, and the NOTE says so - which is the visible half the
+    # duplicate registration never had.
     if cert_audit is not None and not (scope_symbol and scope_tf):
         missing = [n for n, v in (("symbol", scope_symbol),
                                   ("timeframe", scope_tf)) if not v]
-        raise ValueError(
-            f"{strat} was promoted against a certification but its "
-            f"{' and '.join(missing)} could not be resolved from "
-            f"{audit_path}. A certified promotion is ONE contract at ONE "
-            f"timeframe and its id has to say which; without the pair this "
-            f"registers a bare name beside whatever already holds that "
-            f"certification, and the two disagree. Pass --symbol/--timeframe, "
-            f"or point --audit-file at an audit that records them.")
+        pair_notes.append(
+            f"{strat} was promoted against a certification that records no "
+            f"{' and no '.join(missing)}, so it is registered under the BARE "
+            f"strategy name rather than a canonical <strategy>_<SYMBOL>_<TF> "
+            f"id. If another promotion already holds this certification under "
+            f"a canonical id, the two are separate registrations of one "
+            f"configuration and the live registry will refuse both. Pass "
+            f"--symbol/--timeframe, or point --audit-file at a per-pair "
+            f"gate_audit_<SYMBOL>_<TF>.json.")
 
     promoted_id = strategy_id(strat, scope_symbol, scope_tf, version)
     dest = Path(incubator) / promoted_id
@@ -703,7 +723,7 @@ def promote(strat: str,
         shutil.copyfile(metrics_path, snap)
         written.append(snap)
 
-    warnings = audit_notes(source)
+    warnings = audit_notes(source) + pair_notes
 
     meta = {
         # The PAIR's id: the directory name, the id in `active_strategies`,
