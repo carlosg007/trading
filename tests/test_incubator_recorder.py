@@ -71,6 +71,7 @@ from portfolio.incubator_recorder import (                         # noqa: E402
     discover_logs,
     merge_into_ledger,
     parse_rows,
+    parse_strategy_tag,
     portfolio_for_account,
     root_symbol,
 )
@@ -803,3 +804,109 @@ def test_an_evaluation_entry_still_accumulates_forward_trades() -> None:
     # "has graduated at all" - which would freeze the ledger one rung early.
     assert f'== STATUS_GRADUATED:' in src
     assert STATUS_GRADUATED_EVAL != STATUS_GRADUATED
+
+
+# ---------------------------------------------------------------------------
+# The tag a broker export carries back is a LOCK, not always a strategy id
+# ---------------------------------------------------------------------------
+def test_a_pair_lock_is_not_mistaken_for_a_strategy() -> None:
+    """
+    THE ONE THAT WOULD HAVE CORRUPTED THE LEDGER SILENTLY. Since 2026-09-04
+    the wire carries `portfolio:SYMBOL` — CrossTrade locks a contract to the
+    string that opened it, and a contributor set changes between bars — so
+    that is the tag an NT8 export hands back.
+
+    Taken at face value it files every fill on that contract under a strategy
+    named `Incubator-Odd:MNQ`, which does not exist and never will: the real
+    strategies show zero trades and never graduate, behind a ledger that looks
+    fully populated.
+    """
+    pid, contributors, kind = parse_strategy_tag("Incubator-Odd:MNQ", CONFIG)
+    assert kind == "lock"
+    assert contributors == [], "a contract is not a strategy"
+    assert pid == "Incubator-Odd", "the stream is still named, and is usable"
+
+
+def test_a_lock_falls_through_to_the_account_rule_rather_than_inventing_one(
+) -> None:
+    """Falling through is what the module already does for a row that names
+    nothing: exactly one candidate on that contract is an attribution, and two
+    are a refusal to guess."""
+    strategy, portfolio_id, why = attribute(
+        {"strategy": "Incubator-Odd:MNQ", "account": "SimIncubator1",
+         "symbol": "MNQ"}, CONFIG)
+    assert strategy == "alpha", why
+    assert portfolio_id == "Incubator-Odd"
+    assert "only strategy" in why, why
+
+
+def test_a_sole_contributor_tag_resolves_to_the_strategy_that_traded() -> None:
+    """`portfolio:strategy` is the common case — one strategy signalling
+    alone — and it is a real attribution, not a lock."""
+    pid, contributors, kind = parse_strategy_tag("Incubator-Odd:alpha", CONFIG)
+    assert (pid, contributors, kind) == ("Incubator-Odd", ["alpha"],
+                                         "contributors")
+    strategy, portfolio_id, why = attribute(
+        {"strategy": "Incubator-Odd:alpha", "account": "SimIncubator1",
+         "symbol": "MNQ"}, CONFIG)
+    assert (strategy, portfolio_id) == ("alpha", "Incubator-Odd")
+
+
+def test_a_multi_contributor_tag_is_reported_rather_than_split() -> None:
+    """
+    A netted position belongs to every contributor and this row is ONE trade.
+    Splitting its P&L invents a number; assigning it to the first decides a
+    promotion on somebody else's trade. The module's own rule, applied to a
+    tag.
+    """
+    cfg = json.loads(json.dumps(CONFIG))
+    cfg["portfolios"]["Incubator-Odd"]["active_strategies"] = ["alpha", "beta"]
+    _, contributors, kind = parse_strategy_tag("Incubator-Odd:alpha+beta", cfg)
+    assert (contributors, kind) == (["alpha", "beta"], "contributors")
+
+    strategy, portfolio_id, why = attribute(
+        {"strategy": "Incubator-Odd:alpha+beta", "account": "SimIncubator1",
+         "symbol": "MNQ"}, cfg)
+    assert strategy is None, "never split, never assigned to the first"
+    assert portfolio_id == "Incubator-Odd"
+    assert "alpha+beta" in why, "and the contributors are reported: " + why
+
+
+def test_a_bare_strategy_id_is_unchanged_by_any_of_this() -> None:
+    """The log that names a strategy outright still wins outright — that path
+    predates tags and must not have moved."""
+    strategy, portfolio_id, why = attribute(
+        {"strategy": "alpha", "account": "SimIncubator1", "symbol": "MNQ"},
+        CONFIG)
+    assert (strategy, portfolio_id, why) == ("alpha", "Incubator-Odd",
+                                             "named by the log")
+
+
+def test_a_tag_names_the_stream_when_the_account_column_does_not() -> None:
+    """Same routing table either way. A row whose account is missing or
+    unmapped still declares its portfolio in the tag."""
+    strategy, portfolio_id, why = attribute(
+        {"strategy": "Incubator-Odd:alpha", "account": "SomeUnknownAcct",
+         "symbol": "MNQ"}, CONFIG)
+    assert (strategy, portfolio_id) == ("alpha", "Incubator-Odd"), why
+
+
+def test_a_stood_down_strategy_stays_attributable() -> None:
+    """A strategy keeps its allocation record when it stops trading, and its
+    historical fills must not become unattributable the day it is stood
+    down."""
+    cfg = json.loads(json.dumps(CONFIG))
+    cfg["portfolios"]["Incubator-Odd"]["active_strategies"] = []
+    _, contributors, kind = parse_strategy_tag("Incubator-Odd:alpha", cfg)
+    assert (contributors, kind) == (["alpha"], "contributors")
+
+
+def test_a_tag_with_nothing_after_the_colon_names_no_strategy() -> None:
+    """`portfolio:` is a lock on the empty string. It is not a strategy id and
+    filing a fill under it would create one out of a formatting accident."""
+    _, contributors, kind = parse_strategy_tag("Incubator-Odd:", CONFIG)
+    assert (contributors, kind) == ([], "empty")
+    strategy, portfolio_id, why = attribute(
+        {"strategy": "Incubator-Odd:", "account": "SimIncubator1",
+         "symbol": "MNQ"}, CONFIG)
+    assert strategy == "alpha", why

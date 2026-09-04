@@ -1221,8 +1221,13 @@ def test_the_strategy_tag_names_every_contributor(tmp_path):
                           "beta_two": dict(side="long")})
     report = d.process_bar_cycle({"MNQ": make_bars()})
 
-    tag = report["dispatches"][0]["json"]["strategy_tag"]
-    assert tag == "Incubator-Odd:alpha_one+beta_two"
+    # ON THE RECORD, which is what the ledger and the cycle card read. It is
+    # no longer what goes on the wire: CrossTrade locks a contract to the
+    # string that opened it, and a contributor set changes between bars. See
+    # `test_the_wire_tag_is_stable_across_a_changing_contributor_set`.
+    record = report["dispatches"][0]
+    assert record["strategy_tag"] == "Incubator-Odd:alpha_one+beta_two"
+    assert record["json"]["strategy_tag"] == "Incubator-Odd:MNQ", "the lock"
     # The payload itself is untouched — it must stay the manager's five keys.
     assert set(report["payloads"][0]) == {"account", "action", "symbol",
                                           "orderType", "quantity"}
@@ -1247,12 +1252,19 @@ def test_the_tag_travels_on_the_command_that_is_actually_sent(tmp_path):
               crosstrade_key="K")
     report = d.process_bar_cycle({"MNQ": make_bars()})
 
-    tag = "Incubator-Odd:alpha_one+beta_two"
+    # THE LOCK, not the contributor tag — the contract is locked to the string
+    # that opened it, so what travels has to be the string that does not move
+    # when the contributor set does.
+    tag = "Incubator-Odd:MNQ"
     assert len(sender.calls) == 1
     assert f"strategy_tag={tag};" in sender.calls[0]["payload"]
     # ...and the two wire forms agree, so a switch back to the JSON endpoint
     # does not silently change which lock the order takes out.
     assert report["dispatches"][0]["json"]["strategy_tag"] == tag
+    # THE CONTRIBUTORS ARE STILL ON THE RECORD. This test guards the wire;
+    # losing attribution here would be the other half of the same bug.
+    assert (report["dispatches"][0]["strategy_tag"]
+            == "Incubator-Odd:alpha_one+beta_two")
 
 
 def test_the_flatten_carries_THE_ENTRY_S_TAG_and_not_the_exiting_strategy_s(tmp_path):
@@ -1281,6 +1293,7 @@ def test_the_flatten_carries_THE_ENTRY_S_TAG_and_not_the_exiting_strategy_s(tmp_
     entry = d.process_bar_cycle({"MNQ": make_bars()})["dispatches"][0]
     assert entry["ok"] is True
     entry_tag = entry["json"]["strategy_tag"]
+    entry_contributors = entry["strategy_tag"]
 
     # The same two strategies now signal EXIT and neither claims a position,
     # which is what `plan_exits` requires before a flatten is a flatten.
@@ -1294,8 +1307,18 @@ def test_the_flatten_carries_THE_ENTRY_S_TAG_and_not_the_exiting_strategy_s(tmp_
     assert len(emitted) == 1, report["exit_orders"]
     assert emitted[0]["ok"] is True
 
-    assert emitted[0]["strategy_tag"] == entry_tag == \
+    # THE ATTRIBUTION, rebuilt from the position book rather than taken from
+    # whichever strategy signalled the exit: this is still what the ledger and
+    # the cycle card read, and it still names EVERY contributor.
+    assert emitted[0]["strategy_tag"] == entry_contributors == \
         "Incubator-Odd:alpha_one+beta_two"
+
+    # THE LOCK, on the wire, identical on both sides of the trade. This is the
+    # release, matched by string equality, and it is now keyed on the pair so
+    # it matches even when the book cannot name who opened the position - see
+    # `test_a_flatten_releases_the_lock_even_when_the_book_forgot_who_opened_it`.
+    assert entry_tag == "Incubator-Odd:MNQ"
+    assert emitted[0]["wire_strategy_tag"] == entry_tag
     # On the wire too. BOTH are the text command - the entry and the exit go
     # to the same webhook in the same form - and one lock spans both.
     assert wire_fields(sender.calls[-1]["payload"])["strategy_tag"] == entry_tag
@@ -1478,8 +1501,10 @@ def test_an_order_over_the_cap_is_clamped_to_one_and_still_dispatched(tmp_path):
     assert fields["qty"] == str(MAX_QTY) == "1"
     # THE TAG SURVIVES THE CLAMP. It is CrossTrade's lock and the flatten is
     # matched to it by string equality, so a clamped entry that lost its tag
-    # would open a position nothing could later close.
-    assert fields["strategy_tag"] == "Incubator-Odd:fixture_long"
+    # would open a position nothing could later close. The wire carries the
+    # per-pair lock; the contributor is on the record.
+    assert fields["strategy_tag"] == "Incubator-Odd:MNQ"
+    assert record["strategy_tag"] == "Incubator-Odd:fixture_long"
     assert record["strategy_tag"] == "Incubator-Odd:fixture_long"
 
 
@@ -2296,12 +2321,16 @@ def test_the_dispatch_line_names_the_tag_the_order_carried(tmp_path):
     card = d.describe_cycle(report)
 
     tag = compose_strategy_tag("Incubator-Odd", ["alpha_one"])
-    assert f'tag="{tag}"' in card, f"the lock is not on the card:\n{card}"
+    assert f'tag="{tag}"' in card, f"the attribution is not on the card:\n{card}"
 
-    # THE CARD'S TAG IS THE WIRE'S TAG. A card that spelled it differently
-    # would be worse than one that omitted it: an operator would compare a
-    # stranded position against a string no order ever carried.
-    assert tag in str(sender.calls[0]["payload"])
+    # THE CARD ALSO SHOWS THE LOCK, and it is the lock that is on the wire. A
+    # card that spelled either differently would be worse than one that
+    # omitted it: an operator would compare a stranded position against a
+    # string no order ever carried.
+    from realtime.live_dispatcher import compose_wire_tag
+    lock = compose_wire_tag("Incubator-Odd", "MNQ")
+    assert f'lock="{lock}"' in card
+    assert f"strategy_tag={lock};" in str(sender.calls[0]["payload"])
 
 
 def test_an_untagged_order_reads_as_NONE_rather_than_a_blank(tmp_path):
@@ -2353,3 +2382,220 @@ def test_the_flatten_line_names_the_lock_it_is_releasing(tmp_path):
     # THE SAME STRING ON BOTH SIDES, which is the whole of CrossTrade's
     # matching rule. Reading the two cards is now enough to see it.
     assert f'tag="{tag}"' in entry_card
+
+
+# ---------------------------------------------------------------------------
+# The CrossTrade strategy lock is keyed on the PAIR, not the contributors
+# ---------------------------------------------------------------------------
+def test_the_wire_tag_is_stable_across_a_changing_contributor_set(tmp_path):
+    """
+    THE COLLISION THIS FIXES. CrossTrade locks a contract to the exact string
+    that opened it and refuses any later order carrying a different one:
+
+        Trade blocked: MGC is managed by strategy 'Incubator-Even:strat_a'
+
+    A contributor set is not stable across bars — it is whichever strategies
+    signalled together on that one. So a position opened by `a` alone and
+    acted on next bar by `a+b` presented a second string for an already-locked
+    contract, and the order was refused outright.
+    """
+    from realtime.live_dispatcher import compose_wire_tag
+
+    alone = compose_strategy_tag("Incubator-Even", ["strat_a"])
+    together = compose_strategy_tag("Incubator-Even", ["strat_a", "strat_b"])
+    assert alone != together, "the premise: the attribution tag DOES move"
+
+    lock = compose_wire_tag("Incubator-Even", "MGC")
+    assert lock == "Incubator-Even:MGC"
+    # UNMOVED BY THE THING THAT MOVED THE OTHER, because it is keyed on what
+    # the position IS — one netted position per (portfolio, symbol).
+    assert compose_wire_tag("Incubator-Even", "MGC") == lock
+
+
+def test_the_order_on_the_wire_carries_the_lock_and_the_record_carries_both(
+        tmp_path):
+    """
+    The two answer different questions and both have to survive: `lock` is
+    what the broker holds against the contract, `strategy_tag` is who asked
+    for the position and is what a promotion is decided on.
+    """
+    from realtime.live_dispatcher import compose_wire_tag
+
+    sender = RecordingSender()
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["alpha_one"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"alpha_one": dict(side="long")},
+              dry_run=False, sender=sender,
+              crosstrade_url="https://crosstrade.invalid/hooks/T",
+              crosstrade_key="K")
+
+    report = d.process_bar_cycle({"MNQ": make_bars()})
+    sent = str(sender.calls[0]["payload"])
+    granular = compose_strategy_tag("Incubator-Odd", ["alpha_one"])
+    lock = compose_wire_tag("Incubator-Odd", "MNQ")
+
+    assert f"strategy_tag={lock}" in sent, f"the lock is not on the wire: {sent}"
+    assert granular not in sent, (
+        "the contributor tag must NOT reach CrossTrade — it is the string "
+        "that collides")
+
+    record = report["dispatches"][0]
+    assert record["wire_strategy_tag"] == lock
+    assert record["strategy_tag"] == granular, "attribution survives"
+
+
+def test_a_flatten_releases_the_lock_even_when_the_book_forgot_who_opened_it(
+        tmp_path):
+    """
+    THE OTHER DIRECTION, and the silent one. After a restart the position book
+    is empty, so a reconciled flatten knows the pair but not its contributors
+    and could not compose the tag that held the lock. A mismatched flatten is
+    sent, accepted and logged while the position stays open.
+
+    The lock is derivable from the pair alone, so it matches whether or not
+    this process is the one that opened the position.
+    """
+    from realtime.live_dispatcher import compose_wire_tag
+
+    sender = RecordingSender()
+    d = build(tmp_path, assignments={"Incubator-Odd": ["alpha_one"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              dry_run=False, sender=sender,
+              crosstrade_url="https://crosstrade.invalid/hooks/T",
+              crosstrade_key="K")
+
+    # NO contributors at all — the state a restart leaves behind.
+    record = d.dispatch_flatten("SimIncubator1", "MNQ", "Incubator-Odd",
+                                strategy_tag="")
+    lock = compose_wire_tag("Incubator-Odd", "MNQ")
+    assert record["wire_strategy_tag"] == lock
+    assert f"strategy_tag={lock}" in str(sender.calls[-1]["payload"])
+
+
+def test_an_entry_and_its_flatten_present_one_identical_lock(tmp_path):
+    """CrossTrade matches by STRING EQUALITY. The entry takes the lock out and
+    the flatten releases it, and this is the whole of the contract."""
+    sender = RecordingSender()
+    root = tmp_path / "strategies"
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["alpha_one"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"alpha_one": dict(side="long")},
+              dry_run=False, sender=sender,
+              crosstrade_url="https://crosstrade.invalid/hooks/T",
+              crosstrade_key="K")
+
+    entry = d.process_bar_cycle({"MNQ": make_bars()})["dispatches"][0]
+    write_strategy(root, "alpha_one", side="flat", exit_on_last=True)
+    d.strategies = []
+    d._load_active_strategies()
+    flat = d.process_bar_cycle({"MNQ": make_bars()})["exit_orders"][0]
+
+    assert flat["wire_strategy_tag"] == entry["wire_strategy_tag"]
+
+
+def test_the_manual_path_keeps_the_tag_it_was_handed(tmp_path):
+    """With no portfolio there is no pair to key a lock on. An operator
+    flattening by hand gets the tag they typed, not one composed for them."""
+    sender = RecordingSender()
+    d = build(tmp_path, assignments={"Incubator-Odd": []},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              dry_run=False, sender=sender,
+              crosstrade_url="https://crosstrade.invalid/hooks/T",
+              crosstrade_key="K")
+    record = d.dispatch_flatten("SimIncubator1", "MNQ",
+                                strategy_tag="typed_by_hand")
+    assert record["wire_strategy_tag"] == "typed_by_hand"
+
+
+def test_the_lock_names_the_contract_dispatched_not_its_full_size_parent():
+    """The lock is held against the contract the ORDER names. Resolving MGC to
+    GC here would name a contract no order was ever placed on."""
+    from realtime.live_dispatcher import compose_wire_tag
+
+    assert compose_wire_tag("Incubator-Odd", "MGC") == "Incubator-Odd:MGC"
+    assert compose_wire_tag("Incubator-Odd", "mnq") == "Incubator-Odd:MNQ"
+
+
+def test_the_card_shows_who_asked_beside_what_the_broker_holds(tmp_path):
+    """Granular attribution stays in master_live.log — that is the whole
+    reason the wire tag and the attribution tag are allowed to differ."""
+    from realtime.live_dispatcher import compose_wire_tag
+
+    d = build(tmp_path, assignments={"Incubator-Odd": []},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}})
+    granular = compose_strategy_tag("Incubator-Odd", ["a_one", "b_two"])
+    lock = compose_wire_tag("Incubator-Odd", "MNQ")
+    card = d.describe_cycle({
+        "started_at": "t", "dry_run": True, "symbols": ["MNQ"],
+        "dispatches": [{"account": "SimIncubator1", "action": "BUY",
+                        "symbol": "MNQ", "quantity": 1, "ok": True,
+                        "strategy_tag": granular,
+                        "wire_strategy_tag": lock}],
+        "plan": [], "payloads": [], "ml_vetoes": [], "declines": [],
+        "held": [], "errors": [], "exit_signals": []})
+    assert f'tag="{granular}"' in card, "who asked"
+    assert f'lock="{lock}"' in card, "what CrossTrade holds"
+
+
+def test_a_multi_strategy_transition_on_one_symbol_emits_one_unchanging_lock(
+        tmp_path):
+    """
+    THE END-TO-END CASE, driven through real cycles rather than asserted on
+    the composer. One contract, three orders, a contributor set that CHANGES
+    between them:
+
+        bar 1   alpha alone opens        lock taken out
+        bar 2   both signal exit         lock released
+        bar 3   alpha AND beta enter     lock taken out again
+
+    Before this, order 3 carried `Incubator-Odd:alpha_one+beta_two` against a
+    contract CrossTrade had locked to `Incubator-Odd:alpha_one`, and was
+    refused: "Trade blocked: MNQ is managed by strategy '...'". Every order
+    here must present ONE string, and the attribution must still differ across
+    them — that is the whole point of separating the two.
+    """
+    sender = RecordingSender()
+    root = tmp_path / "strategies"
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["alpha_one"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"alpha_one": dict(side="long")},
+              dry_run=False, sender=sender,
+              crosstrade_url="https://crosstrade.invalid/hooks/T",
+              crosstrade_key="K")
+
+    # bar 1 — alpha alone.
+    first = d.process_bar_cycle({"MNQ": make_bars()})["dispatches"][0]
+    assert first["ok"] is True
+    assert first["strategy_tag"] == "Incubator-Odd:alpha_one"
+
+    # bar 2 — alpha signals an exit, and the position is flattened.
+    write_strategy(root, "alpha_one", side="flat", exit_on_last=True)
+    d.strategies = []
+    d._load_active_strategies()
+    d.positions.begin_cycle("bar-2")
+    flat = [e for e in d.process_bar_cycle({"MNQ": make_bars()})["exit_orders"]
+            if e["emitted"]]
+    assert len(flat) == 1 and flat[0]["ok"] is True
+
+    # bar 3 — a SECOND strategy is now on the portfolio and both enter. This
+    # is the transition: the same contract, a different contributor set.
+    write_strategy(root, "alpha_one", side="long")
+    write_strategy(root, "beta_two", side="long")
+    d.portfolios["Incubator-Odd"]["active_strategies"] = ["alpha_one",
+                                                          "beta_two"]
+    d.strategies = []
+    d._load_active_strategies()
+    d.positions.begin_cycle("bar-3")
+    third = d.process_bar_cycle({"MNQ": make_bars()})["dispatches"][0]
+    assert third["ok"] is True
+    assert third["strategy_tag"] == "Incubator-Odd:alpha_one+beta_two", (
+        "the premise: the contributor set really did change")
+
+    # ONE LOCK ACROSS ALL THREE, on the wire, in the form that is sent.
+    locks = {wire_fields(c["payload"]).get("strategy_tag")
+             for c in sender.calls}
+    assert locks == {"Incubator-Odd:MNQ"}, (
+        f"CrossTrade would refuse the odd one out: {sorted(locks)}")

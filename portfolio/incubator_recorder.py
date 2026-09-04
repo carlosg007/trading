@@ -324,6 +324,59 @@ def _trades_symbol(portfolio: dict, strategy_id: str, symbol: str) -> bool:
                for asset in (portfolio.get("basket") or {}).get("assets") or [])
 
 
+def parse_strategy_tag(declared: str,
+                       config: dict) -> tuple[str | None, list[str], str]:
+    """
+    `(portfolio_id, contributor_ids, kind)` for a tag written by the live loop.
+
+    THE LOG NAMES A TAG, NOT ALWAYS A STRATEGY, and the two stopped being the
+    same string on 2026-09-04. `realtime.live_dispatcher` composes two:
+
+      `Incubator-Odd:strat_a+strat_b`  the CONTRIBUTORS to a netted position
+      `Incubator-Odd:MNQ`              the CrossTrade LOCK, keyed on the pair
+
+    The second is what now goes on the wire, because a contributor set changes
+    between bars and CrossTrade refuses an order whose tag differs from the one
+    that opened the contract. So the tag a broker export carries back is the
+    lock, and taking it at face value would file every fill on that contract
+    under a strategy named `Incubator-Odd:MNQ`, which does not exist and never
+    will - the real strategies would show zero trades and never graduate, with
+    a populated ledger behind it.
+
+    A suffix is a contributor list ONLY when its parts resolve to strategies
+    the routing table actually knows. Anything else - a symbol, a retired id, a
+    tag from some other tool - returns no contributor and the caller falls
+    through to resolving the account, exactly as it does for a row that names
+    nothing. That is the module's rule applied to a tag: attribution is
+    evidence, not inference.
+    """
+    raw = str(declared or "").strip()
+    if not raw or ":" not in raw:
+        return None, ([raw] if raw else []), "bare" if raw else "empty"
+
+    pid, _, suffix = raw.partition(":")
+    pid, suffix = pid.strip(), suffix.strip()
+    portfolio = (config.get("portfolios") or {}).get(pid)
+    portfolio_id = pid if portfolio is not None else None
+
+    if not suffix:
+        return portfolio_id, [], "empty"
+
+    parts = [x for x in (p.strip() for p in suffix.split("+")) if x]
+    # KNOWN TO THE ROUTING TABLE, and across EVERY portfolio rather than only
+    # the one the tag names: a strategy promoted onward keeps the id it traded
+    # under, and a historical fill must stay attributable after the move.
+    # `strategy_allocations` as well as `active_strategies`: a strategy stood
+    # down keeps its allocation record, and its historical fills have to stay
+    # attributable after it stops trading.
+    known = {sid for p in (config.get("portfolios") or {}).values()
+             for sid in list(p.get("active_strategies") or [])
+             + list((p.get("strategy_allocations") or {}).keys())}
+    if parts and all(x in known for x in parts):
+        return portfolio_id, sorted(set(parts)), "contributors"
+    return portfolio_id, [], "lock"
+
+
 def attribute(row: dict, config: dict) -> tuple[str | None, str | None, str]:
     """
     `(strategy_id, portfolio_id, why)` for one row.
@@ -339,12 +392,34 @@ def attribute(row: dict, config: dict) -> tuple[str | None, str | None, str]:
     declared = str(row.get("strategy") or "").strip()
 
     if declared:
-        if portfolio_id is None:
-            # The strategy is named, so the trade is attributable; the account
-            # only decides which risk envelope grades it, and the tracker
-            # resolves that from the routing table anyway.
-            return declared, None, "named by the log"
-        return declared, portfolio_id, "named by the log"
+        tag_portfolio, contributors, kind = parse_strategy_tag(declared, config)
+        # THE TAG'S PORTFOLIO IS ACCEPTED WHEN THE ACCOUNT RESOLVED TO NONE.
+        # It is the same routing table either way, and a row whose account
+        # column is missing or unmapped still names its stream in the tag.
+        portfolio_id = portfolio_id or tag_portfolio
+
+        if len(contributors) == 1:
+            # THE STRATEGY IS NAMED, so the trade is attributable whether or
+            # not the account resolved: the account only decides which risk
+            # envelope grades it, and the tracker resolves that from the
+            # routing table anyway.
+            return contributors[0], portfolio_id, (
+                "named by the log" if kind == "bare"
+                else "the tag's sole contributor")
+        if len(contributors) > 1:
+            # A NETTED POSITION BELONGS TO ALL OF THEM and this row is ONE
+            # trade. Splitting a P&L across contributors invents a number, and
+            # assigning it to the first decides a promotion on somebody else's
+            # trade. The contributors are REPORTED so the row is diagnosable.
+            return None, portfolio_id, (
+                f"the tag names {len(contributors)} contributors "
+                f"({'+'.join(contributors)}) to one netted position; a single "
+                f"fill cannot be split between them")
+        # A LOCK NAMES A CONTRACT, NOT A STRATEGY - and so does a tag with
+        # nothing after the colon. Filing the fill under either would invent a
+        # strategy named after the symbol. Falls through to the account rule
+        # below, which attributes when exactly one strategy on this portfolio
+        # trades this contract and refuses to guess otherwise.
 
     if portfolio_id is None:
         return None, None, (

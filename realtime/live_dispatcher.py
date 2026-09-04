@@ -1263,11 +1263,19 @@ class LiveExecutionDispatcher:
         and opens no socket; the logged command is REDACTED, because the key is
         a bearer credential for a live account.
 
-        `strategy_tag` MUST be the tag the entry carried - see
-        `compose_strategy_tag`. It defaults to empty because this method is
-        also the manual/operator entry point, where an untagged flatten (act on
-        whatever the account holds) is the honest thing to send; `dispatch_exits`
-        never leaves it empty.
+        `strategy_tag` is the ATTRIBUTION tag - who opened the position, read
+        off the position book by `dispatch_exits`. It is no longer what
+        releases the lock: the wire carries `compose_wire_tag(portfolio_id,
+        symbol)`, which is derivable from the pair alone and is therefore the
+        same string the entry sent WHETHER OR NOT this process is the one that
+        opened the position. That is what makes a reconciled flatten work after
+        a restart, when the book is empty and the contributors are unknowable.
+
+        It defaults to empty because this method is also the manual/operator
+        entry point, where an untagged flatten (act on whatever the account
+        holds) is the honest thing to send; `dispatch_exits` never leaves it
+        empty. WITHOUT A `portfolio_id` there is no pair to key a lock on and
+        the caller's tag goes out unchanged.
         """
         started = time.perf_counter()
         record: dict[str, Any] = {
@@ -1279,11 +1287,19 @@ class LiveExecutionDispatcher:
             # one flatten cannot carry different tags.
             "strategy_tag": strategy_tag,
         }
+        # THE LOCK RELEASE. Keyed on the pair, so it matches what the entry
+        # took out even when this process cannot name who opened the position -
+        # which is every flatten after a restart, and the case where a tag
+        # mismatch is silent and expensive: the flatten is sent, accepted and
+        # logged, and the position stays open.
+        wire_tag = (compose_wire_tag(portfolio_id, symbol)
+                    if portfolio_id else strategy_tag)
+        record["wire_strategy_tag"] = wire_tag
         try:
             command = format_flatten_command(account=account,
                                              instrument=symbol,
                                              key=self.crosstrade_key,
-                                             strategy_tag=strategy_tag)
+                                             strategy_tag=wire_tag)
         except Exception as exc:                                  # noqa: BLE001
             record["error"] = f"{type(exc).__name__}: {exc}"
             return record
@@ -1295,7 +1311,7 @@ class LiveExecutionDispatcher:
         # attaches only AFTER this method returns.
         record["json"] = format_flatten_json(
             account=account, instrument=symbol,
-            strategy_tag=record.get("strategy_tag") or "")
+            strategy_tag=record.get("wire_strategy_tag") or "")
 
         if self.dry_run:
             record.update({"ok": True, "attempts": 0,
@@ -1448,6 +1464,20 @@ class LiveExecutionDispatcher:
             "attempts": 0, "ok": False, "error": None,
         }
 
+        # THE LOCK, AND IT IS NOT THE ATTRIBUTION TAG. CrossTrade keys a
+        # strategy lock on the exact string that opened the position and
+        # refuses a later order carrying a different one - and the contributor
+        # tag changes whenever the set of strategies that signalled together
+        # changes. See `compose_wire_tag`. Both are kept on the record: this
+        # one is what the broker sees, `strategy_tag` is who asked for it.
+        #
+        # WITH NO PORTFOLIO THERE IS NO PAIR TO KEY ON, so the caller's tag
+        # goes out unchanged. That is the manual/operator entry point, where
+        # nothing composed the tag in the first place.
+        wire_tag = (compose_wire_tag(portfolio_id, payload.get("symbol", ""))
+                    if portfolio_id else strategy_tag)
+        record["wire_strategy_tag"] = wire_tag
+
         # THE PRE-TRADE GATE, INSIDE THE SEND PATH. Every order this repository
         # places goes through this method, so the firewall sits here rather
         # than in the caller: a gate a caller can forget is a gate that will be
@@ -1572,14 +1602,23 @@ class LiveExecutionDispatcher:
                 # from the day it was added, which meant every live entry
                 # went out untagged and CrossTrade held no lock for the
                 # flatten to clear.
-                strategy_tag=strategy_tag)
+                #
+                # `wire_tag`, NOT `strategy_tag` - the stable per-pair lock,
+                # because a contributor set that changes between bars presents
+                # CrossTrade with a second string for a contract it has
+                # already locked and the order is refused outright.
+                strategy_tag=wire_tag)
             body = format_crosstrade_json(
                 account=payload["account"],
                 instrument=payload["symbol"],
                 action=payload["action"],
                 qty=payload["quantity"],
                 order_type=payload.get("orderType", "MARKET"),
-                strategy_tag=strategy_tag)
+                # The same lock. The JSON object is kept as evidence of what
+                # the other endpoint would have been handed, and two wire
+                # forms of one order carrying different tags is the bug this
+                # module already shipped once.
+                strategy_tag=wire_tag)
         except (CrossTradeFormatError, KeyError) as exc:
             record["error"] = f"payload refused by the formatter: {exc}"
             record["elapsed_ms"] = round((time.perf_counter() - started) * 1000, 1)
@@ -1691,9 +1730,19 @@ class LiveExecutionDispatcher:
             # entry is a position CrossTrade holds no lock for, and a blank
             # where a tag should be reads as a formatting quirk.
             tag = str(d.get("strategy_tag") or "")
+            lock = str(d.get("wire_strategy_tag") or "")
+            # BOTH, because they answer different questions and are no longer
+            # the same string. `tag=` is WHO ASKED - the contributors to the
+            # netted position, which is the attribution a promotion is decided
+            # on. `lock=` is what CROSSTRADE HOLDS against the contract, keyed
+            # on the pair so it cannot collide with itself between bars. It is
+            # printed only when it differs: on the manual path there is no
+            # portfolio, the two are one string, and repeating it reads as two
+            # facts where there is one.
             lines.append(f"  {status} {d['account']:<16} {d['action']:<5} "
                          f"{d['symbol']:<5} x{d['quantity']}"
                          + (f'  | tag="{tag}"' if tag else "  | tag=NONE")
+                         + (f' lock="{lock}"' if lock and lock != tag else "")
                          + (f"   {d['error']}" if d.get("error") else "")
                          + detail)
         for h in report.get("held", []):
@@ -1746,10 +1795,12 @@ class LiveExecutionDispatcher:
                 # it beside the entry's is what makes that visible in a log
                 # rather than only on the account.
                 ftag = str(x.get("strategy_tag") or "")
+                flock = str(x.get("wire_strategy_tag") or "")
                 lines.append(
                     f"  {status} {x.get('portfolio_id','')}/"
                     f"{x.get('symbol','')} FLATTEN"
                     + (f'  | tag="{ftag}"' if ftag else "  | tag=NONE")
+                    + (f' lock="{flock}"' if flock and flock != ftag else "")
                     + f"  ({x.get('reason')})"
                     + (f"   {x['error']}" if x.get("error") else ""))
             else:
@@ -1830,6 +1881,51 @@ def compose_strategy_tag(portfolio_id: str, strategy_ids) -> str:
     # would otherwise collapse onto one lock. `sanitize_strategy_tag` still
     # runs after this and is what the wire form is guaranteed by - it is asked
     # here too so the tag on the cycle report is the tag on the wire.
+    return sanitize_strategy_tag(tag.replace(";", "_").replace("=", "_"))
+
+
+def compose_wire_tag(portfolio_id: str, symbol: str) -> str:
+    """
+    `portfolio:SYMBOL` - the STABLE tag that goes on the wire, and the only
+    string CrossTrade's strategy lock ever sees.
+
+    WHY THE WIRE TAG IS NOT THE ATTRIBUTION TAG
+    ===========================================
+    CrossTrade locks a contract to the exact string that OPENED the position
+    and refuses any later order carrying a different one:
+
+        Trade blocked: MGC is managed by strategy 'Incubator-Even:strat_a'
+
+    `compose_strategy_tag` names the CONTRIBUTORS, and a contributor set is not
+    stable across bars - it is whichever strategies signalled together on that
+    bar. A position opened by `a` alone and reversed on the next bar by `a+b`
+    presents a second string for a contract that is already locked, and the
+    order is REFUSED. The exit path had the same exposure from the other
+    direction: after a restart the position book is empty, so a reconciled
+    flatten knows the pair but not who opened it, and the tag it could compose
+    was not the one holding the lock.
+
+    Keying the lock on (portfolio, symbol) removes both. The pair is what the
+    position IS - `PositionBook`, `build_order_plan` and `plan_exits` are all
+    keyed by it, one netted position per pair - so the lock now has exactly the
+    granularity of the thing it locks, and it is derivable at any moment by any
+    process, including one that has just started and holds no history.
+
+    ATTRIBUTION DOES NOT LIVE HERE AND IS NOT LOST. The contributor tag is
+    still composed for every order and is what goes on the dispatch record, the
+    cycle card in `master_live.log`, and the durable `EngineState` ledger. See
+    `describe_cycle`, which prints both: `tag=` is who asked, `lock=` is what
+    CrossTrade holds.
+
+    The symbol is upper-cased and used AS DISPATCHED - the micro, not its
+    full-size parent. The lock is held against the contract the order names, so
+    resolving MGC to GC here would name a contract no order was placed on.
+    """
+    sym = str(symbol or "").strip().upper()
+    tag = f"{portfolio_id}:{sym}"
+    # Separators mapped exactly as `compose_strategy_tag` maps them, for the
+    # same reason: the formatter DELETES them, so two ids differing only in a
+    # separator would collapse onto one lock.
     return sanitize_strategy_tag(tag.replace(";", "_").replace("=", "_"))
 
 

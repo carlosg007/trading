@@ -152,12 +152,31 @@ table every tier resolves symbols through.
     report showed a tag. An entry tagged and
     an exit untagged, or tagged differently, does not close the position: the
     flatten is sent, accepted and logged, and nothing is released.
-    `live_dispatcher.compose_strategy_tag` is the ONE composer — the entry
-    builds `portfolio:strategy_a+strategy_b` from the plan's contributors and
-    the exit rebuilds the identical string from the POSITION BOOK, because a
-    netted position took out one lock named for all of its contributors and
-    flattening it under the exiting strategy's own id names a lock that never
-    existed. `;`, `=` and whitespace are STRIPPED (`sanitize_strategy_tag`) —
+    **THE WIRE TAG AND THE ATTRIBUTION TAG ARE DIFFERENT STRINGS, since
+    2026-09-04.** `compose_wire_tag` builds `portfolio:SYMBOL` and it is the
+    only thing CrossTrade ever sees; `compose_strategy_tag` builds
+    `portfolio:strategy_a+strategy_b` from the plan's contributors and stays on
+    the dispatch record, the cycle card and the `EngineState` ledger. They were
+    one string until CrossTrade started refusing orders — *Trade blocked: MGC
+    is managed by strategy 'Incubator-Even:strat_a'* — because **a contributor
+    set is not stable across bars.** It is whichever strategies signalled
+    together on that one, so a position opened by `a` and acted on next bar by
+    `a+b` presents a second string for an already-locked contract. The exit had
+    the mirror exposure: after a restart the book is empty, so a reconciled
+    flatten knew the pair but not who opened it and could not rebuild the tag
+    holding the lock. **A lock keyed on (portfolio, symbol) has exactly the
+    granularity of the thing it locks** — one netted position per pair, which is
+    how `PositionBook`, `build_order_plan` and `plan_exits` are all keyed — and
+    is derivable by any process at any moment, including one that has just
+    started. The symbol is the one DISPATCHED, the micro rather than its
+    full-size parent, because the lock is held against the contract the order
+    names. `describe_cycle` prints both: `tag=` is who asked, `lock=` is what
+    CrossTrade holds. **A broker export hands the LOCK back**, so
+    `incubator_recorder.parse_strategy_tag` resolves a tag before believing it —
+    a suffix is a contributor list only when its parts are strategies the
+    routing table knows, and anything else falls through to the account rule
+    rather than filing every fill on that contract under a strategy named after
+    the symbol. `;`, `=` and whitespace are STRIPPED (`sanitize_strategy_tag`) —
     they are the text form's field separators — and a tag that is nothing but
     separators is refused rather than reduced to `""`, since an order that
     silently lost its lock is the failure the field exists to prevent. No tag
