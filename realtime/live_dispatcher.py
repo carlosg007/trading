@@ -142,6 +142,7 @@ from realtime.crosstrade_formatter import (                        # noqa: E402
     format_flatten_command,
     format_flatten_json,
     redact,
+    refusal_reason,
     sanitize_strategy_tag,
 )
 from realtime.contract_alias import resolve_parent                 # noqa: E402
@@ -1133,6 +1134,15 @@ class LiveExecutionDispatcher:
             record["ok"] = bool(result.get("ok"))
             record["error"] = result.get("error")
             record["http_status"] = result.get("http_status")
+            # A 2xx IS NOT A FILL. CrossTrade accepts the webhook and then
+            # declines the trade in the BODY - a strategy-lock refusal comes
+            # back 200 - so an order it refused read `OK` everywhere. See
+            # `crosstrade_formatter.refusal_reason`.
+            refusal = refusal_reason(result.get("response_body"))
+            if refusal is not None:
+                record["ok"] = False
+                record["refused_by_broker"] = refusal
+                record["error"] = record["error"] or refusal
             if record["ok"] or not _is_safe_to_retry(result):
                 break
             if attempt < self.max_attempts:
@@ -1655,6 +1665,15 @@ class LiveExecutionDispatcher:
             record["ok"] = bool(result.get("ok"))
             record["error"] = result.get("error")
             record["http_status"] = result.get("http_status")
+            # A 2xx IS NOT A FILL. CrossTrade accepts the webhook and then
+            # declines the trade in the BODY - a strategy-lock refusal comes
+            # back 200 - so an order it refused read `OK` everywhere. See
+            # `crosstrade_formatter.refusal_reason`.
+            refusal = refusal_reason(result.get("response_body"))
+            if refusal is not None:
+                record["ok"] = False
+                record["refused_by_broker"] = refusal
+                record["error"] = record["error"] or refusal
             if record["ok"] or not _is_safe_to_retry(result):
                 break
             if attempt < self.max_attempts:

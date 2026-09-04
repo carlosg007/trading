@@ -81,6 +81,7 @@ falls back to `$CROSSTRADE_KEY`; an explicit argument always wins.
 from __future__ import annotations
 
 import datetime as _dt
+import json
 import os
 import re
 import sys
@@ -245,6 +246,50 @@ def _clean_tif(tif: str) -> str:
 #: that split but reaches the receiver with the space in the value, and two
 #: spellings of one strategy are two different locks.
 _TAG_STRIP = re.compile(r"[\s;=]+")
+
+
+#: What CrossTrade says when its STRATEGY LOCK refuses an order. Observed on
+#: 2026-09-04 against live accounts:
+#:
+#:     Trade blocked: MGC DEC26 is managed by strategy 'Incubator-Even:...'
+#:     Trade blocked: 6J SEP26 is managed by strategy 'Incubator-Odd:...'
+#:
+#: Matched case-insensitively on the DECODED BODY, and deliberately narrow -
+#: two phrases CrossTrade writes when it declines, not a general search for
+#: the word "error". A false positive marks a filled order as failed, which
+#: leaves the position book denying a position that exists.
+REFUSAL_MARKERS = ("trade blocked", "is managed by strategy")
+
+
+def refusal_reason(response_body: Any) -> str | None:
+    """
+    The refusal CrossTrade wrote into a 2xx body, or None.
+
+    **A 2xx IS NOT A FILL.** `live.dispatcher.send_execution_signal` sets `ok`
+    from the HTTP status alone, which is the right rule for a transport: the
+    request arrived and was understood. But CrossTrade ACCEPTS the webhook and
+    then declines the trade in the body, so an order its strategy lock refused
+    came back 200 and every log line read `OK`.
+
+    That is the expensive direction on the FLATTEN path. `dispatch_exits`
+    clears the position book only for a flatten that succeeded - so a refusal
+    read as success cleared the book, the loop believed it was flat, and the
+    position stayed open at the broker with nothing in any log saying so. On
+    2026-09-04 sixty-two flattens were logged `OK` this way.
+
+    Returns the body TEXT rather than a bool, because "which lock is it
+    holding" is the next question and the answer is in that sentence.
+    """
+    if response_body is None:
+        return None
+    text = (response_body if isinstance(response_body, str)
+            else json.dumps(response_body) if isinstance(response_body,
+                                                         (dict, list))
+            else str(response_body))
+    low = text.lower()
+    if any(marker in low for marker in REFUSAL_MARKERS):
+        return " ".join(text.split())[:300]
+    return None
 
 
 def sanitize_strategy_tag(strategy_tag: Any) -> str:

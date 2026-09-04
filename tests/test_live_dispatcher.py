@@ -2599,3 +2599,90 @@ def test_a_multi_strategy_transition_on_one_symbol_emits_one_unchanging_lock(
              for c in sender.calls}
     assert locks == {"Incubator-Odd:MNQ"}, (
         f"CrossTrade would refuse the odd one out: {sorted(locks)}")
+
+
+# ---------------------------------------------------------------------------
+# A 2xx is not a fill: CrossTrade declines in the BODY
+# ---------------------------------------------------------------------------
+class RefusingSender(RecordingSender):
+    """CrossTrade's strategy lock declining, the way it actually does it —
+    HTTP 200, refusal in the body."""
+
+    def __call__(self, payload, webhook_url=None, timeout_seconds=None):
+        self.calls.append({"payload": payload, "url": webhook_url,
+                           "timeout": timeout_seconds})
+        return {"ok": True, "http_status": 200, "error": None,
+                "response_body": ("Trade blocked: MNQ SEP26 is managed by "
+                                  "strategy 'Incubator-Odd:old_tag'"),
+                "url": webhook_url, "payload": payload}
+
+
+def test_a_flatten_refused_in_the_body_is_not_reported_as_sent(tmp_path):
+    """
+    THE EXPENSIVE DIRECTION, and it was live. `dispatch_exits` clears the
+    position book only for a flatten that SUCCEEDED — so a refusal read as
+    success cleared the book, this process believed it was flat, and the
+    position stayed open at the broker with every log line reading OK. Sixty-
+    two flattens were logged that way on 2026-09-04.
+    """
+    sender = RefusingSender()
+    d = build(tmp_path, assignments={"Incubator-Odd": []},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              dry_run=False, sender=sender,
+              crosstrade_url="https://crosstrade.invalid/hooks/T",
+              crosstrade_key="K")
+
+    record = d.dispatch_flatten("SimIncubator1", "MNQ", "Incubator-Odd")
+    assert record["ok"] is False, "a refused flatten is not a flatten"
+    assert "is managed by strategy" in record["refused_by_broker"]
+    # THE REASON SURVIVES ONTO `error`, which is what the cycle card prints —
+    # "which lock is it holding" is the next question and the answer is in
+    # that sentence.
+    assert "Incubator-Odd:old_tag" in record["error"]
+
+
+def test_a_refused_entry_is_not_recorded_as_an_open_position(tmp_path):
+    """The mirror. A position the broker never opened, recorded as open, makes
+    the next entry look like a stack and the next exit flatten thin air."""
+    sender = RefusingSender()
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["alpha_one"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"alpha_one": dict(side="long")},
+              dry_run=False, sender=sender,
+              crosstrade_url="https://crosstrade.invalid/hooks/T",
+              crosstrade_key="K")
+
+    report = d.process_bar_cycle({"MNQ": make_bars()})
+    assert report["dispatches"][0]["ok"] is False
+    assert d.positions.state("Incubator-Odd", "MNQ") == "flat"
+
+
+def test_a_broker_refusal_is_never_retried(tmp_path):
+    """The request REACHED CrossTrade and was understood — it was the trade
+    that was declined. A retry there is a duplicate order this process cannot
+    undo, and retries exist only for failures that prove nothing was sent."""
+    sender = RefusingSender()
+    d = build(tmp_path, assignments={"Incubator-Odd": []},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              dry_run=False, sender=sender,
+              crosstrade_url="https://crosstrade.invalid/hooks/T",
+              crosstrade_key="K")
+    record = d.dispatch_flatten("SimIncubator1", "MNQ", "Incubator-Odd")
+    assert record["attempts"] == 1
+    assert len(sender.calls) == 1
+
+
+def test_an_ordinary_success_body_is_still_a_success(tmp_path):
+    """The markers are two phrases CrossTrade writes when it declines, not a
+    search for the word "error". A false positive marks a filled order failed
+    and leaves the book denying a position that exists."""
+    sender = RecordingSender()
+    d = build(tmp_path, assignments={"Incubator-Odd": []},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              dry_run=False, sender=sender,
+              crosstrade_url="https://crosstrade.invalid/hooks/T",
+              crosstrade_key="K")
+    record = d.dispatch_flatten("SimIncubator1", "MNQ", "Incubator-Odd")
+    assert record["ok"] is True
+    assert "refused_by_broker" not in record
