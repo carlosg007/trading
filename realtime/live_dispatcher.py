@@ -1682,8 +1682,18 @@ class LiveExecutionDispatcher:
             if d.get("clamped"):
                 detail += (f"  (CLAMPED from {d.get('requested_quantity')} "
                            f"— MAX_QTY cap)")
+            # THE TAG, ON THE LINE THAT SAYS AN ORDER WENT OUT. It is
+            # CrossTrade's LOCK - the flatten is matched to it by string
+            # equality - and until 2026-09-04 it appeared in no log at all, so
+            # "which lock did that order take out" could only be answered by
+            # recomposing it by hand from the plan. An order that carries no
+            # tag is shown as `tag=NONE` rather than omitted: an untagged
+            # entry is a position CrossTrade holds no lock for, and a blank
+            # where a tag should be reads as a formatting quirk.
+            tag = str(d.get("strategy_tag") or "")
             lines.append(f"  {status} {d['account']:<16} {d['action']:<5} "
                          f"{d['symbol']:<5} x{d['quantity']}"
+                         + (f'  | tag="{tag}"' if tag else "  | tag=NONE")
                          + (f"   {d['error']}" if d.get("error") else "")
                          + detail)
         for h in report.get("held", []):
@@ -1729,10 +1739,18 @@ class LiveExecutionDispatcher:
         for x in report.get("exit_orders", []):
             if x.get("emitted"):
                 status = "OK  " if x.get("ok") else "FAIL"
+                # THE FLATTEN'S TAG IS THE ONE THAT MATTERS MOST. It is the
+                # lock RELEASE, matched to the entry's by string equality, and
+                # a flatten spelling it even slightly differently is sent,
+                # accepted and logged while the position stays open. Printing
+                # it beside the entry's is what makes that visible in a log
+                # rather than only on the account.
+                ftag = str(x.get("strategy_tag") or "")
                 lines.append(
                     f"  {status} {x.get('portfolio_id','')}/"
                     f"{x.get('symbol','')} FLATTEN"
-                    f"  ({x.get('reason')})"
+                    + (f'  | tag="{ftag}"' if ftag else "  | tag=NONE")
+                    + f"  ({x.get('reason')})"
                     + (f"   {x['error']}" if x.get("error") else ""))
             else:
                 lines.append(f"       NO-EXIT {x.get('portfolio_id','')}/"

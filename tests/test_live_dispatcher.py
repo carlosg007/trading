@@ -54,6 +54,7 @@ from realtime.live_dispatcher import (                              # noqa: E402
     LiveDispatchError,
     LiveExecutionDispatcher,
     _is_safe_to_retry,
+    compose_strategy_tag,
     load_env_file,
     resolve_credentials,
 )
@@ -2269,3 +2270,86 @@ def test_the_flatten_appears_on_the_console_card(tmp_path):
     card = d.describe_cycle(report)
     assert "FLATTEN" in card, f"the flatten is invisible on the card:\n{card}"
     assert "Incubator-Odd/MNQ" in card
+
+
+# ---------------------------------------------------------------------------
+# The strategy tag on the console card
+# ---------------------------------------------------------------------------
+def test_the_dispatch_line_names_the_tag_the_order_carried(tmp_path):
+    """
+    THE TAG IS CROSSTRADE'S LOCK and until 2026-09-04 it appeared in no log
+    line at all. The entry takes the lock out and the flatten releases it by
+    STRING EQUALITY, so "which lock did that order take out" is the first
+    question a stranded position raises — and answering it meant recomposing
+    the string by hand from the plan's contributors.
+    """
+    sender = RecordingSender()
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["alpha_one"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"alpha_one": dict(side="long")},
+              dry_run=False, sender=sender,
+              crosstrade_url="https://crosstrade.invalid/hooks/T",
+              crosstrade_key="K")
+
+    report = d.process_bar_cycle({"MNQ": make_bars()})
+    card = d.describe_cycle(report)
+
+    tag = compose_strategy_tag("Incubator-Odd", ["alpha_one"])
+    assert f'tag="{tag}"' in card, f"the lock is not on the card:\n{card}"
+
+    # THE CARD'S TAG IS THE WIRE'S TAG. A card that spelled it differently
+    # would be worse than one that omitted it: an operator would compare a
+    # stranded position against a string no order ever carried.
+    assert tag in str(sender.calls[0]["payload"])
+
+
+def test_an_untagged_order_reads_as_NONE_rather_than_a_blank(tmp_path):
+    """
+    An untagged entry is a position CrossTrade holds NO LOCK for — nothing can
+    close it by tag. A blank where a tag should be reads as a formatting quirk;
+    `tag=NONE` is a statement.
+    """
+    d = build(tmp_path, assignments={"Incubator-Odd": []},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}})
+    card = d.describe_cycle({
+        "started_at": "t", "dry_run": True, "symbols": ["MNQ"],
+        "dispatches": [{"account": "SimIncubator1", "action": "BUY",
+                        "symbol": "MNQ", "quantity": 1, "ok": True}],
+        "plan": [], "payloads": [], "ml_vetoes": [], "declines": [],
+        "held": [], "errors": [], "exit_signals": []})
+    assert "tag=NONE" in card
+    assert 'tag=""' not in card
+
+
+def test_the_flatten_line_names_the_lock_it_is_releasing(tmp_path):
+    """
+    The flatten's tag is the RELEASE, and a mismatch does not close the
+    position: the order is sent, accepted and logged while the position stays
+    open. That is the failure direction that costs money, so the release
+    string belongs on the card beside the one that took the lock out.
+    """
+    sender = RecordingSender()
+    root = tmp_path / "strategies"
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["alpha_one"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"alpha_one": dict(side="long")},
+              dry_run=False, sender=sender,
+              crosstrade_url="https://crosstrade.invalid/hooks/T",
+              crosstrade_key="K")
+
+    entry_card = d.describe_cycle(d.process_bar_cycle({"MNQ": make_bars()}))
+    write_strategy(root, "alpha_one", side="flat", exit_on_last=True)
+    d.strategies = []
+    d._load_active_strategies()
+    exit_card = d.describe_cycle(d.process_bar_cycle({"MNQ": make_bars()}))
+
+    tag = compose_strategy_tag("Incubator-Odd", ["alpha_one"])
+    assert "FLATTEN" in exit_card
+    assert f'tag="{tag}"' in exit_card, (
+        f"the released lock is not on the card:\n{exit_card}")
+
+    # THE SAME STRING ON BOTH SIDES, which is the whole of CrossTrade's
+    # matching rule. Reading the two cards is now enough to see it.
+    assert f'tag="{tag}"' in entry_card

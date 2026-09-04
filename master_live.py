@@ -291,6 +291,13 @@ def build_parser() -> argparse.ArgumentParser:
                          "process - which is the pre-2026-09-03 behaviour and "
                          "is why every exit read 'position state is not known "
                          "here' after a restart.")
+    ap.add_argument("--no-tag-manifest", dest="tag_manifest",
+                    action="store_false",
+                    help="do not refresh the CrossTrade strategy tag manifest "
+                         "at startup. The manifest is what a journal "
+                         "pre-registers locks from; skipping the refresh "
+                         "leaves it describing whatever config/portfolios.json "
+                         "said the last time it was written.")
     ap.add_argument("--max-regime-write-age-sec", type=float, default=900.0,
                     help="CRITICAL and stand every strategy down when the "
                          "regime daemon has not WRITTEN for this long "
@@ -449,6 +456,30 @@ def main(argv: list[str] | None = None) -> int:
         print("[master_live] RISK FIREWALL DISABLED (--no-risk-firewall). "
               "Nothing checks an order between the sizer and the socket.",
               flush=True)
+    # ---- the strategy tag manifest ---------------------------------------
+    # AUDITED AGAINST THE ROUTING TABLE THIS PROCESS JUST LOADED, at startup
+    # rather than on a timer, because `active_strategies` is read once here and
+    # a manifest generated from a different config would pre-register locks
+    # this loop will never take out. Regenerated in full rather than diffed:
+    # the manifest is derived, so rewriting it IS the audit.
+    #
+    # NEVER FATAL. `export` does not raise. A live loop that refused to start
+    # because an NFS mount was busy would be down for a journal convenience,
+    # and the loop trades correctly without the file - the tag on the wire is
+    # composed at dispatch by the same function, not read from here.
+    if args.tag_manifest:
+        from scripts.strategy_tag_manifest import export       # noqa: PLC0415
+        exported = export(config_path=args.config)
+        if exported["ok"]:
+            print(f"[master_live] tag manifest {exported['path']} refreshed "
+                  f"({exported['singleton_tags']} singleton tag(s) over "
+                  f"{exported['rows']} portfolio/symbol pair(s))", flush=True)
+        else:
+            print(f"[master_live] tag manifest NOT refreshed: "
+                  f"{exported['error']} — the loop continues; tags on the "
+                  f"wire are composed at dispatch, not read from the file.",
+                  file=sys.stderr, flush=True)
+
     if not dry_run:
         print("[master_live] LIVE MODE — orders will be sent.", flush=True)
 

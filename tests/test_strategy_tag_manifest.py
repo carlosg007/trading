@@ -203,3 +203,93 @@ def test_the_parser_accepts_the_documented_flags():
     args = build_parser().parse_args(
         ["--account", "Sim101", "--json", "--out", "/tmp/x.json"])
     assert args.account == "Sim101" and args.json is True
+
+
+# --------------------------------------------------------------------------
+# 5. The automated export, and the two callers that must not die on it
+# --------------------------------------------------------------------------
+def test_export_writes_the_manifest_and_reports_what_it_wrote(tmp_path):
+    from scripts.strategy_tag_manifest import export
+
+    out = tmp_path / "nested" / "strategy_tags.json"
+    result = export(out)
+    assert result["ok"] and result["path"] == str(out)
+    written = json.loads(out.read_text())
+    assert written["rows"] == build()["rows"]
+    assert result["rows"] == len(written["rows"])
+    assert result["singleton_tags"] == sum(
+        len(r["singleton_tags"]) for r in written["rows"])
+
+
+def test_export_never_raises_when_the_destination_is_unwritable(tmp_path):
+    """
+    THE WHOLE POINT OF THE RETURN VALUE. This runs after a promotion has
+    already been written and at `master_live` startup. A promotion that
+    succeeded and then raised would leave an operator unsure whether the
+    strategy was registered; a live loop that refused to start because the NFS
+    mount was busy would be down for a journal convenience.
+    """
+    from scripts.strategy_tag_manifest import export
+
+    blocked = tmp_path / "afile"
+    blocked.write_text("not a directory")
+    result = export(blocked / "under" / "tags.json")
+    assert result["ok"] is False
+    assert result["error"], "the reason has to survive, not just the failure"
+
+
+def test_export_is_atomic_so_a_polling_journal_never_reads_half_a_manifest(
+        tmp_path):
+    """
+    A reader gets the previous complete document or the new one. A truncated
+    write parses as a SHORTER strategy list, which reads as strategies having
+    been retired rather than as a partial file.
+    """
+    from scripts.strategy_tag_manifest import export
+
+    out = tmp_path / "tags.json"
+    export(out)
+    first = out.read_text()
+    export(out)
+    assert json.loads(out.read_text())["rows"] == json.loads(first)["rows"]
+    assert not list(tmp_path.glob("*.tmp")), "the temp file is not left behind"
+
+
+def test_the_manifest_path_is_read_at_call_time_not_import(monkeypatch,
+                                                           tmp_path):
+    """Every artifact path in this repository follows this rule: a module
+    imported before `.env` loaded would otherwise pin the default forever."""
+    from scripts.strategy_tag_manifest import DEFAULT_MANIFEST, manifest_path
+
+    assert str(manifest_path()) == DEFAULT_MANIFEST
+    monkeypatch.setenv("BT_STRATEGY_TAGS", str(tmp_path / "elsewhere.json"))
+    assert str(manifest_path()) == str(tmp_path / "elsewhere.json")
+    assert str(manifest_path(tmp_path / "explicit.json")) == str(
+        tmp_path / "explicit.json"), "an explicit path outranks the env"
+
+
+def test_master_live_refreshes_the_manifest_at_startup():
+    """
+    The routing table is read ONCE at startup, so that is when the manifest
+    can be audited against the config this process actually loaded. A manifest
+    generated from a different config pre-registers locks the loop will never
+    take out.
+    """
+    source = (REPO_ROOT / "master_live.py").read_text()
+    assert "from scripts.strategy_tag_manifest import export" in source
+    assert "--no-tag-manifest" in source, "an operator can opt out"
+
+
+def test_promote_refreshes_the_manifest_after_a_registration():
+    """
+    A registration changes which strategies can contribute to a netted
+    position and therefore which locks the account can take out — the manifest
+    is stale from that moment. It is hooked AFTER the registration and inside
+    the `not args.no_register` branch: a staged promotion changes no routing.
+    """
+    source = (REPO_ROOT / "backtest" / "promote.py").read_text()
+    assert "from scripts.strategy_tag_manifest import export" in source
+    hook = source.index("from scripts.strategy_tag_manifest import export")
+    assert source.index("registration = register_portfolio(") < hook, (
+        "the manifest is regenerated from a routing table that must already "
+        "carry the new registration")

@@ -2465,6 +2465,30 @@ def main(argv: list[str] | None = None) -> int:
             for note in registration["notes"]:
                 print(f"\n  ! {note}")
 
+    # ---- refresh the strategy tag manifest --------------------------------
+    # A registration changes which strategies can contribute to a netted
+    # position, and therefore which CrossTrade locks this account can take
+    # out. The manifest a journal pre-registers those locks from is stale the
+    # moment `active_strategies` changes, so it is regenerated here.
+    #
+    # AFTER the registration and NEVER FATAL. `export` does not raise: a
+    # promotion that succeeded and then reported an error would leave an
+    # operator unsure whether the strategy was registered, and the manifest is
+    # a convenience for a journal rather than part of the promotion. Imported
+    # inside the branch so a `--no-register` run does not pay for a module
+    # that pulls in the live dispatcher.
+    if not args.no_register:
+        from scripts.strategy_tag_manifest import export   # noqa: PLC0415
+        exported = export(config_path=str(
+            Path(args.portfolios) if args.portfolios else PORTFOLIO_CONFIG))
+        if exported["ok"]:
+            print(f"\n  tag manifest    {exported['path']} "
+                  f"({exported['singleton_tags']} tag(s) over "
+                  f"{exported['rows']} pair(s))")
+        else:
+            print(f"\n  ! tag manifest NOT refreshed: {exported['error']}")
+            print(f"    The promotion stands. Regenerate with: strat-tags --out")
+
     # ---- the stage 5 card ------------------------------------------------
     if args.no_discord:
         pass

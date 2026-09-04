@@ -78,6 +78,7 @@ load_env()
 
 import argparse                                                    # noqa: E402
 import json                                                        # noqa: E402
+import os                                                          # noqa: E402
 from datetime import datetime, timezone                            # noqa: E402
 from typing import Any                                             # noqa: E402
 
@@ -173,6 +174,52 @@ def build(config_path: str | None = None) -> dict[str, Any]:
     }
 
 
+#: Where the exported manifest lives, beside the other artifacts a journal
+#: reads. `$BT_STRATEGY_TAGS` overrides.
+DEFAULT_MANIFEST = "/mnt/backtest/artifacts/strategy_tags.json"
+MANIFEST_ENV_VAR = "BT_STRATEGY_TAGS"
+
+
+def manifest_path(path: str | Path | None = None) -> Path:
+    """Read at CALL time, never at import — the same rule every artifact path
+    in this repository follows."""
+    if path:
+        return Path(path)
+    return Path(os.environ.get(MANIFEST_ENV_VAR, DEFAULT_MANIFEST))
+
+
+def export(path: str | Path | None = None,
+           config_path: str | None = None) -> dict[str, Any]:
+    """
+    Regenerate the manifest and write it atomically.
+
+    NEVER RAISES. This is called from `promote.py` after a promotion has
+    already been written and from `master_live` at startup, and neither of
+    those may fail over a manifest: a promotion that succeeded and then
+    reported an error would leave an operator unsure whether the strategy was
+    registered, and a live loop that refused to start because an NFS mount was
+    busy would be down for a journal convenience. The outcome is RETURNED so a
+    caller can print it.
+
+    Atomic (temp file, `os.replace`) because a journal may be polling this
+    path: a reader gets the previous complete manifest or the new one, never a
+    half-written document that parses as a shorter strategy list.
+    """
+    target = manifest_path(path)
+    try:
+        manifest = build(config_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_suffix(".tmp")
+        tmp.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, target)
+    except Exception as exc:                                       # noqa: BLE001
+        return {"ok": False, "path": str(target),
+                "error": f"{type(exc).__name__}: {exc}"}
+    tags = sum(len(r["singleton_tags"]) for r in manifest["rows"])
+    return {"ok": True, "path": str(target), "rows": len(manifest["rows"]),
+            "singleton_tags": tags}
+
+
 def render(manifest: dict[str, Any]) -> str:
     rows = manifest["rows"]
     lines = [
@@ -228,8 +275,10 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--config", default=None)
     ap.add_argument("--account", default=None, help="filter to one account")
     ap.add_argument("--json", action="store_true")
-    ap.add_argument("--out", default=None,
-                    help="also write the manifest as JSON to this path")
+    ap.add_argument("--out", nargs="?", const=DEFAULT_MANIFEST, default=None,
+                    help=f"also write the manifest as JSON. Bare, it writes "
+                         f"the canonical {DEFAULT_MANIFEST} that promote.py "
+                         f"and master_live refresh.")
     return ap
 
 
