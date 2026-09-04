@@ -192,7 +192,9 @@ regime-check # = .venv/bin/python3 ~/src/trading/scripts/check_market_regime.py
 quadrant-check # the same tool
 strat-perf   # = .venv/bin/python3 ~/src/trading/scripts/report_strategy_performance.py
 perf-report  # the same tool
-             # (all sixteen from deploy/shell/trading_helpers.sh)
+strat-tags   # = .venv/bin/python3 ~/src/trading/scripts/strategy_tag_manifest.py
+tag-manifest # the same tool
+             # (all eighteen from deploy/shell/trading_helpers.sh)
 ```
 
 ## Working style

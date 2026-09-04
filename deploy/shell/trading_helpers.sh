@@ -559,3 +559,24 @@ alias quadrant-check='regime-check'
 # strategy_performance_latest.csv beside it. --no-csv prints only.
 alias strat-perf="${_TRADING_PY} ${_TRADING_REPO}/scripts/report_strategy_performance.py"
 alias perf-report='strat-perf'
+
+# --------------------------------------------------------------------------
+# 11. What strategy tag can each account actually emit?
+#
+# A tag is `portfolio:strategy_a+strategy_b`, composed by
+# `live_dispatcher.compose_strategy_tag` from the CONTRIBUTORS to one netted
+# position, AT DISPATCH. There is no tag registry and no manual step: the
+# entry builds it from the plan, the wire carries it, and the flatten rebuilds
+# the identical string from the position book, because CrossTrade matches the
+# lock by string equality.
+#
+# So an account showing ONE tag on the journal is an account on which one
+# contributor-set has traded - not an incomplete mapping. This enumerates what
+# each account CAN emit, for pre-registering locks in a journal before their
+# first fill.
+#
+# It lists the SINGLETON tag per strategy and the FULL-SET tag per pair, not
+# every subset: 16 eligible strategies on one symbol is 65,535 possible tags.
+# `tag_pattern` on each row is what a journal should match on.
+alias strat-tags="${_TRADING_PY} ${_TRADING_REPO}/scripts/strategy_tag_manifest.py"
+alias tag-manifest='strat-tags'
