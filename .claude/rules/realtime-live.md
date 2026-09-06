@@ -12,6 +12,10 @@ paths:
   - "data_pull/databento_live.py"
   - "tests/test_nt8_feed.py"
   - "tests/test_nt8_listener.py"
+  - "tests/test_market_calendar.py"
+  - "tests/test_watchdog_alert.py"
+  - "scripts/watchdog.py"
+  - "deploy/systemd/**"
 ---
 
 # The live regime service and the execution loop
@@ -607,6 +611,84 @@ always on the record), and `evaluate_incubator_sync` (parses NT8 fill logs from
 **ticks** — tick size read from `backtest/specs.py`, never assumed — and the fill
 rate). Connection profile in `live/config.json`; the shipped webhook URL is a
 placeholder and the dispatcher refuses to POST to it.
+
+## The market-hours gate: the loop is not resident any more
+
+**`realtime/market_calendar.py` is the ONLY definition of the CME schedule.**
+`scripts.watchdog.market_status` is that module's function, not a copy of it —
+it used to live in `scripts/watchdog.py` and moved when a second process
+started asking. A second copy would be invisible when it drifted: the watchdog
+would suppress its staleness alerts on a schedule the loop was still trading,
+or the loop would stand down on a Sunday evening the watchdog called open, and
+**every log line on both sides would read correctly**. Do not restate the four
+numbers anywhere else.
+
+    Sunday   18:00 ET  open        Mon-Thu 17:00 ET  halt, one hour
+    Friday   17:00 ET  weekend     Mon-Thu 18:00 ET  open
+
+**17:00:00 exactly is SHUT and 18:00:00 exactly is TRADING** — half-open at the
+close, closed at the open, so the windows meet with no minute in both and none
+in neither. That is a `>=` and a `<`, and `tests/test_market_calendar.py` pins
+both at the exact second. This repository has already paid once for a
+comparator restated in prose and implemented differently (`mdlib/regimes.py`'s
+ADX `>` against a spec saying `>=`); do not create a second.
+
+**Exchange local time, never a UTC offset.** 17:00 ET is 21:00 UTC in summer
+and 22:00 UTC in winter. A gate on a fixed offset is right for half the year,
+and the wrong half still produces a plausible weekend one hour displaced —
+including in the `.timer`'s `OnCalendar=`, which carries the zone name for the
+same reason.
+
+**`--halt-when-closed` makes `master_live.py` EXIT, not sleep, and the
+difference is the whole point.** Measured 2026-09-06: the resident loop reached
+**18.5 GB RSS after 47 hours** and OOM-killed `pytest tests/`. A sleeping
+process keeps every byte — `gc.collect()` returns arenas to the OS only when
+they are entirely empty, and a fragmented 18 GB heap is not. `release_caches()`
+exists to MEASURE that on every close, not to fix it.
+
+**The exit status is 3, and it is not 0 by accident.** The unit runs
+`Restart=always`, which restarts on a clean exit too, so a 0 would put the
+process back up ten seconds later and spend the weekend loading a dispatcher
+every ten seconds. `RestartPreventExitStatus=2 3` in
+`deploy/systemd/trading-master-live.service` is the other half of one decision;
+the flag without the code is strictly worse than no gate at all, and
+`tests/test_market_calendar.py` pins the two together. 2 is REFUSING TO START,
+3 is the market-hours close, 1 is a session that had failures — three different
+mornings for whoever reads `systemctl status`.
+
+**The gate is OFF by default and the unit file turns it on.** A dry run started
+by hand at 17:30 should keep printing rather than vanish.
+
+**Nothing is flattened and nothing is cancelled at the close.** The loop sends
+market orders inside one `send_execution_signal` call: there is no resting
+entry order and no socket held between cycles, and there never was.
+`market_close_report` REPORTS two records that can disagree — what the book
+believes it holds, and what `EngineState` sent and never saw confirmed — and
+stops. Being flat over a weekend is a trading decision; it belongs to the
+operator and to CrossTrade NAM, not to a scheduler. A test stubs the position
+book and booby-traps every other dispatcher attribute so the close cannot
+quietly grow a send.
+
+**Holidays are READ, never generated.** `$BT_CME_HOLIDAYS`, else
+`/mnt/backtest/reference/calendar/cme_holidays.csv`; **no file means no holiday
+is modelled**. The asymmetry is deliberate and matches
+`backtest/event_calendar.py`'s PUBLISHED/RULE lesson: a holiday nobody recorded
+costs one idle day of a process that finds no bars, an invented one costs a
+trading day. A file that EXISTS and does not parse makes the loop REFUSE TO
+START — an operator who wrote it meant to have holidays, and silently not
+having them is the failure they would never see. **Keyed on the CME SESSION
+date**, the same 18:00 ET roll `backtest.event_calendar.session_date` owns, so
+`2026-11-26,closed` shuts Nov 25 18:00 ET through Nov 26 17:00 ET. A
+calendar-date key closes the wrong twenty-three hours and looks right. The file
+is cached per process because it is on the hard-mounted NFS share, where a
+blocked read blocks forever.
+
+**`trading-master-live.timer` fires Sun-Thu 17:55 ET, never Friday or
+Saturday**, and `Persistent=false` — a catch-up replay would start the loop
+into a closure. Five minutes early so the strategy load, the SHA-256 checks and
+the tag manifest are done and REPORTED before the market trades;
+`--open-wait-sec` holds the loop at the gate until 18:00 and refuses to wait
+out anything longer.
 
 ## Commands
 

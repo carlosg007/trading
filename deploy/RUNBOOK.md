@@ -228,7 +228,8 @@ redeploy silently reverts you.
 | `trading-nt8-listener.service` | simple, `Restart=always` | continuous, binds **:8000** | receives NT8's POSTs, validates, appends to the spool |
 | `trading-regime-daemon.service` | oneshot | `.timer`: 5 min, `OnBootSec=2min`, `Persistent=true` | recomputes and publishes the live quadrant |
 | `trading-watchdog.service` | oneshot | `.timer`: 2 min, `OnBootSec=3min`, `Persistent=false` | feed staleness, regime write age, state, kill switch |
-| `trading-master-live.service` | simple | continuous when armed | the execution loop. **Ships as `--dry-run`** |
+| `trading-master-live.service` | simple | market hours only; exits at every CME close | the execution loop. **Ships as `--dry-run`** |
+| `trading-master-live.timer` | — | `.timer`: **Sun-Thu 17:55 America/New_York**, `Persistent=false` | starts the loop five minutes before each CME open |
 
 The TIMERS are what is enabled; the `.service` units are one-shots the timer
 triggers. On a healthy box `systemctl status trading-watchdog.service` reads:
@@ -248,6 +249,63 @@ The daemon and the watchdog append to `logs/*.log` and `logs/*.err`; the
 listener goes to the **journal** instead, because a process that dies before
 opening its log file writes nothing to it, and a bind failure on :8000 is
 exactly that kind of death.
+
+### The loop is no longer resident — it exits at every close
+
+`trading-master-live.service` runs with `--halt-when-closed` and **EXITS when
+the CME is shut**: the 17:00-18:00 ET daily maintenance halt, the Friday 17:00
+ET weekend close, and any holiday `$BT_CME_HOLIDAYS` names. It exits **3**,
+`RestartPreventExitStatus=2 3` tells systemd to leave it stopped, and
+`trading-master-live.timer` starts it again at **17:55 ET, Sunday through
+Thursday**.
+
+**`inactive (dead)` with status 3 on a Saturday is the correct state.** It is
+not a crash and not a fault. Check it the same way you check a oneshot:
+
+```bash
+systemctl show trading-master-live -p ExecMainStatus -p Result --value
+systemctl list-timers trading-master-live.timer --no-pager
+.venv/bin/python3 realtime/market_calendar.py   # exits 0 open, 1 closed
+```
+
+**Why it exits rather than sleeps.** Measured 2026-09-06: the resident loop was
+at **18.5 GB RSS after 47 hours** on a 24 GB box and had OOM-killed
+`pytest tests/`. A sleeping process keeps all of it — `gc.collect()` hands
+arenas back to the OS only when they are entirely empty, and a fragmented 18 GB
+heap is not. Exit is the only thing that returns 18 GB to the machine. The
+daily halt now also caps growth at one session instead of a week, which is the
+larger part of the win.
+
+**Nothing is flattened and nothing is cancelled at the close.** The loop sends
+market orders inside one call and holds no resting order and no socket. The
+stand-down REPORTS what the book and `data/engine_state.json` still hold, and
+says so loudly when it is going into the weekend — but being flat over a
+weekend is a trading decision, and it stays yours and CrossTrade NAM's. If the
+close report shows inventory and you want it flat, do it before 17:00 ET
+Friday, through the ordinary emergency procedure above.
+
+**A position held across a close is not lost.** The book reconciles against the
+broker snapshot on the first cycle after every start, which is what lets the
+restarted loop close what it did not open. That path has always run on every
+restart; the schedule just makes it run twice a day.
+
+**Holidays.** Read from `$BT_CME_HOLIDAYS`, else
+`/mnt/backtest/reference/calendar/cme_holidays.csv`; **no file means no holiday
+is modelled**, which is deliberate and is the safe direction — a holiday nobody
+recorded costs one idle day, an invented one costs a trading day. A file that
+exists and does not parse makes the loop **REFUSE TO START**. Keyed on the CME
+session date (the 18:00 ET roll):
+
+```csv
+session_date,status,close_et,note
+2026-11-26,closed,,Thanksgiving
+2026-11-27,early,13:00,day after Thanksgiving
+```
+
+**To turn the schedule off** for a session — a migration, a test, a day you
+want the loop resident — drop `--halt-when-closed` from the ExecStart and
+`systemctl stop trading-master-live.timer`. Both, or the timer will start a
+process that never leaves.
 
 ### The listener, and port 8000
 
@@ -346,6 +404,19 @@ Two behaviours to know before you run it:
   Taking the manual one down is a LIVE FEED INTERRUPTION: bars posted into the
   gap are connection-refused and nothing interpolates a missing bar. Do it when
   a dropped bar is acceptable.
+* **It refuses to run if the INSTALLED `trading-master-live.service` carries
+  `--live` and the repo's does not.** As of 2026-09-06 that is the state of
+  this box: it was armed by editing `/etc/systemd/system/` directly, and the
+  copy in step 2 would have disarmed the live loop silently — every banner,
+  every log line and `systemctl status` would go on reading exactly as they do
+  now while no order was ever sent. That is the 2026-08-27 failure in reverse.
+  **Move `--live` into `deploy/systemd/trading-master-live.service`, commit it,
+  then redeploy.** Arming belongs where git can see it. Do not add `--dry-run`
+  beside it to stand it down: passing both is refused outright.
+* It enables `trading-master-live.timer` only when
+  `trading-master-live.service` is already enabled. A timer for a unit somebody
+  deliberately left disabled would start it on their behalf, and this script
+  has never started `master_live`.
 
 ## Shell helpers and aliases
 
