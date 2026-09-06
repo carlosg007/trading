@@ -72,13 +72,28 @@ from typing import Any
 
 REPO = Path(__file__).resolve().parent.parent
 
+#: Stage 4.5's stage id, as an INTEGER, because that is what `write_stage`
+#: stamps and `read_stage` compares. `4.5` cannot be used: `write_stage` writes
+#: `int(stage)`, which truncates it to 4, and every Stage 4.5 handoff would
+#: then be indistinguishable from a Stage 4 one to `read_stage` - a Stage 4.5
+#: summary would satisfy a Stage 4 check and vice versa, silently. The DISPLAY
+#: label is separate (`STAGE_LABELS`), so the banner still reads "STAGE 4.5/5".
+STAGE45 = 45
+
 STAGE_NAMES = {
     1: "BASELINE · which contracts carry the edge",
     2: "SCAN · in-sample parameter selection",
     3: "GATE AUDIT · certification",
     4: "FULL VERIFICATION · whole lifecycle",
+    STAGE45: "DAY-OF-WEEK GATE · the worst session, named",
     5: "PROMOTION · into the incubator",
 }
+
+#: How a stage id is SPELLED in a banner. Only Stage 4.5 differs from its id,
+#: and it differs because the id has to be an integer (see `STAGE45`) while
+#: the thing a human reads is "4.5". Keyed rather than computed so a future
+#: half-stage lands here rather than in a conditional inside `stage_banner`.
+STAGE_LABELS = {STAGE45: "4.5"}
 
 # The charter's IN-SAMPLE window, and the first day of the holdout. Defined
 # here rather than in a stage because more than one stage has to agree about
@@ -162,6 +177,21 @@ GATE_AUDIT_FILE = "gate_audit_{symbol}.json"
 STAGE3_SUMMARY_FILE = "stage3_audit_summary.json"
 
 VERIFY_FILE = "verify_{symbol}.json"
+
+# Stage 4.5's two handoffs. The per-pair file is the AUTHORITATIVE verdict -
+# it carries the full weekday table, the counterfactual and the rule that
+# produced the block - and the summary is the index over them, the same
+# division Stage 3 draws between `gate_audit_<SYM>_<TF>.json` and
+# `stage3_audit_summary.json`.
+#
+# The per-pair name carries the TIMEFRAME and there is no unsuffixed form, on
+# purpose. A blocked weekday is a fact about one (symbol, timeframe) pair -
+# `t3_braid_scalp_20260823` certified NQ at 15m, 30m and 1h with a different
+# quadrant at each - and an unsuffixed file would hold whichever timeframe ran
+# last while Stage 5 promoted all three against it. The failure is invisible:
+# every meta.json would carry a plausible weekday, two of them wrong.
+DOW_GATE_FILE = "dow_gate_{symbol}_{tf}.json"
+STAGE45_SUMMARY_FILE = "stage45_dow_summary.json"
 
 
 # --------------------------------------------------------------------------
@@ -345,8 +375,9 @@ def pipeline_dir(strategy: str, out_dir: str | Path | None = None,
 def stage_banner(stage: int, strategy: str, detail: str = "") -> str:
     """The header every stage prints. One line says which stage a log is."""
     W = 78
+    label = STAGE_LABELS.get(int(stage), str(int(stage)))
     return ("\n" + "=" * W
-            + f"\nSTAGE {stage}/5 · {STAGE_NAMES[stage]}"
+            + f"\nSTAGE {label}/5 · {STAGE_NAMES[stage]}"
             + f"\n{strategy}" + (f"  ·  {detail}" if detail else "")
             + "\n" + "=" * W)
 
@@ -433,6 +464,54 @@ def stage1_exclude_days(blob: dict[str, Any] | None
         days = tuple(sorted({int(d) for d in (pair.get("exclude_days") or [])}))
         if sym and tf and days:
             out[(str(sym), str(tf))] = days
+    return out
+
+
+def stage45_blocked_days(blob: dict[str, Any] | None
+                         ) -> dict[tuple[str, str], tuple[int, ...]]:
+    """
+    Stage 4.5's day-of-week decision, keyed by `(symbol, timeframe)`.
+
+    The twin of `stage1_exclude_days`, and keyed the same way for the same
+    reason: which weekday loses is a fact about a contract AT A TIMEFRAME.
+    `t3_braid_scalp_20260823` cleared Gate R on NQ at 15m, 30m and 1h with a
+    different quadrant at each, and one blocked weekday flattened across all
+    three would stand the strategy down on a session two of them trade
+    profitably - with every log line reading correctly.
+
+    A pair whose verdict blocked NOTHING is ABSENT from the mapping rather
+    than mapped to `()`. `()` and "no entry" mean the same thing to every
+    caller, and the absent key keeps `if key in mapping` an honest test of
+    "did Stage 4.5 block anything for this pair".
+
+    That absence is deliberately NOT how "the stage did not run" is expressed.
+    A handoff written before this contract existed - or no handoff at all -
+    yields `{}`, which is the same shape as a run where nothing was blocked;
+    the difference is whether the FILE exists, and that is the caller's to
+    check. `backtest/promote.py` does, and writes `"NOT EVALUATED"` into
+    `meta.json` rather than an empty list, because an empty list is a
+    statement about the week and "nobody looked" is not.
+
+    Each row carries ONE weekday or none. The stage names the worst session,
+    not a set: a rule that could block two would be selecting a subset of the
+    calendar in-sample on the bars it is scored on, which is the curve fit the
+    firewall replaced this contract with in the first place.
+    """
+    out: dict[tuple[str, str], tuple[int, ...]] = {}
+    for row in (blob or {}).get("results") or []:
+        if not isinstance(row, dict):
+            continue
+        sym, tf = row.get("symbol"), row.get("timeframe") or row.get("tf")
+        day = row.get("blocked_weekday")
+        if not sym or not tf or day is None:
+            continue
+        d = int(day)
+        if not 0 <= d <= 6:
+            raise ValueError(
+                f"stage 4.5 recorded blocked_weekday={day!r} for {sym} {tf}; "
+                f"weekdays are 0-6 (Mon-Sun). Read as anything else this "
+                f"stands a strategy down on a day nobody profiled.")
+        out[(str(sym), str(tf))] = (d,)
     return out
 
 
