@@ -43,7 +43,6 @@ import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -57,6 +56,8 @@ from realtime.feed import FeedError, resolve_feed, tf_delta        # noqa: E402
 from realtime.lifecycle import EngineState                        # noqa: E402
 from realtime.regime_reader import (RegimeStateError,             # noqa: E402
                                     get_all_regimes)
+from realtime.market_calendar import (EXCHANGE_TZ,             # noqa: E402
+                                      market_status)
 from realtime.risk_firewall import (arm_kill_switch,              # noqa: E402
                                     kill_switch_engaged)
 
@@ -65,16 +66,20 @@ HEALTHY, DEGRADED, BROKEN = 0, 1, 2
 #: CME futures trade nearly around the clock, and the gaps are the point here:
 #: a feed that returns nothing at 02:00 on a Saturday is a CLOSED MARKET, not a
 #: dead feed, and a watchdog that cannot tell them apart pages somebody every
-#: two minutes for 49 hours. New York, not UTC - the schedule is defined in
-#: exchange local time and moves with US daylight saving, so a fixed UTC offset
-#: is right for half the year.
-EXCHANGE_TZ = ZoneInfo("America/New_York")
-#: Friday 17:00 ET until Sunday 18:00 ET.
-WEEKEND_CLOSE_HOUR = 17
-WEEKEND_OPEN_HOUR = 18
-#: Monday-Thursday 17:00-18:00 ET, the daily maintenance break.
-MAINTENANCE_START_HOUR = 17
-MAINTENANCE_END_HOUR = 18
+#: two minutes for 49 hours.
+#:
+#: THE SCHEDULE MOVED OUT OF THIS FILE, and only the schedule.
+#: `realtime/market_calendar.py` now owns the four numbers and the two
+#: comparators; `market_status` above is IMPORTED from there and is the same
+#: function `master_live.py` stands itself down on. Two processes that decide
+#: opposite things about a Sunday evening would each log correctly while one of
+#: them was wrong, and nothing downstream could see it — which is exactly the
+#: failure a second copy of these constants produces. `EXCHANGE_TZ` is
+#: re-exported because callers and tests reach for `wd.EXCHANGE_TZ`.
+#:
+#: Nothing else moved. The SUPPRESSION policy below — which checks a closed
+#: market silences, and which it must not — is a watchdog decision and stays a
+#: watchdog decision.
 
 #: How long a persistent DEGRADED state waits before it says so again. The
 #: first alert is immediate; this only governs the REMINDERS, so a fault that
@@ -93,35 +98,6 @@ ALERT_STATE_FILE = REPO_ROOT / "data" / "watchdog_alert_state.json"
 #: suppressing those would use the weekend to hide a fault that has nothing to
 #: do with the weekend.
 STALENESS_CHECKS = ("regime", "feed")
-
-
-def market_status(now: datetime | None = None) -> tuple[bool, str]:
-    """
-    `(is_open, reason)` for CME futures, in exchange local time.
-
-    Closed windows, both from the CME schedule:
-      * Friday 17:00 ET -> Sunday 18:00 ET
-      * Monday-Thursday 17:00-18:00 ET (daily maintenance)
-
-    The boundaries are half-open at the close and closed at the open - 17:00:00
-    exactly is shut, 18:00:00 exactly is trading - so the two windows meet with
-    no minute belonging to both and none belonging to neither.
-    """
-    now = datetime.now(timezone.utc) if now is None else now
-    if now.tzinfo is None:
-        now = now.replace(tzinfo=timezone.utc)
-    local = now.astimezone(EXCHANGE_TZ)
-    dow, hour = local.weekday(), local.hour       # Monday is 0
-
-    if dow == 4 and hour >= WEEKEND_CLOSE_HOUR:
-        return False, "weekend — closed Friday 17:00 ET"
-    if dow == 5:
-        return False, "weekend — Saturday"
-    if dow == 6 and hour < WEEKEND_OPEN_HOUR:
-        return False, "weekend — reopens Sunday 18:00 ET"
-    if dow <= 3 and MAINTENANCE_START_HOUR <= hour < MAINTENANCE_END_HOUR:
-        return False, "daily maintenance break 17:00-18:00 ET"
-    return True, f"open ({local:%a %H:%M} ET)"
 
 
 def read_alert_state(path: Path | None = None) -> dict:
