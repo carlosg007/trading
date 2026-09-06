@@ -130,7 +130,11 @@ task.
   gate off silently — the block is simply never found and every log line reads
   correctly. Three states are kept apart end to end and must not be collapsed:
   no key at all (promoted before the stage existed), `blocked_weekdays: []`
-  (the stage ran and every session cleared), and a blocked day. The live gate
+  (the stage ran and every session cleared), and a blocked day. **The verdict
+  is PER VERSION**: Version B's trades are a subset of A's, so its weekday
+  table is a different table, and one weekday handed to both packages stands
+  one of them down on a session measured on a strategy nobody deployed. The
+  live gate
   keys on the **FILL** bar's session weekday, not the last closed bar's,
   because the engine fills at the next bar's open — keyed on the closed bar it
   would let through exactly the Thursday-evening signal that fills into

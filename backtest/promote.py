@@ -508,10 +508,11 @@ DOW_NOT_EVALUATED = "NOT EVALUATED"
 
 
 def load_dow_gate(strat: str, symbol: str | None, timeframe: str | None,
+                  version: str | None = None,
                   path: Path | None = None,
                   out_dir: str | Path | None = None) -> dict[str, Any]:
     """
-    Stage 4.5's verdict for ONE pair, as the block that goes into meta.json.
+    Stage 4.5's verdict for ONE promoted package, as the block for meta.json.
 
     `strategies/approved_incubator/<id>/meta.json` is the only file the live
     loop reads about a promoted package, so this is where the blocked weekday
@@ -519,33 +520,40 @@ def load_dow_gate(strat: str, symbol: str | None, timeframe: str | None,
     dispatcher would have to go looking for, keyed on a strategy id it would
     have to split apart first.
 
-    THE FILE IS PER (SYMBOL, TIMEFRAME) AND SO IS THE LOOKUP. There is no
-    unsuffixed `dow_gate_<SYMBOL>.json` to fall back to, on purpose:
-    `t3_braid_scalp_20260823` certified NQ at 15m, 30m and 1h, and an
-    unsuffixed file would hold whichever timeframe ran last while all three
-    promotions read it. Every meta.json would then carry a plausible weekday
-    and two of them would be wrong, with nothing raising.
+    THE FILE IS PER (SYMBOL, TIMEFRAME) AND THE VERDICT INSIDE IT IS PER
+    VERSION, and both halves matter. There is no unsuffixed
+    `dow_gate_<SYMBOL>.json`: `t3_braid_scalp_20260823` certified NQ at 15m,
+    30m and 1h, and one would hold whichever timeframe ran last while all
+    three promotions read it. And Version B is Version A's entries minus the
+    ones a classifier expected to lose, so its trade list is a SUBSET and its
+    weekday table is a different table - both versions of one pair can certify
+    and be promoted as two packages, and one weekday handed to both would
+    stand one of them down on a session measured on a strategy nobody
+    deployed.
 
-    Three outcomes, and the middle one is the reason this returns a dict
+    Four outcomes, and the middle two are the reason this returns a dict
     rather than an integer:
 
         no file            `{"status": "NOT EVALUATED", ...}` - Stage 4.5 was
-                           not run for this pair. Nothing is blocked and the
-                           record says why.
-        file, no block     `blocked_weekdays: []` under `status: "EVALUATED"` -
-                           the stage ran and every session cleared.
-        file, one block    `blocked_weekdays: [4]`.
+                           not run for this pair.
+        no such version    also NOT EVALUATED, naming the versions that WERE
+                           profiled. This is what a Version B package gets
+                           when Stage 4.5 ran without `--ml`.
+        version, no block  `blocked_weekdays: []` under `EVALUATED` - the
+                           stage ran and every session cleared.
+        version, blocked   `blocked_weekdays: [4]`.
 
-    A file that cannot be read is reported as `status: "UNREADABLE"` with the
-    error, and blocks nothing. It is NOT raised: a certification that cleared
-    Gate R must not be thrown away because a day-of-week artifact was
-    truncated by a killed run, and a package promoted with the gate off and
-    the reason on its own meta.json is recoverable by re-running Stage 4.5.
+    A file that cannot be read is `status: "UNREADABLE"` with the error, and
+    blocks nothing. It is NOT raised: a certification that cleared Gate R must
+    not be thrown away because a day-of-week artifact was truncated by a
+    killed run, and a package promoted with the gate off and the reason on its
+    own meta.json is recoverable by re-running Stage 4.5.
     """
+    ver = str(version or "A").upper()
     if path is None:
         if not symbol or not timeframe:
             return {"status": DOW_NOT_EVALUATED, "blocked_weekdays": [],
-                    "blocked_weekday": None, "source": None,
+                    "blocked_weekday": None, "version": ver, "source": None,
                     "reason": ("this promotion is not scoped to a (symbol, "
                                "timeframe) pair, so there is no Stage 4.5 "
                                "verdict to attach")}
@@ -555,7 +563,7 @@ def load_dow_gate(strat: str, symbol: str | None, timeframe: str | None,
     path = Path(path)
     if not path.exists():
         return {"status": DOW_NOT_EVALUATED, "blocked_weekdays": [],
-                "blocked_weekday": None, "source": str(path),
+                "blocked_weekday": None, "version": ver, "source": str(path),
                 "reason": (f"{path.name} does not exist. Stage 4.5 "
                            f"(backtest/dow_gate.py) was not run for this "
                            f"pair; no weekday is blocked and none was "
@@ -564,21 +572,38 @@ def load_dow_gate(strat: str, symbol: str | None, timeframe: str | None,
         blob = read_stage(path, STAGE45, base_strategy(strat))
     except Exception as e:                                        # noqa: BLE001
         return {"status": "UNREADABLE", "blocked_weekdays": [],
-                "blocked_weekday": None, "source": str(path),
+                "blocked_weekday": None, "version": ver, "source": str(path),
                 "reason": f"{type(e).__name__}: {e}"}
 
-    day = blob.get("blocked_weekday")
-    verdict = blob.get("verdict") or {}
+    profiled = sorted((blob.get("versions") or {}))
+    entry = (blob.get("versions") or {}).get(ver)
+    if entry is None:
+        # NOT EVALUATED, never an empty block list. This is what a Version B
+        # package gets when Stage 4.5 ran without --ml, and reporting it as
+        # "every session cleared" would be a claim nobody measured.
+        return {"status": DOW_NOT_EVALUATED, "blocked_weekdays": [],
+                "blocked_weekday": None, "version": ver, "source": str(path),
+                "versions_profiled": profiled,
+                "reason": (f"{path.name} carries no Version {ver} verdict "
+                           f"(profiled: {profiled or 'none'}). Stage 4.5 runs "
+                           f"Version B only with --ml, and a weekday measured "
+                           f"on Version A does not describe Version B's "
+                           f"trades.")}
+
+    day = entry.get("blocked_weekday")
+    verdict = entry.get("verdict") or {}
     return {
         "status": "EVALUATED",
+        "version": ver,
+        "versions_profiled": profiled,
         # A LIST, even though the stage names at most one weekday. The live
         # handle reads a list, `exclude_days` is a list everywhere else in
         # this repository, and a scalar that some readers treat as a set is
         # how a second blocked day would silently be dropped later.
         "blocked_weekdays": ([] if day is None else [int(day)]),
         "blocked_weekday": (None if day is None else int(day)),
-        "blocked_day": blob.get("blocked_day"),
-        "blocked_day_name": blob.get("blocked_day_name"),
+        "blocked_day": entry.get("blocked_day"),
+        "blocked_day_name": entry.get("blocked_day_name"),
         # The worst session is carried even when it was NOT blocked. "Friday
         # was the weakest week and still made money" is the finding that
         # explains an empty block list, and without it the two look identical.
@@ -833,7 +858,7 @@ def promote(strat: str,
     # own pair was resolved above and falls back to the MODULE's preferred
     # timeframe, which is not necessarily the pair Stage 4.5 profiled.
     dow_block = load_dow_gate(strat, scope_symbol, scope_tf or tf,
-                              path=dow_gate, out_dir=out_dir)
+                              version=version, path=dow_gate, out_dir=out_dir)
     if dow_block["status"] == "UNREADABLE":
         # Recorded as a warning rather than raised. A certification that
         # cleared Gate R is not thrown away because a day-of-week artifact was
@@ -2508,9 +2533,11 @@ def main(argv: list[str] | None = None) -> int:
     dow = meta["day_of_week_gate"]
     if dow.get("blocked_weekdays"):
         print(f"  day-of-week    BLOCKED {dow['blocked_day_name']} "
-              f"(weekday {dow['blocked_weekday']}) — {dow.get('reason', '')}")
+              f"(weekday {dow['blocked_weekday']}, Version "
+              f"{dow.get('version')}) — {dow.get('reason', '')}")
     elif dow.get("status") == "EVALUATED":
-        print(f"  day-of-week    no session blocked "
+        print(f"  day-of-week    no session blocked for Version "
+              f"{dow.get('version')} "
               f"(worst was {dow.get('worst_day') or 'not identified'})")
     else:
         print(f"  day-of-week    {dow.get('status')} — {dow.get('reason', '')}")

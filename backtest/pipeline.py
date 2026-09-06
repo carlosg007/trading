@@ -468,16 +468,26 @@ def stage1_exclude_days(blob: dict[str, Any] | None
 
 
 def stage45_blocked_days(blob: dict[str, Any] | None
-                         ) -> dict[tuple[str, str], tuple[int, ...]]:
+                         ) -> dict[tuple[str, str, str], tuple[int, ...]]:
     """
-    Stage 4.5's day-of-week decision, keyed by `(symbol, timeframe)`.
+    Stage 4.5's day-of-week decision, keyed by `(symbol, timeframe, version)`.
 
-    The twin of `stage1_exclude_days`, and keyed the same way for the same
-    reason: which weekday loses is a fact about a contract AT A TIMEFRAME.
-    `t3_braid_scalp_20260823` cleared Gate R on NQ at 15m, 30m and 1h with a
-    different quadrant at each, and one blocked weekday flattened across all
-    three would stand the strategy down on a session two of them trade
-    profitably - with every log line reading correctly.
+    The twin of `stage1_exclude_days`, with one more axis. Which weekday loses
+    is a fact about a contract AT A TIMEFRAME: `t3_braid_scalp_20260823`
+    cleared Gate R on NQ at 15m, 30m and 1h with a different quadrant at each,
+    and one blocked weekday flattened across all three would stand the
+    strategy down on a session two of them trade profitably - with every log
+    line reading correctly.
+
+    THE VERSION IS PART OF THE KEY. Version B is Version A's entries minus the
+    ones a classifier expected to lose, so its trade list is a SUBSET and its
+    weekday table is a different table - and both versions of one pair can
+    certify and be promoted as two packages (`..._VA` and `..._VB`, two
+    directories with two meta.json files, as `strategy_id` has spelled since
+    2026-08-29). A mapping keyed on the pair alone would hand one weekday to
+    both, and the wrong half would be a session measured on a strategy nobody
+    deployed. A row with no version recorded is read as `"A"`, which is what
+    every handoff written before the axis existed describes.
 
     A pair whose verdict blocked NOTHING is ABSENT from the mapping rather
     than mapped to `()`. `()` and "no entry" mean the same thing to every
@@ -497,21 +507,23 @@ def stage45_blocked_days(blob: dict[str, Any] | None
     calendar in-sample on the bars it is scored on, which is the curve fit the
     firewall replaced this contract with in the first place.
     """
-    out: dict[tuple[str, str], tuple[int, ...]] = {}
+    out: dict[tuple[str, str, str], tuple[int, ...]] = {}
     for row in (blob or {}).get("results") or []:
         if not isinstance(row, dict):
             continue
         sym, tf = row.get("symbol"), row.get("timeframe") or row.get("tf")
+        version = str(row.get("version") or "A").upper()
         day = row.get("blocked_weekday")
         if not sym or not tf or day is None:
             continue
         d = int(day)
         if not 0 <= d <= 6:
             raise ValueError(
-                f"stage 4.5 recorded blocked_weekday={day!r} for {sym} {tf}; "
-                f"weekdays are 0-6 (Mon-Sun). Read as anything else this "
-                f"stands a strategy down on a day nobody profiled.")
-        out[(str(sym), str(tf))] = (d,)
+                f"stage 4.5 recorded blocked_weekday={day!r} for {sym} {tf} "
+                f"version {version}; weekdays are 0-6 (Mon-Sun). Read as "
+                f"anything else this stands a strategy down on a day nobody "
+                f"profiled.")
+        out[(str(sym), str(tf), version)] = (d,)
     return out
 
 

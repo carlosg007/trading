@@ -431,49 +431,75 @@ def test_the_table_marks_the_worst_row_and_the_thin_ones() -> None:
 # --------------------------------------------------------------------------
 # 5. The handoff, and what Stage 5 does with it
 # --------------------------------------------------------------------------
+def _version_entry(version: str, blocked: int | None) -> dict:
+    names = ["Mon", "Tue", "Wed", "Thu", "Fri"]
+    full = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+    return {
+        "version": version,
+        "blocked_weekday": blocked,
+        "blocked_day": (None if blocked is None else names[blocked]),
+        "blocked_day_name": (None if blocked is None else full[blocked]),
+        "verdict": {"worst_weekday": FRI, "worst_day": "Fri",
+                    "block_rule": "negative_expectancy", "min_trades": 20,
+                    "reason": "fixture"},
+    }
+
+
 def _write_handoff(root: Path, strat: str, symbol: str, tf: str,
-                   blocked: int | None) -> Path:
+                   versions: dict[str, int | None]) -> Path:
+    """
+    A per-pair verdict carrying a `versions` map, which is the real shape.
+
+    `versions` is `{"A": 4, "B": None}` — one entry per version PROFILED, and
+    a version that is absent is absent, because that is what a run without
+    `--ml` produces and it is the state `load_dow_gate` has to report as NOT
+    EVALUATED rather than as an empty block list.
+    """
     d = root / "pipeline" / strat
     d.mkdir(parents=True, exist_ok=True)
     path = d / DOW_GATE_FILE.format(symbol=symbol, tf=tf)
     write_stage(path, STAGE45, strat, {
-        "symbol": symbol, "timeframe": tf, "version": "A",
-        "blocked_weekday": blocked,
-        "blocked_day": (None if blocked is None
-                        else ["Mon", "Tue", "Wed", "Thu", "Fri"][blocked]),
-        "blocked_day_name": (None if blocked is None
-                             else ["Monday", "Tuesday", "Wednesday",
-                                   "Thursday", "Friday"][blocked]),
+        "symbol": symbol, "timeframe": tf,
+        "versions_profiled": sorted(versions),
+        "versions": {v: _version_entry(v, day) for v, day in versions.items()},
         "selected_in_sample": True,
-        "verdict": {"worst_weekday": FRI, "worst_day": "Fri",
-                    "block_rule": "negative_expectancy", "min_trades": 20,
-                    "reason": "fixture"},
     })
     return path
 
 
-def test_the_summary_reader_is_keyed_on_the_pair(tmp: Path) -> None:
+def test_the_summary_reader_is_keyed_on_pair_and_version(tmp: Path) -> None:
     """
-    Which weekday loses is a fact about a contract AT A TIMEFRAME. One blocked
-    weekday flattened across every timeframe would stand a strategy down on a
-    session two of them trade profitably, with every log line reading
-    correctly.
+    Which weekday loses is a fact about a contract AT A TIMEFRAME, IN ONE
+    VERSION. A weekday flattened across timeframes would stand a strategy
+    down on a session two of them trade profitably; one flattened across
+    versions would hand Version B a session measured on Version A, whose
+    trade list is a strict superset of B's.
     """
     print("\nstage45_blocked_days")
     blob = {"results": [
-        {"symbol": "NQ", "timeframe": "15m", "blocked_weekday": FRI},
-        {"symbol": "NQ", "timeframe": "30m", "blocked_weekday": MON},
-        {"symbol": "ES", "timeframe": "15m", "blocked_weekday": None},
+        {"symbol": "NQ", "timeframe": "15m", "version": "A",
+         "blocked_weekday": FRI},
+        {"symbol": "NQ", "timeframe": "15m", "version": "B",
+         "blocked_weekday": WED},
+        {"symbol": "NQ", "timeframe": "30m", "version": "A",
+         "blocked_weekday": MON},
+        {"symbol": "ES", "timeframe": "15m", "version": "A",
+         "blocked_weekday": None},
     ]}
     m = stage45_blocked_days(blob)
-    check("each pair keeps its own weekday",
-          m == {("NQ", "15m"): (FRI,), ("NQ", "30m"): (MON,)}, str(m))
+    check("each (pair, version) keeps its own weekday",
+          m == {("NQ", "15m", "A"): (FRI,), ("NQ", "15m", "B"): (WED,),
+                ("NQ", "30m", "A"): (MON,)}, str(m))
     check("a pair that blocked nothing is ABSENT, not mapped to ()",
-          ("ES", "15m") not in m)
+          ("ES", "15m", "A") not in m)
+    check("a row with no version recorded reads as Version A",
+          stage45_blocked_days({"results": [
+              {"symbol": "GC", "timeframe": "1h", "blocked_weekday": TUE}]})
+          == {("GC", "1h", "A"): (TUE,)})
     check("an empty blob is an empty mapping, not an error",
           stage45_blocked_days({}) == {} and stage45_blocked_days(None) == {})
 
-    bad = {"results": [{"symbol": "NQ", "timeframe": "15m",
+    bad = {"results": [{"symbol": "NQ", "timeframe": "15m", "version": "A",
                         "blocked_weekday": 9}]}
     try:
         stage45_blocked_days(bad)
@@ -482,47 +508,69 @@ def test_the_summary_reader_is_keyed_on_the_pair(tmp: Path) -> None:
         check("a weekday outside 0-6 RAISES", "0-6" in str(e))
 
 
-def test_promote_reads_three_distinct_states(tmp: Path) -> None:
+def test_promote_reads_the_verdict_for_ITS_version(tmp: Path) -> None:
     """
     `NOT EVALUATED` is written rather than omitted, and is NOT an empty block
     list. "Nobody looked" and "the stage looked and every session cleared" are
     different facts about a package, and the live handle keeps them apart on
     the way back in.
+
+    THE VERSION IS PART OF THE LOOKUP. Version B is Version A's entries minus
+    the ones a classifier expected to lose, so its weekday table is a
+    different table - and both versions of one pair can certify and be
+    promoted as two packages. A Version B package handed A's weekday would be
+    stood down on a session measured on a strategy nobody deployed.
     """
     print("\npromote.load_dow_gate")
     root = tmp / "artifacts"
-    _write_handoff(root, "fixture_strat", "NQ", "15m", FRI)
-    _write_handoff(root, "fixture_strat", "ES", "15m", None)
+    home = root / "pipeline" / "fixture_strat"
+    _write_handoff(root, "fixture_strat", "NQ", "15m", {"A": FRI, "B": WED})
+    _write_handoff(root, "fixture_strat", "ES", "15m", {"A": None})
 
-    blocked = load_dow_gate("fixture_strat", "NQ", "15m", out_dir=None,
-                            path=(root / "pipeline" / "fixture_strat"
-                                  / DOW_GATE_FILE.format(symbol="NQ", tf="15m")))
-    check("a blocked pair reports EVALUATED with the weekday",
-          blocked["status"] == "EVALUATED"
-          and blocked["blocked_weekdays"] == [FRI]
-          and blocked["blocked_weekday"] == FRI, str(blocked))
+    def _load(symbol, version):
+        return load_dow_gate(
+            "fixture_strat", symbol, "15m", version=version,
+            path=home / DOW_GATE_FILE.format(symbol=symbol, tf="15m"))
+
+    a = _load("NQ", "A")
+    check("Version A gets its own weekday",
+          a["status"] == "EVALUATED" and a["blocked_weekdays"] == [FRI]
+          and a["blocked_weekday"] == FRI, str(a))
+    b = _load("NQ", "B")
+    check("Version B gets a DIFFERENT one from the same file",
+          b["status"] == "EVALUATED" and b["blocked_weekdays"] == [WED],
+          str(b))
     check("the verdict's own hash travels with it",
-          len(blocked["source_sha256"]) == 64)
+          len(a["source_sha256"]) == 64)
 
-    cleared = load_dow_gate("fixture_strat", "ES", "15m",
-                            path=(root / "pipeline" / "fixture_strat"
-                                  / DOW_GATE_FILE.format(symbol="ES", tf="15m")))
+    cleared = _load("ES", "A")
     check("a cleared pair is EVALUATED with an EMPTY list",
           cleared["status"] == "EVALUATED"
           and cleared["blocked_weekdays"] == [], str(cleared))
     check("and it still names the worst session it declined to block",
           cleared["worst_day"] == "Fri")
 
-    absent = load_dow_gate("fixture_strat", "GC", "15m",
-                           path=(root / "pipeline" / "fixture_strat"
-                                 / DOW_GATE_FILE.format(symbol="GC", tf="15m")))
+    # THE CASE A --ml-LESS RUN PRODUCES. Reporting it as an empty block list
+    # would claim every session cleared for a version nobody profiled.
+    unprofiled = _load("ES", "B")
+    check("a version the file does not carry is NOT EVALUATED",
+          unprofiled["status"] == "NOT EVALUATED"
+          and unprofiled["blocked_weekdays"] == [], str(unprofiled))
+    check("and the reason names the versions that WERE profiled",
+          unprofiled["versions_profiled"] == ["A"]
+          and "Version B" in unprofiled["reason"], str(unprofiled))
+
+    absent = load_dow_gate("fixture_strat", "GC", "15m", version="A",
+                           path=home / DOW_GATE_FILE.format(symbol="GC",
+                                                            tf="15m"))
     check("a pair with no file is NOT EVALUATED, not an empty verdict",
           absent["status"] == "NOT EVALUATED"
           and absent["blocked_weekdays"] == [], str(absent))
 
-    junk = root / "pipeline" / "fixture_strat" / "dow_gate_ZZ_15m.json"
+    junk = home / "dow_gate_ZZ_15m.json"
     junk.write_text("{ not json", encoding="utf-8")
-    broken = load_dow_gate("fixture_strat", "ZZ", "15m", path=junk)
+    broken = load_dow_gate("fixture_strat", "ZZ", "15m", version="A",
+                           path=junk)
     check("an unreadable verdict is UNREADABLE and blocks nothing",
           broken["status"] == "UNREADABLE"
           and broken["blocked_weekdays"] == [], str(broken))
@@ -541,7 +589,7 @@ def test_the_days_card_catches_a_package_out_of_step(tmp: Path) -> None:
     from scripts.check_strategy_days import scan                   # noqa: PLC0415
 
     root = tmp / "artifacts2"
-    _write_handoff(root, "fixture_strat", "NQ", "15m", WED)
+    _write_handoff(root, "fixture_strat", "NQ", "15m", {"A": WED})
 
     inc = tmp / "incubator"
     for name, block in (("fixture_strat_NQ_15m_VA",
@@ -586,6 +634,53 @@ def test_the_days_card_catches_a_package_out_of_step(tmp: Path) -> None:
           and none_yet["status"] == "NOT EVALUATED")
 
 
+def test_the_days_card_reads_each_version_separately(tmp: Path) -> None:
+    """
+    One pair, two promoted packages, two different weekdays in ONE handoff.
+    Reading Version A's verdict for a `..._VB` package would report a
+    disagreement that is really this card comparing two different strategies -
+    and would hide a real one.
+    """
+    print("\nthe days card resolves per VERSION")
+    import os                                                      # noqa: PLC0415
+
+    from scripts.check_strategy_days import scan                   # noqa: PLC0415
+
+    root = tmp / "artifacts3"
+    _write_handoff(root, "fixture_strat", "NQ", "15m", {"A": WED, "B": FRI})
+
+    inc = tmp / "incubator3"
+    for version, blocked in (("A", WED), ("B", FRI)):
+        name = f"fixture_strat_NQ_15m_V{version}"
+        d = inc / name
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "meta.json").write_text(json.dumps({
+            "name": name, "strategy": "fixture_strat", "symbol": "NQ",
+            "timeframe": "15m", "version": version,
+            "day_of_week_gate": {"status": "EVALUATED", "version": version,
+                                 "blocked_weekdays": [blocked],
+                                 "blocked_weekday": blocked},
+        }), encoding="utf-8")
+
+    prior = os.environ.get("BT_ARTIFACTS")
+    os.environ["BT_ARTIFACTS"] = str(root)
+    try:
+        rows = {r["strategy_id"]: r for r in scan(incubator=inc)}
+    finally:
+        if prior is None:
+            os.environ.pop("BT_ARTIFACTS", None)
+        else:
+            os.environ["BT_ARTIFACTS"] = prior
+
+    a, b = rows["fixture_strat_NQ_15m_VA"], rows["fixture_strat_NQ_15m_VB"]
+    check("Version A reads A's weekday and agrees",
+          a["blocked"] == [WED] and a["agrees"] is True, str(a["agrees"]))
+    check("Version B reads B's own weekday from the same file",
+          b["blocked"] == [FRI] and b["agrees"] is True, str(b["agrees"]))
+    check("the two packages have different active weeks",
+          a["active_days"] != b["active_days"])
+
+
 if __name__ == "__main__":
     import tempfile
 
@@ -613,9 +708,10 @@ if __name__ == "__main__":
         # evidence - see tests/test_regime_profiler.py, where exactly that
         # happened because pytest called a helper whose only argument was
         # defaulted.
-        test_the_summary_reader_is_keyed_on_the_pair(Path(td))
-        test_promote_reads_three_distinct_states(Path(td))
+        test_the_summary_reader_is_keyed_on_pair_and_version(Path(td))
+        test_promote_reads_the_verdict_for_ITS_version(Path(td))
         test_the_days_card_catches_a_package_out_of_step(Path(td))
+        test_the_days_card_reads_each_version_separately(Path(td))
 
     print("\n" + "=" * 70)
     if FAILURES:

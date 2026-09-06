@@ -836,10 +836,27 @@ not defaulted) so the two stages describe the same bars.
   order and every trade inside it is attributed to its ENTRY weekday. Shares
   can total more than 100% because profitable weekdays inside the episode
   offset the losing ones; that is printed rather than normalised away.
-- **The counterfactual is Version A, over the SAME bars, differing only in
-  `cfg.exclude_days`.** `ml=False`: the question is about the calendar, and a
-  classifier refitting per completed trade would double the stage to answer
-  it. **The report carries the candidate count, never the trade count alone** —
+- **ONE VERDICT PER VERSION, and that is not a detail.** Version B is Version
+  A's entries minus the ones a classifier expected to lose, so its trade list
+  is a SUBSET and its weekday table is a different table. A weekday named on A
+  and written into a B package would stand it down on a session measured on a
+  strategy nobody deployed — the same shape as the Version B gap Stages 2 and
+  3 were corrected for on 2026-08-25, where the answer travelled as far as a
+  summary column and then stopped while every output stayed complete and
+  well-formed. The per-pair file therefore carries a `versions` map, each
+  entry with its own profile, worst weekday, block and counterfactual, and the
+  summary has one row per (symbol, timeframe, VERSION) — which is the unit
+  that gets promoted, since `<strategy>_<SYM>_<TF>_VA` and `..._VB` are two
+  packages with two `meta.json` files and both can certify. `--ml` runs
+  Version B and the orchestrator passes it for exactly the reason `stage4_cmd`
+  does; without it the B entry is ABSENT and `promote.load_dow_gate` records
+  `NOT EVALUATED` for it, naming the versions that WERE profiled — not an
+  empty block list, which would claim every session cleared.
+- **The counterfactual runs over the SAME bars, differing only in
+  `cfg.exclude_days`, and ONCE PER DISTINCT identified weekday** rather than
+  once per version: A and B usually name the same session, and a second run
+  excluding the same day would build the same masks over the same bars.
+  **The report carries the candidate count, never the trade count alone** —
   a filter removes candidate TRIGGERS and the walk holds one position at a
   time, so declining an early trigger can leave the strategy flat for a later
   one it would have been holding through, and a trade count that went UP is
@@ -853,7 +870,10 @@ not defaulted) so the two stages describe the same bars.
   each `meta.json` carrying a plausible weekday with two of them wrong. The
   summary MERGES across timeframes for the same reason Stage 3's does.
   `pipeline.stage45_blocked_days` is the one place that mapping is read back,
-  keyed per pair exactly as `stage1_exclude_days` is. The handoff's stage id is
+  keyed per (symbol, timeframe, VERSION) — one axis more than
+  `stage1_exclude_days`, for the reason above. A row with no version recorded
+  reads as `"A"`, which is what every handoff written before the axis existed
+  describes. The handoff's stage id is
   the INTEGER `pipeline.STAGE45` (45) rather than 4.5, because `write_stage`
   stamps `int(stage)` and a float would truncate to 4 and make every Stage 4.5
   file satisfy a Stage 4 `read_stage` check; `STAGE_LABELS` is what spells
@@ -1049,11 +1069,14 @@ Version B — and commits that directory alone.
   the dispatcher would have to go looking for. `load_dow_gate` finds the
   per-pair file at the conventional path, `--dow-gate` names one explicitly,
   and the orchestrator passes it explicitly so a relocated `--out-dir` cannot
-  silently record NOT EVALUATED on a pair that was profiled. **THREE STATES,
-  kept apart exactly as the `risk` block keeps its three**: `status: "NOT
-  EVALUATED"` (Stage 4.5 did not run for this pair — written, never omitted),
-  `blocked_weekdays: []` under `EVALUATED` (it ran and every session cleared),
-  and `[4]`. An unreadable verdict is `UNREADABLE` and blocks nothing, as a
+  silently record NOT EVALUATED on a pair that was profiled. **THE VERSION IS
+  PART OF THE LOOKUP** — this promotion's version, so a `..._VB` package gets
+  B's weekday and never A's. **FOUR OUTCOMES, kept apart**: `status: "NOT
+  EVALUATED"` for no file at all (Stage 4.5 did not run for this pair —
+  written, never omitted); NOT EVALUATED again for a file carrying no entry
+  for THIS version, naming the ones it does carry (what a Version B package
+  gets when Stage 4.5 ran without `--ml`); `blocked_weekdays: []` under
+  `EVALUATED` (it ran and every session cleared); and `[4]`. An unreadable verdict is `UNREADABLE` and blocks nothing, as a
   warning rather than a refusal: a certification that cleared Gate R is not
   thrown away because a day-of-week artifact was truncated. **The key spelling
   is shared with `live_dispatcher.DOW_GATE_KEY`** — a rename on one side alone
@@ -1121,6 +1144,11 @@ python3 backtest/dow_gate.py    --strat X --tf 15m \
 # to be ranked at all (default 20).
 python3 backtest/dow_gate.py --strat X --tf 15m --min-trades 40
 python3 backtest/dow_gate.py --strat X --tf 15m --block-worst-always
+# --ml gives VERSION B its OWN weekday. B's trades are a SUBSET of A's, so its
+# weekday table is a different table, and a pair stage 3 certified as B and
+# profiled here only as A is promoted carrying a weekday nobody measured for
+# it. run_pipeline.py passes it; a hand run must too.
+python3 backtest/dow_gate.py --strat X --tf 15m --ml
 python3 backtest/promote.py --strat X --version A --source <module.py> \
     --audit-file /mnt/backtest/artifacts/pipeline/X/gate_audit_NQ_15m.json \
     --dow-gate /mnt/backtest/artifacts/pipeline/X/dow_gate_NQ_15m.json  # 5

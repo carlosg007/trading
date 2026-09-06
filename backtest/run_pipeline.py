@@ -332,7 +332,8 @@ def stage4_cmd(strat: str, tf: str, start: str, end: str,
 def stage45_cmd(strat: str, tf: str, start: str, end: str,
                 out_dir: str | None = None,
                 min_trades: int | None = None,
-                block_worst_always: bool = False) -> list[str]:
+                block_worst_always: bool = False,
+                ml_threshold: float = ML_THRESHOLD_DEFAULT) -> list[str]:
     """
     Stage 4.5: the day-of-week gate for one timeframe.
 
@@ -342,17 +343,25 @@ def stage45_cmd(strat: str, tf: str, start: str, end: str,
     different window would produce two day-of-week tables of the same strategy
     that disagree, with nothing on either saying why.
 
-    `--ml` is deliberately NOT passed, unlike Stage 4's. This stage runs
-    Version A only - the question is about the calendar, and a classifier
-    refitting per completed trade would double the stage's cost to answer it.
-    Which version was measured is on the handoff.
+    `--ml` IS passed, for exactly the reason `stage4_cmd` passes it. Version B
+    is Version A's entries minus the ones a classifier expected to lose, so
+    its trade list is a SUBSET and its weekday table is a different table; a
+    pair Stage 3 certified as B and this stage profiled only as A would be
+    promoted carrying a weekday measured on a strategy nobody deployed. Both
+    versions get their own verdict inside the one per-pair file, and
+    `promote.py` picks the one matching the package it is writing.
+
+    `--ml-threshold` travels with it: Stage 3 certifies at that bar and
+    `promote.py` embeds it, so profiling at a different one would describe a
+    Version B nobody certified.
 
     ONE TIMEFRAME per invocation, as with Stages 3 and 4: the blocked weekday
     is a fact about one (symbol, timeframe) pair, and the per-pair file is
     named for both.
     """
     cmd = _py() + [str(STAGE_SCRIPTS[STAGE45]), "--strat", strat, "--tf", tf,
-                   "--start", start, "--end", end]
+                   "--start", start, "--end", end,
+                   "--ml", "--ml-threshold", str(ml_threshold)]
     if min_trades is not None:
         cmd += ["--min-trades", str(int(min_trades))]
     if block_worst_always:
@@ -1148,7 +1157,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             rc45 = run_step(
                 stage45_cmd(strat, tf, args.start, _today(), out_dir,
                             min_trades=args.dow_min_trades,
-                            block_worst_always=args.dow_block_worst_always),
+                            block_worst_always=args.dow_block_worst_always,
+                            ml_threshold=args.ml_threshold),
                 f"STAGE 4.5 · dow_gate.py · day-of-week gate {tf}",
                 dry_run=dry, check=False)
             if rc45:

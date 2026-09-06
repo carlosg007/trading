@@ -64,7 +64,8 @@ from datetime import datetime, timezone                            # noqa: E402
 from typing import Any                                             # noqa: E402
 
 from backtest.pipeline import (DOW_GATE_FILE, base_strategy,        # noqa: E402
-                               pipeline_dir, split_strategy_id)
+                               pipeline_dir, split_strategy_id,
+                               version_of_strategy_id)
 
 INCUBATOR = REPO / "strategies" / "approved_incubator"
 
@@ -111,12 +112,21 @@ def _blocked_from_meta(meta: dict) -> tuple[list[int], str, str]:
 def _handoff_blocked(strategy_id: str, meta: dict,
                      out_dir: str | None) -> dict[str, Any]:
     """
-    Stage 4.5's verdict for this package's pair, read from the pipeline dir.
+    Stage 4.5's verdict for this package's pair AND VERSION.
 
     The pair comes from `meta.json` first and from the id only as a fallback,
     the same order `promote.py` resolves it in: `meta["symbol"]` and
     `meta["timeframe"]` are what the promotion recorded, while the id is a
     string that has to be split back apart on a timeframe token.
+
+    THE VERSION IS PART OF THE LOOKUP. The per-pair file carries a verdict per
+    version because Version B is Version A's entries minus the ones a
+    classifier expected to lose - a different trade list and a different
+    weekday table - and both versions of one pair can be promoted as two
+    packages. Reading A's verdict for a `..._VB` package would report a
+    disagreement that is really this card comparing two different strategies.
+    A file profiled without `--ml` carries no B entry, which is reported as
+    "no verdict" and not as a disagreement.
     """
     strat = str(meta.get("strategy") or base_strategy(strategy_id))
     symbol = meta.get("symbol")
@@ -124,8 +134,10 @@ def _handoff_blocked(strategy_id: str, meta: dict,
     if not symbol or not tf:
         _s, sym2, tf2 = split_strategy_id(strategy_id)
         symbol, tf = symbol or sym2, tf or tf2
+    version = str(meta.get("version")
+                  or version_of_strategy_id(strategy_id) or "A").upper()
     if not symbol or not tf:
-        return {"found": False, "path": None, "blocked": [],
+        return {"found": False, "path": None, "blocked": [], "version": version,
                 "reason": ("this package names no (symbol, timeframe) pair, "
                            "so no per-pair verdict can be located")}
     path = (pipeline_dir(strat, out_dir)
@@ -133,17 +145,27 @@ def _handoff_blocked(strategy_id: str, meta: dict,
                                    tf=str(tf).lower()))
     if not path.exists():
         return {"found": False, "path": str(path), "blocked": [],
+                "version": version,
                 "reason": "stage 4.5 left no verdict for this pair"}
     try:
         blob = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as e:
         return {"found": False, "path": str(path), "blocked": [],
-                "reason": f"{type(e).__name__}: {e}"}
-    day = blob.get("blocked_weekday")
-    return {"found": True, "path": str(path),
+                "version": version, "reason": f"{type(e).__name__}: {e}"}
+    profiled = sorted((blob.get("versions") or {}))
+    entry = (blob.get("versions") or {}).get(version)
+    if entry is None:
+        return {"found": False, "path": str(path), "blocked": [],
+                "version": version, "versions_profiled": profiled,
+                "reason": (f"stage 4.5 profiled {profiled or 'nothing'} for "
+                           f"this pair, not Version {version} — it runs "
+                           f"Version B only with --ml")}
+    day = entry.get("blocked_weekday")
+    return {"found": True, "path": str(path), "version": version,
+            "versions_profiled": profiled,
             "blocked": ([] if day is None else [int(day)]),
-            "worst": (blob.get("verdict") or {}).get("worst_day"),
-            "reason": (blob.get("verdict") or {}).get("reason", "")}
+            "worst": (entry.get("verdict") or {}).get("worst_day"),
+            "reason": (entry.get("verdict") or {}).get("reason", "")}
 
 
 def scan(strat: str | None = None, incubator: Path = INCUBATOR,
@@ -231,12 +253,12 @@ def render(rows: list[dict[str, Any]], session: dict[str, Any]) -> str:
                 f"{INCUBATOR.relative_to(REPO)}/)", "=" * W, ""]
         return "\n".join(out)
 
-    head = (f"  {'STRATEGY':<44}{'SYM':<6}{'TF':<5}{'BLOCKED':<10}"
+    head = (f"  {'STRATEGY':<44}{'SYM':<6}{'TF':<5}{'VER':<5}{'BLOCKED':<10}"
             f"{'ACTIVE':<20}{'TODAY':<9}CHECK")
     out += [head, "  " + "-" * (len(head) - 2)]
     for r in rows:
         if r.get("error"):
-            out.append(f"  {r['strategy_id']:<44}{'':<6}{'':<5}"
+            out.append(f"  {r['strategy_id']:<44}{'':<6}{'':<5}{'':<5}"
                        f"{'?':<10}{'?':<20}{'?':<9}{r['error']}")
             continue
         blocked = "".join(DAYS[d] for d in r["blocked"]) or "none"
@@ -252,7 +274,8 @@ def render(rows: list[dict[str, Any]], session: dict[str, Any]) -> str:
         else:
             check = f"no verdict ({r['handoff']['reason']})"
         out.append(f"  {r['strategy_id']:<44}{str(r['symbol'] or '?'):<6}"
-                   f"{str(r['timeframe'] or '?'):<5}{blocked:<10}{active:<20}"
+                   f"{str(r['timeframe'] or '?'):<5}"
+                   f"{str(r['version'] or '?'):<5}{blocked:<10}{active:<20}"
                    f"{today:<9}{check}")
 
     stale = [r for r in rows if r.get("agrees") is False]

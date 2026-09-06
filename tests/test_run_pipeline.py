@@ -355,10 +355,17 @@ def test_order_and_expansion(tmp: Path) -> None:
            for c in runner.for_script("dow_gate.py")]
           == [(flag_value(c, "--start"), flag_value(c, "--end"))
               for c in runner.for_script("verify_full.py")])
-    # Version A only: the question is about the calendar, and a classifier
-    # refitting per completed trade would double the stage to answer it.
-    check("Stage 4.5 does not run Version B",
-          all("--ml" not in c for c in runner.for_script("dow_gate.py")))
+    # VERSION B IS PROFILED TOO, for the reason Stage 4 passes --ml: B's
+    # trade list is a SUBSET of A's, so its weekday table is a different
+    # table, and a pair Stage 3 certified as B profiled only as A would be
+    # promoted carrying a weekday measured on a strategy nobody deployed.
+    check("Stage 4.5 profiles Version B",
+          all("--ml" in c for c in runner.for_script("dow_gate.py")))
+    check("...at the SAME ML threshold every other stage used",
+          [flag_value(c, "--ml-threshold")
+           for c in runner.for_script("dow_gate.py")]
+          == [flag_value(c, "--ml-threshold")
+              for c in runner.for_script("verify_full.py")])
     check("no Discord card without --report-discord",
           "discord_reporter.py" not in seq)
     check("no promotion without --auto-promote", "promote.py" not in seq)

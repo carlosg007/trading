@@ -89,6 +89,29 @@ Shares can exceed 100% in total, because profitable weekdays inside the
 episode offset the losing ones; that is the honest arithmetic and it is
 printed rather than normalised away.
 
+ONE VERDICT PER VERSION, AND THAT IS NOT A DETAIL
+-------------------------------------------------
+Version B is Version A's entries minus the ones a classifier expected to lose,
+so its trade list is a SUBSET and its weekday table is a different table. A
+weekday named on Version A and written into a Version B package would stand
+that package down on a session measured on a strategy nobody deployed - the
+same shape as the Version B gap Stage 2 and Stage 3 were corrected for on
+2026-08-25, where the answer travelled as far as a summary column and then
+stopped while every output stayed complete and well-formed.
+
+So the per-pair file carries a `versions` map and each entry has its own
+profile, worst weekday, block and counterfactual. `--ml` runs Version B, and
+the orchestrator passes it for exactly the reason `stage4_cmd` does: a pair
+Stage 3 certified as B and this stage profiled only as A is a package promoted
+with a weekday nobody measured for it. Without `--ml` the B entry is absent
+and `promote.load_dow_gate` records `NOT EVALUATED` for it, which is the
+honest reading - not an empty block list, which would say every session
+cleared.
+
+The COUNTERFACTUAL is run once per DISTINCT identified weekday rather than
+once per version. Both versions usually name the same session, and a second
+run to exclude the same day would produce the same masks over the same bars.
+
 THE COST MODEL IS THE CONSTANT-TICK ONE
 ---------------------------------------
 `--slippage-atr-mult` is Stage 4's flag and is deliberately not repeated here.
@@ -728,35 +751,35 @@ def _headline(metrics: dict | None) -> dict[str, Any]:
 
 def counterfactual_run(path: Path, bars: pd.DataFrame, symbol: str, tf: str,
                        params: dict, cfg, weekday: int | None,
-                       baseline_metrics: dict, strat_name: str) -> dict[str, Any]:
+                       strat_name: str, ml: bool = False) -> dict[str, Any]:
     """
-    The same Version A run with one weekday's ENTRIES suppressed.
+    The same run with one weekday's ENTRIES suppressed, for every version.
 
-    The ONLY difference between the two configurations is `exclude_days`: the
-    same bars, the same parameters, the same costs, the same fills. Anything
-    else varying would make the comparison a measurement of the change rather
-    than of the filter - the same rule `run_dual_version_backtest` holds A and
-    B to.
+    The ONLY difference from the baseline is `cfg.exclude_days`: the same
+    bars, the same parameters, the same costs, the same fills. Anything else
+    varying would make the comparison a measurement of the change rather than
+    of the filter - the same rule `run_dual_version_backtest` holds A and B to.
 
-    `ml=False`. Version B is a classifier refitted per completed trade, and
-    running it here would double the cost of the stage to answer a question
-    about the calendar. Which version this measured is on the record.
+    Returns `{"available", "reason", "excluded_day", "by_version": {...}}`.
+    ONE call covers both versions, which is why this is keyed on a weekday
+    rather than on a version: A and B usually name the same worst session, and
+    a second run excluding the same day would build the same masks over the
+    same bars.
     """
     from agents.tier1_master import run_dual_version_backtest       # noqa: PLC0415
 
     if weekday is None:
-        return {"available": False,
+        return {"available": False, "excluded_day": None, "by_version": {},
                 "reason": ("no weekday was identified, so there is nothing to "
-                           "exclude and no counterfactual to run"),
-                "excluded_day": None}
+                           "exclude and no counterfactual to run")}
 
     existing = tuple(cfg.exclude_days or ())
     if weekday in existing:
-        return {"available": False,
+        return {"available": False, "by_version": {},
+                "excluded_day": WEEKDAY_NAMES[weekday],
                 "reason": (f"{WEEKDAY_FULL_NAMES[weekday]} is already in "
                            f"exclude_days for this run, so the baseline IS "
-                           f"the counterfactual"),
-                "excluded_day": WEEKDAY_NAMES[weekday]}
+                           f"the counterfactual")}
 
     cf_cfg = dataclasses.replace(
         cfg,
@@ -765,35 +788,44 @@ def counterfactual_run(path: Path, bars: pd.DataFrame, symbol: str, tf: str,
               f"excl. {WEEKDAY_FULL_NAMES[weekday]}")
     out = run_dual_version_backtest(
         str(path), bars, freq=tf, symbol=symbol, cfg=cf_cfg, params=params,
-        ml=False, emit_reports=False, strat_name=strat_name)
-    cf_metrics = out["version_a"]["metrics"]
-    filters = dict(cf_metrics.get("entry_filters") or {})
+        ml=ml, emit_reports=False, strat_name=strat_name)
+
+    by_version: dict[str, dict] = {}
+    for version, key in (("A", "version_a"), ("B", "version_b")):
+        block = out.get(key)
+        if not block:
+            continue
+        metrics = block.get("metrics") or {}
+        filters = dict(metrics.get("entry_filters") or {})
+        by_version[version] = {
+            "metrics": _headline(metrics),
+            # THE ENGINE'S OWN RECORD OF WHAT THE MASK DID, read straight off
+            # `apply_entry_filters` rather than recomputed. A trade-count
+            # delta cannot answer "did the filter bind" - the walk holds one
+            # position at a time, so removing a trigger can ADD a realised
+            # trade - and these three can. "NOT RECORDED" rather than 0 where
+            # the key is absent: a zero would read as a mask that covered
+            # nothing.
+            "entries_suppressed": filters.get("entries_suppressed",
+                                              "NOT RECORDED"),
+            "entries_offered": (int(filters.get("long_entries_before", 0))
+                                + int(filters.get("short_entries_before", 0))
+                                if "long_entries_before" in filters
+                                else "NOT RECORDED"),
+            "bars_blocked": filters.get("dow_signal_bars_blocked",
+                                        filters.get("signal_bars_blocked",
+                                                    "NOT RECORDED")),
+            "entry_filters": filters,
+        }
 
     return {
         "available": True,
         "reason": "",
-        "version": "A",
         "excluded_day": WEEKDAY_NAMES[weekday],
         "excluded_weekday": int(weekday),
         "exclude_days_applied": list(cf_cfg.exclude_days),
         "exclude_days_baseline": list(existing),
-        "baseline": _headline(baseline_metrics),
-        "counterfactual": _headline(cf_metrics),
-        # THE ENGINE'S OWN RECORD OF WHAT THE MASK DID, read straight off
-        # `apply_entry_filters` rather than recomputed. A trade-count delta
-        # cannot answer "did the filter bind" - the walk holds one position at
-        # a time, so removing a trigger can ADD a realised trade - and these
-        # three can. "NOT RECORDED" rather than 0 where the key is absent: a
-        # zero here would read as a mask that covered nothing.
-        "entries_suppressed": filters.get("entries_suppressed", "NOT RECORDED"),
-        "entries_offered": (int(filters.get("long_entries_before", 0))
-                            + int(filters.get("short_entries_before", 0))
-                            if "long_entries_before" in filters
-                            else "NOT RECORDED"),
-        "bars_blocked": filters.get("dow_signal_bars_blocked",
-                                    filters.get("signal_bars_blocked",
-                                                "NOT RECORDED")),
-        "entry_filters": filters,
+        "by_version": by_version,
         # Said on the file, not only in the docstring: this window spans the
         # Stage 3 holdout, so both curves are in-sample by construction.
         "is_certification": False,
@@ -804,10 +836,49 @@ def counterfactual_run(path: Path, bars: pd.DataFrame, symbol: str, tf: str,
     }
 
 
+def _version_counterfactual(cf: dict[str, Any], version: str,
+                            baseline: dict[str, Any]) -> dict[str, Any]:
+    """One version's slice of a shared counterfactual run, table-ready."""
+    if not cf.get("available"):
+        return {"available": False, "reason": cf.get("reason", "not run"),
+                "excluded_day": cf.get("excluded_day")}
+    side = (cf.get("by_version") or {}).get(version)
+    if side is None:
+        return {"available": False,
+                "excluded_day": cf.get("excluded_day"),
+                "reason": (f"the counterfactual run produced no Version "
+                           f"{version} curve to compare against")}
+    return {
+        "available": True, "reason": "", "version": version,
+        "excluded_day": cf["excluded_day"],
+        "excluded_weekday": cf["excluded_weekday"],
+        "exclude_days_applied": cf["exclude_days_applied"],
+        "exclude_days_baseline": cf["exclude_days_baseline"],
+        "baseline": baseline,
+        "counterfactual": side["metrics"],
+        "entries_suppressed": side["entries_suppressed"],
+        "entries_offered": side["entries_offered"],
+        "bars_blocked": side["bars_blocked"],
+        "entry_filters": side["entry_filters"],
+        "is_certification": False,
+        "note": cf["note"],
+    }
+
+
 def gate_symbol(symbol: str, path: Path, tf: str, params: dict,
                 args: argparse.Namespace, cfg_kwargs: dict,
                 strat_name: str) -> dict[str, Any]:
-    """One contract: profile it, name the worst weekday, run the counterfactual."""
+    """
+    One contract: profile every version, name its worst weekday, run the
+    counterfactuals.
+
+    Version B is Version A's entries minus the ones a classifier expected to
+    lose, so its trade list is a SUBSET and its weekday table is a different
+    table. Each version therefore gets its own profile, its own verdict and
+    its own counterfactual slice - a weekday named on A and written into a B
+    package would stand it down on a session measured on a strategy nobody
+    deployed.
+    """
     from backtest.engine import BacktestConfig                      # noqa: PLC0415
     from backtest.run import load_bars                              # noqa: PLC0415
     from agents.tier1_master import run_dual_version_backtest       # noqa: PLC0415
@@ -823,66 +894,93 @@ def gate_symbol(symbol: str, path: Path, tf: str, params: dict,
                          f"({bars['symbol'].nunique()} symbols)")
     print(f"  bars       : {len(bars):,}  "
           f"{bars['ts'].iloc[0]} → {bars['ts'].iloc[-1]}")
+    print(f"  versions   : {'A and B' if args.ml else 'A only (no --ml)'}")
 
     cfg = BacktestConfig(
         initial_capital=args.capital, contracts=args.contracts,
         slippage_ticks=args.slippage_ticks, flat_by_close=args.flat_by_close,
         notes=f"stage 4.5 day-of-week gate {symbol} {tf}", **cfg_kwargs)
 
-    # VERSION A, and the counterfactual is Version A too. The gate is about
-    # the calendar, and a classifier refitting per completed trade would
-    # double the stage's cost to answer a question it has no bearing on.
     out = run_dual_version_backtest(
         str(path), bars, freq=tf, symbol=symbol, cfg=cfg, params=params,
-        ml=False, emit_reports=False, strat_name=strat_name)
-    metrics = out["version_a"]["metrics"]
-    result = out["version_a"].get("result")
-    trades = metrics.get("trades")
-    returns = getattr(result, "returns", None)
+        threshold=args.threshold, ml=args.ml, emit_reports=False,
+        strat_name=strat_name)
 
-    profile = weekday_profile(trades, returns)
-    verdict = select_worst_weekday(profile, min_trades=args.min_trades,
-                                   block_always=args.block_worst_always)
-    print("\n  DAY OF WEEK · Version A, Stage 4 lifecycle window")
-    print(format_weekday_profile(profile, verdict))
-    print(f"\n  VERDICT    : {verdict['reason']}")
-    if verdict["below_floor"]:
-        print(f"  below floor: "
-              + ", ".join(f"{e['day']} ({e['trades']} trades)"
-                          for e in verdict["below_floor"])
-              + f"  — not ranked, floor is {args.min_trades}")
+    versions: dict[str, dict[str, Any]] = {}
+    for version, key in (("A", "version_a"), ("B", "version_b")):
+        block = out.get(key)
+        if not block:
+            continue
+        metrics = block.get("metrics") or {}
+        result = block.get("result")
+        profile = weekday_profile(metrics.get("trades"),
+                                  getattr(result, "returns", None))
+        verdict = select_worst_weekday(profile, min_trades=args.min_trades,
+                                       block_always=args.block_worst_always)
+        print(f"\n  DAY OF WEEK · Version {version} · Stage 4 lifecycle window")
+        print(format_weekday_profile(profile, verdict))
+        print(f"\n  VERDICT    : {verdict['reason']}")
+        if verdict["below_floor"]:
+            print("  below floor: "
+                  + ", ".join(f"{e['day']} ({e['trades']} trades)"
+                              for e in verdict["below_floor"])
+                  + f"  — not ranked, floor is {args.min_trades}")
+        versions[version] = {"version": version, "baseline": _headline(metrics),
+                             "weekday_profile": profile.to_dict("records"),
+                             "verdict": verdict}
 
-    cf = counterfactual_run(path, bars, symbol, tf, params, cfg,
-                            verdict["worst_weekday"], metrics, strat_name)
-    print("\n  COUNTERFACTUAL · entries on the identified weekday suppressed")
-    print(format_counterfactual(cf))
+    if not versions:
+        raise ValueError(f"{symbol} {tf}: the dual-version run produced no "
+                         f"Version A curve to profile")
 
-    gate = promotion_gate(verdict)
-    print(f"\n  PROMOTION  : {gate['status']} — {gate['criterion']}")
+    # ONE COUNTERFACTUAL PER DISTINCT IDENTIFIED WEEKDAY, not one per version.
+    # A and B usually name the same session, and a second run excluding the
+    # same day would build the same masks over the same bars. Sorted so the
+    # order does not depend on dict insertion, which decides nothing here but
+    # would make two runs of the same pair print in different orders.
+    wanted = sorted({v["verdict"]["worst_weekday"] for v in versions.values()
+                     if v["verdict"]["worst_weekday"] is not None})
+    runs: dict[int | None, dict] = {}
+    for day in wanted:
+        runs[day] = counterfactual_run(path, bars, symbol, tf, params, cfg,
+                                       day, strat_name, ml=args.ml)
+    none_run = counterfactual_run(path, bars, symbol, tf, params, cfg, None,
+                                  strat_name, ml=args.ml)
+
+    for version, entry in versions.items():
+        day = entry["verdict"]["worst_weekday"]
+        shared = runs.get(day, none_run) if day is not None else none_run
+        entry["counterfactual"] = _version_counterfactual(
+            shared, version, entry["baseline"])
+        entry["promotion"] = promotion_gate(entry["verdict"])
+        entry["blocked_weekday"] = entry["verdict"]["blocked_weekday"]
+        entry["blocked_day"] = entry["verdict"]["blocked_day"]
+        entry["blocked_day_name"] = entry["verdict"]["blocked_day_name"]
+        print(f"\n  COUNTERFACTUAL · Version {version} · entries on the "
+              f"identified weekday suppressed")
+        print(format_counterfactual(entry["counterfactual"]))
+        print(f"  PROMOTION  : {entry['promotion']['status']} — "
+              f"{entry['promotion']['criterion']}")
+
     print(f"  ({round(time.time() - t0, 1)}s)")
 
     return {
         "symbol": symbol,
         "timeframe": tf,
-        "version": "A",
         "params": params,
+        "ml": bool(args.ml),
+        "ml_threshold": float(args.threshold),
+        # WHICH VERSIONS WERE PROFILED, said as data. A file carrying only an
+        # "A" entry because --ml was not passed and one carrying only an "A"
+        # entry because Version B produced no curve are different facts, and
+        # `promote.load_dow_gate` reports the missing version as NOT EVALUATED
+        # either way rather than as an empty block list.
+        "versions_profiled": sorted(versions),
+        "versions": versions,
         "window": {"start": str(bars["ts"].iloc[0]),
                    "end": str(bars["ts"].iloc[-1]),
                    "bars": int(len(bars))},
         "entry_filters": cfg_kwargs,
-        "baseline": _headline(metrics),
-        "weekday_profile": profile.to_dict("records"),
-        "verdict": verdict,
-        "counterfactual": cf,
-        "promotion": gate,
-        # THE FIELD THE LIVE LOOP EVENTUALLY READS, lifted to the top level so
-        # nothing downstream has to know the shape of `verdict`. None means
-        # "the stage ran and blocked nothing", which is not the same statement
-        # as an absent file - `pipeline.stage45_blocked_days` keeps the two
-        # apart.
-        "blocked_weekday": verdict["blocked_weekday"],
-        "blocked_day": verdict["blocked_day"],
-        "blocked_day_name": verdict["blocked_day_name"],
         "is_certification": False,
         # The weekday was picked on the bars it is scored on. Recorded on the
         # file for the same reason Stage 1 records `selected_in_sample`: a
@@ -934,12 +1032,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--contracts", type=int, default=1)
     p.add_argument("--slippage-ticks", type=float, default=1.0)
     p.add_argument("--flat-by-close", action="store_true")
+    p.add_argument("--ml", action="store_true",
+                   help="Also profile Version B, and give it its OWN worst "
+                        "weekday. Version B is Version A's entries minus the "
+                        "ones a classifier expected to lose, so its trade "
+                        "list is a SUBSET and its weekday table is a "
+                        "different table - a weekday named on A and written "
+                        "into a B package stands it down on a session "
+                        "measured on a strategy nobody deployed. The "
+                        "orchestrator passes this for the same reason "
+                        "stage4_cmd does. Without it the B entry is ABSENT "
+                        "and promote.py records NOT EVALUATED for it, which "
+                        "is not an empty block list.")
     p.add_argument("--ml-threshold", "--threshold", dest="threshold",
                    type=float, default=ML_THRESHOLD_DEFAULT,
-                   help="Accepted and forwarded to nothing: this stage runs "
-                        "Version A only, because the question is about the "
-                        "calendar. Present so the orchestrator can pass one "
-                        "flag set to every stage.")
+                   help=(f"Version B: P(win) at or above which an entry is "
+                         f"kept (default {ML_THRESHOLD_DEFAULT}). Stage 3 "
+                         f"certifies at this bar, so a different value here "
+                         f"profiles a filter nobody certified."))
     p.add_argument("--out-dir", default=None)
     add_filter_args(p)
     return p
@@ -992,6 +1102,15 @@ def main(argv: list[str] | None = None) -> int:
     print("  loop. It certifies NOTHING and prunes NOTHING: every")
     print("  configuration here advances to Stage 5. The weekday is chosen")
     print("  IN-SAMPLE, on bars Stage 3 already spent.")
+    if args.ml:
+        print("  Versions A and B each get their OWN weekday: B's trade list "
+              "is a")
+        print("  subset of A's, so its weekday table is a different table.")
+    else:
+        print("  VERSION A ONLY (--ml not passed). A pair Stage 3 certified "
+              "as")
+        print("  Version B will record NOT EVALUATED on its promoted "
+              "meta.json.")
 
     rows, errors = [], []
     for i, sym in enumerate(symbols, 1):
@@ -1034,22 +1153,26 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  (the previous Stage 4.5 summary could not be read and "
                   f"is being replaced: {e})", file=sys.stderr)
 
+    # ONE ROW PER (symbol, timeframe, VERSION), because that is the unit that
+    # gets promoted: `<strategy>_<SYMBOL>_<TF>_VA` and `..._VB` are two
+    # packages with two meta.json files, and both can certify. A row per pair
+    # would hand one weekday to both.
     results = carried + [
         {"symbol": r["symbol"], "timeframe": r["timeframe"],
-         "version": r["version"],
-         "blocked_weekday": r["blocked_weekday"],
-         "blocked_day": r["blocked_day"],
-         "worst_weekday": r["verdict"]["worst_weekday"],
-         "worst_day": r["verdict"]["worst_day"],
-         "block_rule": r["verdict"]["block_rule"],
-         "min_trades": r["verdict"]["min_trades"],
-         "reason": r["verdict"]["reason"],
-         "promote": r["promotion"]["promote"],
-         "status": r["promotion"]["status"],
-         "counterfactual_available": bool(r["counterfactual"].get("available")),
+         "version": v["version"],
+         "blocked_weekday": v["blocked_weekday"],
+         "blocked_day": v["blocked_day"],
+         "worst_weekday": v["verdict"]["worst_weekday"],
+         "worst_day": v["verdict"]["worst_day"],
+         "block_rule": v["verdict"]["block_rule"],
+         "min_trades": v["verdict"]["min_trades"],
+         "reason": v["verdict"]["reason"],
+         "promote": v["promotion"]["promote"],
+         "status": v["promotion"]["status"],
+         "counterfactual_available": bool(v["counterfactual"].get("available")),
          "file": str(out_dir / DOW_GATE_FILE.format(symbol=r["symbol"],
                                                     tf=r["timeframe"]))}
-        for r in rows]
+        for r in rows for v in r["versions"].values()]
     results += [{"symbol": e["symbol"], "timeframe": e["timeframe"],
                  "version": None, "blocked_weekday": None, "blocked_day": None,
                  "worst_weekday": None, "worst_day": None, "block_rule": None,
@@ -1067,6 +1190,8 @@ def main(argv: list[str] | None = None) -> int:
                               if r.get("timeframe")}),
         "window": {"start": args.start, "end": args.end},
         "min_trades": int(args.min_trades),
+        "ml": bool(args.ml),
+        "ml_threshold": float(args.threshold),
         "block_rule": ("worst_always" if args.block_worst_always
                        else "negative_expectancy"),
         "selected_in_sample": True,
@@ -1076,17 +1201,23 @@ def main(argv: list[str] | None = None) -> int:
         "results": results,
     })
 
+    # ONE ROW PER VERSION. The versions are two packages with two meta.json
+    # files and can name different sessions; a table showing one row per pair
+    # would present whichever version happened to be first as the pair's
+    # answer.
     print(leaderboard(
         f"STAGE 4.5 · DAY-OF-WEEK GATE · {strat_name} · {tf}",
-        ["SYMBOL", "TF", "WORST", "EXPECTANCY", "TRADES", "BLOCKED", "PROMOTE"],
-        [[r["symbol"], r["timeframe"],
-          (r["verdict"]["worst_day"] or "--"),
-          (f"{r['verdict']['metrics']['expectancy']:,.2f}"
-           if r["verdict"]["metrics"] else "--"),
-          (f"{r['verdict']['metrics']['trades']:,}"
-           if r["verdict"]["metrics"] else "--"),
-          (r["blocked_day"] or "none"),
-          r["promotion"]["status"]] for r in rows],
+        ["SYMBOL", "TF", "VER", "WORST", "EXPECTANCY", "TRADES", "BLOCKED",
+         "PROMOTE"],
+        [[r["symbol"], r["timeframe"], v["version"],
+          (v["verdict"]["worst_day"] or "--"),
+          (f"{v['verdict']['metrics']['expectancy']:,.2f}"
+           if v["verdict"]["metrics"] else "--"),
+          (f"{v['verdict']['metrics']['trades']:,}"
+           if v["verdict"]["metrics"] else "--"),
+          (v["blocked_day"] or "none"),
+          v["promotion"]["status"]]
+         for r in rows for v in r["versions"].values()],
         empty="no configuration was profiled"))
     for e in errors:
         print(f"  ERROR {e['symbol']:<6}{e['error']}")
