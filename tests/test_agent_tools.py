@@ -800,3 +800,41 @@ def test_bridge_skips_the_forum_check_without_credentials(monkeypatch):
     ok, lines = bridge.telegram_chat_check(config)
     assert ok is True
     assert any("not checked" in ln for ln in lines)
+
+
+def test_bridge_addresses_the_general_topic_without_a_thread_id():
+    # Telegram refuses `message_thread_id=1` ("message thread not found").
+    # Hermes catches that and retries without the thread, so a send to 1 still
+    # reports success - through an error path, and indistinguishably from a
+    # topic that has actually been deleted. The bare target keeps General on
+    # the success path and leaves the fallback meaning "this topic is gone".
+    config = _bridge_config()
+    config["telegram"]["topics"]["general_ops"]["thread_id"] = 1
+    assert bridge.topic_target(config, "general_ops") == \
+        "telegram:-1001234567890"
+
+
+def test_bridge_still_threads_every_non_general_topic():
+    config = _bridge_config()
+    config["telegram"]["topics"]["portfolio_mgmt"]["thread_id"] = 17
+    config["telegram"]["topics"]["system_health"]["thread_id"] = 18
+    config["telegram"]["topics"]["roll_alerts"]["thread_id"] = 19
+    assert bridge.topic_target(config, "portfolio_mgmt") == \
+        "telegram:-1001234567890:17"
+    assert bridge.topic_target(config, "system_health") == \
+        "telegram:-1001234567890:18"
+    assert bridge.topic_target(config, "roll_alerts") == \
+        "telegram:-1001234567890:19"
+
+
+def test_bridge_live_registry_routes_four_distinct_destinations():
+    """The installed registry must not collapse two agents onto one thread."""
+    if not bridge.BRIDGE_CONFIG.exists():
+        pytest.skip(f"{bridge.BRIDGE_CONFIG} is not installed on this host")
+    config, _ = bridge.load(strict=False)
+    topics = (config.get("telegram") or {}).get("topics") or {}
+    if not str((config.get("telegram") or {}).get("chat_id") or "").strip():
+        pytest.skip("no chat id configured on this host")
+    targets = {name: bridge.topic_target(config, name) for name in topics}
+    assert len(set(targets.values())) == len(targets), (
+        f"two topics share a destination: {targets}")

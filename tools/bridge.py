@@ -60,6 +60,19 @@ HONCHO_JSON = HERMES_HOME / "honcho.json"
 #: `$VAR`, so a literal dollar in prose is never mistaken for a reference.
 VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z_0-9]*)\}")
 
+#: A forum's General topic. Telegram numbers it 1 everywhere it REPORTS a
+#: thread, but it refuses `message_thread_id=1` on the way in - sendMessage
+#: answers "Bad Request: message thread not found". General is addressed by
+#: omitting the thread entirely.
+#:
+#: This is not cosmetic. Hermes catches that exact error and retries WITHOUT
+#: the thread id (plugins/platforms/telegram/adapter.py: "Thread %s not found
+#: ... retrying without message_thread_id"), so a send to 1 still succeeds and
+#: still reports "sent" - it just arrives through an error path. Emitting the
+#: bare target instead keeps the General card on the success path, and leaves
+#: that fallback meaning what it should: a topic that has gone missing.
+TELEGRAM_GENERAL_THREAD_ID = 1
+
 
 class BridgeError(RuntimeError):
     """The bridge configuration could not be read or does not agree with reality."""
@@ -194,6 +207,9 @@ def topic_target(config: dict[str, Any], topic: str) -> str:
             "somebody has posted in the group.")
     if thread_id is None:
         raise BridgeError(f"topic {topic!r} declares no thread_id")
+    if int(thread_id) == TELEGRAM_GENERAL_THREAD_ID:
+        # General is the chat itself; see TELEGRAM_GENERAL_THREAD_ID.
+        return f"telegram:{chat_id}"
     return f"telegram:{chat_id}:{thread_id}"
 
 
