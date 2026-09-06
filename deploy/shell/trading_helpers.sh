@@ -50,6 +50,7 @@
 # `|| true` because unalias returns non-zero for a name that was not set, and
 # under `set -e` that would abort the very sourcing this protects.
 unalias bt-check bt-progress bt-inventory inv-portfolios check-system \
+        days-check strat-days \
         preflight-check pipeline-all precompute-all bt-tf run-bt \
         bt-1h bt-30m bt-15m bt-5m bt-swing 2>/dev/null || true
 
@@ -580,3 +581,40 @@ alias perf-report='strat-perf'
 # `tag_pattern` on each row is what a journal should match on.
 alias strat-tags="${_TRADING_PY} ${_TRADING_REPO}/scripts/strategy_tag_manifest.py"
 alias tag-manifest='strat-tags'
+
+# --------------------------------------------------------------------------
+# 12. Which weekdays is each promoted strategy actually allowed to trade?
+#
+# The card to run after a campaign finishes and before anything is armed.
+# Stage 4.5 (backtest/dow_gate.py) names the worst session of the week and
+# promote.py writes it into the promoted meta.json, which is the ONLY file
+# realtime/live_dispatcher.py reads about the calendar. This joins the two and
+# reports where they disagree.
+#
+# THE DISAGREEMENT IS THE POINT. meta.json is written at PROMOTION time and
+# never revisited, so a package promoted before stage 4.5 ran for its pair
+# trades the session it was stood down from with every log line reading
+# correctly. Neither bt-inventory nor signal-check can see it: each reads one
+# of the two files and never both.
+#
+# READ-ONLY, like the cards above - no bar is opened, no engine imported,
+# nothing recomputed. It also prints which CME SESSION day it is right now,
+# through backtest/event_calendar.py's own rule rather than a calendar date,
+# because the two disagree for the six hours after 18:00 ET and that is
+# exactly when somebody is reading this.
+#
+# Exits non-zero when a package is OUT OF STEP with its verdict. A package
+# with no stage 4.5 verdict at all is a legitimate state and does not move the
+# exit code, so it chains:
+#     days-check && systemctl restart trading-master-live
+days-check() { "$_TRADING_PY" "${_TRADING_REPO}/scripts/check_strategy_days.py" "$@"; }
+# The spelling for "what days is this strategy on" rather than "is the gate
+# in step". One implementation, two names.
+strat-days()  { days-check "$@"; }
+
+_days_check_complete() {
+    local cur="${COMP_WORDS[COMP_CWORD]}"
+    COMPREPLY=($(compgen -W "--strat --incubator --out-dir --json -h --help" \
+                         -- "$cur"))
+}
+complete -F _days_check_complete days-check strat-days
