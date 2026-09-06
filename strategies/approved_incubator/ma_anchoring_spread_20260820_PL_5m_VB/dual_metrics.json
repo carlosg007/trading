@@ -51,7 +51,7 @@
         "refit_growth": 0.1,
         "max_train_rows": 50000,
         "threads": 1,
-        "elapsed_s": 0.342
+        "elapsed_s": 0.337
       }
     },
     "logic": {
@@ -215,7 +215,7 @@
             "refit_growth": 0.1,
             "max_train_rows": 50000,
             "threads": 1,
-            "elapsed_s": 0.342
+            "elapsed_s": 0.337
           }
         },
         "logic": {
@@ -490,7 +490,7 @@
             "refit_growth": 0.1,
             "max_train_rows": 50000,
             "threads": 1,
-            "elapsed_s": 0.342
+            "elapsed_s": 0.337
           }
         },
         "logic": {
@@ -618,10 +618,10 @@
       "retention_metric": null
     }
   },
-  "generated_utc": "2026-08-30T16:44:53+00:00",
+  "generated_utc": "2026-09-06T18:44:41+00:00",
   "reports": {
-    "version_a": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/verify_20260830_164423/report_PL_version_a.html",
-    "version_b": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/verify_20260830_164423/report_PL_version_b.html"
+    "version_a": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/verify_20260906_184411/report_PL_version_a.html",
+    "version_b": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/verify_20260906_184411/report_PL_version_b.html"
   },
   "cost_drag": {
     "trades": 178,

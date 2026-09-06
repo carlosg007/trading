@@ -28,10 +28,33 @@
     "tp_atr_mult": 2.0,
     "trailing": true
   },
+  "day_of_week_gate": {
+    "status": "EVALUATED",
+    "version": "B",
+    "versions_profiled": [
+      "A",
+      "B"
+    ],
+    "blocked_weekdays": [
+      0
+    ],
+    "blocked_weekday": 0,
+    "blocked_day": "Mon",
+    "blocked_day_name": "Monday",
+    "worst_weekday": 0,
+    "worst_day": "Mon",
+    "block_rule": "negative_expectancy",
+    "min_trades": 20,
+    "reason": "Monday is the weakest session (expectancy -67.29 per trade over 35 trades) and its expectancy is negative",
+    "selected_in_sample": true,
+    "note": "The weekday was chosen in-sample, on a window that spans the Stage 3 holdout. It is a live-supervision instruction, not evidence: no gate was scored on it and nothing was pruned for it.",
+    "source": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/dow_gate_PL_5m.json",
+    "source_sha256": "e76ae4ff156bfb6e817bc3ea3a175b52bb6ab2f9608554142e27588234acdd45"
+  },
   "source": "/home/cgrullon/src/trading/strategies/experimental/ma_anchoring_spread_20260820.py",
   "source_sha256": "296538f7b4199e7eb5fc5000a9b6271c2b779160e9a9d6bcce4e002d00394e4d",
-  "promoted_sha256": "acb3cfc09cce8684f2b123295885912674145a302ceb4b0103363d41cf23f73c",
-  "promoted_utc": "2026-08-30T16:45:14+00:00",
+  "promoted_sha256": "91142fff2cca4acae8ea4783d56b1fbe4c8bff7722e8ec8228c819a270438f7f",
+  "promoted_utc": "2026-09-06T18:48:56+00:00",
   "costs_included": true,
   "variants_tested": null,
   "metrics_status": "RECORDED \u00b7 locked from dual_metrics_PL.json",
@@ -64,12 +87,12 @@
   },
   "certification": {
     "audit_file": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/gate_audit_PL_5m.json",
-    "audit_sha256": "2ea9a973a9f7f3fe0d823333a50d8f36d9c1f819d6cb513703680e84c4503f41",
+    "audit_sha256": "f57d32a51badada171e2c9cf3d0d819513721485ee31cdbaa18814008bf0dca7",
     "audit_symbol": "PL",
     "audit_timeframe": "5m",
     "target_quadrant": "Q1",
     "target_regime": "High Volatility / Trending",
-    "audit_generated_utc": "2026-08-30T16:41:22+00:00",
+    "audit_generated_utc": "2026-09-06T18:41:06+00:00",
     "in_sample": {
       "start": "2013-01-01",
       "end": "2022-12-31"
