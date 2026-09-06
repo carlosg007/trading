@@ -28,10 +28,33 @@
     "tp_atr_mult": 3.0,
     "trailing": false
   },
+  "day_of_week_gate": {
+    "status": "EVALUATED",
+    "version": "B",
+    "versions_profiled": [
+      "A",
+      "B"
+    ],
+    "blocked_weekdays": [
+      3
+    ],
+    "blocked_weekday": 3,
+    "blocked_day": "Thu",
+    "blocked_day_name": "Thursday",
+    "worst_weekday": 3,
+    "worst_day": "Thu",
+    "block_rule": "negative_expectancy",
+    "min_trades": 20,
+    "reason": "Thursday is the weakest session (expectancy -193.31 per trade over 75 trades) and its expectancy is negative",
+    "selected_in_sample": true,
+    "note": "The weekday was chosen in-sample, on a window that spans the Stage 3 holdout. It is a live-supervision instruction, not evidence: no gate was scored on it and nothing was pruned for it.",
+    "source": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/dow_gate_PL_15m.json",
+    "source_sha256": "17b14fc86a9248963735a4bd4dbffa774387ad980dfc7985ab47607e62c4a1da"
+  },
   "source": "/home/cgrullon/src/trading/strategies/experimental/ma_anchoring_spread_20260820.py",
   "source_sha256": "296538f7b4199e7eb5fc5000a9b6271c2b779160e9a9d6bcce4e002d00394e4d",
-  "promoted_sha256": "d48edfddb631406ee76c504fa34d2060a5be8a067acefbdfb066e2b7a8857cd4",
-  "promoted_utc": "2026-08-30T16:46:01+00:00",
+  "promoted_sha256": "dfd128953c444577fe0414d2166b5756ec78f4d4da536e25a8c5ef53931e0fe9",
+  "promoted_utc": "2026-09-06T18:49:38+00:00",
   "costs_included": true,
   "variants_tested": null,
   "metrics_status": "RECORDED \u00b7 locked from dual_metrics_PL.json",
@@ -64,12 +87,12 @@
   },
   "certification": {
     "audit_file": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/gate_audit_PL_15m.json",
-    "audit_sha256": "0ec5557f1142a83062068c7fae351afad35e3001b3ecf87182a5cb2e7dc421ae",
+    "audit_sha256": "fdb81ec54cd4f0bb9df8b65ff5a3694fa67630b7ace1ce6151c16e154e8b326f",
     "audit_symbol": "PL",
     "audit_timeframe": "15m",
     "target_quadrant": "Q2",
     "target_regime": "High Volatility / Ranging",
-    "audit_generated_utc": "2026-08-30T16:26:27+00:00",
+    "audit_generated_utc": "2026-09-06T18:27:20+00:00",
     "in_sample": {
       "start": "2013-01-01",
       "end": "2022-12-31"
