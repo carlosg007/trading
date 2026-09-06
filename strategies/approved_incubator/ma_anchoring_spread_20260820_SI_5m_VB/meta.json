@@ -28,10 +28,33 @@
     "tp_atr_mult": 3.0,
     "trailing": true
   },
+  "day_of_week_gate": {
+    "status": "EVALUATED",
+    "version": "B",
+    "versions_profiled": [
+      "A",
+      "B"
+    ],
+    "blocked_weekdays": [
+      1
+    ],
+    "blocked_weekday": 1,
+    "blocked_day": "Tue",
+    "blocked_day_name": "Tuesday",
+    "worst_weekday": 1,
+    "worst_day": "Tue",
+    "block_rule": "negative_expectancy",
+    "min_trades": 20,
+    "reason": "Tuesday is the weakest session (expectancy -419.38 per trade over 98 trades) and its expectancy is negative",
+    "selected_in_sample": true,
+    "note": "The weekday was chosen in-sample, on a window that spans the Stage 3 holdout. It is a live-supervision instruction, not evidence: no gate was scored on it and nothing was pruned for it.",
+    "source": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/dow_gate_SI_5m.json",
+    "source_sha256": "ba437f0e0fbd61437cc30bc5a158a75c0716fd05c31c0ccd0f1a50e10ff80e2a"
+  },
   "source": "/home/cgrullon/src/trading/strategies/experimental/ma_anchoring_spread_20260820.py",
   "source_sha256": "296538f7b4199e7eb5fc5000a9b6271c2b779160e9a9d6bcce4e002d00394e4d",
-  "promoted_sha256": "78a54e4ed220b13e42508f4153bad2d54dd9bb79e596ffe1564517debca6f97b",
-  "promoted_utc": "2026-08-30T16:45:07+00:00",
+  "promoted_sha256": "57fd248c0623e5330222a2a23097eaf2343f4345e590972c4b507eb65c4214c8",
+  "promoted_utc": "2026-09-06T18:48:49+00:00",
   "costs_included": true,
   "variants_tested": null,
   "metrics_status": "RECORDED \u00b7 locked from dual_metrics_SI.json",
@@ -64,12 +87,12 @@
   },
   "certification": {
     "audit_file": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/gate_audit_SI_5m.json",
-    "audit_sha256": "20b8d22d24d68765a7365e05586da9f4b54cbf7bc8fc1fe92c5d3ccc69954e9c",
+    "audit_sha256": "b5e55f53c1a164d92836656fa4a68ac1d55b703da957d7c94661faa8ce9ffd81",
     "audit_symbol": "SI",
     "audit_timeframe": "5m",
     "target_quadrant": "Q1",
     "target_regime": "High Volatility / Trending",
-    "audit_generated_utc": "2026-08-30T16:40:46+00:00",
+    "audit_generated_utc": "2026-09-06T18:40:31+00:00",
     "in_sample": {
       "start": "2013-01-01",
       "end": "2022-12-31"
