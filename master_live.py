@@ -40,6 +40,38 @@ order this process cannot see is not undone by noticing the mistake.
 Live mode refuses to start without a webhook URL, rather than discovering it at
 the first order - see `LiveExecutionDispatcher.__init__`.
 
+MARKET HOURS: THE LOOP STOPS BEING A PROCESS, NOT JUST AN IDLE ONE
+==================================================================
+`--halt-when-closed` makes the loop EXIT when the CME is shut - the daily
+17:00-18:00 ET maintenance halt, the Friday 17:00 ET weekend close, and any
+exchange holiday `realtime/market_calendar.py` has a file for - and it exits
+with a status systemd is told not to restart on.
+`deploy/systemd/trading-master-live.timer` starts it again at 17:55 ET on
+Sunday through Thursday, and the process waits out the last few minutes before
+the open.
+
+IT EXITS RATHER THAN SLEEPS, AND THAT IS THE WHOLE POINT. Measured 2026-09-06:
+this loop reached 18.5 GB RSS after 47 hours on a 24 GB box and OOM-killed the
+test gate. A sleeping process keeps every one of those bytes. `gc.collect()`
+does not give them back either - CPython returns freed arenas to the OS only
+when they happen to be entirely empty, and a fragmented 18 GB heap is not. The
+only thing that reliably returns 18 GB to the machine is exit. So the weekend
+costs nothing, and the daily halt caps unbounded growth at one session's worth
+instead of a week's.
+
+`--halt-when-closed` IS OFF BY DEFAULT and the unit file passes it. An operator
+running a dry run by hand at 17:30 wants a loop that keeps printing, not one
+that vanishes; a supervised process wants the opposite. The flag is where the
+two are told apart.
+
+NOTHING IS FLATTENED AT THE CLOSE, and nothing is cancelled. This loop sends
+market orders inside one `send_execution_signal` call: it holds no resting
+entry order to cancel and no socket to drain, and it never did. What the close
+does is REPORT - the positions the book holds, the unverified claims
+`EngineState` holds, and a loud line if either is non-empty going into a
+49-hour weekend. Being flat over a weekend is a trading decision and belongs to
+the operator and to CrossTrade NAM, not to a scheduler.
+
 GRACEFUL SHUTDOWN
 =================
 SIGINT and SIGTERM set a flag; they never interrupt a cycle. A cycle is signals
@@ -76,6 +108,7 @@ load_env()
 # ---------------------------------------------------------------------------
 
 import argparse
+import gc
 import signal
 import sys
 import time
@@ -103,10 +136,36 @@ from realtime.risk_firewall import RiskFirewall                  # noqa: E402
 from realtime.nt8_positions import (PositionSnapshotError,       # noqa: E402
                                     describe as describe_positions,
                                     load_snapshot, reconcile)
+from realtime.market_calendar import (MarketCalendarError,      # noqa: E402
+                                      OPEN as MARKET_OPEN,
+                                      describe as describe_market,
+                                      load_holidays,
+                                      seconds_until_open,
+                                      session_phase)
 from realtime.regime_reader import (DEFAULT_STATE_FILE,          # noqa: E402
                                     RegimeStateError, get_all_regimes)
 
 DEFAULT_INTERVAL_S = 60
+
+#: The exit status that means "the exchange is shut and this was on purpose".
+#:
+#: NOT 0, and the difference is operational rather than cosmetic. The unit runs
+#: `Restart=always`, which restarts on a clean exit too, so a 0 here would put
+#: the process straight back up and hold 18 GB across the entire weekend it was
+#: told to release. A distinct code is what `RestartPreventExitStatus=` can
+#: name. It is also distinct from 2 (REFUSING TO START) and from 1 (the run had
+#: failures): "shut for the weekend", "misconfigured" and "degraded" are three
+#: different mornings for whoever reads `systemctl status`.
+#:
+#: `--closed-exit-code 0` exists for a caller that supervises differently.
+EXIT_MARKET_CLOSED = 3
+
+#: How long the startup wait may sit in front of a market that is about to
+#: open, before the process exits instead. The timer starts this unit at 17:55
+#: ET for an 18:00 open, so five minutes is the real case and thirty is slack.
+#: A WEEKEND is 49 hours and must never be waited out in memory, which is what
+#: bounding this buys.
+DEFAULT_OPEN_WAIT_S = 1800.0
 
 
 class ShutdownFlag:
@@ -240,6 +299,123 @@ def basket_symbols(dispatcher: LiveExecutionDispatcher) -> list[str]:
                    for asset in p["basket"]["assets"]})
 
 
+def rss_mb() -> float:
+    """
+    This process's resident set size in MB, from /proc, or 0.0 off Linux.
+
+    Read straight out of `/proc/self/statm` rather than through psutil: the
+    number is wanted in a shutdown path that must not be able to fail, and the
+    second field there is resident pages, which is the same thing `ps -o rss`
+    prints. It is EVIDENCE, not a control - nothing branches on it - and it is
+    on the console at the close so the growth this whole gate exists to bound
+    is a number somebody can read in a log rather than a claim.
+    """
+    try:
+        with open("/proc/self/statm", encoding="ascii") as fh:
+            pages = int(fh.read().split()[1])
+        import resource                                        # noqa: PLC0415
+        return pages * resource.getpagesize() / (1024 * 1024)
+    except Exception:                                          # noqa: BLE001
+        return 0.0
+
+
+def release_caches() -> str:
+    """
+    Drop what this process is knowingly holding, and say what it bought.
+
+    THIS IS NOT THE MECHANISM THAT FIXES THE MEMORY - exiting is. It is here
+    because the caches it clears are the ones this repository can NAME
+    (`mdlib.lake`'s four `lru_cache`s over the catalog, the coverage frame, the
+    degraded-day set and the roll dates), and because reporting RSS on both
+    sides of the collect turns "the loop leaks" into a measured before/after on
+    every close. If a future run shows the collect recovering most of 18 GB,
+    the leak is a reference this function can reach; if it recovers ~nothing,
+    it is fragmentation or an extension allocation and only exit will do -
+    which is what the 2026-09-06 measurement suggests and what nobody has
+    confirmed either way.
+
+    Never raises. A shutdown that failed while tidying up would lose the
+    position report printed after it, which is the part an operator needs.
+    """
+    before = rss_mb()
+    cleared = []
+    try:
+        from mdlib import lake                                  # noqa: PLC0415
+        for name in ("available_symbols", "coverage", "degraded_days",
+                     "roll_dates"):
+            fn = getattr(lake, name, None)
+            if fn is not None and hasattr(fn, "cache_clear"):
+                fn.cache_clear()
+                cleared.append(f"lake.{name}")
+    except Exception as exc:                                    # noqa: BLE001
+        cleared.append(f"lake caches NOT cleared ({type(exc).__name__}: {exc})")
+    collected = gc.collect()
+    after = rss_mb()
+    return (f"[master_live] caches released: {', '.join(cleared) or 'none'}; "
+            f"gc collected {collected} object(s); RSS {before:,.0f} MB -> "
+            f"{after:,.0f} MB. Only the exit below returns the rest to the "
+            f"machine.")
+
+
+def market_close_report(dispatcher: LiveExecutionDispatcher,
+                        engine_state: EngineState,
+                        phase: str, reason: str) -> str:
+    """
+    What is still open as the exchange shuts, stated rather than acted on.
+
+    Two independent records, and they are NOT the same thing:
+
+      * `dispatcher.positions` — what THIS PROCESS believes it holds, after the
+        last cycle reconciled it against the broker snapshot.
+      * `engine_state.open_claims()` — what this process SENT and has not seen
+        confirmed. A claim is not a position.
+
+    Both are printed because they can disagree, and a disagreement at the close
+    is the one worth looking at. NEITHER IS ACTED ON. A scheduler that
+    flattened at 17:00 would be making a trading decision on a clock, and would
+    do it on a Monday maintenance break as readily as on a Friday - so the
+    stand-down says what is held and stops.
+
+    The WEEKEND line is louder than the MAINTENANCE one on purpose: carrying
+    inventory through a 60-minute halt is ordinary, carrying it through 49
+    hours of gap risk with no process watching is a decision somebody should
+    have made deliberately.
+    """
+    lines = [f"[master_live] MARKET CLOSED — {phase}: {reason}."]
+    try:
+        held = dispatcher.positions.open_positions()
+    except Exception as exc:                                    # noqa: BLE001
+        held = []
+        lines.append(f"  position book UNREADABLE: {type(exc).__name__}: {exc}")
+    claims = engine_state.open_claims()
+
+    if held:
+        lines.append(f"  {len(held)} position(s) OPEN in this process's book:")
+        for rec in held[:10]:
+            lines.append(f"    {rec.get('portfolio_id')}/{rec.get('symbol')} "
+                         f"{rec.get('direction')} x{rec.get('quantity')}")
+    else:
+        lines.append("  position book: FLAT (nothing this process opened is "
+                     "still recorded open).")
+    if claims:
+        lines.append(f"  {len(claims)} UNVERIFIED claim(s) in "
+                     f"{engine_state.path} — sent, never confirmed. Reconcile "
+                     f"in NinjaTrader.")
+
+    if held or claims:
+        lines.append("  NOTHING IS BEING FLATTENED. Closing a position is a "
+                     "trading decision; this is a scheduler.")
+        if phase == "WEEKEND":
+            lines.append("  ^ THIS IS THE WEEKEND CLOSE. Inventory carried "
+                         "here is unwatched for ~49 hours and reopens on a "
+                         "Sunday gap. CrossTrade NAM is the only thing still "
+                         "governing the account until Sunday 18:00 ET.")
+    lines.append("  No sockets are held between cycles, and no resting entry "
+                 "order exists to cancel: every order this loop sends is a "
+                 "market order completed inside one call.")
+    return "\n".join(lines)
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="master_live.py",
@@ -334,6 +510,41 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--no-risk-firewall", action="store_true",
                     help="DISABLE the pre-trade risk gate. There is no good "
                          "reason to pass this against a live account")
+    # --- the market-hours gate -------------------------------------------
+    # OFF BY DEFAULT, and `deploy/systemd/trading-master-live.service` is what
+    # turns it on. A hand-run dry run at 17:30 wants a loop that keeps
+    # printing; a supervised process wants one that gets out of memory. The
+    # default is the one that surprises nobody at a console.
+    ap.add_argument("--halt-when-closed", action="store_true",
+                    help="EXIT when the CME is shut — the 17:00-18:00 ET "
+                         "daily maintenance halt, the Friday 17:00 ET weekend "
+                         "close, and any holiday $BT_CME_HOLIDAYS names — "
+                         "instead of idling through it. Exits with "
+                         f"--closed-exit-code (default {EXIT_MARKET_CLOSED}), "
+                         "which the unit file tells systemd not to restart "
+                         "on; the .timer starts it again before the open. "
+                         "Nothing is flattened and nothing is cancelled")
+    ap.add_argument("--open-wait-sec", type=float, default=DEFAULT_OPEN_WAIT_S,
+                    help="with --halt-when-closed, wait for an open that is "
+                         "this close rather than exiting "
+                         f"(default {DEFAULT_OPEN_WAIT_S:.0f}). It is what "
+                         "lets the timer start the unit at 17:55 for an 18:00 "
+                         "open. A longer closure is never waited out: the "
+                         "point of the gate is to stop holding memory")
+    ap.add_argument("--closed-exit-code", type=int,
+                    default=EXIT_MARKET_CLOSED,
+                    help=f"status to exit with when the market is shut "
+                         f"(default {EXIT_MARKET_CLOSED}). NOT 0: this unit "
+                         f"runs Restart=always, which restarts on a clean "
+                         f"exit too, so 0 would put the process straight back "
+                         f"up and hold its memory all weekend")
+    ap.add_argument("--holidays", default=None,
+                    help="CME holiday CSV (default $BT_CME_HOLIDAYS, else "
+                         "/mnt/backtest/reference/calendar/cme_holidays.csv). "
+                         "ABSENT IS NOT AN ERROR and no holiday is then "
+                         "modelled — a holiday nobody told us about costs one "
+                         "idle day, an invented one costs a trading day. A "
+                         "file that exists and does not parse REFUSES TO START")
     ap.add_argument("--no-verify-hash", action="store_true",
                     help="skip the meta.json SHA-256 check on strategy code. "
                          "Do not use this to trade an edited module")
@@ -398,6 +609,33 @@ def main(argv: list[str] | None = None) -> int:
         dry_run = resolve_dry_run(args)
     except ValueError as exc:
         parser.error(str(exc))
+
+    # THE HOLIDAY CALENDAR IS RESOLVED FIRST, and a bad one stops the process
+    # here. `load_holidays` returns {} for a MISSING file, which is not an
+    # error and means no holiday is modelled; it RAISES for a file that exists
+    # and does not parse. An operator who wrote that file meant to have
+    # holidays, and a live loop that silently traded a closed session because
+    # a comma was wrong is the failure they would never see. Loading it now,
+    # rather than at the first cycle boundary, is what makes the refusal a
+    # startup message instead of a 17:00 surprise.
+    #
+    # A BAD CALENDAR IS FATAL ONLY WHEN SOMETHING DEPENDS ON IT. With the gate
+    # armed, or with --holidays named explicitly, an unparseable file stops the
+    # process: the operator meant to have holidays and silently not having them
+    # is the failure they would never see. With neither, the calendar is
+    # decoration on a banner, and refusing to start a dry run over it would be
+    # the gate standing down a loop that was never going to consult it.
+    demands_holidays = bool(args.halt_when_closed or args.holidays)
+    try:
+        holidays = load_holidays(args.holidays)
+    except MarketCalendarError as exc:
+        if demands_holidays:
+            print(f"[master_live] REFUSING TO START: {exc}", file=sys.stderr)
+            return 2
+        print(f"[master_live] holiday calendar unreadable ({exc}); no holiday "
+              f"is modelled. The market-hours gate is not armed, so nothing "
+              f"here depends on it.", file=sys.stderr, flush=True)
+        holidays = {}
 
     # The durable record and the pre-trade gate, built BEFORE the dispatcher
     # so an unreadable state file stops the process here rather than at the
@@ -487,8 +725,54 @@ def main(argv: list[str] | None = None) -> int:
     shutdown = ShutdownFlag()
     shutdown.install()
 
+    # THE MARKET BANNER, printed whether or not the gate is armed. An operator
+    # reading "no signal" on every line at 02:00 on a Saturday needs the phase
+    # on the console; without it a closed exchange and a dead feed produce the
+    # same quiet log, which is the confusion the watchdog already exists to
+    # stop making people resolve by hand.
+    print(describe_market(holidays=holidays), flush=True)
+    if not args.halt_when_closed:
+        print("[master_live] market-hours gate DISABLED (no "
+              "--halt-when-closed): this process stays resident through the "
+              "close and keeps whatever memory it has grown.", flush=True)
+    else:
+        # THE PRE-OPEN WAIT, and it is bounded. The timer starts this unit at
+        # 17:55 ET for an 18:00 open so the dispatcher's load, the hash checks
+        # and the tag manifest are all done and REPORTED before the market is
+        # trading — a startup failure surfaces with five minutes to fix it
+        # rather than at the open. Anything longer than --open-wait-sec is not
+        # waited for at all: the cycle gate below then exits immediately,
+        # because sitting on a heap for 49 hours is the thing this gate was
+        # added to end.
+        wait = seconds_until_open(holidays=holidays)
+        if 0 < wait <= args.open_wait_sec:
+            print(f"[master_live] holding for the open: {wait / 60:.1f} min. "
+                  f"Everything above is already loaded; the first cycle runs "
+                  f"when the exchange does. Ctrl-C or SIGTERM stops the wait.",
+                  flush=True)
+            shutdown.sleep(wait + 2.0)          # +2s so 17:59:59.9 is not 18:00
+
     cycles = failures = 0
+    closed_phase: tuple[str, str] | None = None
     while True:
+        # THE MARKET GATE, at the top of the cycle and before the position
+        # book is touched. Standing down here rather than after
+        # `begin_cycle()` means the closed path mints no cycle token, reads no
+        # snapshot and evaluates no strategy: the last thing in the log is a
+        # complete cycle, exactly as it is for a signal.
+        if args.halt_when_closed:
+            phase, why = session_phase(holidays=holidays)
+            if phase != MARKET_OPEN:
+                closed_phase = (phase, why)
+                break
+        # A signal that arrived during the pre-open WAIT stops the process
+        # there. `cycles == 0` is what distinguishes it from a signal received
+        # mid-session, which must still finish the cycle it is in - the break
+        # at the bottom of the loop is the one that handles that, and this one
+        # must not pre-empt it.
+        if shutdown.requested and cycles == 0:
+            break
+
         cycles += 1
         # THE CYCLE TOKEN, AND IT IS MINTED HERE RATHER THAN IN
         # `process_bar_cycle`. That method runs once per TIMEFRAME BUCKET
@@ -658,11 +942,34 @@ def main(argv: list[str] | None = None) -> int:
         if shutdown.requested:
             break
 
-    reason = (f"{shutdown.signal_name}" if shutdown.requested
+    reason = (f"{closed_phase[0]}" if closed_phase
+              else f"{shutdown.signal_name}" if shutdown.requested
               else "--once" if args.once else "loop ended")
     print(f"[master_live] stopped after {cycles} cycle(s) ({reason}). "
           f"No sockets are held between cycles, so there is nothing to drain.",
           flush=True)
+
+    if closed_phase is not None:
+        # THE CLOSE, in this order: say what is held, then release, then exit.
+        # The report goes out FIRST because it is the part an operator needs
+        # and `release_caches` — however defensively written — is the part
+        # that touches other modules.
+        print(market_close_report(dispatcher, engine_state, *closed_phase),
+              flush=True)
+        print(release_caches(), flush=True)
+        if failures:
+            print(f"[master_live] {failures} failure(s) were recorded during "
+                  f"the session; the exit status reports the CLOSE, not them "
+                  f"— they are in the log above and in master_live.err.",
+                  flush=True)
+        reopen = seconds_until_open(holidays=holidays)
+        print(f"[master_live] exiting {args.closed_exit_code} so the "
+              f"supervisor leaves this stopped. Next open in "
+              f"{reopen / 3600:.1f}h; trading-master-live.timer brings it "
+              f"back. Restarting it by hand before then is fine — it will "
+              f"stand down again.", flush=True)
+        return int(args.closed_exit_code)
+
     return 1 if failures else 0
 
 
