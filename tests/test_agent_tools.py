@@ -716,11 +716,87 @@ def test_bridge_config_on_disk_is_loadable_and_complete():
     assert tools["portfolio_eval"]["writes"] is False
 
 
-def test_bridge_config_mirrors_the_live_honcho_connection():
+def test_bridge_config_mirrors_the_live_honcho_connection(monkeypatch):
     if not bridge.BRIDGE_CONFIG.exists() or not bridge.HONCHO_JSON.exists():
         pytest.skip("the bridge or honcho config is not installed on this host")
+    # `check()` calls Telegram for the forum flag; stubbed so this suite keeps
+    # its no-network property and does not go red on a flaky link.
+    monkeypatch.setattr(bridge, "telegram_chat_check",
+                        lambda config, timeout=15: (True, []))
     ok, lines = bridge.check()
     drift = [ln for ln in lines if "DRIFT" in ln]
     assert not drift, "bridge_config.yaml disagrees with honcho.json:\n" + \
         "\n".join(drift)
     _ = ok      # unset credentials are a separate, expected finding
+
+
+# --------------------------------------------------------------------------
+# bridge: the forum flag, which a successful send does not prove
+# --------------------------------------------------------------------------
+
+class _FakeResponse:
+    def __init__(self, payload: dict):
+        self._payload = payload
+
+    def read(self):
+        return json.dumps(self._payload).encode()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _stub_get_chat(monkeypatch, payload: dict | None, error: Exception | None = None):
+    import urllib.request
+
+    def fake_urlopen(url, timeout=None):
+        if error is not None:
+            raise error
+        return _FakeResponse(payload)
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+
+def _forum_config(chat_id: str = "-1004354636290") -> dict:
+    config = _bridge_config(chat_id)
+    config["telegram"]["bot_token"] = "123:FAKE"
+    return config
+
+
+def test_bridge_flags_thread_ids_on_a_non_forum_supergroup(monkeypatch):
+    # Telegram accepts a message_thread_id on a non-forum supergroup with
+    # ok:true and DISCARDS it. Every topic then lands in the main chat and
+    # nothing downstream reports an error, so this must be caught here.
+    _stub_get_chat(monkeypatch, {"ok": True, "result": {
+        "id": -1004354636290, "title": "Futures System", "type": "supergroup"}})
+    ok, lines = bridge.telegram_chat_check(_forum_config())
+    assert ok is False
+    assert any("topics are NOT enabled" in ln for ln in lines)
+    assert any("[2, 6, 8]" in ln for ln in lines)
+
+
+def test_bridge_accepts_thread_ids_on_a_real_forum(monkeypatch):
+    _stub_get_chat(monkeypatch, {"ok": True, "result": {
+        "id": -1004354636290, "title": "Futures System",
+        "type": "supergroup", "is_forum": True}})
+    ok, lines = bridge.telegram_chat_check(_forum_config())
+    assert ok is True
+    assert any("topics ENABLED" in ln for ln in lines)
+
+
+def test_bridge_treats_an_unreachable_api_as_unknown_not_failed(monkeypatch):
+    # A check that goes red on a flaky network teaches people to ignore it.
+    _stub_get_chat(monkeypatch, None, error=OSError("no route to host"))
+    ok, lines = bridge.telegram_chat_check(_forum_config())
+    assert ok is True
+    assert any("UNKNOWN, not confirmed" in ln for ln in lines)
+
+
+def test_bridge_skips_the_forum_check_without_credentials(monkeypatch):
+    config = _bridge_config(chat_id="")
+    config["telegram"]["bot_token"] = ""
+    ok, lines = bridge.telegram_chat_check(config)
+    assert ok is True
+    assert any("not checked" in ln for ln in lines)

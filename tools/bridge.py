@@ -301,10 +301,91 @@ def check(path: Path = BRIDGE_CONFIG) -> tuple[bool, list[str]]:
                              f"{want!r}, honcho.json says {actual!r}")
                 ok = False
 
+    # -- is the chat actually a forum? ------------------------------------
+    forum_ok, forum_lines = telegram_chat_check(config)
+    lines.extend(forum_lines)
+    ok = ok and forum_ok
+
     if missing:
         lines.append("  Unresolved references make the affected targets "
                      "unaddressable; nothing is sent with an empty id.")
     return ok, lines
+
+
+def telegram_chat_check(config: dict[str, Any],
+                        timeout: int = 15) -> tuple[bool, list[str]]:
+    """
+    Ask Telegram whether the chat is really a forum, because a lie here is silent.
+
+    `sendMessage` to a NON-forum supergroup with a `message_thread_id` returns
+    `ok: true` and drops the thread id on the floor - the reply carries
+    `message_thread_id: null` and the message lands in the main chat. Measured
+    on this account 2026-09-06.
+
+    Nothing downstream can see that. `hermes send` reports success, this
+    module's `send()` returns 0, the timer logs a delivered card, and all four
+    topics quietly collapse into one undifferentiated stream. That is the exact
+    shape of failure this repo exists to catch: every line reads correctly and
+    the routing is not happening.
+
+    So the forum flag is checked against the API rather than assumed from the
+    fact that a send succeeded.
+    """
+    import urllib.error                                          # noqa: PLC0415
+    import urllib.parse                                          # noqa: PLC0415
+    import urllib.request                                        # noqa: PLC0415
+
+    lines: list[str] = []
+    telegram = config.get("telegram") or {}
+    token = str(telegram.get("bot_token") or "").strip()
+    chat_id = str(telegram.get("chat_id") or "").strip()
+    if not token or not chat_id:
+        lines.append("  telegram    not checked — bot token or chat id unset")
+        return True, lines
+
+    query = urllib.parse.urlencode({"chat_id": chat_id})
+    url = f"https://api.telegram.org/bot{token}/getChat?{query}"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            payload = json.load(response)
+    except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
+        # Not reachable is not the same as not a forum. Reported, not failed:
+        # a check that goes red on a flaky network teaches people to ignore it.
+        lines.append(f"  telegram    could not reach the API ({exc}); the "
+                     f"forum flag is UNKNOWN, not confirmed")
+        return True, lines
+
+    if not payload.get("ok"):
+        lines.append(f"  telegram    getChat refused: "
+                     f"{payload.get('description', 'no reason given')}")
+        return False, lines
+
+    chat = payload.get("result") or {}
+    is_forum = bool(chat.get("is_forum"))
+    lines.append(f"  telegram    {chat.get('title')!r} "
+                 f"({chat.get('type')}, id {chat.get('id')})")
+
+    topics = telegram.get("topics") or {}
+    threads = {t.get("thread_id") for t in topics.values()
+               if t.get("thread_id") is not None}
+    if is_forum:
+        lines.append(f"  telegram    topics ENABLED — {len(threads)} distinct "
+                     f"thread id(s) in the registry are addressable")
+        return True, lines
+
+    if not threads:
+        lines.append("  telegram    topics are not enabled, and the registry "
+                     "declares no thread ids — consistent")
+        return True, lines
+
+    lines.append(
+        f"  PROBLEM     topics are NOT enabled on this supergroup, but the "
+        f"registry routes to thread id(s) {sorted(threads)}. Telegram accepts "
+        f"those sends with ok:true and DISCARDS the thread id, so every topic "
+        f"lands in the main chat and nothing reports an error. Enable Topics "
+        f"on the group, then re-read the real thread ids — the ones here have "
+        f"never been confirmed against this chat.")
+    return False, lines
 
 
 def discover() -> tuple[bool, list[str]]:
