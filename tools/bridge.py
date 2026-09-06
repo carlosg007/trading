@@ -51,6 +51,18 @@ from typing import Any
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+from mdlib.env import load_env                                     # noqa: E402
+
+# The repo's `.env`, loaded the way every other entrypoint here loads it -
+# filling only names this process has not already set, so an explicit
+# `TELEGRAM_FORUM_CHAT_ID=... bridge.py send` still wins. This module's own
+# reader below handles `~/.hermes/.env`, which is a DIFFERENT file: Hermes owns
+# that one and the gateway writes it. Both feed `environment()`; the process
+# environment beats both.
+load_env()
+
 HERMES_HOME = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
 BRIDGE_CONFIG = HERMES_HOME / "bridge_config.yaml"
 HERMES_ENV = HERMES_HOME / ".env"

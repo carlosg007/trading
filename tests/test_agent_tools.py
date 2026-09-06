@@ -827,8 +827,14 @@ def test_bridge_still_threads_every_non_general_topic():
         "telegram:-1001234567890:19"
 
 
-def test_bridge_live_registry_routes_four_distinct_destinations():
-    """The installed registry must not collapse two agents onto one thread."""
+def test_bridge_live_registry_routes_distinct_destinations():
+    """The installed registry must not collapse two agents onto one thread.
+
+    Deliberately counts rather than naming a number: roll-alerts shared
+    system-health's thread until it got its own, and backtest-lab was added
+    later still. A test pinned to "four" would have had to be edited on each
+    of those and is one more thing to get wrong.
+    """
     if not bridge.BRIDGE_CONFIG.exists():
         pytest.skip(f"{bridge.BRIDGE_CONFIG} is not installed on this host")
     config, _ = bridge.load(strict=False)
