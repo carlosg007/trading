@@ -131,6 +131,9 @@ from backtest.pipeline import (  # noqa: E402
     HOLDOUT_START,
     STAGE2_SUMMARY_FILE,
     STAGE3_SUMMARY_FILE,
+    STAGE45,
+    STAGE45_SUMMARY_FILE,
+    DOW_GATE_FILE,
     leaderboard,
     artifacts_root,
     pipeline_dir,
@@ -145,6 +148,10 @@ STAGE_SCRIPTS = {
     2: BACKTEST / "scan.py",
     3: BACKTEST / "audit_gates.py",
     4: BACKTEST / "verify_full.py",
+    # Keyed on the integer stage id `pipeline.STAGE45` stamps into the
+    # handoff, not on 4.5: `write_stage` writes `int(stage)` and a float key
+    # here would truncate to 4 and collide with the lifecycle stage above.
+    STAGE45: BACKTEST / "dow_gate.py",
 }
 DISCORD_SCRIPT = BACKTEST / "discord_reporter.py"
 PROMOTE_SCRIPT = BACKTEST / "promote.py"
@@ -322,6 +329,39 @@ def stage4_cmd(strat: str, tf: str, start: str, end: str,
     return cmd
 
 
+def stage45_cmd(strat: str, tf: str, start: str, end: str,
+                out_dir: str | None = None,
+                min_trades: int | None = None,
+                block_worst_always: bool = False) -> list[str]:
+    """
+    Stage 4.5: the day-of-week gate for one timeframe.
+
+    THE SAME WINDOW AS STAGE 4, and passed rather than defaulted for that
+    reason. The two stages describe the same bars, so the weekday table here
+    and the one Stage 4's tear sheet prints are statements about one run; a
+    different window would produce two day-of-week tables of the same strategy
+    that disagree, with nothing on either saying why.
+
+    `--ml` is deliberately NOT passed, unlike Stage 4's. This stage runs
+    Version A only - the question is about the calendar, and a classifier
+    refitting per completed trade would double the stage's cost to answer it.
+    Which version was measured is on the handoff.
+
+    ONE TIMEFRAME per invocation, as with Stages 3 and 4: the blocked weekday
+    is a fact about one (symbol, timeframe) pair, and the per-pair file is
+    named for both.
+    """
+    cmd = _py() + [str(STAGE_SCRIPTS[STAGE45]), "--strat", strat, "--tf", tf,
+                   "--start", start, "--end", end]
+    if min_trades is not None:
+        cmd += ["--min-trades", str(int(min_trades))]
+    if block_worst_always:
+        cmd += ["--block-worst-always"]
+    if out_dir:
+        cmd += ["--out-dir", out_dir]
+    return cmd
+
+
 def discord_cmd(strat: str, stage: int, dry_run: bool = False,
                 out_dir: str | None = None) -> list[str]:
     """The card for one stage, read from that stage's own handoff."""
@@ -374,10 +414,32 @@ def post_card(strat: str, stage: int, *, out_dir: str | None = None,
     return rc
 
 
+def dow_gate_file(strat: str, symbol: str, timeframe: str,
+                  out_dir: str | None = None) -> Path | None:
+    """
+    This PAIR's Stage 4.5 verdict, or None when the stage did not cover it.
+
+    The SUFFIXED name only, and there is no unsuffixed fallback - the same
+    rule `auto_promote` follows for gate audits, for the same reason. A
+    campaign certifies one strategy at several timeframes and each has its own
+    weakest session; a file that dropped the timeframe would hold whichever
+    ran last while every promotion cited it, and each meta.json would carry a
+    plausible weekday with two of them wrong.
+
+    None rather than a guessed path, so `promote_cmd` omits the flag and
+    `promote.py` records `NOT EVALUATED` - which is what actually happened.
+    """
+    path = (pipeline_dir(strat, out_dir)
+            / DOW_GATE_FILE.format(symbol=str(symbol).upper(),
+                                   tf=str(timeframe).lower()))
+    return path if path.exists() else None
+
+
 def promote_cmd(strat: str, version: str, source: str | Path,
                 audit_file: str | Path, symbol: str,
                 timeframe: str,
-                metrics: str | Path | None = None) -> list[str]:
+                metrics: str | Path | None = None,
+                dow_gate: str | Path | None = None) -> list[str]:
     """
     Stage 5 for ONE certified configuration.
 
@@ -397,6 +459,14 @@ def promote_cmd(strat: str, version: str, source: str | Path,
                    "--timeframe", timeframe, "--require-certification"]
     if metrics:
         cmd += ["--metrics", str(metrics)]
+    # PASSED EXPLICITLY rather than left to promote.py's own lookup, even
+    # though the two resolve to the same file. `--out-dir` moves the pipeline
+    # directory and the promotion command is the artifact an operator re-runs
+    # by hand; a flag naming the file is reproducible, and a lookup that
+    # silently found nothing under a relocated root would record NOT EVALUATED
+    # on a pair that was profiled.
+    if dow_gate:
+        cmd += ["--dow-gate", str(dow_gate)]
     return cmd
 
 
@@ -838,6 +908,17 @@ def build_parser() -> argparse.ArgumentParser:
                          f"kept (default {ML_THRESHOLD_DEFAULT}). Forwarded "
                          f"to every stage, so one run cannot screen, certify "
                          f"and measure at three different bars"))
+    p.add_argument("--dow-min-trades", type=int, default=None, metavar="N",
+                   help="Stage 4.5: a weekday must place at least this many "
+                        "trades before it can be condemned (default 20, "
+                        "backtest/dow_gate.py). A day below the floor is "
+                        "listed and never ranked — cutting a session on a "
+                        "thinner sample is how a day-of-week filter "
+                        "manufactures an in-sample Sharpe.")
+    p.add_argument("--dow-block-worst-always", action="store_true",
+                   help="Stage 4.5: block the worst weekday even when its "
+                        "expectancy is POSITIVE. Off by default; being fifth "
+                        "of five is not evidence against a session.")
     p.add_argument("--report-discord", action="store_true",
                    help="Post the Discord card after Stages 1, 2 and 3")
     p.add_argument("--auto-promote", action="store_true",
@@ -940,6 +1021,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"  timeframes  {', '.join(tfs)}\n"
         f"  discord     {'yes' if args.report_discord else 'no'}\n"
         f"  auto-promote {'yes (certified only)' if args.auto_promote else 'no'}\n"
+        f"  stage 4.5   day-of-week gate, "
+        f"{'block worst always' if args.dow_block_worst_always else 'block only a negative expectancy'}"
+        f" (floor {args.dow_min_trades or 20} trades)\n"
         f"  NOTE  the stages are designed not to chain; this run reads no\n"
         f"        evidence between them."))
 
@@ -1043,6 +1127,35 @@ def main(argv: Sequence[str] | None = None) -> int:
         # Card 4 after every timeframe, for the same reason Card 3 waits: it
         # reads ONE run's artifacts directory and defaults to the newest.
         discord(4)
+
+        # STAGE 4.5, BETWEEN THE LIFECYCLE RUN AND THE PROMOTION.
+        #
+        # Here rather than earlier because it profiles the SAME window Stage 4
+        # ran, and before Stage 5 because Stage 5 is what writes the blocked
+        # weekday into the promoted meta.json - run after it, the verdict
+        # would land in the pipeline directory one promotion too late and the
+        # live loop would trade the session until somebody re-promoted.
+        #
+        # `check=False`, unlike Stages 1-4. Those are a chain: a stage that
+        # failed has not written the handoff the next one reads. This one is
+        # not - it produces an INSTRUCTION for the live supervisor, and
+        # nothing downstream needs it to exist. A day-of-week profiler that
+        # raised must not discard certifications that already cleared Gate R;
+        # the promotion proceeds and every affected package records
+        # `day_of_week_gate.status: NOT EVALUATED`, which is exactly what
+        # happened.
+        for tf in certify_tfs:
+            rc45 = run_step(
+                stage45_cmd(strat, tf, args.start, _today(), out_dir,
+                            min_trades=args.dow_min_trades,
+                            block_worst_always=args.dow_block_worst_always),
+                f"STAGE 4.5 · dow_gate.py · day-of-week gate {tf}",
+                dry_run=dry, check=False)
+            if rc45:
+                print(f"  WARNING  Stage 4.5 exited {rc45} at {tf}. Packages "
+                      f"promoted below will record NO blocked weekday for "
+                      f"the pairs it did not profile; nothing else is "
+                      f"affected.", file=sys.stderr, flush=True)
     except subprocess.CalledProcessError as e:
         print(f"\nABORTED: {' '.join(str(c) for c in e.cmd)} exited "
               f"{e.returncode}.", file=sys.stderr)
@@ -1209,8 +1322,16 @@ def auto_promote(strat: str, *, out_dir: str | None = None,
         print(f"  METRICS  {record['symbol']} {record['timeframe']}: "
               + (f"{metrics_basis}" if metrics
                  else f"NOT RECORDED · {metrics_basis}"))
+        dow = dow_gate_file(strat, record["symbol"], record["timeframe"],
+                            out_dir)
+        record["dow_gate_file"] = str(dow) if dow else None
+        if dow is None:
+            print(f"  DOW GATE {record['symbol']} {record['timeframe']}: "
+                  f"NOT EVALUATED — stage 4.5 left no verdict for this pair, "
+                  f"so no weekday is blocked on the promoted package.")
         cmd = promote_cmd(strat, record["version"], source, audit,
-                          record["symbol"], record["timeframe"], metrics)
+                          record["symbol"], record["timeframe"], metrics,
+                          dow_gate=dow)
         rc = run_step(cmd, f"PROMOTE {record['symbol']} {record['timeframe']} "
                            f"version {record['version']}", check=False)
         if rc:

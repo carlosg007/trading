@@ -75,8 +75,9 @@ if str(PROJECT_ROOT) not in sys.path:
     # root, so mdlib is not importable until this runs.
     sys.path.insert(0, str(PROJECT_ROOT))
 from mdlib.env import discord_webhook, load_env                    # noqa: E402
-from backtest.pipeline import (ML_THRESHOLD_DEFAULT,               # noqa: E402
-                               base_strategy, strategy_id)
+from backtest.pipeline import (DOW_GATE_FILE, ML_THRESHOLD_DEFAULT,  # noqa: E402
+                               STAGE45, base_strategy, pipeline_dir,
+                               read_stage, strategy_id)
 
 load_env()
 # ---------------------------------------------------------------------------
@@ -498,6 +499,104 @@ def risk_settings(params: dict) -> dict[str, Any]:
     return out
 
 
+#: What `meta["day_of_week_gate"]["status"]` says when Stage 4.5 never ran for
+#: this pair. WRITTEN, never omitted, and deliberately not an empty list: an
+#: absent key reads as a field nobody filled in, and `[]` reads as "the stage
+#: looked at the week and found nothing to block". Those are different facts,
+#: and `realtime/live_dispatcher.py` keeps them apart on the way back in.
+DOW_NOT_EVALUATED = "NOT EVALUATED"
+
+
+def load_dow_gate(strat: str, symbol: str | None, timeframe: str | None,
+                  path: Path | None = None,
+                  out_dir: str | Path | None = None) -> dict[str, Any]:
+    """
+    Stage 4.5's verdict for ONE pair, as the block that goes into meta.json.
+
+    `strategies/approved_incubator/<id>/meta.json` is the only file the live
+    loop reads about a promoted package, so this is where the blocked weekday
+    has to land - a verdict left in the pipeline directory is one the
+    dispatcher would have to go looking for, keyed on a strategy id it would
+    have to split apart first.
+
+    THE FILE IS PER (SYMBOL, TIMEFRAME) AND SO IS THE LOOKUP. There is no
+    unsuffixed `dow_gate_<SYMBOL>.json` to fall back to, on purpose:
+    `t3_braid_scalp_20260823` certified NQ at 15m, 30m and 1h, and an
+    unsuffixed file would hold whichever timeframe ran last while all three
+    promotions read it. Every meta.json would then carry a plausible weekday
+    and two of them would be wrong, with nothing raising.
+
+    Three outcomes, and the middle one is the reason this returns a dict
+    rather than an integer:
+
+        no file            `{"status": "NOT EVALUATED", ...}` - Stage 4.5 was
+                           not run for this pair. Nothing is blocked and the
+                           record says why.
+        file, no block     `blocked_weekdays: []` under `status: "EVALUATED"` -
+                           the stage ran and every session cleared.
+        file, one block    `blocked_weekdays: [4]`.
+
+    A file that cannot be read is reported as `status: "UNREADABLE"` with the
+    error, and blocks nothing. It is NOT raised: a certification that cleared
+    Gate R must not be thrown away because a day-of-week artifact was
+    truncated by a killed run, and a package promoted with the gate off and
+    the reason on its own meta.json is recoverable by re-running Stage 4.5.
+    """
+    if path is None:
+        if not symbol or not timeframe:
+            return {"status": DOW_NOT_EVALUATED, "blocked_weekdays": [],
+                    "blocked_weekday": None, "source": None,
+                    "reason": ("this promotion is not scoped to a (symbol, "
+                               "timeframe) pair, so there is no Stage 4.5 "
+                               "verdict to attach")}
+        base = pipeline_dir(base_strategy(strat), out_dir)
+        path = base / DOW_GATE_FILE.format(symbol=str(symbol).upper(),
+                                           tf=str(timeframe).lower())
+    path = Path(path)
+    if not path.exists():
+        return {"status": DOW_NOT_EVALUATED, "blocked_weekdays": [],
+                "blocked_weekday": None, "source": str(path),
+                "reason": (f"{path.name} does not exist. Stage 4.5 "
+                           f"(backtest/dow_gate.py) was not run for this "
+                           f"pair; no weekday is blocked and none was "
+                           f"cleared.")}
+    try:
+        blob = read_stage(path, STAGE45, base_strategy(strat))
+    except Exception as e:                                        # noqa: BLE001
+        return {"status": "UNREADABLE", "blocked_weekdays": [],
+                "blocked_weekday": None, "source": str(path),
+                "reason": f"{type(e).__name__}: {e}"}
+
+    day = blob.get("blocked_weekday")
+    verdict = blob.get("verdict") or {}
+    return {
+        "status": "EVALUATED",
+        # A LIST, even though the stage names at most one weekday. The live
+        # handle reads a list, `exclude_days` is a list everywhere else in
+        # this repository, and a scalar that some readers treat as a set is
+        # how a second blocked day would silently be dropped later.
+        "blocked_weekdays": ([] if day is None else [int(day)]),
+        "blocked_weekday": (None if day is None else int(day)),
+        "blocked_day": blob.get("blocked_day"),
+        "blocked_day_name": blob.get("blocked_day_name"),
+        # The worst session is carried even when it was NOT blocked. "Friday
+        # was the weakest week and still made money" is the finding that
+        # explains an empty block list, and without it the two look identical.
+        "worst_weekday": verdict.get("worst_weekday"),
+        "worst_day": verdict.get("worst_day"),
+        "block_rule": verdict.get("block_rule"),
+        "min_trades": verdict.get("min_trades"),
+        "reason": verdict.get("reason"),
+        "selected_in_sample": bool(blob.get("selected_in_sample", True)),
+        "note": ("The weekday was chosen in-sample, on a window that spans "
+                 "the Stage 3 holdout. It is a live-supervision instruction, "
+                 "not evidence: no gate was scored on it and nothing was "
+                 "pruned for it."),
+        "source": str(path),
+        "source_sha256": sha256(path),
+    }
+
+
 # --------------------------------------------------------------------------
 # Writing
 # --------------------------------------------------------------------------
@@ -515,6 +614,8 @@ def promote(strat: str,
             force: bool = False,
             commit: bool = True,
             require_certification: bool = False,
+            dow_gate: Path | None = None,
+            out_dir: str | Path | None = None,
             incubator: Path = INCUBATOR) -> dict[str, Any]:
     """Write the promoted strategy directory and return what was written."""
     version = version.upper()
@@ -725,6 +826,23 @@ def promote(strat: str,
 
     warnings = audit_notes(source) + pair_notes
 
+    # Read AFTER `scope_symbol`/`tf` have been resolved, because the verdict
+    # is keyed on the pair and resolving it from `--symbol`/`--timeframe`
+    # alone would miss the ones that came off the certification.
+    # `scope_tf` first, not `tf`: `tf` was bound before the certification's
+    # own pair was resolved above and falls back to the MODULE's preferred
+    # timeframe, which is not necessarily the pair Stage 4.5 profiled.
+    dow_block = load_dow_gate(strat, scope_symbol, scope_tf or tf,
+                              path=dow_gate, out_dir=out_dir)
+    if dow_block["status"] == "UNREADABLE":
+        # Recorded as a warning rather than raised. A certification that
+        # cleared Gate R is not thrown away because a day-of-week artifact was
+        # truncated; the package is promoted with the gate OFF and the reason
+        # on its own meta.json, which is recoverable by re-running Stage 4.5.
+        warnings.append(f"Stage 4.5 verdict could not be read "
+                        f"({dow_block['reason']}); no weekday is blocked for "
+                        f"this package.")
+
     meta = {
         # The PAIR's id: the directory name, the id in `active_strategies`,
         # and what `--strat` names on the Stage 5 card. `strategy` beside it is
@@ -751,6 +869,17 @@ def promote(strat: str,
         # has one and this run modelled no take-profit. Those are different
         # facts about what a live account would be running.
         "risk": risk_settings(merged_params),
+        # STAGE 4.5's BLOCKED WEEKDAY, and it is what the live loop acts on.
+        # `realtime/live_dispatcher.py` reads this key and nothing else about
+        # the calendar; `DOW_GATE_KEY` there and this spelling are the same
+        # string, and a rename on one side alone turns the gate off silently -
+        # the block would never be found, the strategy would trade the session
+        # it was stood down from, and every log line would read correctly.
+        #
+        # Written on EVERY promotion, including one where Stage 4.5 never ran,
+        # because an absent key reads as a field nobody filled in while
+        # `status: "NOT EVALUATED"` says plainly that no weekday was profiled.
+        "day_of_week_gate": dow_block,
         "source": source.as_posix(),
         "source_sha256": source_sha,
         "promoted_sha256": promoted_sha,
@@ -2269,6 +2398,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--force", action="store_true",
                    help="Promote even when the gate audit did not pass. "
                         "Recorded in meta.json.")
+    p.add_argument("--dow-gate", default=None, metavar="PATH",
+                   help="dow_gate_<SYMBOL>_<TF>.json from stage 4.5 "
+                        "(backtest/dow_gate.py). Omitted, it is looked up at "
+                        "the conventional path for THIS pair; a missing file "
+                        "records `day_of_week_gate.status: NOT EVALUATED` "
+                        "rather than an empty block list, because 'nobody "
+                        "looked' and 'every session cleared' are different "
+                        "facts and the live loop keeps them apart.")
     p.add_argument("--no-commit", action="store_true",
                    help="Write the files but do not touch git")
     p.add_argument("--portfolio", default=None,
@@ -2339,6 +2476,7 @@ def main(argv: list[str] | None = None) -> int:
         threshold=args.threshold, notes=args.notes,
         variants_tested=args.variants_tested, force=args.force,
         require_certification=args.require_certification,
+        dow_gate=Path(args.dow_gate) if args.dow_gate else None,
         commit=not args.no_commit)
 
     meta = out["meta"]
@@ -2363,6 +2501,19 @@ def main(argv: list[str] | None = None) -> int:
     print("  risk           "
           + ", ".join(f"{k}={'no take-profit modelled' if k == 'tp_atr_mult' and v is None else v}"
                       for k, v in risk.items()))
+    # THE BLOCKED WEEKDAY, ON THE PROMOTION LINE. It is a standing
+    # restriction on a live account and the operator reading this output is
+    # the last human in the chain; printed nowhere, the first anybody would
+    # know of it is a Friday with no orders.
+    dow = meta["day_of_week_gate"]
+    if dow.get("blocked_weekdays"):
+        print(f"  day-of-week    BLOCKED {dow['blocked_day_name']} "
+              f"(weekday {dow['blocked_weekday']}) — {dow.get('reason', '')}")
+    elif dow.get("status") == "EVALUATED":
+        print(f"  day-of-week    no session blocked "
+              f"(worst was {dow.get('worst_day') or 'not identified'})")
+    else:
+        print(f"  day-of-week    {dow.get('status')} — {dow.get('reason', '')}")
     print(f"  metrics        {meta['metrics_status']}")
     print(f"  gate audit     {meta['gate_audit_status']}"
           + ("  (OVERRIDDEN with --force)" if meta["gates_overridden"] else ""))
