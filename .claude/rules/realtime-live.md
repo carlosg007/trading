@@ -1,6 +1,6 @@
 ---
 name: realtime-live
-description: "The live regime daemon, the reader, the CrossTrade formatters, the live execution loop and the only module that puts an order on the wire."
+description: "The live regime daemon, the reader, the CrossTrade formatters, the live execution loop, the day-of-week gate and the only module that puts an order on the wire."
 paths:
   - "realtime/**"
   - "master_live.py"
@@ -299,6 +299,77 @@ that produced no entry and is never counted as an approval.
   that existed for one millisecond inside a process that has exited. With no
   state file every signal is declined, which is correct: an unknown environment
   is not a permitted one.
+- **STAGE 4.5's DAY-OF-WEEK GATE, added 2026-09-06.** `StrategyHandle` reads
+  `meta["day_of_week_gate"]` (the constant is `DOW_GATE_KEY`, spelled once and
+  shared with `backtest/promote.py` — a rename on one side alone turns the
+  gate off silently, the block never found and every log line reading
+  correctly) and `_evaluate` declines the (strategy, symbol) before any signal
+  is emitted. Nothing below that line produces a signal, so no payload, no
+  netting and no webhook exists for that strategy on a blocked session.
+  - **IT GATES THE FILL BAR, NOT THE LAST CLOSED ONE.** This loop acts on the
+    last CLOSED bar and the engine fills at the NEXT bar's open, which is why
+    `backtest.event_calendar._widen_to_fill_bar` blocks a backtest signal one
+    bar early. Keyed on the closed bar the live gate would let exactly one
+    trade through per week — the one signalled at 17:45 ET on Thursday and
+    filled into Friday's session, which is both the least visible outcome and
+    precisely the trade the block exists to stop. `session_weekday_for_fill`
+    computes it from the bars and NOT from `datetime.now()`, so a cycle
+    delayed by a slow read cannot change which weekday it thinks it is, and
+    the record carries BOTH weekdays because an operator reading a stand-down
+    at 17:55 on a Thursday has to see which is which.
+  - **The session rule is `backtest.event_calendar.session_date`, imported.**
+    CME runs each session to 17:00 ET and reopens at 18:00, so any bar at or
+    after 18:00 ET belongs to the NEXT day's session. There are no bars in the
+    maintenance break, so the 17:00 rollover an operator describes and the
+    18:00 rule every backtest was computed on pick the same weekday for every
+    bar that exists — and using the backtest's own function is what guarantees
+    a live stand-down and a backtest exclusion can never disagree about which
+    day it is.
+  - **PER STRATEGY, AND APPLIED EXACTLY ONCE.** The regime gate is
+    deliberately checked twice — here and in `build_order_plan` — and this one
+    is NOT, because the two have different granularity. A regime is a fact
+    about a SYMBOL, so the netted plan can re-check it and reach the same
+    verdict. A blocked weekday is a fact about one promoted PAIR: sixteen
+    strategies net into one NQ position, and re-applying this rule at the plan
+    level would stand every contributor down on one strategy's blocked day.
+  - **The exit is computed BEFORE the gate and is never muted.** A position
+    opened on Thursday has to be closeable on a blocked Friday; a gate that
+    swallowed the exit would strand inventory, which is the expensive
+    direction to be wrong in.
+  - **THREE STATES, and they are not collapsed.** No `day_of_week_gate` key at
+    all is a package promoted before the stage existed; `blocked_weekdays: []`
+    is Stage 4.5 saying every session cleared; `[4]` is a block. A weekday
+    outside 0-6 RAISES and the package fails to load, rather than being
+    dropped — dropped, the gate is simply off and every log line still reads
+    correctly.
+  - **AN UNRESOLVED SESSION IS PERMITTED, and recorded.** The gate needs a bar
+    WIDTH to locate the fill bar; a cycle that delivered one bar is a fact
+    about the FRAME, not evidence about the weekday, and standing the roster
+    down on it would mute everything whenever a feed hiccuped — which looks
+    exactly like a quiet market. It lands on `report["dow_unresolved"]` and
+    prints as `DOW?`, because a gate that degraded to permissive and a gate
+    with nothing to say are otherwise identical.
+  - **It is recorded as a DECLINE carrying `rule: "blocked_weekday"`**, not as
+    a fifth report bucket: `evaluated_signals` is derived as signals +
+    declines + ml_vetoes + errors on the guarantee that every evaluation
+    terminates in exactly one of them, and a new list would have to join that
+    sum in the same edit or the summary would silently undercount the roster.
+    `describe_cycle` prints it as `DOW` rather than `HOLD` — "the market left
+    the certified quadrant" and "this pair is stood down all session by a rule
+    somebody wrote" are fixed by different work, and one of them is not a
+    fault at all. `describe()` puts the block on the roster line before the
+    first cycle.
+  - **`session_weekday_for_fill` is computed PER SYMBOL, once per cycle.**
+    Contracts do not have to be in step: a lagging feed leaves one symbol's
+    newest closed bar an interval behind the others, and on a Friday afternoon
+    that is the difference between filling into Friday's session and into
+    Monday's.
+  - **`scripts/check_strategy_days.py` (`days-check`) is where the two files
+    are joined.** `meta.json` is written at PROMOTION time and never revisited,
+    so a package promoted before Stage 4.5 ran for its pair trades the session
+    it was stood down from — invisible to `bt-inventory` and `signal-check`,
+    each of which reads one of the two files and never both.
+
 - **The regime is checked twice and the two cannot disagree.** Once per
   (strategy, symbol) before a signal is emitted — so a decline is recorded
   against the STRATEGY with its reason rather than disappearing into an empty
@@ -571,6 +642,12 @@ python3 data_pull/databento_live.py --symbol NQ --minutes 120
 python3 master_live.py --dry-run --interval-sec 30
 python3 master_live.py --interval-sec 60           # ALSO A DRY RUN
 python3 master_live.py --live --interval-sec 60    # LIVE. SENDS REAL ORDERS.
+
+# WHICH WEEKDAYS EACH PROMOTED PACKAGE MAY TRADE, and whether its meta.json
+# still agrees with the stage 4.5 verdict on disk. meta.json is what this loop
+# reads and it is written at promotion time and never revisited. Read-only.
+python3 scripts/check_strategy_days.py            # or: days-check
+python3 scripts/check_strategy_days.py --strat X --json
 #   --config/--state-file  the routing table and the published regime state
 #   --live                 send real orders. Without it nothing reaches the
 #                          wire; --dry-run and --live together are REFUSED

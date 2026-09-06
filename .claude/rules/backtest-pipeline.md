@@ -1,11 +1,12 @@
 ---
 name: backtest-pipeline
-description: "The five-stage pipeline: Stage 1 regime firewall, Stage 2 sweep charter, Stage 3 Gate R certification, Stage 4 lifecycle, Stage 5 promotion, temporal chunking and the dual-version gate tables."
+description: "The five-stage pipeline: Stage 1 regime firewall, Stage 2 sweep charter, Stage 3 Gate R certification, Stage 4 lifecycle, Stage 4.5 the day-of-week gate, Stage 5 promotion, temporal chunking and the dual-version gate tables."
 paths:
   - "backtest/baseline.py"
   - "backtest/scan.py"
   - "backtest/audit_gates.py"
   - "backtest/verify_full.py"
+  - "backtest/dow_gate.py"
   - "backtest/pipeline.py"
   - "backtest/promote.py"
   - "backtest/run_pipeline.py"
@@ -15,6 +16,8 @@ paths:
   - "tests/test_batch_runner.py"
   - "tests/test_temporal_chunking.py"
   - "tests/test_report_gates.py"
+  - "tests/test_dow_gate.py"
+  - "scripts/check_strategy_days.py"
 ---
 
 # The five-stage pipeline
@@ -775,6 +778,93 @@ one built from the wrong one would describe a different run.
   each bar another bar's slippage, wrong in every trade and invisible in a
   total. A non-finite or negative value in that column RAISES.
 
+**`backtest/dow_gate.py`** — **Stage 4.5**, added 2026-09-06 at operator
+instruction. Profiles every configuration Stage 2 left parameters for by
+WEEKDAY, names the worst session, runs a counterfactual with that weekday's
+entries suppressed, and writes the verdict where the live loop can read it.
+Runs on Stage 4's own window (`--start`/`--end` are passed by the orchestrator,
+not defaulted) so the two stages describe the same bars.
+
+- **IT PRUNES NOTHING, and the rule is a FUNCTION rather than an absence.**
+  `promotion_gate()` returns `promote: True` for every verdict, with the
+  criterion as a string on the row. Everything reaching this stage advances to
+  Stage 5 whatever the weekday table said. What the stage produces is an
+  INSTRUCTION for the live supervisor — the same division Stage 1's regime
+  firewall draws, and for the same reason: the weekday is chosen in-sample on
+  bars Stage 3 already spent, and pruning on it would drop configurations Gate
+  R certified on the strength of a calendar. `selected_in_sample: true` and
+  `is_certification: false` are on every file it writes.
+- **This RE-INSTATES as a LIVE GATE what Stage 1 demoted to descriptive on
+  2026-08-20.** The Drop Unprofitable Days contract was removed because which
+  weekday loses is largely a restatement of which REGIME that weekday falls
+  in, and pruning the calendar masked the environment instead of naming it.
+  Nothing about that reasoning is retracted: the difference is that this
+  verdict never touches the SEARCH — no sweep is masked, no gate is scored on
+  it, nothing is dropped — it only stands a promoted pair down live.
+- **The worst weekday is always IDENTIFIED; it is BLOCKED only when its
+  expectancy is negative.** Two answers, deliberately kept apart. Five
+  profitable weekdays have a worst one too, and blocking it removes realised
+  edge in exchange for nothing — "fifth of five" is not evidence against a
+  session. `--block-worst-always` overrides that and is recorded as
+  `block_rule: "worst_always"`; what it must not be is the silent default.
+  Collapsing the two fields would make "every weekday made money"
+  indistinguishable from "the stage did not run".
+- **The rank is expectancy ascending, ties on win rate ascending, then on the
+  largest share of the deepest drawdown.** Expectancy is the mean NET P&L per
+  trade — the metric a trade decision is made on and the one the
+  counterfactual moves — and it is computed ONCE under that name rather than
+  twice beside `avg_pnl`, which is arithmetically the same number.
+- **A weekday below `--min-trades` (default 20) is NEVER ranked**, however
+  badly it scored, and is listed in `below_floor` with its count. That floor
+  is `backtest.report.losing_weekdays`', for its reason: a weekday holds a
+  fifth of the sample and condemning one on eight trades is precisely how a
+  day-of-week filter manufactures an in-sample Sharpe. A run where nothing
+  reaches the floor blocks nothing and says so.
+- **The grouping is `report.day_of_week_breakdown`'s, imported.** That function
+  already owns the two decisions that change the answer — attribution by the
+  ENTRY, keyed on the CME SESSION date — and a second grouping here would be
+  free to disagree with the day-of-week table Stage 1 and Stage 4 already
+  print, with both summing to the same totals. The DAILY realised-return table
+  beside it is keyed on the EXIT date, because that is when a return is
+  realised and that is the index `BacktestResult.returns` carries; the two are
+  reported side by side and never reconciled, and the decision is taken on the
+  ENTRY table because the entry is what the gate acts on.
+- **`max_dd_contribution` is a share of the run's DEEPEST episode, not a
+  per-weekday drawdown.** A weekday has no equity curve of its own, and five
+  drawdowns over five disjoint slices are five numbers that sum to nothing.
+  The episode is located on the trade-by-trade equity curve in REALISATION
+  order and every trade inside it is attributed to its ENTRY weekday. Shares
+  can total more than 100% because profitable weekdays inside the episode
+  offset the losing ones; that is printed rather than normalised away.
+- **The counterfactual is Version A, over the SAME bars, differing only in
+  `cfg.exclude_days`.** `ml=False`: the question is about the calendar, and a
+  classifier refitting per completed trade would double the stage to answer
+  it. **The report carries the candidate count, never the trade count alone** —
+  a filter removes candidate TRIGGERS and the walk holds one position at a
+  time, so declining an early trigger can leave the strategy flat for a later
+  one it would have been holding through, and a trade count that went UP is
+  not evidence the filter failed to bind.
+- **Two files leave the stage.** `dow_gate_<SYMBOL>_<TF>.json` per pair is the
+  AUTHORITATIVE verdict and `stage45_dow_summary.json` is the index over them,
+  the division Stage 3 draws between its audits and its summary. The per-pair
+  name carries the TIMEFRAME and there is **no unsuffixed form**: a blocked
+  weekday is a fact about one (symbol, timeframe) pair, and an unsuffixed file
+  would hold whichever timeframe ran last while every promotion cited it —
+  each `meta.json` carrying a plausible weekday with two of them wrong. The
+  summary MERGES across timeframes for the same reason Stage 3's does.
+  `pipeline.stage45_blocked_days` is the one place that mapping is read back,
+  keyed per pair exactly as `stage1_exclude_days` is. The handoff's stage id is
+  the INTEGER `pipeline.STAGE45` (45) rather than 4.5, because `write_stage`
+  stamps `int(stage)` and a float would truncate to 4 and make every Stage 4.5
+  file satisfy a Stage 4 `read_stage` check; `STAGE_LABELS` is what spells
+  "4.5" in the banner.
+- **The orchestrator runs it under `check=False`**, unlike Stages 1-4. Those
+  are a chain — a stage that failed has not written the handoff the next one
+  reads. This one is not: nothing downstream needs it to exist, and a
+  day-of-week profiler that raised must not discard certifications that
+  already cleared Gate R. The affected packages record
+  `day_of_week_gate.status: "NOT EVALUATED"`, which is what actually happened.
+
 **`backtest/promote.py`** — **Stage 5**. Promotes one version into
 `strategies/approved_incubator/<strat>/` and commits it. See the workflow below.
 
@@ -952,6 +1042,23 @@ Version B — and commits that directory alone.
   `"NOT DECLARED"` — the strategy has no such parameter; `null` — it has one
   and this run modelled it off, which for `tp_atr_mult` means no take-profit at
   all; or the value.
+- **`day_of_week_gate` is Stage 4.5's verdict, and it is what the live loop
+  acts on.** `strategies/approved_incubator/<id>/meta.json` is the only file
+  `realtime/live_dispatcher.py` reads about the calendar, so the blocked
+  weekday has to land there; a verdict left in the pipeline directory is one
+  the dispatcher would have to go looking for. `load_dow_gate` finds the
+  per-pair file at the conventional path, `--dow-gate` names one explicitly,
+  and the orchestrator passes it explicitly so a relocated `--out-dir` cannot
+  silently record NOT EVALUATED on a pair that was profiled. **THREE STATES,
+  kept apart exactly as the `risk` block keeps its three**: `status: "NOT
+  EVALUATED"` (Stage 4.5 did not run for this pair — written, never omitted),
+  `blocked_weekdays: []` under `EVALUATED` (it ran and every session cleared),
+  and `[4]`. An unreadable verdict is `UNREADABLE` and blocks nothing, as a
+  warning rather than a refusal: a certification that cleared Gate R is not
+  thrown away because a day-of-week artifact was truncated. **The key spelling
+  is shared with `live_dispatcher.DOW_GATE_KEY`** — a rename on one side alone
+  turns the gate off silently, the block simply never found and every log line
+  reading correctly.
 - **Version A is promoted byte for byte** and its SHA-256 recorded, so the
   promoted file provably *is* the file that was backtested. A strategy cleaned
   up on the way through is a different strategy.
@@ -1002,8 +1109,29 @@ python3 backtest/audit_gates.py --strat X --tf 15m \
     --regime-min-pf 1.25 --regime-min-trades 50   # tighten Gate R's bars
 python3 backtest/verify_full.py --strat X --tf 15m \
     --start 2010-01-01 --end 2026-01-01       # 4: tear sheets + cost drag
+python3 backtest/dow_gate.py    --strat X --tf 15m \
+    --start 2010-01-01 --end 2026-01-01       # 4.5: the day-of-week gate
+# STAGE 4.5 ONLY: names the worst weekday, runs the counterfactual, and
+# writes dow_gate_<SYMBOL>_<TF>.json for stage 5 to put into the promoted
+# meta.json. It PRUNES NOTHING - every configuration advances - and it
+# certifies nothing: the weekday is chosen IN-SAMPLE, on a window that spans
+# the stage 3 holdout. The worst session is always NAMED and is BLOCKED only
+# when its expectancy is negative; --block-worst-always blocks it regardless
+# and says so on the handoff. --min-trades is the floor a weekday must clear
+# to be ranked at all (default 20).
+python3 backtest/dow_gate.py --strat X --tf 15m --min-trades 40
+python3 backtest/dow_gate.py --strat X --tf 15m --block-worst-always
 python3 backtest/promote.py --strat X --version A --source <module.py> \
-    --audit-file /mnt/backtest/artifacts/pipeline/X/gate_audit_NQ_15m.json  # 5
+    --audit-file /mnt/backtest/artifacts/pipeline/X/gate_audit_NQ_15m.json \
+    --dow-gate /mnt/backtest/artifacts/pipeline/X/dow_gate_NQ_15m.json  # 5
+
+# WHICH WEEKDAYS EACH PROMOTED PACKAGE MAY ACTUALLY TRADE, and whether its
+# meta.json still agrees with the stage 4.5 verdict on disk. meta.json is
+# written at PROMOTION time and never revisited, so a package promoted before
+# stage 4.5 ran trades the session it was stood down from with every log line
+# reading correctly. Read-only; exits 1 on a DISAGREEMENT only.
+python3 scripts/check_strategy_days.py            # or: days-check
+python3 scripts/check_strategy_days.py --strat X --json
 ```
 
 ```bash

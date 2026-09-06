@@ -9,9 +9,10 @@ looks right and fails in live markets.** Almost every rule below is a defence
 against curve-fitting or silent data corruption.
 
 Scoped detail lives in `.claude/rules/` and loads when you open the matching
-files — the engine contract, the five pipeline stages, the Discord cards, mdlib
-and the lake, realtime/live execution, portfolio routing, strategy modules,
-agents. This file is only what applies everywhere.
+files — the engine contract, the five pipeline stages (plus Stage 4.5's
+day-of-week gate), the Discord cards, mdlib and the lake, realtime/live
+execution, portfolio routing, strategy modules, agents. This file is only what
+applies everywhere.
 
 ---
 
@@ -123,6 +124,19 @@ task.
   downstream: the strategy is stood down in the environment it was certified for
   and turned loose in the one it never traded, with every log line reading
   correctly.
+- **Stage 4.5's blocked weekday reaches the live loop through ONE key,
+  `meta.json`'s `day_of_week_gate`.** `backtest/promote.py` writes it and
+  `realtime/live_dispatcher.py` reads it; a rename on one side alone turns the
+  gate off silently — the block is simply never found and every log line reads
+  correctly. Three states are kept apart end to end and must not be collapsed:
+  no key at all (promoted before the stage existed), `blocked_weekdays: []`
+  (the stage ran and every session cleared), and a blocked day. The live gate
+  keys on the **FILL** bar's session weekday, not the last closed bar's,
+  because the engine fills at the next bar's open — keyed on the closed bar it
+  would let through exactly the Thursday-evening signal that fills into
+  Friday's session. Stage 4.5 **prunes nothing**: every configuration advances
+  to Stage 5, and the weekday is an instruction for the live supervisor rather
+  than evidence about an edge.
 - **Trades are attributed by their ENTRY bar / ENTRY session, never the exit or
   a later bar** — regime quadrant, friction, and day-of-week alike. The live loop
   acts on the **last CLOSED bar** while the engine fills at the **next bar's
@@ -194,7 +208,9 @@ strat-perf   # = .venv/bin/python3 ~/src/trading/scripts/report_strategy_perform
 perf-report  # the same tool
 strat-tags   # = .venv/bin/python3 ~/src/trading/scripts/strategy_tag_manifest.py
 tag-manifest # the same tool
-             # (all eighteen from deploy/shell/trading_helpers.sh)
+days-check   # = .venv/bin/python3 ~/src/trading/scripts/check_strategy_days.py
+strat-days   # the same tool
+             # (all twenty from deploy/shell/trading_helpers.sh)
 ```
 
 ## Working style
