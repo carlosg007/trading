@@ -49,11 +49,17 @@ from realtime.contract_resolver import (                          # noqa: E402
 #: calendar. Pinned rather than "now" so this suite does not start failing on
 #: a date nobody changed anything on.
 #:
-#: The earliest roll in the table is the rates complex at 2026-08-31, which is
-#: what fixes this to the thirty-first: 2026-09-01 was the first choice and
-#: the ZB case failed on it, correctly - the guard had already rolled the
-#: rates and the fixture was the thing that was wrong.
-IN_WINDOW = "2026-08-31T12:00:00Z"
+#: The earliest roll in the table is now the index complex at 2026-09-10,
+#: which is what fixes this to the tenth. It was 2026-08-31 while the rates
+#: complex still held that slot; when the rates were rolled to DEC26 this
+#: moved with them, and the ZB expectation below moved from SEP26 to DEC26.
+#: That coupling is the point: this fixture tracks the table, and when the two
+#: disagree it is the fixture that is wrong.
+#:
+#: Note it also sits one day inside the table's own `valid_until`
+#: (2026-09-10T23:59:59Z). Both expiries have to be refreshed together at the
+#: index roll.
+IN_WINDOW = "2026-09-10T12:00:00Z"
 
 
 @pytest.fixture(scope="module")
@@ -78,7 +84,7 @@ def _table(tmp_path: Path, contracts: dict, valid_until: str) -> Path:
     ("6E", "6E SEP26"),       # FX, quarterly
     ("6J", "6J SEP26"),
     ("HO", "HO OCT26"),       # energy, monthly
-    ("ZB", "ZB SEP26"),       # rates, quarterly
+    ("ZB", "ZB DEC26"),       # rates, quarterly - rolled off SEP26 2026-09-06
     ("ZC", "ZC DEC26"),       # grains, own cycle
 ])
 def test_roots_map_to_their_active_contract(resolver, root, expected):

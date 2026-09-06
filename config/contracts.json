@@ -31,12 +31,12 @@
     "NG":   { "active_contract": "NG OCT26",   "next_contract": "NG NOV26",   "roll_date": "2026-09-25" },
     "RB":   { "active_contract": "RB OCT26",   "next_contract": "RB NOV26",   "roll_date": "2026-09-30" },
     "LE":   { "active_contract": "LE OCT26",   "next_contract": "LE DEC26",   "roll_date": "2026-10-01" },
-    "ZB":   { "active_contract": "ZB SEP26",   "next_contract": "ZB DEC26",   "roll_date": "2026-08-31" },
-    "ZN":   { "active_contract": "ZN SEP26",   "next_contract": "ZN DEC26",   "roll_date": "2026-08-31" },
-    "ZF":   { "active_contract": "ZF SEP26",   "next_contract": "ZF DEC26",   "roll_date": "2026-08-31" },
-    "ZT":   { "active_contract": "ZT SEP26",   "next_contract": "ZT DEC26",   "roll_date": "2026-08-31" },
+    "ZB":   { "active_contract": "ZB DEC26",   "next_contract": "ZB MAR27",   "roll_date": "2026-11-25" },
+    "ZN":   { "active_contract": "ZN DEC26",   "next_contract": "ZN MAR27",   "roll_date": "2026-11-25" },
+    "ZF":   { "active_contract": "ZF DEC26",   "next_contract": "ZF MAR27",   "roll_date": "2026-11-25" },
+    "ZT":   { "active_contract": "ZT DEC26",   "next_contract": "ZT MAR27",   "roll_date": "2026-11-25" },
     "ZC":   { "active_contract": "ZC DEC26",   "next_contract": "ZC MAR27",   "roll_date": "2026-11-25" },
     "ZS":   { "active_contract": "ZS NOV26",   "next_contract": "ZS JAN27",   "roll_date": "2026-10-25" },
-    "ZW":   { "active_contract": "ZW SEP26",   "next_contract": "ZW DEC26",   "roll_date": "2026-08-31" }
+    "ZW":   { "active_contract": "ZW DEC26",   "next_contract": "ZW MAR27",   "roll_date": "2026-11-25" }
   }
 }
