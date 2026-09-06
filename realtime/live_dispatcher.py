@@ -272,6 +272,107 @@ def resolve_credentials(crosstrade_url: str | None = None,
 # --------------------------------------------------------------------------
 # strategy handles
 # --------------------------------------------------------------------------
+#: How a promoted `meta.json` spells the Stage 4.5 verdict. One constant,
+#: because `backtest/promote.py` writes this key and this module reads it, and
+#: a rename on one side alone silently turns every gate off: the block would
+#: simply never be found, every log line would read correctly, and the strategy
+#: would trade the session it was stood down from.
+DOW_GATE_KEY = "day_of_week_gate"
+
+#: What that block says when Stage 4.5 was never run for the pair. NOT an
+#: empty list - "the stage looked and blocked nothing" and "nobody looked" are
+#: different facts, and an empty list reads as the first.
+DOW_NOT_EVALUATED = "NOT EVALUATED"
+
+
+def named_weekdays(days) -> str:
+    """
+    `(4,)` -> `Friday`. Spelled out, because `4` in a log line is unreadable.
+
+    The names are Monday-first to match `datetime.weekday()`, which is what
+    `backtest.event_calendar.session_weekday` returns and what every
+    `exclude_days` in this repository is written in. A Sunday-first table here
+    would move every stand-down by a day while both files still parsed.
+    """
+    names = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
+             "Saturday", "Sunday")
+    return ", ".join(names[int(d)] for d in days) or "no weekday"
+
+
+def session_weekday_for_fill(bars, timeframe: str | None = None
+                             ) -> dict[str, Any]:
+    """
+    The CME session weekday an order placed on this cycle would FILL on.
+
+    THE FILL BAR, NOT THE LAST CLOSED ONE, and the difference is the whole
+    reason this is a function rather than a `.dayofweek`. The live loop acts
+    on the last CLOSED bar; the engine fills at the NEXT bar's open, and
+    `backtest.event_calendar._widen_to_fill_bar` blocks a signal on bar `i`
+    whenever bar `i+1` falls inside the blocked window - precisely so the one
+    entry signalled just before the window opens does not get through. A live
+    gate keyed on the last closed bar would let exactly that trade out, on the
+    last bar of Thursday's session filling into Friday's, which is both the
+    least visible outcome and the one trade the block exists to stop.
+
+    THE SESSION, NOT THE CALENDAR DAY. `backtest.event_calendar.session_date`
+    is the one rule, imported rather than restated: CME runs each session to
+    17:00 ET and reopens at 18:00, so any bar at or after 18:00 ET belongs to
+    the NEXT day's session. There are no bars in the 17:00-18:00 maintenance
+    break, so the 17:00 rollover an operator describes and the 18:00 rule the
+    backtests were computed on select the same weekday for every bar that
+    exists - and using the backtest's own function is what guarantees a live
+    stand-down and a backtest exclusion can never disagree about which day it
+    is.
+
+    The bar width comes from `realtime.feed.tf_delta`, which reads
+    `mdlib.lake.DERIVED` - so the width used here is the width the bar was
+    built at. An UNKNOWN timeframe is reported as unknown rather than guessed:
+    the caller decides what to do with that, and this module's answer is to
+    let the strategy through (see `StrategyHandle.trades_session_weekday`).
+
+    Returns a record rather than an int, because both weekdays belong on the
+    cycle report: `last_bar_weekday` is what the strategy DECIDED on and
+    `fill_weekday` is what it would trade, and an operator reading a
+    stand-down at 17:55 on a Thursday has to be able to see which is which.
+    """
+    from realtime.feed import infer_timeframe, tf_delta            # noqa: PLC0415
+
+    out: dict[str, Any] = {
+        "last_bar_ts": None, "last_bar_weekday": None,
+        "fill_bar_ts": None, "fill_weekday": None,
+        "timeframe": timeframe, "resolved": False, "reason": "",
+    }
+    if bars is None or len(bars) == 0:
+        out["reason"] = "no bars in this cycle"
+        return out
+
+    from backtest.event_calendar import session_weekday            # noqa: PLC0415
+
+    last = pd.to_datetime(
+        bars["ts"].iloc[-1] if "ts" in getattr(bars, "columns", [])
+        else bars.index[-1], utc=True)
+    out["last_bar_ts"] = str(last)
+    out["last_bar_weekday"] = int(session_weekday([last])[0])
+
+    tf = timeframe or infer_timeframe(bars)
+    out["timeframe"] = tf
+    if not tf:
+        out["reason"] = ("the bar width could not be measured, so the fill "
+                         "bar cannot be located")
+        return out
+    try:
+        width = tf_delta(tf)
+    except Exception as exc:                                      # noqa: BLE001
+        out["reason"] = f"unknown timeframe {tf!r}: {exc}"
+        return out
+
+    fill = last + width
+    out["fill_bar_ts"] = str(fill)
+    out["fill_weekday"] = int(session_weekday([fill])[0])
+    out["resolved"] = True
+    return out
+
+
 class StrategyHandle:
     """
     One promoted strategy, bound to one portfolio, ready to be asked for a
@@ -316,6 +417,96 @@ class StrategyHandle:
         # `ma_anchoring_spread_20260820` splits to a symbol of `spread` at a
         # timeframe of `20260820` under any left-to-right rule.
         self.certified_timeframe = self._resolve_timeframe(strategy_id, meta)
+        # THE WEEKDAYS STAGE 4.5 STOOD THIS PAIR DOWN ON.
+        #
+        # Per STRATEGY, read off this package's own meta.json, and never a
+        # process-wide setting. Sixteen strategies trade NQ inside
+        # Incubator-Odd and they were profiled separately; one global blocked
+        # weekday would stand fifteen of them down on a session their own
+        # tables say they make money on, and the console would show a quiet
+        # market rather than a policy.
+        self.blocked_weekdays, self.dow_gate = self._resolve_blocked_weekdays(meta)
+
+    @staticmethod
+    def _resolve_blocked_weekdays(meta: dict) -> tuple[tuple[int, ...], dict]:
+        """
+        `meta["day_of_week_gate"]` -> the weekday integers, and the block itself.
+
+        THREE STATES, KEPT APART, exactly as the `risk` block keeps its three:
+
+            key absent, or "NOT EVALUATED"  Stage 4.5 never ran for this pair.
+                                            Nothing is blocked and the record
+                                            says WHY - which is not the same
+                                            statement as a stage that ran and
+                                            found no losing session.
+            blocked_weekday: null           the stage ran and blocked nothing.
+            blocked_weekday: 4              Friday entries are stood down.
+
+        A value outside 0-6 RAISES rather than being dropped. Dropped, the gate
+        is simply off and every log line reads correctly; raised, the package
+        fails to load and somebody fixes the file. A weekday nobody can read is
+        not a weekday to trade through.
+        """
+        block = meta.get(DOW_GATE_KEY)
+        if not isinstance(block, dict):
+            return (), {"status": DOW_NOT_EVALUATED,
+                        "reason": ("meta.json carries no `day_of_week_gate`; "
+                                   "Stage 4.5 did not run for this pair")}
+        raw = block.get("blocked_weekdays")
+        if raw is None:
+            one = block.get("blocked_weekday")
+            raw = [] if one is None else [one]
+        if isinstance(raw, str):
+            # "NOT EVALUATED" reaching the integer parse below would come out
+            # as a TypeError three frames away from the file that caused it.
+            return (), {**block, "status": str(raw)}
+        days: list[int] = []
+        for value in raw:
+            d = int(value)
+            if not 0 <= d <= 6:
+                raise LiveDispatchError(
+                    f"meta.json blocks weekday {value!r}; weekdays are 0-6 "
+                    f"(Mon-Sun). Read as anything else this stands a strategy "
+                    f"down on a day nobody profiled.")
+            days.append(d)
+        return tuple(sorted(set(days))), dict(block)
+
+    def trades_session_weekday(self, session: dict | None
+                               ) -> tuple[bool, str]:
+        """
+        Whether this strategy may open a position in the session an order
+        would FILL into.
+
+        The weekday twin of `trades_symbol` and `trades_timeframe`, and it
+        returns the same `(permitted, why)` pair so the caller records one
+        shape whichever scope refused.
+
+        AN UNRESOLVED SESSION IS PERMITTED, with a note, and that is the
+        deliberate direction. The gate needs the bar width to locate the fill
+        bar; a cycle that delivered one bar, or a timeframe this repository
+        cannot build, is a fact about the FRAME rather than evidence about the
+        weekday, and standing a strategy down on it would mute the roster
+        every time a feed hiccuped - a failure that looks exactly like a quiet
+        market. The regime gate takes the opposite view because an unknown
+        environment is genuinely not a permitted one; an unknown bar width is
+        not an unknown weekday.
+        """
+        if not self.blocked_weekdays:
+            return True, ""
+        if not session or not session.get("resolved"):
+            return True, (f"blocked on "
+                          f"{named_weekdays(self.blocked_weekdays)}, but this "
+                          f"cycle's fill session could not be resolved "
+                          f"({(session or {}).get('reason', 'no session record')})")
+        fill = int(session["fill_weekday"])
+        if fill not in self.blocked_weekdays:
+            return True, ""
+        return False, (
+            f"Stage 4.5 blocked {named_weekdays(self.blocked_weekdays)} for this "
+            f"pair; an entry on this cycle fills into the "
+            f"{named_weekdays((fill,))} session "
+            f"(bar {session.get('fill_bar_ts')}). Entries are suppressed and "
+            f"no order is built; exits are unaffected.")
 
     @staticmethod
     def _resolve_timeframe(strategy_id: str, meta: dict) -> str | None:
@@ -746,7 +937,38 @@ class LiveExecutionDispatcher:
             # empty cycle carries the keys rather than omitting them.
             "indicators": [], "indicator_errors": [],
             "timeframe_skipped": [],
+            # Strategies carrying a Stage 4.5 blocked weekday that were let
+            # through because this cycle's fill session could not be resolved.
+            # On the report because a gate that degraded to permissive and a
+            # gate that had nothing to say produce the same absence of
+            # declines, and they are different facts about the account.
+            "dow_unresolved": [],
+            # Per-symbol: which session an order placed on this cycle would
+            # FILL into. Filled in immediately below.
+            "sessions": {},
         }
+
+        # WHICH SESSION AN ORDER FROM THIS CYCLE WOULD FILL INTO, per symbol.
+        #
+        # Computed ONCE per cycle rather than per (strategy, symbol): every
+        # strategy in this bucket is handed the same frames, so a
+        # per-strategy recomputation could only produce the same answer more
+        # slowly - or a different one, if a cycle straddled a session roll
+        # while it ran, which is the failure mode a shared record removes.
+        #
+        # PER SYMBOL and not once for the bucket, because the contracts do not
+        # have to be in step: a lagging feed leaves one symbol's newest closed
+        # bar an interval behind the others, and on a Friday afternoon that is
+        # exactly the difference between filling into Friday's session and
+        # into Monday's. Taking whichever frame happened to be first in the
+        # map would give every other contract that symbol's weekday.
+        #
+        # Off the BARS and not `datetime.now()` for the same reason the loop
+        # acts on the last CLOSED bar: a cycle delayed by a slow lake read
+        # must not change which weekday it thinks it is.
+        report["sessions"] = {
+            sym: session_weekday_for_fill(frame, timeframe)
+            for sym, frame in symbol_bar_map.items()}
 
         if not self.strategies:
             report["declines"].append({
@@ -979,6 +1201,55 @@ class LiveExecutionDispatcher:
         # nothing traded: "flat" and "flat because the fast RSI sat at 48 all
         # session" send an operator to different places.
         self._record_telemetry(handle, symbol, bars, bar_ts, direction, report)
+
+        # ---- STAGE 4.5's DAY-OF-WEEK GATE ------------------------------
+        #
+        # AFTER the exit above and BEFORE every entry gate below. Both halves
+        # are the contract: `_record_exit` has already run, so a position
+        # opened on Thursday is still closeable on a blocked Friday - a gate
+        # that muted the exit too would strand inventory, which is the
+        # expensive direction to be wrong in - and nothing below this line
+        # produces a signal, so no payload, no netting and no webhook exists
+        # for this strategy on a blocked session.
+        #
+        # THE GATE IS PER STRATEGY AND IS APPLIED EXACTLY ONCE, HERE. The
+        # regime gate is deliberately checked twice - once here and once
+        # inside `build_order_plan` - and this one is NOT, because the two
+        # gates have different granularity. A regime is a fact about a SYMBOL,
+        # so the netted plan can re-check it and reach the same verdict. A
+        # blocked weekday is a fact about ONE PROMOTED PAIR: sixteen
+        # strategies net into one NQ position, and re-applying this rule at
+        # the plan level would stand every contributor on that pair down on
+        # one strategy's blocked day. That is the global lock this gate exists
+        # to avoid.
+        #
+        # It is recorded as a DECLINE rather than as a new report bucket.
+        # `evaluated_signals` is derived as signals + declines + ml_vetoes +
+        # errors on the guarantee that every evaluation terminates in exactly
+        # one of them; a fifth list would have to be added to that sum in the
+        # same edit or the summary would silently undercount the roster. The
+        # `rule` key is what makes it findable - "blocked_weekday" and "the
+        # market left the quadrant" are different investigations.
+        session = (report.get("sessions") or {}).get(symbol) or {}
+        allowed_day, day_why = handle.trades_session_weekday(session)
+        if not allowed_day:
+            decline(day_why, rule="blocked_weekday",
+                    blocked_weekdays=list(handle.blocked_weekdays),
+                    fill_weekday=session.get("fill_weekday"),
+                    fill_bar_ts=session.get("fill_bar_ts"),
+                    last_bar_weekday=session.get("last_bar_weekday"))
+            return
+        if day_why:
+            # PERMITTED, but not silently: this strategy HAS a blocked weekday
+            # and the fill session could not be resolved, so it is trading on
+            # the fallback rather than on a verdict. Recorded on the report
+            # because a gate that quietly degraded to off is the one nobody
+            # notices.
+            report["dow_unresolved"].append({
+                "strategy_id": handle.strategy_id,
+                "portfolio_id": handle.portfolio_id,
+                "symbol": symbol, "reason": day_why,
+                "blocked_weekdays": list(handle.blocked_weekdays)})
 
         if symbol in missing:
             decline(f"no live regime reading: {missing[symbol]}")
@@ -1780,8 +2051,22 @@ class LiveExecutionDispatcher:
             lines.append(f"       VETO {v['strategy_id']} {v['symbol']} "
                          f"{v['direction']} — ML gate declined")
         for d in report["declines"]:
-            lines.append(f"       HOLD {d.get('strategy_id')} "
+            # A BLOCKED WEEKDAY GETS ITS OWN VERB. `HOLD` is what every other
+            # decline prints, and an operator scanning a Friday log for "why
+            # is nothing trading" needs to separate "the market left the
+            # certified quadrant" from "this pair is stood down all session by
+            # a rule somebody wrote". They are fixed by completely different
+            # work, and one of them is not a fault at all.
+            verb = "DOW " if d.get("rule") == "blocked_weekday" else "HOLD"
+            lines.append(f"       {verb} {d.get('strategy_id')} "
                          f"{d.get('symbol')} — {d['reason']}")
+        for u in report.get("dow_unresolved") or []:
+            # A GATE THAT DEGRADED TO PERMISSIVE, said out loud. This strategy
+            # carries a blocked weekday and was let through because the fill
+            # session could not be resolved; printed nowhere it is
+            # indistinguishable from a cycle the gate had nothing to say about.
+            lines.append(f"       DOW? {u['strategy_id']} {u['symbol']} — "
+                         f"{u['reason']}")
         # AFTER the verdicts, so the decision reads first and the numbers
         # behind it read second. One line per (strategy, symbol) evaluated,
         # carrying whatever that module declares - see `_record_telemetry`.
@@ -1848,9 +2133,15 @@ class LiveExecutionDispatcher:
             lines.append("  ACTIVE STRATEGIES: none — `active_strategies` is "
                          "empty, so this loop will place no orders.")
         for h in self.strategies:
+            # THE BLOCKED WEEKDAY IS ON THE ROSTER LINE, printed before the
+            # first cycle. It is a standing restriction on an account, and an
+            # operator who does not know it is there reads Friday's empty log
+            # as a market with no setups.
+            dow = (f"  dow=BLOCKED {named_weekdays(h.blocked_weekdays)}"
+                   if h.blocked_weekdays else "")
             lines.append(f"  {h.strategy_id:<34} -> {h.portfolio_id:<15} "
                          f"({h.account})  sl={h.sl_atr_mult} tp={h.tp_atr_mult} "
-                         f"certified={list(h.certified_symbols)}")
+                         f"certified={list(h.certified_symbols)}{dow}")
         for e in self.strategy_errors:
             lines.append(f"  FAILED TO LOAD {e['strategy_id']} "
                          f"({e['portfolio_id']}): {e['error']}")
