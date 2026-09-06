@@ -332,18 +332,58 @@ def test_order_and_expansion(tmp: Path) -> None:
                              "--tf", "15m,30m", "--out-dir", str(tmp)])
     seq = runner.scripts()
     check("exits 0", rc == 0, f"rc={rc}")
-    check("stages run 1 -> 2 -> 3 -> 4 in order",
+    check("stages run 1 -> 2 -> 3 -> 4 -> 4.5 in order",
           seq == ["baseline.py", "scan.py", "audit_gates.py", "audit_gates.py",
-                  "verify_full.py", "verify_full.py"], str(seq))
+                  "verify_full.py", "verify_full.py",
+                  "dow_gate.py", "dow_gate.py"], str(seq))
     check("Stage 3 runs once per surviving timeframe",
           [flag_value(c, "--tf") for c in runner.for_script("audit_gates.py")]
           == ["15m", "30m"])
     check("Stage 4 runs once per surviving timeframe",
           [flag_value(c, "--tf") for c in runner.for_script("verify_full.py")]
           == ["15m", "30m"])
+    # STAGE 4.5 RUNS AFTER STAGE 4 AND BEFORE ANY PROMOTION. Before Stage 5
+    # because Stage 5 is what writes the blocked weekday into the promoted
+    # meta.json; run after it, the verdict would land in the pipeline
+    # directory one promotion too late and the live loop would trade the
+    # session until somebody re-promoted.
+    check("Stage 4.5 runs once per surviving timeframe",
+          [flag_value(c, "--tf") for c in runner.for_script("dow_gate.py")]
+          == ["15m", "30m"])
+    check("Stage 4.5 profiles the SAME window Stage 4 ran",
+          [(flag_value(c, "--start"), flag_value(c, "--end"))
+           for c in runner.for_script("dow_gate.py")]
+          == [(flag_value(c, "--start"), flag_value(c, "--end"))
+              for c in runner.for_script("verify_full.py")])
+    # Version A only: the question is about the calendar, and a classifier
+    # refitting per completed trade would double the stage to answer it.
+    check("Stage 4.5 does not run Version B",
+          all("--ml" not in c for c in runner.for_script("dow_gate.py")))
     check("no Discord card without --report-discord",
           "discord_reporter.py" not in seq)
     check("no promotion without --auto-promote", "promote.py" not in seq)
+
+
+def test_a_failing_stage45_does_not_abort_the_run(tmp: Path) -> None:
+    """
+    STAGE 4.5 IS NOT A LINK IN THE CHAIN. Stages 1-4 run under `check=True`
+    because each reads the previous one's handoff, so continuing past a
+    failure would report an earlier run's artifacts as this one's result.
+    Stage 4.5 produces an INSTRUCTION for the live supervisor and nothing
+    downstream needs it to exist - so a day-of-week profiler that raised must
+    not discard certifications that already cleared Gate R. The affected
+    packages record `day_of_week_gate.status: NOT EVALUATED`, which is exactly
+    what happened.
+    """
+    print("\n9b. Stage 4.5 failing is a warning, not an abort")
+    write_stage2(tmp, [s2row("NQ", "15m")])
+    write_stage3(tmp, [s3row("NQ", "15m")])
+
+    runner = FakeRunner(fail_on={"dow_gate.py": 3})
+    rc = _main_with(runner, ["--strat", STRAT, "--symbols", "NQ",
+                             "--tf", "15m", "--out-dir", str(tmp)])
+    check("the run still exits 0", rc == 0, f"rc={rc}")
+    check("stage 4.5 was attempted", "dow_gate.py" in runner.scripts())
 
 
 def test_skips_unsurvived_timeframe(tmp: Path) -> None:
@@ -784,6 +824,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
         test_order_and_expansion(tmp)
+        test_a_failing_stage45_does_not_abort_the_run(tmp)
         test_skips_unsurvived_timeframe(tmp)
         test_stops_when_nothing_survived(tmp)
         test_discord_strict_sequential_order(tmp)

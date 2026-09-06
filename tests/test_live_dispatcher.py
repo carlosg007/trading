@@ -165,8 +165,18 @@ def ml_features(bars, **_ignored):
 def write_strategy(root: Path, strategy_id: str, *, side="long",
                    symbols=("NQ",), sl_atr_mult=SL_ATR_MULT, tp_atr_mult=2.0,
                    exit_on_last=False, corrupt_hash=False,
-                   src: str | None = None, timeframe: str = "15m") -> Path:
-    """A promoted-strategy directory: strat.py, meta.json, honest SHA-256."""
+                   src: str | None = None, timeframe: str = "15m",
+                   dow_block: object = "omit") -> Path:
+    """
+    A promoted-strategy directory: strat.py, meta.json, honest SHA-256.
+
+    `dow_block` writes Stage 4.5's verdict into meta.json. Its default is the
+    SENTINEL `"omit"` rather than None, because None is a real state - "the
+    stage ran and blocked nothing" - and every case predating the gate needs
+    the third one, "no `day_of_week_gate` key at all". Collapsing them would
+    make a package promoted before Stage 4.5 existed indistinguishable from
+    one it cleared.
+    """
     directory = root / strategy_id
     directory.mkdir(parents=True, exist_ok=True)
     module = directory / "strat.py"
@@ -186,6 +196,18 @@ def write_strategy(root: Path, strategy_id: str, *, side="long",
         "promoted_sha256": digest,
         "source_sha256": digest,
         "gate_audit_status": "PASS",
+        **({} if dow_block == "omit" else {"day_of_week_gate": {
+            "status": "EVALUATED",
+            "blocked_weekdays": ([] if dow_block is None else [dow_block]),
+            "blocked_weekday": dow_block,
+            # Indexed only for a real weekday: one case deliberately writes
+            # an out-of-range value to prove the LOADER refuses it, and a
+            # fixture that raised while building it would test nothing.
+            "blocked_day": (("Mon", "Tue", "Wed", "Thu", "Fri", "Sat",
+                             "Sun")[dow_block]
+                            if isinstance(dow_block, int)
+                            and 0 <= dow_block <= 6 else None),
+        }}),
     }, indent=2))
     return directory
 
@@ -704,6 +726,241 @@ def test_payloads_match_the_managers_own_reduction(tmp_path):
     regimes = {"MNQ": {**report["regime_readings"]["MNQ"],
                        "stop_atr_mult": SL_ATR_MULT}}
     assert report["payloads"] == manager.build_order_payloads(net, regimes)
+
+
+# --------------------------------------------------------------------------
+# 3b. Stage 4.5's day-of-week gate
+# --------------------------------------------------------------------------
+# `make_bars` runs 15m bars from 2026-08-20, a THURSDAY, so the last closed bar
+# is 14:45 UTC (10:45 ET) and an order placed on that cycle fills into the
+# Thursday session. Spelled as constants because every case below turns on
+# which weekday it is, and a hardcoded 3 three cases apart is a fixture nobody
+# can re-date.
+FIXTURE_FILL_WEEKDAY = 3            # Thursday
+OTHER_WEEKDAY = 4                   # Friday - not this fixture's session
+
+
+def _bars_into_the_next_session(n: int = 8) -> pd.DataFrame:
+    """
+    15m bars whose LAST CLOSED bar is Thursday and whose FILL bar is Friday.
+
+    2026-08-20 21:45 UTC is 17:45 EDT - inside Thursday's session, which runs
+    to 17:00 ET with the break to 18:00 - and the next bar opens 22:00 UTC,
+    18:00 EDT, which `backtest.event_calendar.session_date` rolls into
+    FRIDAY's session. This is the exact bar the gate exists to catch: the
+    engine fills at the next bar's open, so a signal here is a Friday trade
+    however Thursday the bar it was computed on looks.
+    """
+    ts = pd.date_range("2026-08-20 20:00", periods=n, freq="15min", tz="UTC")
+    close = 15000.0 + np.arange(n) * 1.0
+    return pd.DataFrame({"ts": ts, "open": close, "high": close + 2.0,
+                         "low": close - 2.0, "close": close, "volume": 100})
+
+
+def test_a_blocked_weekday_suppresses_the_entry_and_builds_no_order(tmp_path):
+    """
+    The gate's whole job. A strategy whose meta.json blocks this session must
+    produce no signal, no plan record and no payload - and a DECLINE naming
+    the rule, because an empty payload list cannot tell a stand-down from a
+    day with no setups.
+    """
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["fixture_long"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"fixture_long": dict(side="long",
+                                               dow_block=FIXTURE_FILL_WEEKDAY)})
+    report = d.process_bar_cycle({"MNQ": make_bars()})
+
+    assert report["signals"] == []
+    assert report["payloads"] == []
+    assert report["dispatches"] == []
+    blocked = [x for x in report["declines"]
+               if x.get("rule") == "blocked_weekday"]
+    assert len(blocked) == 1
+    assert blocked[0]["strategy_id"] == "fixture_long"
+    assert blocked[0]["fill_weekday"] == FIXTURE_FILL_WEEKDAY
+    assert "Thursday" in blocked[0]["reason"]
+
+
+def test_the_same_strategy_trades_on_an_unblocked_weekday(tmp_path):
+    """
+    The mirror of the case above: only the blocked weekday differs. Without
+    this the case above would pass just as well against a gate that muted
+    everything.
+    """
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["fixture_long"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"fixture_long": dict(side="long",
+                                               dow_block=OTHER_WEEKDAY)})
+    report = d.process_bar_cycle({"MNQ": make_bars()})
+
+    assert len(report["payloads"]) == 1
+    assert report["payloads"][0]["action"] == "BUY"
+    assert [x for x in report["declines"]
+            if x.get("rule") == "blocked_weekday"] == []
+
+
+def test_a_package_with_no_stage45_verdict_is_not_gated(tmp_path):
+    """
+    Most of this tree predates Stage 4.5. A meta.json with no
+    `day_of_week_gate` key blocks nothing - the alternative is that adding the
+    stage mutes every package promoted before it, on a day nobody profiled.
+    """
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["fixture_long"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"fixture_long": dict(side="long")})   # dow_block omitted
+    report = d.process_bar_cycle({"MNQ": make_bars()})
+
+    assert d.strategies[0].blocked_weekdays == ()
+    assert len(report["payloads"]) == 1
+
+
+def test_an_evaluated_verdict_that_blocked_nothing_is_not_a_block(tmp_path):
+    """
+    `blocked_weekday: null` is Stage 4.5 saying every session cleared. It must
+    read as permission, not as a missing field - and it must be distinguishable
+    on the handle from the case above, which is "nobody looked".
+    """
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["fixture_long"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"fixture_long": dict(side="long", dow_block=None)})
+    report = d.process_bar_cycle({"MNQ": make_bars()})
+
+    handle = d.strategies[0]
+    assert handle.blocked_weekdays == ()
+    assert handle.dow_gate["status"] == "EVALUATED"
+    assert len(report["payloads"]) == 1
+
+
+def test_the_gate_is_per_strategy_and_not_a_lock_on_the_pair(tmp_path):
+    """
+    THE REQUIREMENT THAT MAKES THIS A STRATEGY GATE RATHER THAN A GLOBAL ONE.
+
+    Sixteen strategies trade NQ inside one basket and they net into ONE
+    position. A blocked weekday belongs to a promoted PAIR - it was measured
+    on that pair's own trades - so one strategy's Thursday must not stand its
+    neighbours down. This is also why the rule is applied once, in `_evaluate`,
+    and deliberately NOT re-checked inside `build_order_plan` the way the
+    regime gate is: the plan is keyed on (portfolio, symbol), and a
+    strategy-level rule applied there would refuse every contributor.
+    """
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["muted_one", "trading_one"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={
+                  "muted_one": dict(side="long",
+                                    dow_block=FIXTURE_FILL_WEEKDAY),
+                  "trading_one": dict(side="long", dow_block=OTHER_WEEKDAY)})
+    report = d.process_bar_cycle({"MNQ": make_bars()})
+
+    assert [s["strategy_id"] for s in report["signals"]] == ["trading_one"]
+    assert len(report["payloads"]) == 1
+    blocked = [x for x in report["declines"]
+               if x.get("rule") == "blocked_weekday"]
+    assert [x["strategy_id"] for x in blocked] == ["muted_one"]
+
+
+def test_a_blocked_weekday_still_records_the_exit(tmp_path):
+    """
+    MUTING STOPS ENTRIES AND NEVER AN EXIT. A position opened on Thursday has
+    to be closeable on a blocked Friday: a gate that swallowed the exit would
+    strand inventory, which is the expensive direction to be wrong in and the
+    same reason the regime gate computes the exit before it declines.
+    """
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["fixture_long"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"fixture_long": dict(side="long", exit_on_last=True,
+                                               dow_block=FIXTURE_FILL_WEEKDAY)})
+    report = d.process_bar_cycle({"MNQ": make_bars()})
+
+    assert report["payloads"] == []
+    assert [x["strategy_id"] for x in report["exit_signals"]] == ["fixture_long"]
+    assert report["exit_signals"][0]["exit_permitted"] is True
+
+
+def test_the_FILL_bar_decides_the_session_not_the_last_closed_bar(tmp_path):
+    """
+    The live loop acts on the last CLOSED bar and the engine fills at the NEXT
+    bar's open, which is why `backtest.event_calendar._widen_to_fill_bar`
+    blocks the signal one bar early. Keyed on the closed bar this gate would
+    let exactly one trade through per week - the one signalled at 17:45 ET on
+    Thursday and filled into Friday's session, which is both the least visible
+    outcome and precisely the trade the block exists to stop.
+    """
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["fixture_long"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"fixture_long": dict(side="long",
+                                               dow_block=OTHER_WEEKDAY)})
+    report = d.process_bar_cycle({"MNQ": _bars_into_the_next_session()})
+
+    session = report["sessions"]["MNQ"]
+    assert session["last_bar_weekday"] == FIXTURE_FILL_WEEKDAY   # Thursday
+    assert session["fill_weekday"] == OTHER_WEEKDAY              # Friday
+    assert report["payloads"] == []
+    assert [x["rule"] for x in report["declines"]] == ["blocked_weekday"]
+
+
+def test_an_unresolved_session_permits_the_strategy_and_says_so(tmp_path):
+    """
+    The gate needs a bar WIDTH to locate the fill bar. A cycle that delivered
+    one bar cannot supply one - and that is a fact about the frame, not
+    evidence about the weekday. Standing the roster down on it would mute
+    everything whenever a feed hiccuped, which reads exactly like a quiet
+    market. It is permitted and RECORDED: a gate that degraded to off and a
+    gate with nothing to say are otherwise identical.
+    """
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["fixture_long"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"fixture_long": dict(side="long",
+                                               dow_block=FIXTURE_FILL_WEEKDAY)})
+    report = d.process_bar_cycle({"MNQ": make_bars(n=1)}, timeframe=None)
+
+    assert report["sessions"]["MNQ"]["resolved"] is False
+    assert [x["strategy_id"] for x in report["dow_unresolved"]] == ["fixture_long"]
+    assert [x for x in report["declines"]
+            if x.get("rule") == "blocked_weekday"] == []
+
+
+def test_an_unreadable_blocked_weekday_refuses_to_load_the_package(tmp_path):
+    """
+    A weekday outside 0-6 RAISES rather than being dropped. Dropped, the gate
+    is simply off and every log line still reads correctly; raised, the
+    package fails to load and somebody fixes the file.
+    """
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["fixture_long"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"fixture_long": dict(side="long", dow_block=9)})
+
+    assert d.strategies == []
+    assert any("9" in e["error"] for e in d.strategy_errors)
+
+
+def test_the_session_record_is_per_symbol(tmp_path):
+    """
+    Contracts do not have to be in step: a lagging feed leaves one symbol's
+    newest closed bar an interval behind the others, and on a Friday afternoon
+    that is the difference between filling into Friday's session and into
+    Monday's. One record for the bucket would give every contract whichever
+    frame happened to be first in the map.
+    """
+    d = build(tmp_path,
+              assignments={"Incubator-Odd": ["fixture_long"]},
+              state={"MNQ": {"quadrant": PERMITTED_QUADRANT},
+                     "MCL": {"quadrant": PERMITTED_QUADRANT}},
+              strategies={"fixture_long": dict(side="long",
+                                               symbols=("NQ", "CL"))})
+    report = d.process_bar_cycle({"MNQ": make_bars(),
+                                  "MCL": _bars_into_the_next_session()})
+
+    assert report["sessions"]["MNQ"]["fill_weekday"] == FIXTURE_FILL_WEEKDAY
+    assert report["sessions"]["MCL"]["fill_weekday"] == OTHER_WEEKDAY
 
 
 # --------------------------------------------------------------------------
