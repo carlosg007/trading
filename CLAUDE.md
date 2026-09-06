@@ -208,13 +208,15 @@ portfolio-check # = .venv/bin/python3 ~/src/trading/realtime/check_portfolio_ass
 assets-check # the same tool
 regime-check # = .venv/bin/python3 ~/src/trading/scripts/check_market_regime.py
 quadrant-check # the same tool
+market-check # = .venv/bin/python3 ~/src/trading/realtime/market_calendar.py
+session-check # the same tool
 strat-perf   # = .venv/bin/python3 ~/src/trading/scripts/report_strategy_performance.py
 perf-report  # the same tool
 strat-tags   # = .venv/bin/python3 ~/src/trading/scripts/strategy_tag_manifest.py
 tag-manifest # the same tool
 days-check   # = .venv/bin/python3 ~/src/trading/scripts/check_strategy_days.py
 strat-days   # the same tool
-             # (all twenty from deploy/shell/trading_helpers.sh)
+             # (all twenty-two from deploy/shell/trading_helpers.sh)
 ```
 
 ## Working style

@@ -536,6 +536,23 @@ alias assets-check='portfolio-check'
 alias regime-check="${_TRADING_PY} ${_TRADING_REPO}/scripts/check_market_regime.py"
 alias quadrant-check='regime-check'
 
+# IS THE CME OPEN, AND WHEN DOES THAT CHANGE. The first thing to run when
+# trading-master-live reads `inactive (dead)` and you are deciding whether that
+# is a fault. Since 2026-09-06 the loop EXITS at every close with status 3 and
+# `trading-master-live.timer` starts it again at 17:55 ET Sun-Thu, so a stopped
+# loop on a Saturday is the design rather than an outage.
+#
+# Reads the clock and the holiday file. No lake, no feed, no socket, no order.
+#
+#   market-check                      now
+#   market-check --now 2026-12-25T20:00:00Z
+#   market-check --holidays /path/to/cme_holidays.csv
+#
+# EXIT 0 = open, 1 = closed, 2 = the holiday file exists and does not parse.
+# The 1 is a verdict, not a failure — `market-check && echo trading` works.
+alias market-check="${_TRADING_PY} ${_TRADING_REPO}/realtime/market_calendar.py"
+alias session-check='market-check'
+
 # --------------------------------------------------------------------------
 # 10. What has everything I ever certified actually scored?
 #
