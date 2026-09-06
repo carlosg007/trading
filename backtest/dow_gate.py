@@ -935,15 +935,23 @@ def gate_symbol(symbol: str, path: Path, tf: str, params: dict,
 
     # ONE COUNTERFACTUAL PER DISTINCT IDENTIFIED WEEKDAY, not one per version.
     # A and B usually name the same session, and a second run excluding the
-    # same day would build the same masks over the same bars. Sorted so the
-    # order does not depend on dict insertion, which decides nothing here but
-    # would make two runs of the same pair print in different orders.
-    wanted = sorted({v["verdict"]["worst_weekday"] for v in versions.values()
-                     if v["verdict"]["worst_weekday"] is not None})
-    runs: dict[int | None, dict] = {}
-    for day in wanted:
+    # same day would build the same masks over the same bars.
+    #
+    # `ml` is decided PER RUN rather than taken from the flag: a weekday only
+    # Version A identified needs no classifier at all, and Version B refits
+    # per completed trade. Across 23 contracts x 4 timeframes that is the
+    # difference between one extra classifier pass per pair and two. Sorted so
+    # the order does not depend on dict insertion.
+    needed: dict[int, set[str]] = {}
+    for version, entry in versions.items():
+        day = entry["verdict"]["worst_weekday"]
+        if day is not None:
+            needed.setdefault(int(day), set()).add(version)
+    runs: dict[int, dict] = {}
+    for day in sorted(needed):
         runs[day] = counterfactual_run(path, bars, symbol, tf, params, cfg,
-                                       day, strat_name, ml=args.ml)
+                                       day, strat_name,
+                                       ml="B" in needed[day])
     none_run = counterfactual_run(path, bars, symbol, tf, params, cfg, None,
                                   strat_name, ml=args.ml)
 
