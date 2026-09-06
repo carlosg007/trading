@@ -1,5 +1,5 @@
 """
-ma_anchoring_spread_20260820 - Version B (ML-filtered), promoted 2026-08-30.
+ma_anchoring_spread_20260820 - Version B (ML-filtered), promoted 2026-09-06.
 
 Baseline signals from `baseline.py` (SHA-256 296538f7b4199e7eb5fc5000a9b6271c2b779160e9a9d6bcce4e002d00394e4d), with the causal ML
 filter applied on top. This is the pipeline, not a new idea: every entry here
