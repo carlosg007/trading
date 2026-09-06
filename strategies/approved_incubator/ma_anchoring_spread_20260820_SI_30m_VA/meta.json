@@ -28,10 +28,33 @@
     "tp_atr_mult": 2.0,
     "trailing": false
   },
+  "day_of_week_gate": {
+    "status": "EVALUATED",
+    "version": "A",
+    "versions_profiled": [
+      "A",
+      "B"
+    ],
+    "blocked_weekdays": [
+      2
+    ],
+    "blocked_weekday": 2,
+    "blocked_day": "Wed",
+    "blocked_day_name": "Wednesday",
+    "worst_weekday": 2,
+    "worst_day": "Wed",
+    "block_rule": "negative_expectancy",
+    "min_trades": 20,
+    "reason": "Wednesday is the weakest session (expectancy -366.65 per trade over 87 trades) and its expectancy is negative",
+    "selected_in_sample": true,
+    "note": "The weekday was chosen in-sample, on a window that spans the Stage 3 holdout. It is a live-supervision instruction, not evidence: no gate was scored on it and nothing was pruned for it.",
+    "source": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/dow_gate_SI_30m.json",
+    "source_sha256": "a2b6cac97193baa0430755b14f9e7538f38acf516601e716341aeb443c41ad77"
+  },
   "source": "/home/cgrullon/src/trading/strategies/experimental/ma_anchoring_spread_20260820.py",
   "source_sha256": "296538f7b4199e7eb5fc5000a9b6271c2b779160e9a9d6bcce4e002d00394e4d",
   "promoted_sha256": "296538f7b4199e7eb5fc5000a9b6271c2b779160e9a9d6bcce4e002d00394e4d",
-  "promoted_utc": "2026-08-30T16:45:47+00:00",
+  "promoted_utc": "2026-09-06T18:49:27+00:00",
   "costs_included": true,
   "variants_tested": null,
   "metrics_status": "RECORDED \u00b7 locked from dual_metrics_SI.json",
@@ -64,12 +87,12 @@
   },
   "certification": {
     "audit_file": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/gate_audit_SI_30m.json",
-    "audit_sha256": "099529e180017989390b63ac42e7443831cd3486c6c0e5f508ed7cc3babcbcf1",
+    "audit_sha256": "c291991d11b03b7cb05abc28326b3b34d0ab0abcdd0bd88afc55e5bff31316ae",
     "audit_symbol": "SI",
     "audit_timeframe": "30m",
     "target_quadrant": "Q1",
     "target_regime": "High Volatility / Trending",
-    "audit_generated_utc": "2026-08-30T16:29:35+00:00",
+    "audit_generated_utc": "2026-09-06T18:29:50+00:00",
     "in_sample": {
       "start": "2013-01-01",
       "end": "2022-12-31"
