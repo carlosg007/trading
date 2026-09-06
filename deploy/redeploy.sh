@@ -3,6 +3,42 @@
 set -euo pipefail
 R=/home/cgrullon/src/trading
 
+# == 0. THE ARMING PREFLIGHT ==================================================
+# Step 2 copies the repo's unit files over /etc/systemd/system. If the INSTALLED
+# trading-master-live.service was armed by editing it in /etc — which is how
+# this box was armed — that copy DISARMS the live loop, silently, and every
+# subsequent log line reads correctly while no order is ever sent. That is the
+# 2026-08-27 failure in reverse, and it is worth stopping the deploy for.
+#
+# Arming belongs in the repo unit, where git can see it. If the two disagree,
+# say so and stop rather than resolve it: whichever way this script guessed,
+# half of it would be about whether real orders go out.
+INSTALLED_UNIT=/etc/systemd/system/trading-master-live.service
+REPO_UNIT="$R/deploy/systemd/trading-master-live.service"
+if [ -f "$INSTALLED_UNIT" ]; then
+    INSTALLED_LIVE=$(grep -c -- '^ *--live *\\\?$' "$INSTALLED_UNIT" || true)
+    REPO_LIVE=$(grep -c -- '^ *--live *\\\?$' "$REPO_UNIT" || true)
+    if [ "$INSTALLED_LIVE" != "0" ] && [ "$REPO_LIVE" = "0" ]; then
+        cat <<'WARN'
+  REFUSING TO DEPLOY.
+
+  The INSTALLED trading-master-live.service carries --live. The unit in the
+  repository does not. Copying the repo unit over it would stand the live loop
+  down while leaving every log line, every banner and `systemctl status`
+  reading exactly as they do now.
+
+  Arming belongs in git. To keep the loop armed:
+
+      add a line "    --live \" to the ExecStart in
+      deploy/systemd/trading-master-live.service, commit it, re-run this.
+
+  To stand it down deliberately, delete --live from the installed unit first,
+  then re-run. Do NOT add --dry-run beside it: passing both is refused.
+WARN
+        exit 1
+    fi
+fi
+
 echo "== 1. directories (the 209/STDOUT root cause), made durable =="
 cp "$R/deploy/systemd/trading-dirs.conf" /etc/tmpfiles.d/
 systemd-tmpfiles --create /etc/tmpfiles.d/trading-dirs.conf
@@ -50,11 +86,25 @@ if [ -z "${MANUAL_HELD:-}" ]; then
     systemctl is-active trading-nt8-listener.service
 fi
 
-echo "== 6. one-shot runs =="
+echo "== 6. the market-hours timer =="
+# It STARTS trading-master-live at 17:55 ET Sun-Thu, so it is enabled only when
+# the operator has already chosen to run that service. Enabling a timer for a
+# unit somebody deliberately left disabled would start it on their behalf, and
+# this script has never started master_live.
+if systemctl is-enabled trading-master-live.service >/dev/null 2>&1; then
+    systemctl enable --now trading-master-live.timer
+    systemctl list-timers trading-master-live.timer --no-pager
+else
+    echo "  trading-master-live.service is not enabled — leaving its timer alone."
+    echo "  Enable both together when you want the schedule:"
+    echo "      sudo systemctl enable --now trading-master-live.service trading-master-live.timer"
+fi
+
+echo "== 7. one-shot runs =="
 systemctl start trading-regime-daemon.service || true
 systemctl start trading-watchdog.service      || true
 
-echo "== 7. results =="
+echo "== 8. results =="
 systemctl status trading-regime-daemon.service trading-watchdog.service \
     trading-nt8-listener.service --no-pager -n 0 | grep -E '^●|Active:|Process:' || true
 systemctl list-timers --all --no-pager | grep trading || true
