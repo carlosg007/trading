@@ -18,6 +18,10 @@ Documentation=file:///home/cgrullon/src/trading/deploy/RUNBOOK.md
 # every line, which is the correct behaviour and is better than not starting.
 Wants=trading-regime-daemon.service
 After=network-online.target trading-regime-daemon.service
+# The timer that brings this back after a close. NOT `Requires=` and not
+# `Wants=` on the timer: this unit must remain startable by hand, at any hour,
+# without the timer being enabled - and the timer is what starts IT, never the
+# other way round.
 Wants=network-online.target
 # The lake and the NT8 spool both live on the NFS mount. Starting before it is
 # mounted gives a loop that reads nothing and reports a quiet market.
@@ -76,7 +80,33 @@ ExecStart=/home/cgrullon/src/trading/.venv/bin/python3 \
     --interval-sec 60 \
     --session-cutoff-utc 20:55 \
     --max-session-loss-usd 1000 \
-    --max-regime-write-age-sec 900
+    --max-regime-write-age-sec 900 \
+    --halt-when-closed
+
+# THE MARKET-HOURS GATE, and it is here rather than in the code's defaults.
+# `--halt-when-closed` makes the loop EXIT at every CME close - the 17:00-18:00
+# ET daily maintenance halt, the Friday 17:00 ET weekend close - with status 3,
+# which RestartPreventExitStatus below tells systemd to leave alone.
+# `trading-master-live.timer` starts it again at 17:55 ET Sunday through
+# Thursday, and the process holds the last five minutes before the open with
+# everything already loaded.
+#
+# IT EXITS RATHER THAN SLEEPING BECAUSE ONLY EXIT RETURNS THE MEMORY. Measured
+# 2026-09-06: this loop was at 18.5 GB RSS after 47 hours on a 24 GB box and
+# had OOM-killed `pytest tests/`. A sleeping process keeps all of it -
+# `gc.collect()` returns arenas to the OS only when they are entirely empty,
+# and a fragmented 18 GB heap is not. The daily halt now caps growth at one
+# session instead of a week.
+#
+# The flag is OFF in the code's defaults on purpose: a dry run somebody starts
+# by hand at 17:30 should keep printing rather than vanish. A supervised
+# process wants the opposite, and this line is where that is said.
+#
+# NOTHING IS FLATTENED AND NOTHING IS CANCELLED at the close. The loop sends
+# market orders inside one call and holds no resting order; the stand-down
+# REPORTS what the book and the engine state still hold, loudly if it is going
+# into a 49-hour weekend, and stops. Being flat over a weekend is a trading
+# decision - CrossTrade NAM and the operator own it, not a scheduler.
 
 # THE STALENESS GUARD, and it is the PUBLISHER's clock rather than the
 # market's. `trading-regime-daemon.timer` writes data/live_regime_state.json;
@@ -106,7 +136,18 @@ RestartSec=10s
 
 LimitNOFILE=65536
 # Never restart into a busy market on a schedule nobody chose.
-RestartPreventExitStatus=2
+#
+# 2 is REFUSING TO START - a bad config, an unreadable state file, a holiday
+# calendar that does not parse. 3 is the MARKET-HOURS gate: the exchange is
+# shut and the loop got out of memory on purpose.
+#
+# 3 HAS TO BE HERE OR THE WHOLE GATE IS INERT. `Restart=always` restarts on a
+# clean exit as readily as on a crash, so without this line the loop would exit
+# at 17:00, come back ten seconds later, exit again, and spend the weekend
+# crash-looping through a dispatcher load every ten seconds - which is worse
+# than the resident process it replaced. This is also why the code's default
+# exit status is 3 and not 0.
+RestartPreventExitStatus=2 3
 
 # --- sandboxing -----------------------------------------------------------
 # The loop reads the repo and the NFS mount and writes state, logs and the

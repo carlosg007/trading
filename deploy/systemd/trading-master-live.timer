@@ -1,0 +1,67 @@
+# Bring the execution loop back when the CME opens.
+#
+# INSTALL
+#   sudo cp deploy/systemd/trading-master-live.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now trading-master-live.timer
+#
+# WHY A TIMER AT ALL. `trading-master-live.service` now runs with
+# `--halt-when-closed` and EXITS at every CME close with status 3, which
+# `RestartPreventExitStatus=2 3` tells systemd to leave stopped. Something has
+# to start it again, and that is this. Measured 2026-09-06: the resident loop
+# reached 18.5 GB RSS after 47 hours and OOM-killed the test gate, so the
+# weekend and the daily halt are now spent as no process rather than as an
+# idle one.
+#
+# WHY 17:55 AND NOT 18:00. The loop loads strategies, verifies their SHA-256
+# against meta.json, builds the dispatcher and refreshes the tag manifest
+# before its first cycle. Started at the open, all of that happens while the
+# market is already trading; started five minutes early, it is done and
+# REPORTED with time to read it, and `--open-wait-sec` holds the loop at the
+# gate until 18:00. A startup failure is then a message somebody can act on
+# rather than one discovered by the absence of orders.
+#
+# WHY Sun-Thu. The open windows are Sunday 18:00 ET through Friday 17:00 ET,
+# broken by a one-hour halt at 17:00 every weekday evening. Every one of those
+# windows begins at 18:00 ET on a Sunday, Monday, Tuesday, Wednesday or
+# Thursday, and none begins on a Friday or a Saturday. A Friday firing would
+# start a process into the weekend close, which would exit 3 immediately -
+# harmless but noisy, and a log full of harmless noise is where a real failure
+# hides.
+#
+# A HOLIDAY IS NOT HANDLED HERE, and deliberately. The timer fires, the process
+# starts, `realtime/market_calendar.py` reads the holiday file and the loop
+# stands itself down with a line saying which holiday. Encoding the calendar
+# into an OnCalendar= expression would put a second copy of it in a place no
+# test can reach.
+
+[Unit]
+Description=Start the trading execution loop at the CME open (Sun-Thu 17:55 ET)
+Documentation=file:///home/cgrullon/src/trading/deploy/RUNBOOK.md
+
+[Timer]
+# THE TIMEZONE IS PART OF THE EXPRESSION. 17:55 ET is 21:55 UTC in summer and
+# 22:55 UTC in winter; an OnCalendar= written in UTC is an hour wrong for half
+# the year, and the half it is wrong for is the half where it starts the loop
+# an hour after the open or an hour before it. systemd resolves the zone
+# itself and follows US daylight saving with it. Requires systemd 247+; this
+# box runs 259.
+OnCalendar=Sun,Mon,Tue,Wed,Thu *-*-* 17:55:00 America/New_York
+
+# Thirty seconds of slack against a five-minute margin. Tighter than this buys
+# nothing and wakes the box more often.
+AccuracySec=30s
+
+# NO CATCH-UP. Persistent= replays a trigger missed while the machine was off,
+# and a machine that was down over the weekend would come up on Saturday
+# morning and fire Thursday's trigger - starting the loop into a closed market.
+# It would exit 3 straight away, so nothing breaks, but the correct behaviour
+# is not to fire at all. The service is separately WantedBy=multi-user.target,
+# so a boot inside an open window starts it immediately, which is the
+# recovery this would otherwise be for.
+Persistent=false
+
+Unit=trading-master-live.service
+
+[Install]
+WantedBy=timers.target
