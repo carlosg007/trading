@@ -75,6 +75,7 @@ Environment=PYTHONUNBUFFERED=1
 # editing under pressure expects.
 ExecStart=/home/cgrullon/src/trading/.venv/bin/python3 \
     /home/cgrullon/src/trading/master_live.py \
+    --live \
     --tf 1h \
     --feed auto \
     --interval-sec 60 \
