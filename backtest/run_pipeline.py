@@ -406,6 +406,36 @@ def stage4_metrics_exist(strat: str, out_dir: str | None = None) -> bool:
     return any(any(d.glob("dual_metrics_*.json")) for d in stamps)
 
 
+def stage5_card_targets(strat: str) -> list[str]:
+    """
+    The id(s) the Stage 5 card must be posted under, module name included.
+
+    Stages 1-4 measure a MODULE and their cards are headed by its name. Stage 5
+    does not: `promote.py` writes one package per certified pair
+    (`<module>_<SYMBOL>_<TF>_V<A|B>`) and a promotion card names ONE contract.
+    So the module name this orchestrator passes to every other card resolves
+    to no package at all here, and the card refused for a missing `--symbol` -
+    a message that sends an operator looking for a contract when what was
+    actually wrong is that a module is not a promotion.
+
+    Returns the packages when there are any, and otherwise the name as given,
+    so a strategy promoted under its own module name (the older layout) still
+    posts exactly one card and nothing about this path changes for it.
+    """
+    try:
+        from backtest.discord_reporter import promotion_packages
+        found = [p.name for p in promotion_packages(strat)]
+    except Exception as exc:                                      # noqa: BLE001
+        # A card is an announcement; failing to enumerate packages must not
+        # end a run that has already promoted. Fall back to what was asked
+        # for and let the reporter print its own refusal.
+        print(f"  NOTE  could not enumerate promoted packages for {strat} "
+              f"({exc}); posting one card under the name as given.",
+              file=sys.stderr, flush=True)
+        return [strat]
+    return found or [strat]
+
+
 def post_card(strat: str, stage: int, *, out_dir: str | None = None,
               dry_run: bool = False) -> int:
     """
@@ -414,13 +444,25 @@ def post_card(strat: str, stage: int, *, out_dir: str | None = None,
     `check=False` throughout: a card is an ANNOUNCEMENT and the stage's
     artifacts are the evidence. A completed certification must not be
     discarded because Discord was unreachable.
+
+    Stage 5 posts ONE CARD PER PROMOTED PACKAGE - see `stage5_card_targets`.
+    The worst return code wins, so a run whose second card failed still says
+    so rather than being reported by whichever went last.
     """
-    rc = run_step(discord_cmd(strat, stage, out_dir=out_dir),
-                  f"DISCORD · Stage {stage} card", dry_run=dry_run, check=False)
-    if rc:
-        print(f"  WARNING  Stage {stage} Discord card failed (exit {rc}); "
-              f"the stage itself is unaffected.", file=sys.stderr, flush=True)
-    return rc
+    targets = stage5_card_targets(strat) if stage == 5 else [strat]
+    worst = 0
+    for target in targets:
+        label = f"DISCORD · Stage {stage} card"
+        if len(targets) > 1:
+            label += f" · {target}"
+        rc = run_step(discord_cmd(target, stage, out_dir=out_dir),
+                      label, dry_run=dry_run, check=False)
+        if rc:
+            print(f"  WARNING  Stage {stage} Discord card for {target} failed "
+                  f"(exit {rc}); the stage itself is unaffected.",
+                  file=sys.stderr, flush=True)
+            worst = worst or rc
+    return worst
 
 
 def dow_gate_file(strat: str, symbol: str, timeframe: str,

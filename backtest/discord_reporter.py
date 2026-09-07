@@ -721,6 +721,42 @@ def promoted_dir(strat: str, incubator: str | Path | None = None) -> Path:
     return root / strat
 
 
+def promotion_packages(strat: str,
+                       incubator: str | Path | None = None) -> list[Path]:
+    """
+    The promoted package(s) `--strat` names, or [] when nothing was promoted.
+
+    `--strat` may name a package OUTRIGHT (`..._NQ_15m_VA`, which is what
+    `promote.py` passes when it posts its own card) or name the MODULE the
+    pipeline swept (`..._20260901`, which is what `run_pipeline.discord_cmd`
+    passes for every stage). Stage 5 splits a module into ONE PACKAGE PER
+    CERTIFIED PAIR, so a module name is not a directory: `promoted_dir` finds
+    nothing, every field resolves empty, and the card then refuses for a
+    missing `--symbol` - which sends an operator looking for a contract when
+    what is actually missing is the pair half of the id they meant to type.
+
+    A package that names itself wins outright and no scan happens, so this
+    cannot reinterpret an id that already resolves.
+
+    Discovered by SCANNING for a `meta.json` rather than by rebuilding
+    `promote.strategy_id`'s spelling here. `promote.py` imports this module to
+    post its Stage 5 card, so an import back would be circular - and a second
+    copy of the naming rule would be free to drift from the one that actually
+    wrote the directories, which is how a card comes to look for a package
+    that is on disk under a slightly different name.
+    """
+    root = Path(incubator) if incubator else INCUBATOR
+    own = root / strat
+    if (own / PROMOTED_META_FILE).exists():
+        return [own]
+    try:
+        kids = sorted(root.glob(f"{strat}_*"))
+    except OSError:
+        return []
+    return [d for d in kids
+            if d.is_dir() and (d / PROMOTED_META_FILE).exists()]
+
+
 def _read_promotion_json(path: Path, label: str) -> dict[str, Any]:
     """Read one of the promotion's files, or say which one could not be read."""
     path = Path(path)
@@ -1190,11 +1226,25 @@ def resolve_promotion_fields(
     notes: list[str] = []
     inspected: list[str] = []
 
+    # One package, or the several a module name covers. `strat_id` is what the
+    # rest of this resolution reads itself as: when a MODULE name resolved to a
+    # single package, the ownership checks and the routing-table lookup must
+    # both use the PACKAGE's id, because that is the name `promote.py` wrote
+    # into meta.json and into `active_strategies`. Reading those under the
+    # module name returns NOT STAGED for a strategy that is in fact routed.
+    packages = promotion_packages(strat, incubator)
     home = promoted_dir(strat, incubator)
+    strat_id = strat
+    if len(packages) == 1 and packages[0].name != strat:
+        home = packages[0]
+        strat_id = home.name
+        notes.append(f"'{strat}' is a module name; it has exactly one "
+                     f"promoted package, {strat_id}, and this card describes "
+                     f"that one")
     meta_path = home / PROMOTED_META_FILE
     meta: dict[str, Any] | None = None
     if meta_path.exists():
-        meta = load_promoted_meta(meta_path, strat)
+        meta = load_promoted_meta(meta_path, strat_id)
         inspected.append(meta_path.name)
 
     # Which twin was promoted, and therefore which block to read in both files.
@@ -1227,11 +1277,11 @@ def resolve_promotion_fields(
 
     candidates: list[tuple[str, dict[str, Any]]] = []
     if audit_path is not None:
-        blob = load_promotion_audit(audit_path, strat)
+        blob = load_promotion_audit(audit_path, strat_id)
         inspected.append(audit_path.name)
         candidates.append((audit_path.name, audit_promotion_values(blob, version)))
     if metrics_path is not None:
-        blob = load_promotion_metrics(metrics_path, strat)
+        blob = load_promotion_metrics(metrics_path, strat_id)
         inspected.append(metrics_path.name)
         candidates.append((metrics_path.name,
                            metrics_promotion_values(blob, version)))
@@ -1289,7 +1339,7 @@ def resolve_promotion_fields(
     # operator may correct, while this one is a statement about which live
     # account holds the strategy right now, and a card is not the place that
     # gets decided.
-    member = portfolio_membership(strat, staged=meta is not None,
+    member = portfolio_membership(strat_id, staged=meta is not None,
                                   config_path=portfolio_config)
     sources["membership"] = member["source"]
     inspected.append(member["source"])
@@ -1313,6 +1363,8 @@ def resolve_promotion_fields(
         "inspected": inspected,
         "notes": notes,
         "home": str(home),
+        "strat_id": strat_id,
+        "packages": [p.name for p in packages],
     }
 
 
@@ -4000,13 +4052,31 @@ def _build_card(args: argparse.Namespace) -> tuple[dict[str, Any], str]:
     missing = [f for f, v in (("--symbol", res["symbol"]), ("--tf", res["tf"]))
                if not v]
     if missing:
+        # An ambiguous MODULE name is a different failure from a missing
+        # measurement, and it has a different fix. Stage 5 writes one package
+        # per certified pair, so a module with several of them cannot be
+        # reduced to the one contract this card names - and telling the
+        # operator to pass --symbol would have them describe a package by
+        # hand when the id they want is already on disk. Name them instead.
+        packages = res.get("packages") or []
+        if len(packages) > 1:
+            listed = "\n  ".join(packages)
+            raise ValueError(
+                f"--mode promotion needs {' and '.join(missing)}: "
+                f"'{args.strat}' is a MODULE name and Stage 5 promoted "
+                f"{len(packages)} packages from it. A promotion card names "
+                f"one contract, so name one package:\n  {listed}")
         looked = ", ".join(res["inspected"]) or f"nothing under {res['home']}"
         raise ValueError(
             f"--mode promotion needs {' and '.join(missing)}: the contract "
             f"could not be resolved from {looked}.")
 
     embed = build_embed(
-        strat=args.strat,
+        # The PACKAGE's id, not what was typed: where a module name resolved
+        # to a single promotion, the card describes that package and must be
+        # headed by its name, or the announcement reads as though the module
+        # itself were promoted at one contract.
+        strat=res["strat_id"],
         symbol=res["symbol"],
         tf=res["tf"],
         pf=res["pf"],
