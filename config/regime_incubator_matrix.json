@@ -1,0 +1,384 @@
+{
+  "version": "1.0.0",
+  "generated_utc": "2026-09-07T22:50:08+00:00",
+  "purpose": "Tracks candidate / incubating / deployed strategies per market regime quadrant and asset class. This file is an INDEX, never an authority: config/portfolios.json decides what is routed and approved_incubator/<id>/meta.json decides what was certified. A disagreement is resolved against those two, never against this.",
+  "quadrant_authority": {
+    "module": "mdlib/regimes.py",
+    "note": "The Q1..Q4 numbering is mdlib/regimes.py's and nothing else's. config/portfolios.json schema 1.0.0 numbered these incompatibly - every digit named a different environment - and 1.1.0 relabels them to agree. Never renumber these to match another document; a live daemon and a backtest disagreeing about what Q1 means is invisible downstream, because every log line still reads correctly.",
+    "adx_comparator": "STRICT '>' , not '>='. mdlib/regimes.py and backtest/profiler.py have always used '>' and every cached quadrant, Stage 1 designation and Gate R verdict was drawn on it. At ADX exactly 25.00000 the bar is RANGING.",
+    "adx_trend_threshold": 25.0,
+    "indicators": "adx_14 and atr_14, both period 14"
+  },
+  "quadrants": {
+    "Q1": {
+      "id": 1,
+      "label": "High Volatility / Trending",
+      "rule": {
+        "adx_14": "> 25.0",
+        "atr_14": "> theta_vol"
+      }
+    },
+    "Q2": {
+      "id": 2,
+      "label": "High Volatility / Ranging",
+      "rule": {
+        "adx_14": "<= 25.0",
+        "atr_14": "> theta_vol"
+      }
+    },
+    "Q3": {
+      "id": 3,
+      "label": "Low Volatility / Trending",
+      "rule": {
+        "adx_14": "> 25.0",
+        "atr_14": "<= theta_vol"
+      }
+    },
+    "Q4": {
+      "id": 4,
+      "label": "Low Volatility / Ranging",
+      "rule": {
+        "adx_14": "<= 25.0",
+        "atr_14": "<= theta_vol"
+      }
+    }
+  },
+  "theta_vol": {
+    "definition": "median(ATR_14) over the pinned in-sample anchor",
+    "anchor_start": "2013-01-01",
+    "anchor_end": "2022-12-31",
+    "scope": "PER (symbol, timeframe)",
+    "note": "theta_vol is LOADED from the pinned anchor, never computed over a caller's window. A median taken over the request's own window is a property of the REQUEST, not the contract: on a quiet morning every bar reads high-volatility and a Q1-certified strategy is handed permission for a market it is not in. It is per (symbol, TIMEFRAME) - NQ is 7.90 at 15m and 11.33 at 30m, a 43% different boundary on the same tape - so this file stores no theta_vol value at all; read it through mdlib.regimes.provenance()."
+  },
+  "undefined_quadrant": {
+    "id": 0,
+    "label": "Undefined (indicator warm-up)",
+    "note": "0 IS NOT A QUADRANT and has no row in the matrix. It is indicator warm-up, where adx_14/atr_14 are NaN. The naive encoding files every warm-up bar under Low-Vol/Ranging, because NaN > 25.0 is False."
+  },
+  "timeframes": [
+    "5m",
+    "15m",
+    "30m",
+    "1h"
+  ],
+  "timeframes_note": "The screened ladder. 1m/2m/3m are deliberately absent: friction per unit of edge removed them, and pre-2013 1-minute data is sparse for ten symbols (see intraday_start_year).",
+  "states": [
+    "candidate",
+    "incubating",
+    "deployed"
+  ],
+  "states_note": "candidate  = swept and certified, nothing promoted; incubating = promoted into approved_incubator/ and routed on an incubator portfolio; deployed   = routed on an Eval or Prop portfolio. Being in approved_incubator/ is a record that a version was CHOSEN and is explicitly not permission to trade it.",
+  "asset_classes": {
+    "Equities": [
+      "ES",
+      "NQ",
+      "RTY",
+      "YM"
+    ],
+    "Energy": [
+      "CL",
+      "HO",
+      "RB",
+      "NG"
+    ],
+    "Metals": [
+      "GC",
+      "SI",
+      "PL"
+    ],
+    "Currencies": [
+      "6A",
+      "6B",
+      "6C",
+      "6E",
+      "6J",
+      "6S"
+    ],
+    "Rates": [
+      "ZT",
+      "ZF",
+      "ZN",
+      "ZB"
+    ],
+    "Agriculture": [
+      "ZC",
+      "ZS",
+      "ZW"
+    ]
+  },
+  "asset_classes_note": "All 24 have a verified ContractSpec and a symbol= partition in the lake. CL is BACKTEST-ONLY here: NinjaTrader on this box streams no CL series, so it can be swept and certified but not routed live. No existing module owned this symbol->class mapping; it is declared here for the first time.",
+  "matrix": {
+    "Q1": {
+      "Equities": {
+        "symbols": [
+          "ES",
+          "NQ",
+          "RTY",
+          "YM"
+        ],
+        "candidate": [],
+        "incubating": [],
+        "deployed": []
+      },
+      "Energy": {
+        "symbols": [
+          "CL",
+          "HO",
+          "RB",
+          "NG"
+        ],
+        "candidate": [],
+        "incubating": [],
+        "deployed": []
+      },
+      "Metals": {
+        "symbols": [
+          "GC",
+          "SI",
+          "PL"
+        ],
+        "candidate": [],
+        "incubating": [],
+        "deployed": []
+      },
+      "Currencies": {
+        "symbols": [
+          "6A",
+          "6B",
+          "6C",
+          "6E",
+          "6J",
+          "6S"
+        ],
+        "candidate": [],
+        "incubating": [],
+        "deployed": []
+      },
+      "Rates": {
+        "symbols": [
+          "ZT",
+          "ZF",
+          "ZN",
+          "ZB"
+        ],
+        "candidate": [],
+        "incubating": [],
+        "deployed": []
+      },
+      "Agriculture": {
+        "symbols": [
+          "ZC",
+          "ZS",
+          "ZW"
+        ],
+        "candidate": [],
+        "incubating": [],
+        "deployed": []
+      }
+    },
+    "Q2": {
+      "Equities": {
+        "symbols": [
+          "ES",
+          "NQ",
+          "RTY",
+          "YM"
+        ],
+        "candidate": [],
+        "incubating": [],
+        "deployed": []
+      },
+      "Energy": {
+        "symbols": [
+          "CL",
+          "HO",
+          "RB",
+          "NG"
+        ],
+        "candidate": [],
+        "incubating": [],
+        "deployed": []
+      },
+      "Metals": {
+        "symbols": [
+          "GC",
+          "SI",
+          "PL"
+        ],
+        "candidate": [],
+        "incubating": [],
+        "deployed": []
+      },
+      "Currencies": {
+        "symbols": [
+          "6A",
+          "6B",
+          "6C",
+          "6E",
+          "6J",
+          "6S"
+        ],
+        "candidate": [],
+        "incubating": [],
+        "deployed": []
+      },
+      "Rates": {
+        "symbols": [
+          "ZT",
+          "ZF",
+          "ZN",
+          "ZB"
+        ],
+        "candidate": [],
+        "incubating": [],
+        "deployed": []
+      },
+      "Agriculture": {
+        "symbols": [
+          "ZC",
+          "ZS",
+          "ZW"
+        ],
+        "candidate": [],
+        "incubating": [],
+        "deployed": []
+      }
+    },
+    "Q3": {
+      "Equities": {
+        "symbols": [
+          "ES",
+          "NQ",
+          "RTY",
+          "YM"
+        ],
+        "candidate": [],
+        "incubating": [],
+        "deployed": []
+      },
+      "Energy": {
+        "symbols": [
+          "CL",
+          "HO",
+          "RB",
+          "NG"
+        ],
+        "candidate": [],
+        "incubating": [],
+        "deployed": []
+      },
+      "Metals": {
+        "symbols": [
+          "GC",
+          "SI",
+          "PL"
+        ],
+        "candidate": [],
+        "incubating": [],
+        "deployed": []
+      },
+      "Currencies": {
+        "symbols": [
+          "6A",
+          "6B",
+          "6C",
+          "6E",
+          "6J",
+          "6S"
+        ],
+        "candidate": [],
+        "incubating": [],
+        "deployed": []
+      },
+      "Rates": {
+        "symbols": [
+          "ZT",
+          "ZF",
+          "ZN",
+          "ZB"
+        ],
+        "candidate": [],
+        "incubating": [],
+        "deployed": []
+      },
+      "Agriculture": {
+        "symbols": [
+          "ZC",
+          "ZS",
+          "ZW"
+        ],
+        "candidate": [],
+        "incubating": [],
+        "deployed": []
+      }
+    },
+    "Q4": {
+      "Equities": {
+        "symbols": [
+          "ES",
+          "NQ",
+          "RTY",
+          "YM"
+        ],
+        "candidate": [],
+        "incubating": [],
+        "deployed": []
+      },
+      "Energy": {
+        "symbols": [
+          "CL",
+          "HO",
+          "RB",
+          "NG"
+        ],
+        "candidate": [],
+        "incubating": [],
+        "deployed": []
+      },
+      "Metals": {
+        "symbols": [
+          "GC",
+          "SI",
+          "PL"
+        ],
+        "candidate": [],
+        "incubating": [],
+        "deployed": []
+      },
+      "Currencies": {
+        "symbols": [
+          "6A",
+          "6B",
+          "6C",
+          "6E",
+          "6J",
+          "6S"
+        ],
+        "candidate": [],
+        "incubating": [],
+        "deployed": []
+      },
+      "Rates": {
+        "symbols": [
+          "ZT",
+          "ZF",
+          "ZN",
+          "ZB"
+        ],
+        "candidate": [],
+        "incubating": [],
+        "deployed": []
+      },
+      "Agriculture": {
+        "symbols": [
+          "ZC",
+          "ZS",
+          "ZW"
+        ],
+        "candidate": [],
+        "incubating": [],
+        "deployed": []
+      }
+    }
+  }
+}
