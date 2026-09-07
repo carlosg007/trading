@@ -43,3 +43,27 @@ models/*.onnx
 
 # Numba on-disk cache — see NUMBA_CACHE_DIR in deploy/systemd/trading.env.
 .cache/
+
+# Rotated run logs. `*.log` and `*.err` above catch the LIVE file, but
+# logrotate renames to `master_live.log.1` and `master_live.log.2.gz`, which
+# match neither - which is why 54 of them were sitting in `git status`.
+# `logs/.gitkeep` is tracked and stays tracked; the negation keeps the
+# directory placeholder meaningful if it is ever removed and re-added.
+logs/
+!logs/.gitkeep
+
+# Local backups. Written by hand before a destructive edit -
+# `config/portfolios.json.bak` is the pre-cleanup routing table - and useful
+# exactly where they sit. The copy that matters for review is the git history
+# the edit was made against.
+*.bak
+
+# Lifecycle run write-ups. Operator scratchpads recording one run on one day;
+# the artifacts they describe live under /mnt/backtest/artifacts/.
+full_lifecycle_run_results.md
+
+# Watchdog alert state. Rewritten by the watchdog every cycle, exactly like
+# `data/live_regime_state.json` above and ignored for the same reason: a
+# running process's scratch space makes every `git status` dirty and every
+# diff meaningless.
+data/watchdog_alert_state.json
