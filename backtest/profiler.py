@@ -99,6 +99,49 @@ DESIGNATION_RULE = ("primary = max(Net_PnL x Profit_Factor) among quadrants "
                     f"{DESIGNATION_MIN_TRADE_FRACTION:.0%} of profiled trades)")
 
 
+def _quadrant_risk(pnl) -> dict:
+    """
+    One quadrant's own Sharpe and drawdown, and what they are NOT.
+
+    Both are QUADRANT-LOCAL. A quadrant's trades are scattered through the run
+    - the tape moves in and out of High-Vol/Trending all year - so this is the
+    risk of the STREAM OF TRADES THIS QUADRANT CONTRIBUTED, in entry order,
+    and not the risk the account carried. The account's drawdown is the whole
+    equity path and lives on the run metrics; mixing the two would put a
+    quadrant-sized figure under an account-sized heading with both individually
+    true, which is the mistake this repository keeps making room to avoid.
+
+    `sharpe_trade` IS NOT ANNUALISED, and the name says so. Annualising needs a
+    time basis, and a non-contiguous subset of the calendar has none that is
+    not invented: 40 trades drawn from four separate High-Vol weeks do not
+    describe a year. It is mean(pnl) / stdev(pnl) over the quadrant's trades -
+    a per-trade signal-to-noise ratio, comparable across quadrants of the SAME
+    run, which is exactly the comparison the all-quadrant gate makes. Reading
+    it against an annualised Sharpe from anywhere else is a category error.
+
+    `max_drawdown_pnl` is the deepest peak-to-trough fall of this quadrant's
+    CUMULATIVE P&L, in dollars, and is <= 0 by construction (0 when the
+    quadrant only ever made new highs). Dollars rather than a percent: a
+    percent needs a capital base, the base here is the whole account, and the
+    quotient would then describe neither the quadrant nor the account.
+
+    A single trade has no dispersion, so `sharpe_trade` is None rather than
+    infinite - one observation is not a measurement, and a None the gate
+    refuses is safer than a large number it passes.
+    """
+    series = pd.Series(pnl, dtype="float64").dropna()
+    n = int(len(series))
+    if n == 0:
+        return {"sharpe_trade": None, "max_drawdown_pnl": None}
+    sd = float(series.std(ddof=1)) if n > 1 else 0.0
+    sharpe = (round(float(series.mean()) / sd, 3)
+              if n > 1 and sd > 0 else None)
+    curve = series.cumsum()
+    drawdown = float((curve - curve.cummax()).min())
+    return {"sharpe_trade": sharpe,
+            "max_drawdown_pnl": round(min(drawdown, 0.0), 2)}
+
+
 def _score_num(value):
     """A float, or None - never a NaN masquerading as a measurement."""
     try:
@@ -825,6 +868,13 @@ class RegimeProfiler:
                 # disagree about which population they describe.
                 "avg_trade_abs_pnl": round(
                     float(regime_trades['pnl'].abs().mean()), 2),
+                # PER-QUADRANT RISK, for the all-quadrant robustness gate.
+                # Both are QUADRANT-LOCAL and neither is an account figure -
+                # see `_quadrant_risk`. Written here so the gate reads one
+                # recorded number rather than re-deriving it from the trade
+                # list, which is how two modules come to disagree about what
+                # they measured.
+                **_quadrant_risk(regime_trades['pnl']),
             }
             
             self._say(f" {regime:<30} | {count:<8} | {win_rate:>5.1f}%  | {pf:>13.2f} | ${net_pnl:,.2f}")

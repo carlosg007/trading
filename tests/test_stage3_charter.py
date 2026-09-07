@@ -493,8 +493,15 @@ def test_no_aggregate_pruning() -> None:
 
     # The clause, at its sharpest. Before 2026-08-21 this combination was
     # NOT CERTIFIED on the strength of the Gate 1 FAIL.
+    # `require_all_quadrants=False` throughout this section: these cases
+    # assert the CHARTER's verdict, which is Gate R alone, and that is now the
+    # waived mode. Gate Q - the all-quadrant bar added 2026-09-07 - is
+    # exercised in its own section below, on profiles built for it. Passing it
+    # a fixture with no holdout breakdown would test nothing except that NOT
+    # EVALUATED is not a pass, which `test_all_quadrant_gate` states directly.
     a = charter_audit(_aggregate(FAIL, PASS, NOT_EVALUATED, FAIL),
-                      passing_r, ret, in_sample_metrics=ALIVE)
+                      passing_r, ret, in_sample_metrics=ALIVE,
+                      require_all_quadrants=False)
     check("a FAILING Gate 1 and an unrun Gate 2 still CERTIFY when Gate R "
           "passes", a["status"] == PASS and a["passed"] is True, a["status"])
     check("...and the pre-charter roll-up survives as aggregate_status, so "
@@ -508,14 +515,14 @@ def test_no_aggregate_pruning() -> None:
           a["verdict_gate"] == GATE_R and "clause 3" in a["verdict_basis"])
 
     b = charter_audit(_aggregate(PASS, PASS, PASS, PASS), failing_r, ret,
-                      in_sample_metrics=ALIVE)
+                      in_sample_metrics=ALIVE, require_all_quadrants=False)
     check("three PASSING aggregate gates do NOT certify a failed Gate R - "
           "the blend cannot vouch for the quadrant either",
           b["status"] == FAIL and b["passed"] is False, b["status"])
 
     c = charter_audit(_aggregate(PASS, PASS, PASS, PASS),
                       regime_gate(_profile(), None), ret,
-                      in_sample_metrics=ALIVE)
+                      in_sample_metrics=ALIVE, require_all_quadrants=False)
     check("no designated quadrant is NOT CERTIFIED however the gates read",
           c["status"] == NOT_EVALUATED and c["passed"] is False)
 
@@ -542,7 +549,8 @@ def test_ruin_guard() -> None:
            "gates": {"gate1": {"name": "g1", "status": PASS, "checks": []}}}
 
     def _audit(metrics):
-        return charter_audit(agg, passing_r, ret, in_sample_metrics=metrics)
+        return charter_audit(agg, passing_r, ret, in_sample_metrics=metrics,
+                             require_all_quadrants=False)
 
     alive = _audit({"ruined": False, "final_equity": 207_890.0,
                     "max_drawdown_pct": -49.56})
@@ -1563,7 +1571,8 @@ def test_regime_starvation_is_never_certified() -> None:
         "gate1": {"status": "PASS"}, "gate2": {"status": "PASS"},
         "gate3": {"status": "PASS"}}}
     folded = charter_audit(dict(audit), starved, {"metrics": {}},
-                           in_sample_metrics=survived)
+                           in_sample_metrics=survived,
+                           require_all_quadrants=False)
     check("a starved quadrant is NOT CERTIFIED even with Gates 1-3 all "
           "passing", folded["passed"] is False, str(folded["passed"]))
     check("...and the verdict gate is named as Gate R",
@@ -1576,7 +1585,8 @@ def test_regime_starvation_is_never_certified() -> None:
     # check above a measurement rather than a tautology.
     healthy = regime_gate(profile(61), REGIME, 1.00, MIN_REGIME_TRADES)
     ok = charter_audit(dict(audit), healthy, {"metrics": {}},
-                       in_sample_metrics=survived)
+                       in_sample_metrics=survived,
+                       require_all_quadrants=False)
     check("a quadrant with 61 trades and PF 2.50 IS certified",
           ok["passed"] is True and ok["status"] == "PASS", ok["status"])
 
@@ -1603,6 +1613,137 @@ def test_version_b_survivor_is_audited_as_version_b() -> None:
     check("the B survivor is audited as Version B without --ml being typed",
           verdicts == {"NQ": True, "ES": False}, str(verdicts))
 
+def test_all_quadrant_gate() -> None:
+    """
+    Gate Q: the edge held in EVERY quadrant, not only its designated one.
+
+    Requested 2026-09-07 and enforced by DEFAULT, so the case that matters
+    most is the specialist: Stage 1 designates one home quadrant and the live
+    supervisor stands the strategy down in the other three, so a Q4 range fade
+    never trades Q1 and fails this gate by construction. That is the intended
+    effect of the request rather than a defect, and it is pinned here so
+    nobody later reads the resulting wall of refusals as a bug in the gate.
+    """
+    from backtest.audit_gates import (all_quadrant_gate, ALL_QUADRANTS_FAILED,
+                                      GATE_Q)
+    from backtest.profiler import REGIMES
+
+    print("\nGate Q: all four quadrants, individually (2026-09-07)")
+
+    def _qrisk(net, sharpe, dd, n=40):
+        return {"trade_count": n, "net_pnl": net, "sharpe_trade": sharpe,
+                "max_drawdown_pnl": dd, "profit_factor": 1.3,
+                "win_rate": 50.0}
+
+    healthy = {"regime_breakdown": {r: _qrisk(5000, 0.20, -3000)
+                                    for r in REGIMES}}
+    check("four healthy quadrants PASS",
+          all_quadrant_gate(healthy)["status"] == PASS)
+
+    # The specialist. Only Q4 has any trades at all.
+    specialist = {"regime_breakdown": {REGIMES[3]: _qrisk(9000, 0.30, -2000)}}
+    spec = all_quadrant_gate(specialist)
+    check("a quadrant the strategy NEVER TRADED is a FAIL, not a skip",
+          spec["status"] == FAIL
+          and sum(1 for r in spec["quadrants"] if r["status"] != PASS) == 3,
+          spec["status"])
+    check("...and the note says a specialist is EXPECTED to fail it",
+          "specialist" in spec["note"].lower()
+          and "--no-require-all-quadrants" in spec["note"])
+
+    # Each bar, one at a time, so a pass cannot come from the wrong column.
+    for label, bad in (
+            ("negative expectancy", _qrisk(-800, 0.20, -3000)),
+            ("Sharpe below the floor", _qrisk(5000, 0.01, -3000)),
+            ("drawdown past the cap", _qrisk(5000, 0.20, -22_000)),
+            ("too few trades to measure", _qrisk(5000, 0.20, -3000, n=6)),
+            ("no Sharpe recorded at all", _qrisk(5000, None, -3000))):
+        prof = {"regime_breakdown": {r: _qrisk(5000, 0.20, -3000)
+                                     for r in REGIMES}}
+        prof["regime_breakdown"][REGIMES[0]] = bad
+        check(f"one quadrant with {label} fails the gate",
+              all_quadrant_gate(prof)["status"] == FAIL, label)
+
+    check("no breakdown at all is NOT EVALUATED, which is not a pass",
+          all_quadrant_gate({})["status"] == NOT_EVALUATED)
+
+    # The fold: Gate Q can refuse a certification Gate R passed, under its own
+    # status token, and waiving it is recorded by the gate's ABSENCE.
+    alive = {"ruined": False, "final_equity": 138_400.0,
+             "max_drawdown_pct": -17.5}
+    passing_r = regime_gate(_profile(**{TRENDING: _q(1.42, 88)}), TRENDING)
+    ret = retention_scores({"profit_factor": 2.4}, {"profit_factor": 1.1})
+    # Spelled out rather than reaching for `test_no_aggregate_pruning`'s
+    # nested `_aggregate`: these sections are called independently by main()
+    # and a helper borrowed across them would tie their order together.
+    agg = {"version": "A", "status": PASS, "passed": True,
+           "gates": {"gate1": {"name": "g1", "status": PASS, "checks": []},
+                     "gate2": {"name": "g2", "status": PASS, "checks": []},
+                     "gate3": {"name": "g3", "status": PASS, "checks": []}}}
+
+    refused = charter_audit(agg, passing_r, ret, in_sample_metrics=alive,
+                            holdout_profile=specialist)
+    check("Gate Q refuses a certification Gate R passed",
+          refused["passed"] is False
+          and refused["status"] == ALL_QUADRANTS_FAILED, refused["status"])
+    check("...under its OWN token, so it is never read as a blown account",
+          refused["status"] != "FAILED_RUIN_CHECK"
+          and GATE_Q in refused["gates"])
+
+    passed = charter_audit(agg, passing_r, ret, in_sample_metrics=alive,
+                           holdout_profile=healthy)
+    check("...and four healthy quadrants certify, so the refusal above is a "
+          "measurement and not a tautology",
+          passed["passed"] is True and passed["status"] == PASS,
+          passed["status"])
+
+    waived = charter_audit(agg, passing_r, ret, in_sample_metrics=alive,
+                           holdout_profile=specialist,
+                           require_all_quadrants=False)
+    check("waiving it is recorded by the gate's ABSENCE, never by a written "
+          "PASS", waived["passed"] is True and GATE_Q not in waived["gates"]
+          and waived["all_quadrant_gate"] is None)
+
+    # Ruin outranks it: a blown account must not be relabelled by a
+    # robustness bar it also missed.
+    blown = {"ruined": True, "final_equity": -78_868.0,
+             "max_drawdown_pct": -194.0}
+    both = charter_audit(agg, passing_r, ret, in_sample_metrics=blown,
+                         holdout_profile=specialist)
+    check("a blown account still reads as RUIN, not as a quadrant failure",
+          both["status"] == "FAILED_RUIN_CHECK", both["status"])
+
+
+def test_quadrant_risk_is_quadrant_local() -> None:
+    """
+    `profiler._quadrant_risk` - the two figures Gate Q reads.
+
+    Both are quadrant-local and neither is an account number. The Sharpe is
+    UNANNUALISED because a non-contiguous subset of the calendar has no time
+    basis that is not invented, and the drawdown is in dollars because a
+    percent would need a capital base that describes the whole account.
+    """
+    from backtest.profiler import _quadrant_risk
+
+    print("\nGate Q's inputs: quadrant-local risk")
+
+    mixed = _quadrant_risk([100, -50, 80, -30, 60])
+    check("Sharpe is mean/stdev over the quadrant's own trades",
+          abs(mixed["sharpe_trade"] - 0.473) < 0.01, str(mixed))
+    check("drawdown is the deepest fall of the quadrant's cumulative P&L",
+          mixed["max_drawdown_pnl"] == -50.0, str(mixed))
+    check("a quadrant that only made new highs draws 0, not None",
+          _quadrant_risk([10, 20, 30])["max_drawdown_pnl"] == 0.0)
+    check("ONE trade has no dispersion, so the Sharpe is None rather than "
+          "infinite - and Gate Q refuses a None",
+          _quadrant_risk([42.0])["sharpe_trade"] is None)
+    check("an empty quadrant reports None for both",
+          _quadrant_risk([]) == {"sharpe_trade": None,
+                                 "max_drawdown_pnl": None})
+    check("a losing quadrant carries a negative Sharpe through",
+          _quadrant_risk([-10, -20, -5])["sharpe_trade"] < 0)
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="stage3charter_") as td:
         tmp = Path(td)
@@ -1625,6 +1766,8 @@ def main() -> int:
         test_stage3_input_resolution(tmp)
         test_regime_starvation_is_never_certified()
         test_version_b_survivor_is_audited_as_version_b()
+        test_all_quadrant_gate()
+        test_quadrant_risk_is_quadrant_local()
 
     print("\n" + "=" * 60)
     if _failures:
