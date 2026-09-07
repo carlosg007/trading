@@ -972,6 +972,16 @@ def build_parser() -> argparse.ArgumentParser:
                         "of five is not evidence against a session.")
     p.add_argument("--report-discord", action="store_true",
                    help="Post the Discord card after Stages 1, 2 and 3")
+    p.add_argument("--promote-max", type=int, default=DEFAULT_PROMOTE_MAX,
+                   metavar="N",
+                   help=f"Refuse an unattended promotion of more than N "
+                        f"configurations (default {DEFAULT_PROMOTE_MAX}; 0 or "
+                        f"less removes the bar). Applies to --auto-promote "
+                        f"and --promote-only alike. One command over the "
+                        f"23-contract universe at four timeframes can certify "
+                        f"dozens of pairs, and each promotion is a package on "
+                        f"disk, a routing-table row and its own commit that "
+                        f"nobody read a card for.")
     p.add_argument("--auto-promote", action="store_true",
                    help="Run Stage 5 for every configuration Stage 3 recorded "
                         "as certified. Never overrides a gate.")
@@ -1011,7 +1021,8 @@ def _promote_only(args: argparse.Namespace) -> int:
         f"--require-certification.\n"
         f"  --symbols/--tf/--start/--end are not used by this path."))
 
-    outcome = auto_promote(strat, out_dir=out_dir, dry_run=dry)
+    outcome = auto_promote(strat, out_dir=out_dir, dry_run=dry,
+                           promote_max=args.promote_max)
     rc = int(outcome["returncode"])
     rows, promotions = outcome["rows"], outcome["promotions"]
 
@@ -1217,7 +1228,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     promotions: list[dict[str, Any]] = []
     rows: list[dict[str, Any]] = []
     if args.auto_promote:
-        outcome = auto_promote(strat, out_dir=out_dir, dry_run=dry)
+        outcome = auto_promote(strat, out_dir=out_dir, dry_run=dry,
+                               promote_max=args.promote_max)
         rc = int(outcome["returncode"])
         promotions, rows = outcome["promotions"], outcome["rows"]
         # Card 5 last, and only now: the promotion outcome is on the handoff,
@@ -1281,8 +1293,13 @@ def render_unrouted(groups: dict[str, list[str]], width: int = 78) -> str:
     return "\n".join(lines)
 
 
+DEFAULT_PROMOTE_MAX = 5
+
+
 def auto_promote(strat: str, *, out_dir: str | None = None,
-                 dry_run: bool = False) -> dict[str, Any]:
+                 dry_run: bool = False,
+                 promote_max: int | None = DEFAULT_PROMOTE_MAX,
+                 ) -> dict[str, Any]:
     """
     Stage 5 for every configuration Stage 3 recorded as certified.
 
@@ -1323,6 +1340,35 @@ def auto_promote(strat: str, *, out_dir: str | None = None,
     if not winners:
         print("  Nothing was certified. Nothing promoted.")
         return {"returncode": 0, "promotions": [], "rows": rows, "commit": None}
+
+    # THE UNATTENDED FAN-OUT BAR, added 2026-09-07 after an audit of
+    # approved_incubator/. `promote.py` is per-pair and refuses an ambiguous
+    # multi-pair promotion outright; the bulk arrives HERE, because this loop
+    # promotes every certified row and the shell helpers sweep 23 contracts x
+    # 4 timeframes. One command therefore reached 92 certifiable pairs, and
+    # 472 promotion commits over 14 days put 160 packages on disk against 52
+    # the routing table actually routes.
+    #
+    # A CAP RATHER THAN A PROMPT: this path exists to run unattended, so
+    # blocking on stdin would hang a detached run rather than protect it. The
+    # limit is refused LOUDLY and names the flag that lifts it, so promoting
+    # forty configurations stays possible and stops being accidental.
+    if (promote_max is not None and int(promote_max) > 0
+            and len(winners) > int(promote_max)):
+        print(f"\n  REFUSED  Stage 3 certified {len(winners)} configurations "
+              f"and --auto-promote will not register more than "
+              f"{int(promote_max)} unattended.\n"
+              f"           Each one is a package on disk, a row in "
+              f"config/portfolios.json and its own git commit, and no human "
+              f"has read the Stage 3 card for any of them.\n"
+              f"           Read the card, then promote what you chose:\n"
+              f"             python3 backtest/run_pipeline.py --strat {strat} "
+              f"--promote-only\n"
+              f"           Or lift the bar deliberately:\n"
+              f"             --promote-max {len(winners)}",
+              file=sys.stderr, flush=True)
+        return {"returncode": 1, "promotions": [], "rows": rows,
+                "commit": None}
 
     try:
         source = _strategy_source(strat)
