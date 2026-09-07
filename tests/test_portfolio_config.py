@@ -63,7 +63,8 @@ from mdlib.regimes import QUADRANT_LABELS                        # noqa: E402
 from backtest.specs import SPECS                                 # noqa: E402
 from portfolio.config_loader import (                            # noqa: E402
     ACCOUNT_TYPES, CANONICAL_QUADRANT, CANONICAL_REGIME,
-    DEFAULT_CONFIG_PATH, INCUBATOR_ACCOUNT_TYPE, PROP_ACCOUNT_TYPE,
+    DEFAULT_CONFIG_PATH, EVAL_ACCOUNT_TYPE, INCUBATOR_ACCOUNT_TYPE,
+    PROP_ACCOUNT_TYPE,
     PortfolioConfigError, REQUIRED_PORTFOLIOS, canonical_quadrant,
     canonical_regime, clear_cache, describe, get_asset_spec,
     get_portfolio_by_account, get_portfolio_for_strategy,
@@ -78,7 +79,8 @@ CONFIG_PATH = REPO / DEFAULT_CONFIG_PATH
 # The NinjaTrader account each portfolio EXECUTES on, retyped from the
 # specification for the same reason. `target_account` is not the portfolio id:
 # NT8 prefixes a simulation account with `Sim`, and the ids keep the Odd/Even
-# spelling that encodes the basket split (Odd = MNQ/MCL, Even = MES/MGC). Read
+# spelling that encodes the basket split (Odd = MNQ/6E/6J, Even = MES/MGC).
+# Read
 # off the file instead, this case would pass whatever the accounts were
 # renamed to — and an order sent to an account NinjaTrader does not have is
 # rejected on a config that loads perfectly.
@@ -109,33 +111,32 @@ EXECUTION_ACCOUNTS = {"Incubator-Odd": "SimIncubator1",
 # EVERY ENTRY HERE MUST BE ABLE TO TRADE WHERE IT SITS. The dispatcher walks
 # `basket.assets` and asks `trades_symbol` for each, so a strategy certified on
 # a contract the basket cannot reach is refused on every asset and declines
-# forever — visibly running, permanently inert. Incubator-Odd holds MNQ/MCL
-# (NQ, CL) and Incubator-Even holds MES/MGC (ES, GC); an ES strategy on the Odd
-# account is the mistake `backtest/promote.py`'s own routing comment records
-# having made before.
+# forever — visibly running, permanently inert. Incubator-Odd holds
+# MNQ/6E/6J (NQ, 6E, 6J) and Incubator-Even holds MES/MGC (ES, GC); an ES
+# strategy on the Odd account is the mistake `backtest/promote.py`'s own
+# routing comment records having made before.
 #
 # NG and RB promotions are deliberately absent: `contract_alias.MICRO_TO_PARENT`
 # has no micro for either, so NO incubator basket can reach them and moving
 # them between accounts cannot help. They need full-size contracts, which is a
 # different risk profile from these sim accounts.
 #
-# CL promotions are deliberately absent too, for a DIFFERENT reason, and the
-# difference matters if anyone is tempted to put them back. NG and RB cannot be
-# reached by any basket; CL can - Incubator-Odd holds MCL and the routing works.
-# What is missing is the DATA: NinjaTrader on this box streams no CL series, so
+# CL promotions are absent for a THIRD reason now, and the history matters if
+# anyone is tempted to put them back. NG and RB cannot be reached by any
+# basket. CL once could - Incubator-Odd held MCL and the routing worked - but
+# the DATA was missing: NinjaTrader on this box streams no CL series, so
 # /mnt/backtest/artifacts/nt8_bars carries 27 symbols and none of them is CL,
-# and the regime daemon fails every cycle with "the feed returned no 15m bars".
-# Five CL strategies sat here reading `no_regime_published` - allocated,
-# certified, permanently inert.
+# and the regime daemon failed every cycle with "the feed returned no 15m
+# bars". Five CL strategies sat here reading `no_regime_published` -
+# allocated, certified, permanently inert.
 #
-# So this absence is reversible and NG/RB's is not. Restore them when the CL
-# feed exists, and confirm it with the spool rather than with this comment:
+# `724a92b portfolios: route the certified FX and Q3/Q4 packages; drop MCL`
+# then took MCL out of the basket and its `asset_metadata` entry with it, and
+# put 6E/6J in its place. So restoring CL is now TWO changes, not one: the
+# feed, and then the basket. Confirm the feed with the spool rather than with
+# this comment:
 #
 #     ls /mnt/backtest/artifacts/nt8_bars/ | grep '^CL'
-#
-# MCL is deliberately LEFT in Incubator-Odd's basket. The basket says what the
-# account may trade, not what it currently does, and stripping it would turn a
-# missing upstream feed into a config change that has to be undone twice.
 EXPECTED_ASSIGNMENTS = {
     "Incubator-Odd":  [
         "sma_momentum_crossover_20260818_NQ_5m_VA",           #  5m, NQ
@@ -159,12 +160,16 @@ EXPECTED_ASSIGNMENTS = {
         "ma_anchoring_spread_20260820_GC_1h_VA",              #  1h, GC
         "ma_anchoring_spread_20260820_GC_1h_VB",              #  1h, GC
     ],
+    "Eval-Odd":       [],
+    "Eval-Even":      [],
     "Prop-Odd":       [],
     "Prop-Even":      [],
 }
 
-REQUESTED_POINT_VALUES = {"MNQ": 2.0, "MES": 5.0, "MCL": 100.0, "MGC": 10.0}
-REQUESTED_TICK_SIZES = {"MNQ": 0.25, "MES": 0.25, "MCL": 0.01, "MGC": 0.10}
+REQUESTED_POINT_VALUES = {"MNQ": 2.0, "MES": 5.0, "MGC": 10.0,
+                          "6E": 125_000.0, "6J": 12_500_000.0}
+REQUESTED_TICK_SIZES = {"MNQ": 0.25, "MES": 0.25, "MGC": 0.10,
+                        "6E": 0.00005, "6J": 0.0000005}
 
 # The repository's regime -> quadrant id map, built HERE from
 # `backtest.profiler.REGIMES` rather than imported. `REGIMES` is a tuple in
@@ -207,17 +212,22 @@ def write_temp_config(mutate) -> Path:
 # ==========================================================================
 # 1. Schema validation — the request's first testing clause
 # ==========================================================================
-def test_all_four_target_accounts_exist_and_are_well_formed() -> None:
+def test_all_six_target_accounts_exist_and_are_well_formed() -> None:
     """
-    THE REQUEST'S FIRST CLAUSE: all four target accounts, valid asset lists,
+    THE REQUEST'S FIRST CLAUSE: every target account, valid asset lists,
     non-null risk profiles.
 
-    The four names are retyped from the specification rather than read off the
+    Four accounts until `48d1091 config: the three-stage ladder, and an
+    evaluation tier to carry it` put an evaluation rung between incubation and
+    the funded book; six since.
+
+    The names are retyped from the specification rather than read off the
     file, so a portfolio quietly renamed fails here instead of at the first
     order that cannot be routed.
     """
     cfg = config()
     assert set(REQUIRED_PORTFOLIOS) == {"Incubator-Odd", "Incubator-Even",
+                                        "Eval-Odd", "Eval-Even",
                                         "Prop-Odd", "Prop-Even"}
     assert set(cfg["portfolios"]) == set(REQUIRED_PORTFOLIOS), (
         sorted(cfg["portfolios"]))
@@ -237,7 +247,13 @@ def test_all_four_target_accounts_exist_and_are_well_formed() -> None:
         assert risk["fixed_risk_budget_usd"] == 250.0
         assert risk["max_trailing_drawdown_usd"] == 2500.0
         assert risk["max_forward_incubation_dd_pct"] == 0.40
-        assert risk["clamping"] == {"min_contracts": 1, "max_contracts": 5}
+        # The evaluation rung is capped at ONE contract. Retyped per tier
+        # rather than relaxed to a range: a clamp that silently widened from
+        # 1 to 5 on an evaluation account is a funded-challenge breach, and a
+        # test asserting `<= 5` would pass through it.
+        want_max = 1 if p["account_type"] == EVAL_ACCOUNT_TYPE else 5
+        assert risk["clamping"] == {"min_contracts": 1,
+                                    "max_contracts": want_max}, (pid, risk)
 
         assets = p["basket"]["assets"]
         assert isinstance(assets, list) and assets, f"{pid}: {assets!r}"
@@ -257,9 +273,10 @@ def test_all_four_target_accounts_exist_and_are_well_formed() -> None:
 
 def test_the_two_tracks_hold_the_same_baskets_and_are_orthogonal_within() -> None:
     """
-    The partition's actual shape: Odd trades MNQ/MCL and Even trades MES/MGC on
-    BOTH tracks, so an incubator portfolio mirrors its prop counterpart — that
-    is what makes paper validation transferable.
+    The partition's actual shape: Odd trades MNQ/6E/6J and Even trades
+    MES/MGC, and the incubation and evaluation rungs carry the SAME basket —
+    that is what makes paper validation transferable up the ladder. The funded
+    rung may carry less (Prop-Odd is MNQ alone), never more.
 
     Within one track the baskets must not overlap. Two accounts of the same
     track holding the same asset are one position split in two, and the
@@ -277,13 +294,18 @@ def test_the_two_tracks_hold_the_same_baskets_and_are_orthogonal_within() -> Non
                     f"both trade {symbol}")
                 holders[symbol] = pid
 
-    odd = {pid: cfg["portfolios"][pid]["basket"]
-           for pid in ("Incubator-Odd", "Prop-Odd")}
-    assert odd["Incubator-Odd"]["assets"] == odd["Prop-Odd"]["assets"] \
-        == ["MNQ", "MCL"]
-    even = {pid: cfg["portfolios"][pid]["basket"]
-            for pid in ("Incubator-Even", "Prop-Even")}
-    assert even["Incubator-Even"]["assets"] == even["Prop-Even"]["assets"] \
+    odd = {pid: cfg["portfolios"][pid]["basket"]["assets"]
+           for pid in ("Incubator-Odd", "Eval-Odd", "Prop-Odd")}
+    assert odd["Incubator-Odd"] == odd["Eval-Odd"] == ["MNQ", "6E", "6J"]
+    # Prop-Odd is deliberately NARROWER than the two rungs below it: the FX
+    # pair is carried through incubation and evaluation but is not on the
+    # funded book. Asserted as a subset as well as by value, so widening the
+    # funded basket past what was paper-validated fails here.
+    assert odd["Prop-Odd"] == ["MNQ"]
+    assert set(odd["Prop-Odd"]) <= set(odd["Incubator-Odd"])
+    even = {pid: cfg["portfolios"][pid]["basket"]["assets"]
+            for pid in ("Incubator-Even", "Eval-Even", "Prop-Even")}
+    assert even["Incubator-Even"] == even["Eval-Even"] == even["Prop-Even"] \
         == ["MES", "MGC"]
     assert cfg["portfolios"]["Incubator-Odd"]["account_type"] \
         == INCUBATOR_ACCOUNT_TYPE
@@ -395,9 +417,10 @@ def test_a_missing_or_malformed_file_is_refused_with_a_usable_message() -> None:
 # ==========================================================================
 def test_the_point_values_are_the_ones_specified() -> None:
     """
-    THE REQUEST'S SECOND CLAUSE: MNQ $2.00, MES $5.00, MCL $100.00,
-    MGC $10.00 — checked through `get_asset_spec` and against values retyped
-    from the specification.
+    THE REQUEST'S SECOND CLAUSE: MNQ $2.00, MES $5.00, MGC $10.00, and the
+    FX pair 6E $125,000 / 6J $12,500,000 that replaced MCL in `724a92b` —
+    checked through `get_asset_spec` and against values retyped from the
+    specification.
     """
     cfg = config()
     for symbol, want in REQUESTED_POINT_VALUES.items():
@@ -409,8 +432,11 @@ def test_the_point_values_are_the_ones_specified() -> None:
 
     assert get_asset_spec("MNQ", config=cfg)["sector"] == "Equity_Index"
     assert get_asset_spec("MES", config=cfg)["sector"] == "Equity_Index"
-    assert get_asset_spec("MCL", config=cfg)["sector"] == "Energy"
     assert get_asset_spec("MGC", config=cfg)["sector"] == "Metals"
+    assert get_asset_spec("6E", config=cfg)["sector"] == "FX"
+    assert get_asset_spec("6J", config=cfg)["sector"] == "FX"
+    assert "no asset_metadata" in raises(get_asset_spec, "MCL", config=cfg), (
+        "MCL left the baskets in 724a92b and its metadata went with it")
 
     assert "no asset_metadata" in raises(get_asset_spec, "NQ", config=cfg), (
         "the full-size contracts are not in this basket and must not resolve")
@@ -423,11 +449,14 @@ def test_the_tick_value_is_derived_once_and_is_right() -> None:
     caller: one multiplication is still one place to get it wrong, and two
     copies would be two.
 
-    The four values are hand-worked here rather than recomputed from the same
-    two fields, which would make the case a restatement of the formula.
+    The five values are hand-worked here rather than recomputed from the same
+    two fields, which would make the case a restatement of the formula. 6E and
+    6J both land on $6.25 a tick from very different multipliers, which is the
+    pair most worth writing out by hand.
     """
     cfg = config()
-    hand_worked = {"MNQ": 0.50, "MES": 1.25, "MCL": 1.00, "MGC": 1.00}
+    hand_worked = {"MNQ": 0.50, "MES": 1.25, "MGC": 1.00,
+                   "6E": 6.25, "6J": 6.25}
     for symbol, want in hand_worked.items():
         got = get_asset_spec(symbol, config=cfg)["tick_value"]
         assert abs(got - want) < 1e-9, (symbol, got, want)
@@ -755,7 +784,7 @@ def test_the_accessors_hand_out_copies_and_not_the_cache() -> None:
     p = get_portfolio_by_account(EXECUTION_ACCOUNTS["Prop-Odd"], config=second)
     p["basket"]["assets"].append("SPY")
     assert second["portfolios"]["Prop-Odd"]["basket"]["assets"] == \
-        ["MNQ", "MCL"], "get_portfolio_by_account returned a live reference"
+        ["MNQ"], "get_portfolio_by_account returned a live reference"
 
 
 # ==========================================================================
@@ -763,16 +792,18 @@ def test_the_accessors_hand_out_copies_and_not_the_cache() -> None:
 # ==========================================================================
 def test_the_basket_assets_have_no_market_data_and_the_config_says_so() -> None:
     """
-    NONE OF THE FOUR BASKET ASSETS EXIST IN THE LAKE. It holds 27 symbols and
-    every one is a full-size contract; MNQ, MES, MCL and MGC are absent, and
-    CLAUDE.md lists the micros among the symbols whose definitions were never
-    downloaded, so they are UNVERIFIED in `backtest/specs.py` as well.
+    THE MICROS ARE ABSENT FROM THE LAKE; 6E AND 6J ARE NOT. MNQ, MES and MGC
+    have no `symbol=` partition — CLAUDE.md lists the micros among the symbols
+    whose definitions were never downloaded, so they are UNVERIFIED in
+    `backtest/specs.py` as well — while the FX pair `724a92b` added trades on
+    a full-size series the lake has carried all along.
 
-    Nothing here fails because of it and nothing should — a configuration
-    written before a data pull is a legitimate state. But no strategy can be
-    backtested, screened, swept or certified on these baskets until the data
-    exists, so the gap is reported on the loaded config rather than discovered
-    when a run returns no bars.
+    THIS DOES NOT GATE THE BACKTEST PIPELINE, and the summary line's wording
+    ("these baskets cannot be backtested yet") should not be read as saying it
+    does. Nothing under `backtest/` imports this module: a strategy is swept
+    and certified on the FULL-SIZE contract (NQ, ES, GC), and the micro is
+    only what the live dispatcher sends the order in. What the gap actually
+    blocks is a forward test of a BASKET on its own execution symbol.
 
     This case asserts the REPORTING, not the absence: if the micros are pulled
     tomorrow the list empties and the case still passes.
