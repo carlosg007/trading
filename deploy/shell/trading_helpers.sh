@@ -70,7 +70,20 @@ _TRADING_PY="${_TRADING_REPO}/.venv/bin/python3"
 # comment:
 #
 #     ls /mnt/backtest/artifacts/nt8_bars/ | grep '^CL' 
-_TRADING_UNIVERSE="ES,NQ,RTY,YM,NG,RB,HO,GC,SI,PL,ZB,ZN,ZF,ZT,6E,6J,6B,6A,6C,6S,ZC,ZS,ZW"
+# THE BACKTEST UNIVERSE, WHICH IS NOT THE LIVE-ROUTABLE ONE. 24 contracts:
+# every one has a `symbol=` partition in the lake and a VERIFIED ContractSpec
+# (`backtest.specs.verify_specs` reports only M2K and MYM unverified, and
+# neither is here), so all 24 can be swept, screened and certified.
+#
+# CL is in this list and is deliberately NOT live-routable. The lake carries
+# it, but NinjaTrader on this box streams no CL series - the nt8_bars spool
+# holds 27 symbols and none of them is CL - so the regime daemon fails every
+# cycle on it and five CL promotions once sat in the routing table reading
+# `no_regime_published`: allocated, certified, permanently inert. Backtesting
+# a contract and being able to trade it are different questions, and the two
+# lists are allowed to differ. Confirm the feed with the spool, never with
+# this comment:  ls /mnt/backtest/artifacts/nt8_bars/ | grep '^CL'
+_TRADING_UNIVERSE="ES,NQ,RTY,YM,CL,NG,RB,HO,GC,SI,PL,ZB,ZN,ZF,ZT,6E,6J,6B,6A,6C,6S,ZC,ZS,ZW"
 
 # Fail loudly here rather than three screens into a run.
 _trading_preflight() {
