@@ -196,7 +196,8 @@ from backtest.report import (FAIL, NOT_EVALUATED, PASS,            # noqa: E402
                              day_of_week_breakdown, format_day_of_week)
 from backtest.run import (load_bars, parse_param, parse_symbols,    # noqa: E402
                           resolve_strategy)
-from backtest.scan import expand_grid                              # noqa: E402
+from backtest.scan import (expand_grid,                          # noqa: E402
+                          STAGE2_PRUNED_FRAGILE)
 
 # Gate R's own name, kept beside the three it sits with so a reader of the
 # audit file never has to guess which key holds the verdict.
@@ -312,6 +313,34 @@ def stage2_targets(blob: dict | None, tf: str | None) -> list[dict]:
             "stage2_error": row.get("error") or "",
         })
     return out
+
+
+def stage2_skip_reason(status: str) -> str:
+    """
+    Why a Stage 2 pair is not certifiable, in the words of the status itself.
+
+    Stage 2 goes to real trouble to keep three states apart: OPTIMIZED, a
+    PRUNED_FRAGILE grid that RAN and locked no winner, and an ERROR row whose
+    sweep raised and wrote `params: "NOT OPTIMIZED"` (`scan.py` - "a sweep that
+    raised produced no parameters at all, which is a different statement from a
+    grid that produced no measurable Sharpe, and the two must not share a
+    cell"). An ERROR row carries `error` text and never reaches this function.
+
+    A fragility prune carries NO error text, because it is not an error - so
+    the bare fallback that used to stand here relabelled the one deliberate
+    ANTI-OVERFITTING verdict in Stage 2 as "stage 2 recorded no parameters",
+    which reads as a broken run. An operator triaging that table goes looking
+    for a crash that never happened, and - worse - the finding that every cell
+    in the grid was an isolated spike is precisely the evidence AGAINST this
+    configuration. Losing it is losing the result.
+    """
+    if str(status).upper() == STAGE2_PRUNED_FRAGILE:
+        return ("stage 2 swept this configuration and locked no winner: every "
+                "combination was an isolated spike or ruinous in sample "
+                f"({STAGE2_PRUNED_FRAGILE}). The sweep ran; this is a "
+                "fragility verdict, not a failed run.")
+    return (f"stage 2 recorded no parameters for this configuration "
+            f"({status or 'UNKNOWN'})")
 
 
 class WindowOverlapError(ValueError):
@@ -2354,8 +2383,11 @@ def write_stage3_summary(strat_name: str, out_dir: Path, results: list[dict],
             "complete": all(bool(r.get("complete")) for r in runs.values()),
             "timeframes": sorted(runs),
             "rule": ("Stage 3 prunes nothing on an aggregate metric. A row "
-                     "that is NOT AUDITED is a run failure or a missing "
-                     "Stage 2 parameter set, never a screening decision."),
+                     "that is NOT AUDITED did not reach a gate: the run "
+                     "broke, Stage 2 left no parameter set, or Stage 2 "
+                     "pruned the whole grid as fragile. It is never a "
+                     "screening decision by THIS stage, and the row's "
+                     "reason says which of the three it was."),
         },
         "runs": runs,
         # The consolidated index over the per-pair audits. Those files remain
@@ -2559,8 +2591,8 @@ def resolve_targets(strat_name: str, args: argparse.Namespace,
         if rows:
             targets = [r for r in rows if r["certifiable"]]
             skipped = [{**r, "error": (r["stage2_error"]
-                                       or "stage 2 recorded no parameters "
-                                          "for this configuration")}
+                                       or stage2_skip_reason(
+                                           r["stage2_status"]))}
                        for r in rows if not r["certifiable"]]
             return targets, skipped, f"{STAGE2_SUMMARY_FILE} (exact pairs)", \
                 summary

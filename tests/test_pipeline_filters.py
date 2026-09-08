@@ -1829,6 +1829,23 @@ def test_stage2_refuses_a_spike_and_a_ruinous_cell() -> None:
     check("a PRUNED_FRAGILE pair is not certifiable by Stage 3",
           certifiable == {"NQ": False, "ES": True}, str(certifiable))
 
+    # ...and the REASON must say the sweep ran. A fragility prune carries no
+    # `error` text, because it is not an error, so the bare fallback used to
+    # report Stage 2's one deliberate anti-overfitting verdict as "stage 2
+    # recorded no parameters" - which reads as a broken run and sends an
+    # operator hunting a crash that never happened.
+    from backtest.audit_gates import stage2_skip_reason
+    fragile = stage2_skip_reason(STAGE2_PRUNED_FRAGILE)
+    check("a fragility prune says the sweep RAN and locked no winner",
+          "locked no winner" in fragile and "not a failed run" in fragile,
+          fragile)
+    check("...and never borrows the wording of a sweep that produced nothing",
+          "recorded no parameters" not in fragile, fragile)
+    broke = stage2_skip_reason("ERROR")
+    check("a status that is neither still reports no parameters, and NAMES "
+          "itself so the two cannot be read as one",
+          "recorded no parameters" in broke and "ERROR" in broke, broke)
+
 
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="pipefilt_") as td:
