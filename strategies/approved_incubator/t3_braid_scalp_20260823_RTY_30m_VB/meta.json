@@ -1,0 +1,149 @@
+{
+  "name": "t3_braid_scalp_20260823_RTY_30m_VB",
+  "strategy": "t3_braid_scalp_20260823",
+  "symbol": "RTY",
+  "version": "B",
+  "description": "Promoted Version B (baseline + causal ML filter).",
+  "symbols": [
+    "RTY"
+  ],
+  "timeframe": "30m",
+  "params": {
+    "t3_period": 5,
+    "t3_vfactor": 0.7,
+    "braid_fast": 3,
+    "braid_slow": 7,
+    "stiffness_period": 20,
+    "stiffness_threshold": 45.0,
+    "use_t3_filter": true,
+    "use_braid_filter": true,
+    "use_stiffness_filter": true,
+    "use_news_filter": false,
+    "sl_atr_mult": 1.5,
+    "tp_atr_mult": 3.0,
+    "trailing": false
+  },
+  "params_source": "locked from dual_metrics_RTY.json",
+  "params_conflict": [],
+  "risk": {
+    "sl_atr_mult": 1.5,
+    "tp_atr_mult": 3.0,
+    "trailing": false
+  },
+  "day_of_week_gate": {
+    "status": "EVALUATED",
+    "version": "B",
+    "versions_profiled": [
+      "A",
+      "B"
+    ],
+    "blocked_weekdays": [
+      3
+    ],
+    "blocked_weekday": 3,
+    "blocked_day": "Thu",
+    "blocked_day_name": "Thursday",
+    "worst_weekday": 3,
+    "worst_day": "Thu",
+    "block_rule": "negative_expectancy",
+    "min_trades": 20,
+    "reason": "Thursday is the weakest session (expectancy -124.78 per trade over 127 trades) and its expectancy is negative",
+    "selected_in_sample": true,
+    "note": "The weekday was chosen in-sample, on a window that spans the Stage 3 holdout. It is a live-supervision instruction, not evidence: no gate was scored on it and nothing was pruned for it.",
+    "source": "/mnt/backtest/artifacts/pipeline/t3_braid_scalp_20260823/dow_gate_RTY_30m.json",
+    "source_sha256": "3a3a8896d2e81951fae76b316e5cbaccf1b32ab277e29ba7ce2a885f4cb089a2"
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/t3_braid_scalp_20260823.py",
+  "source_sha256": "7947879906b65bca846ba7866963262866c49757e0eaf8b387e5399fd87aac07",
+  "promoted_sha256": "b7fc6026ae041935993bccd3a90ecbe158ee1e0997c16cfa926efba4a922e2a1",
+  "promoted_utc": "2026-09-08T11:35:01+00:00",
+  "costs_included": true,
+  "variants_tested": null,
+  "metrics_status": "RECORDED \u00b7 locked from dual_metrics_RTY.json",
+  "metrics": {
+    "sharpe": -0.11267322400587967,
+    "sortino": -0.19593042650923964,
+    "calmar": -0.03833694191016756,
+    "profit_factor": 0.9331750164611287,
+    "win_rate": 0.31862745098039214,
+    "max_drawdown_pct": -27.565576213848665,
+    "total_return_pct": -11.242959999999991,
+    "annualized_return_pct": -1.0567798940306128,
+    "trade_count": 612,
+    "total_pnl": -11242.959999999699,
+    "total_costs": 8922.9599999999,
+    "final_equity": 88757.04000000001,
+    "n_days": 2829,
+    "start": "2017-07-09 22:00:00+00:00",
+    "end": "2026-08-07 20:30:00+00:00",
+    "bars": 107077,
+    "initial_capital": 100000.0
+  },
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "FAIL",
+    "gate2": "FAIL",
+    "gate3": "PASS",
+    "gate_regime": "PASS",
+    "gate_ruin": "PASS",
+    "gate_all_quadrants": "FAIL"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/t3_braid_scalp_20260823/gate_audit_RTY_30m.json",
+    "audit_sha256": "df7e6654a02a8eb231e30af83d8c8d66d05b6afc11bf87e167f7aa075341a96d",
+    "audit_symbol": "RTY",
+    "audit_timeframe": "30m",
+    "target_quadrant": "Q1",
+    "target_regime": "High Volatility / Trending",
+    "audit_generated_utc": "2026-09-08T03:10:58+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "t3_period": 5,
+      "stiffness_threshold": 45.0,
+      "sl_atr_mult": 1.5,
+      "tp_atr_mult": 3.0,
+      "trailing": false
+    },
+    "params_source": "stage 2 winner (best_params_RTY_30m.json)",
+    "variants_tested": 162,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "FAIL",
+    "agrees_with_snapshot": false
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [
+    "import from 'backtest.event_calendar' is not allowed"
+  ],
+  "notes": "",
+  "ml_threshold": 0.48,
+  "baseline": "baseline.py"
+}
