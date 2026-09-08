@@ -418,9 +418,20 @@ def stage5_card_targets(strat: str) -> list[str]:
     a message that sends an operator looking for a contract when what was
     actually wrong is that a module is not a promotion.
 
-    Returns the packages when there are any, and otherwise the name as given,
-    so a strategy promoted under its own module name (the older layout) still
-    posts exactly one card and nothing about this path changes for it.
+    Returns the packages when there are any, and NO TARGET when the enumeration
+    succeeded and found none. `promotion_packages` already returns the module
+    directory itself when a strategy was promoted under its own module name
+    (the older layout), so an empty result there does not mean "the old layout"
+    - it means NOTHING WAS PROMOTED. Falling back to the module name in that
+    case posted a promotion card for a promotion that does not exist, which
+    could only ever fail, and it failed with "the contract could not be
+    resolved from portfolios.json" - a message that sends an operator to a
+    config file to debug a run whose real outcome was simply that no
+    configuration cleared its gates. A run that certified nothing has nothing
+    to announce.
+
+    The enumeration RAISING is a different case and still falls back, because
+    then we genuinely do not know whether anything was promoted.
     """
     try:
         from backtest.discord_reporter import promotion_packages
@@ -433,7 +444,7 @@ def stage5_card_targets(strat: str) -> list[str]:
               f"({exc}); posting one card under the name as given.",
               file=sys.stderr, flush=True)
         return [strat]
-    return found or [strat]
+    return found
 
 
 def post_card(strat: str, stage: int, *, out_dir: str | None = None,
@@ -450,6 +461,10 @@ def post_card(strat: str, stage: int, *, out_dir: str | None = None,
     so rather than being reported by whichever went last.
     """
     targets = stage5_card_targets(strat) if stage == 5 else [strat]
+    if stage == 5 and not targets:
+        print(f"  NOTE  no promoted package for {strat}; there is no Stage 5 "
+              f"card to post.", flush=True)
+        return 0
     worst = 0
     for target in targets:
         label = f"DISCORD · Stage {stage} card"

@@ -36,6 +36,7 @@ import json
 import subprocess
 import sys
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -322,6 +323,29 @@ def _main_with(runner: FakeRunner, argv: list[str], monkey_today="2026-08-21",
         rp._strategy_source = real_source
 
 
+@contextmanager
+def promoted_packages(*names: str):
+    """
+    Stand in for the packages a real `promote.py` leaves on disk.
+
+    `stage5_card_targets` asks `discord_reporter.promotion_packages` what was
+    actually promoted, and posts NO Stage 5 card when the answer is nothing -
+    a run that certified nothing has no promotion to announce. The FakeRunner
+    only records that `promote.py` was invoked; it writes no package, so
+    without this the fifth card can never be exercised here.
+
+    Patched on `discord_reporter`, where `stage5_card_targets` imports it from,
+    so the real resolution logic in `run_pipeline` is the code under test.
+    """
+    import backtest.discord_reporter as dr
+    real = dr.promotion_packages
+    dr.promotion_packages = lambda strat, incubator=None: [Path(n) for n in names]
+    try:
+        yield
+    finally:
+        dr.promotion_packages = real
+
+
 def test_order_and_expansion(tmp: Path) -> None:
     print("\n9. The stages run in order, expanded per surviving timeframe")
     write_stage2(tmp, [s2row("NQ", "15m"), s2row("NQ", "30m")])
@@ -453,8 +477,10 @@ def test_discord_strict_sequential_order(tmp: Path) -> None:
     # promotion it announces.
     write_stage3(tmp, [s3row("NQ", "15m", certified=True)])
     runner = FakeRunner()
-    _main_with(runner, ["--strat", STRAT, "--tf", "15m", "--report-discord",
-                        "--auto-promote", "--out-dir", str(tmp)])
+    with promoted_packages(f"{STRAT}_NQ_15m_VA"):
+        _main_with(runner, ["--strat", STRAT, "--tf", "15m",
+                            "--report-discord", "--auto-promote",
+                            "--out-dir", str(tmp)])
     seq = runner.scripts()
     stages = [flag_value(c, "--stage") for c in runner.for_script("discord_reporter.py")]
     check("all five cards are posted, ascending",
@@ -465,6 +491,25 @@ def test_discord_strict_sequential_order(tmp: Path) -> None:
           f"card4@{card[3]} promote@{seq.index('promote.py')}")
     check("the Stage 5 card follows the LAST promote.py",
           card[4] > max(i for i, s in enumerate(seq) if s == "promote.py"))
+
+    # A promotion that produced no package has nothing to announce. Falling
+    # back to the MODULE name here posted a promotion card for a promotion
+    # that does not exist: it could only fail, and it failed with "the
+    # contract could not be resolved from portfolios.json" - which sends an
+    # operator to a config file to debug a run whose real outcome was that
+    # nothing cleared its gates.
+    runner = FakeRunner()
+    with promoted_packages():
+        rc = _main_with(runner, ["--strat", STRAT, "--tf", "15m",
+                                 "--report-discord", "--auto-promote",
+                                 "--out-dir", str(tmp)])
+    stages = [flag_value(c, "--stage")
+              for c in runner.for_script("discord_reporter.py")]
+    check("no package promoted posts NO Stage 5 card, rather than one under "
+          "the module name that can only refuse",
+          "5" not in stages, str(stages))
+    check("...and the run still exits 0: nothing to announce is not a failure",
+          rc == 0, f"rc={rc}")
 
 
 def test_stage_failure_aborts_discord_failure_does_not(tmp: Path) -> None:
@@ -594,8 +639,9 @@ def test_promote_only(tmp: Path) -> None:
     # a skipped Stage 4 card and a missing one are the same absence on the
     # channel, and only one of them is correct.
     runner = FakeRunner()
-    _main_with(runner, ["--strat", STRAT, "--promote-only", "--report-discord",
-                        "--out-dir", str(tmp)])
+    with promoted_packages(f"{STRAT}_NQ_15m_VA"):
+        _main_with(runner, ["--strat", STRAT, "--promote-only",
+                            "--report-discord", "--out-dir", str(tmp)])
     scripts = runner.scripts()
     stages = [flag_value(c, "--stage")
               for c in runner.for_script("discord_reporter.py")]
@@ -612,8 +658,9 @@ def test_promote_only(tmp: Path) -> None:
     check("stage4_metrics_exist sees the snapshot",
           rp.stage4_metrics_exist(STRAT, str(tmp)))
     runner = FakeRunner()
-    _main_with(runner, ["--strat", STRAT, "--promote-only", "--report-discord",
-                        "--out-dir", str(tmp)])
+    with promoted_packages(f"{STRAT}_NQ_15m_VA"):
+        _main_with(runner, ["--strat", STRAT, "--promote-only",
+                            "--report-discord", "--out-dir", str(tmp)])
     stages = [flag_value(c, "--stage")
               for c in runner.for_script("discord_reporter.py")]
     check("with one, the order is 3 -> 4 -> 5", stages == ["3", "4", "5"],
