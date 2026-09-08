@@ -166,10 +166,19 @@ EXPECTED_ASSIGNMENTS = {
     "Prop-Even":      [],
 }
 
+# M2K and MYM added 2026-09-08 to carry t3_braid_scalp_20260823's RTY and YM
+# certifications onto the micro accounts. NEITHER HAS AN AUTHORITATIVE
+# DEFINITION: /mnt/backtest/reference/futures/definitions/ has no symbol=M2K
+# or symbol=MYM, so `python -m backtest.specs` cannot reconcile them and these
+# multipliers rest on backtest/specs.py's hand-entry alone - which that file's
+# own header calls "the single most consequential set of constants in the
+# whole system". Pull the definitions before either trades real size.
 REQUESTED_POINT_VALUES = {"MNQ": 2.0, "MES": 5.0, "MGC": 10.0,
-                          "6E": 125_000.0, "6J": 12_500_000.0}
+                          "6E": 125_000.0, "6J": 12_500_000.0,
+                          "M2K": 5.0, "MYM": 0.5}
 REQUESTED_TICK_SIZES = {"MNQ": 0.25, "MES": 0.25, "MGC": 0.10,
-                        "6E": 0.00005, "6J": 0.0000005}
+                        "6E": 0.00005, "6J": 0.0000005,
+                        "M2K": 0.10, "MYM": 1.0}
 
 # The repository's regime -> quadrant id map, built HERE from
 # `backtest.profiler.REGIMES` rather than imported. `REGIMES` is a tuple in
@@ -296,7 +305,7 @@ def test_the_two_tracks_hold_the_same_baskets_and_are_orthogonal_within() -> Non
 
     odd = {pid: cfg["portfolios"][pid]["basket"]["assets"]
            for pid in ("Incubator-Odd", "Eval-Odd", "Prop-Odd")}
-    assert odd["Incubator-Odd"] == odd["Eval-Odd"] == ["MNQ", "6E", "6J"]
+    assert odd["Incubator-Odd"] == odd["Eval-Odd"] == ["MNQ", "6E", "6J", "M2K"]
     # Prop-Odd is deliberately NARROWER than the two rungs below it: the FX
     # pair is carried through incubation and evaluation but is not on the
     # funded book. Asserted as a subset as well as by value, so widening the
@@ -305,8 +314,12 @@ def test_the_two_tracks_hold_the_same_baskets_and_are_orthogonal_within() -> Non
     assert set(odd["Prop-Odd"]) <= set(odd["Incubator-Odd"])
     even = {pid: cfg["portfolios"][pid]["basket"]["assets"]
             for pid in ("Incubator-Even", "Eval-Even", "Prop-Even")}
-    assert even["Incubator-Even"] == even["Eval-Even"] == even["Prop-Even"] \
-        == ["MES", "MGC"]
+    # Prop-Even is now NARROWER than the rungs below it, the way Prop-Odd
+    # always was: MYM is carried through incubation and evaluation and is not
+    # on the funded book until it has been paper-validated there.
+    assert even["Incubator-Even"] == even["Eval-Even"] == ["MES", "MGC", "MYM"]
+    assert even["Prop-Even"] == ["MES", "MGC"]
+    assert set(even["Prop-Even"]) <= set(even["Incubator-Even"])
     assert cfg["portfolios"]["Incubator-Odd"]["account_type"] \
         == INCUBATOR_ACCOUNT_TYPE
     assert cfg["portfolios"]["Prop-Odd"]["account_type"] == PROP_ACCOUNT_TYPE

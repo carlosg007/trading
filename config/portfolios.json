@@ -20,7 +20,8 @@
         "assets": [
           "MNQ",
           "6E",
-          "6J"
+          "6J",
+          "M2K"
         ],
         "correlation_group": "Index_FX_Uncorrelated",
         "regime_quadrants": [
@@ -135,7 +136,8 @@
         "assets": [
           "MNQ",
           "6E",
-          "6J"
+          "6J",
+          "M2K"
         ],
         "correlation_group": "Index_FX_Uncorrelated",
         "regime_quadrants": [
@@ -202,7 +204,8 @@
       "basket": {
         "assets": [
           "MES",
-          "MGC"
+          "MGC",
+          "MYM"
         ],
         "correlation_group": "Index_Metals_Uncorrelated",
         "regime_quadrants": [
@@ -316,7 +319,8 @@
       "basket": {
         "assets": [
           "MES",
-          "MGC"
+          "MGC",
+          "MYM"
         ],
         "correlation_group": "Index_Metals_Uncorrelated",
         "regime_quadrants": [
@@ -393,6 +397,16 @@
       "point_value": 12500000.0,
       "tick_size": 5e-07,
       "sector": "FX"
+    },
+    "M2K": {
+      "point_value": 5.0,
+      "tick_size": 0.1,
+      "sector": "Equity_Index"
+    },
+    "MYM": {
+      "point_value": 0.5,
+      "tick_size": 1.0,
+      "sector": "Equity_Index"
     }
   }
 }
