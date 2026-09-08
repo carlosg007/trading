@@ -303,13 +303,29 @@ def stage3_cmd(strat: str, tf: str, is_start: str, is_end: str,
 
 def stage4_cmd(strat: str, tf: str, start: str, end: str,
                out_dir: str | None = None,
-               ml_threshold: float = ML_THRESHOLD_DEFAULT) -> list[str]:
+               ml_threshold: float = ML_THRESHOLD_DEFAULT,
+               symbols: str | None = None) -> list[str]:
     """
     Stage 4: the lifecycle run for one timeframe.
 
     The window spans the holdout on purpose - this is not a certification and
     the module records `is_certification: false`. `--end` is passed rather
     than defaulted for the reason given in the module docstring.
+
+    `symbols` NAMES THE CONTRACTS, and since 2026-09-08 the caller passes
+    Stage 3's CERTIFIED pairs rather than leaving it off.
+
+    Every other stage omits `--symbols` so the scope is INHERITED from the
+    previous stage's artifacts, and Stage 4 inheriting Stage 2's the same way
+    was consistent rather than accidental. But Stage 4 runs AFTER Stage 3, and
+    its output is what `promote.py` locks into the promoted package - so the
+    pairs it needs are the ones that can still BE promoted. On
+    t3_braid_scalp_20260823 that difference was 31 sixteen-year lifecycle runs
+    for 12 promotable pairs: 19 full tear sheets, trade logs and per-year cost
+    tables for configurations Gate R had already refused.
+
+    `--all-optimized` restores the wider sweep, for a diagnostic run where the
+    lifecycle curve of a pair that FAILED is the thing being read.
     """
     cmd = _py() + [str(STAGE_SCRIPTS[4]), "--strat", strat, "--tf", tf,
                    "--start", start, "--end", end,
@@ -329,6 +345,8 @@ def stage4_cmd(strat: str, tf: str, start: str, end: str,
                    # threshold would deploy metrics for a Version B nobody
                    # certified.
                    "--ml-threshold", str(ml_threshold)]
+    if symbols:
+        cmd += ["--symbols", symbols]
     if out_dir:
         cmd += ["--out-dir", out_dir]
     return cmd
@@ -721,6 +739,25 @@ def resolve_metrics(strat: str, symbol: str, timeframe: str,
                   f"run's metrics and parameters into this pair's meta.json.")
 
 
+def certified_symbols(strat: str, tf: str,
+                      out_dir: str | None = None) -> list[str]:
+    """
+    The contracts Stage 3 certified AT THIS TIMEFRAME, for Stage 4's scope.
+
+    Read from Stage 3's summary through `certified_rows`, so the list is the
+    audit's own `certified` flag and never a second opinion about what passed.
+
+    Returns [] when the summary is missing or nothing certified at `tf`, and
+    the caller must read that as "run NOTHING" rather than "run everything".
+    An empty scope list falling through to an unscoped command is precisely
+    the failure this narrowing exists to close: it would profile the whole
+    Stage 2 universe while reporting that it had narrowed.
+    """
+    rows = certified_rows(_read_summary(strat, STAGE3_SUMMARY_FILE, 3, out_dir))
+    return sorted({str(r["symbol"]) for r in rows
+                   if r.get("symbol") and str(r.get("timeframe")) == str(tf)})
+
+
 def certified_rows(summary: dict[str, Any] | None) -> list[dict[str, Any]]:
     """
     Stage 3's certified configurations, as it recorded them.
@@ -990,6 +1027,16 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Stage 4.5: block the worst weekday even when its "
                         "expectancy is POSITIVE. Off by default; being fifth "
                         "of five is not evidence against a session.")
+    p.add_argument("--all-optimized", dest="all_optimized",
+                   action="store_true", default=False,
+                   help="Stage 4: profile every pair Stage 2 optimised, not "
+                        "only the ones Stage 3 certified. Off by default "
+                        "since 2026-09-08 — Stage 4 runs after Stage 3 and "
+                        "its output is what promote.py locks into a package, "
+                        "so the pairs worth sixteen years of tear sheets are "
+                        "the promotable ones. Turn it on for a diagnostic "
+                        "run, where the lifecycle curve of a pair that FAILED "
+                        "is the thing being read.")
     p.add_argument("--allow-isolated-spikes", dest="allow_isolated_spikes",
                    action="store_true", default=False,
                    help="Forwarded to Stage 2: let a cell whose grid "
@@ -1214,9 +1261,25 @@ def main(argv: Sequence[str] | None = None) -> int:
                       f"{len(b_pairs)} pair(s).", flush=True)
 
         for tf in certify_tfs:
+            # Stage 3's certified pairs, not Stage 2's optimised ones - see
+            # `stage4_cmd`. In a --dry-run there is no Stage 3 summary to
+            # read, so the scope is left off and the printed command is the
+            # unscoped one; that is the honest thing to print, because a
+            # scope resolved from a handoff that does not exist would be a
+            # different command from the one a real run would issue.
+            scope = None if (dry or args.all_optimized) else ",".join(
+                certified_symbols(strat, tf, out_dir))
+            if not dry and not args.all_optimized and not scope:
+                print(f"  SKIPPED  Stage 4 at {tf}: Stage 3 certified nothing "
+                      f"here, so there is no promotable pair to profile. "
+                      f"--all-optimized runs the lifecycle anyway.",
+                      flush=True)
+                continue
             run_step(stage4_cmd(strat, tf, args.start, _today(), out_dir,
-                                args.ml_threshold),
-                     f"STAGE 4 · verify_full.py · lifecycle {tf}", dry_run=dry)
+                                args.ml_threshold, symbols=scope),
+                     f"STAGE 4 · verify_full.py · lifecycle {tf}"
+                     + (f" · {scope}" if scope else " · ALL optimised pairs"),
+                     dry_run=dry)
         # Card 4 after every timeframe, for the same reason Card 3 waits: it
         # reads ONE run's artifacts directory and defaults to the newest.
         discord(4)

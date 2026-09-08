@@ -356,16 +356,35 @@ def test_order_and_expansion(tmp: Path) -> None:
                              "--tf", "15m,30m", "--out-dir", str(tmp)])
     seq = runner.scripts()
     check("exits 0", rc == 0, f"rc={rc}")
+    # Stage 4 is scoped to Stage 3's CERTIFIED pairs from 2026-09-08, and
+    # only 15m certified in this fixture - so 30m has no promotable pair and
+    # Stage 4 is SKIPPED there. Stages 3 and 4.5 still run at both.
     check("stages run 1 -> 2 -> 3 -> 4 -> 4.5 in order",
           seq == ["baseline.py", "scan.py", "audit_gates.py", "audit_gates.py",
-                  "verify_full.py", "verify_full.py",
+                  "verify_full.py",
                   "dow_gate.py", "dow_gate.py"], str(seq))
     check("Stage 3 runs once per surviving timeframe",
           [flag_value(c, "--tf") for c in runner.for_script("audit_gates.py")]
           == ["15m", "30m"])
-    check("Stage 4 runs once per surviving timeframe",
+    check("Stage 4 runs only where Stage 3 CERTIFIED something",
           [flag_value(c, "--tf") for c in runner.for_script("verify_full.py")]
-          == ["15m", "30m"])
+          == ["15m"])
+    check("...and names those contracts explicitly, so it cannot widen to the "
+          "Stage 2 universe by omission",
+          [flag_value(c, "--symbols")
+           for c in runner.for_script("verify_full.py")] == ["NQ"])
+
+    # --all-optimized restores the wider sweep for a diagnostic run.
+    runner_all = FakeRunner()
+    _main_with(runner_all, ["--strat", STRAT, "--symbols", "NQ",
+                            "--tf", "15m,30m", "--all-optimized",
+                            "--out-dir", str(tmp)])
+    check("--all-optimized profiles every optimised timeframe again",
+          [flag_value(c, "--tf")
+           for c in runner_all.for_script("verify_full.py")] == ["15m", "30m"])
+    check("...and passes NO --symbols, so the scope is inherited as before",
+          all(flag_value(c, "--symbols") is None
+              for c in runner_all.for_script("verify_full.py")))
     # STAGE 4.5 RUNS AFTER STAGE 4 AND BEFORE ANY PROMOTION. Before Stage 5
     # because Stage 5 is what writes the blocked weekday into the promoted
     # meta.json; run after it, the verdict would land in the pipeline
@@ -374,11 +393,15 @@ def test_order_and_expansion(tmp: Path) -> None:
     check("Stage 4.5 runs once per surviving timeframe",
           [flag_value(c, "--tf") for c in runner.for_script("dow_gate.py")]
           == ["15m", "30m"])
+    # Compared as DISTINCT windows rather than element-wise: Stage 4 is
+    # scoped to certified pairs and 4.5 is not, so the two lists are
+    # different LENGTHS and zipping them would compare 30m's gate against
+    # 15m's lifecycle. What has to hold is that both describe one window.
     check("Stage 4.5 profiles the SAME window Stage 4 ran",
-          [(flag_value(c, "--start"), flag_value(c, "--end"))
-           for c in runner.for_script("dow_gate.py")]
-          == [(flag_value(c, "--start"), flag_value(c, "--end"))
-              for c in runner.for_script("verify_full.py")])
+          {(flag_value(c, "--start"), flag_value(c, "--end"))
+           for c in runner.for_script("dow_gate.py")}
+          == {(flag_value(c, "--start"), flag_value(c, "--end"))
+              for c in runner.for_script("verify_full.py")})
     # VERSION B IS PROFILED TOO, for the reason Stage 4 passes --ml: B's
     # trade list is a SUBSET of A's, so its weekday table is a different
     # table, and a pair Stage 3 certified as B profiled only as A would be
@@ -386,10 +409,10 @@ def test_order_and_expansion(tmp: Path) -> None:
     check("Stage 4.5 profiles Version B",
           all("--ml" in c for c in runner.for_script("dow_gate.py")))
     check("...at the SAME ML threshold every other stage used",
-          [flag_value(c, "--ml-threshold")
-           for c in runner.for_script("dow_gate.py")]
-          == [flag_value(c, "--ml-threshold")
-              for c in runner.for_script("verify_full.py")])
+          {flag_value(c, "--ml-threshold")
+           for c in runner.for_script("dow_gate.py")}
+          == {flag_value(c, "--ml-threshold")
+              for c in runner.for_script("verify_full.py")})
     check("no Discord card without --report-discord",
           "discord_reporter.py" not in seq)
     check("no promotion without --auto-promote", "promote.py" not in seq)
@@ -806,6 +829,9 @@ def test_dry_run_launches_nothing(tmp: Path) -> None:
 def test_defaults_are_the_charter(tmp: Path) -> None:
     print("\n16. The default window is the charter's, not the lake's")
     write_stage2(tmp, [s2row("NQ", "15m")])
+    # Stage 4 is scoped to Stage 3's certified pairs, so one is needed here
+    # for it to run at all - this section is about the WINDOW, not the scope.
+    write_stage3(tmp, [s3row("NQ", "15m", certified=True)])
     runner = FakeRunner()
     _main_with(runner, ["--strat", STRAT, "--tf", "15m", "--out-dir", str(tmp)])
     s1 = runner.for_script("baseline.py")[0]
