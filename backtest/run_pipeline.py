@@ -248,7 +248,8 @@ def stage1_cmd(strat: str, symbols: str, tfs: Sequence[str], start: str,
 
 def stage2_cmd(strat: str, start: str, end: str,
                out_dir: str | None = None,
-               ml_threshold: float = ML_THRESHOLD_DEFAULT) -> list[str]:
+               ml_threshold: float = ML_THRESHOLD_DEFAULT,
+               allow_isolated_spikes: bool = False) -> list[str]:
     """
     Stage 2: the sweep, over Stage 1's EXACT surviving pairs.
 
@@ -263,6 +264,10 @@ def stage2_cmd(strat: str, start: str, end: str,
     cmd = _py() + [str(STAGE_SCRIPTS[2]), "--strat", strat,
                    "--start", start, "--end", end,
                    "--ml-threshold", str(ml_threshold)]
+    # Also not a scope flag: it changes which cell of an already-swept grid is
+    # ELIGIBLE to win, never which pairs are swept.
+    if allow_isolated_spikes:
+        cmd += ["--allow-isolated-spikes"]
     if out_dir:
         cmd += ["--out-dir", out_dir]
     return cmd
@@ -985,6 +990,15 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Stage 4.5: block the worst weekday even when its "
                         "expectancy is POSITIVE. Off by default; being fifth "
                         "of five is not evidence against a session.")
+    p.add_argument("--allow-isolated-spikes", dest="allow_isolated_spikes",
+                   action="store_true", default=False,
+                   help="Forwarded to Stage 2: let a cell whose grid "
+                        "neighbours keep under half its Sharpe still win its "
+                        "sweep. NOTE this re-rolls WHICH parameters Stage 2 "
+                        "locks, so Stage 3 then certifies a different set - "
+                        "it is not a way to reproduce an earlier run's "
+                        "verdicts with more candidates. Does not touch the "
+                        "ruin bar.")
     p.add_argument("--report-discord", action="store_true",
                    help="Post the Discord card after Stages 1, 2 and 3")
     p.add_argument("--promote-max", type=int, default=DEFAULT_PROMOTE_MAX,
@@ -1116,7 +1130,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         discord(1)
 
         run_step(stage2_cmd(strat, args.start, args.end, out_dir,
-                            args.ml_threshold),
+                            args.ml_threshold,
+                            allow_isolated_spikes=getattr(
+                                args, "allow_isolated_spikes", False)),
                  "STAGE 2 · scan.py · parameter sweep over Stage 1's exact pairs",
                  dry_run=dry)
         discord(2)
