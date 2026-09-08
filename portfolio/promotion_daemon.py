@@ -191,6 +191,19 @@ PROMOTION_ROUTES = {
     "Eval-Odd": "Prop-Odd",
     "Incubator-Even": "Eval-Even",
     "Eval-Even": "Prop-Even",
+    # The FULL-SIZE track, added 2026-09-08 for t3_braid_scalp_20260823's HO,
+    # PL, RB and ETH certifications. Those contracts have no CME micro (and
+    # Micro Ether is in neither specs.py nor the reference definitions), so
+    # they cannot ride the two micro tracks - a strategy certified on HO
+    # routed to an account whose basket is MES/MGC is refused on every asset
+    # and could never place an order.
+    #
+    # BOTH HOPS ARE DEFINED HERE OR NEITHER SHOULD BE. `target_portfolio_for`
+    # raises for a portfolio absent from this map, so an incubation rung whose
+    # evaluation rung is missing is a dead end that only shows itself when the
+    # daemon first tries to advance something out of it.
+    "Incubator-FullSize": "Eval-FullSize",
+    "Eval-FullSize": "Prop-FullSize",
 }
 
 # Metric aliases accepted on a ledger entry, canonical name first. Kept short

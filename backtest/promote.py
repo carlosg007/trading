@@ -1001,6 +1001,22 @@ PORTFOLIO_CONFIG = REPO_ROOT / "config" / "portfolios.json"
 # `--portfolio Prop-Odd` here would put a strategy on an evaluation account on
 # the strength of a certification alone, which is the one step the forward
 # incubation exists to sit between.
+#: The incubator tracks an UNROUTED promotion may default onto, 2026-09-08.
+#:
+#: Routing narrows by certified symbol first, and for HO/PL/RB/ETH that is the
+#: full-size track and nothing else - so a promotion that CAN be placed is
+#: unaffected by this list. It decides only the leftover case, where no
+#: incubator basket carries the contract and the headcount rule is choosing
+#: among all of them.
+#:
+#: `Incubator-FullSize` is deliberately absent. It started empty, and "fewest
+#: active strategies, ties alphabetical" would therefore have handed it every
+#: unrouted promotion - putting a strategy nobody could route onto a book
+#: where HO and RB are $42,000 a point and ETH is $25 a tick, on the strength
+#: of an empty account and a leading letter. A full-size book is reached by
+#: the certified symbol or by an explicit --portfolio, never by a tie-break.
+DEFAULT_ROUTING_TRACKS = ("Incubator-Odd", "Incubator-Even")
+
 INCUBATOR_ACCOUNT_TYPE = "incubator_sim"
 
 # The status stamped on a freshly registered allocation.
@@ -1126,6 +1142,36 @@ INCUBATOR_TRACK_TEMPLATE: dict[str, dict[str, Any]] = {
                        "correlation_group": "Index_Metals_Uncorrelated",
                        "regime_quadrants": ["Q1_HIGH_VOL_TREND",
                                             "Q2_HIGH_VOL_CHOP"]},
+    # The FULL-SIZE track, added 2026-09-08. HO, PL, RB and ETH have no micro
+    # this repository can trade - CME's Micro Ether is in neither specs.py nor
+    # the reference definitions - so a strategy certified on one of them
+    # cannot ride either micro track, and a bootstrap without these rungs
+    # writes a table that REQUIRED_PORTFOLIOS then rejects.
+    #
+    # Only the incubation rung names a real NinjaTrader account. The two above
+    # it are UNBOUND_ placeholders: they make the ladder walkable for
+    # `PROMOTION_ROUTES` while stating that no broker account exists yet, which
+    # is the difference between "not promoted there yet" and "promoted onto an
+    # account that rejects every order".
+    "Incubator-FullSize": {"account_type": "incubator_sim",
+                           "execution_account": "SimIncubator-FullSize",
+                           "assets": ["HO", "PL", "RB", "ETH"],
+                           "correlation_group":
+                               "FullSize_Energy_Metals_Crypto",
+                           "regime_quadrants": ["Q1_HIGH_VOL_TREND",
+                                                "Q2_HIGH_VOL_CHOP"]},
+    "Eval-FullSize":  {"account_type": "prop_evaluation",
+                       "execution_account": "UNBOUND_PENDING_NT8_EVAL",
+                       "assets": ["HO", "PL", "RB", "ETH"],
+                       "correlation_group": "FullSize_Energy_Metals_Crypto",
+                       "regime_quadrants": ["Q1_HIGH_VOL_TREND",
+                                            "Q2_HIGH_VOL_CHOP"]},
+    "Prop-FullSize":  {"account_type": "prop_eval",
+                       "execution_account": "UNBOUND_PENDING_NT8_PROP",
+                       "assets": ["HO", "PL", "RB", "ETH"],
+                       "correlation_group": "FullSize_Energy_Metals_Crypto",
+                       "regime_quadrants": ["Q1_HIGH_VOL_TREND",
+                                            "Q2_HIGH_VOL_CHOP"]},
 }
 
 # The placeholder risk envelope, and the reason it is announced every time it
@@ -1144,8 +1190,14 @@ BOOTSTRAP_ACCOUNT_SIZE = 50000
 # config when they disagree, because a wrong multiplier silently scales every
 # P&L figure for that symbol. A hardcoded copy here would be a second source
 # of truth that the loader exists to catch - so it is generated from the first.
+# Every symbol any template basket names, or a bootstrapped table fails the
+# loader's own check that a basket asset can be sized. HO/PL/RB/ETH arrived
+# with the full-size track and M2K/MYM with the micro rungs, both 2026-09-08.
 BOOTSTRAP_SECTORS = {"MNQ": "Equity_Index", "MES": "Equity_Index",
-                     "MCL": "Energy", "MGC": "Metals"}
+                     "MCL": "Energy", "MGC": "Metals",
+                     "M2K": "Equity_Index", "MYM": "Equity_Index",
+                     "HO": "Energy", "RB": "Energy",
+                     "PL": "Metals", "ETH": "Crypto"}
 
 
 def _bootstrap_asset_metadata() -> dict[str, dict[str, Any]]:
@@ -1503,7 +1555,29 @@ def resolve_portfolio(portfolios: dict,
     counts = {pid: len([s for s in (portfolios[pid].get("active_strategies")
                                     or [])])
               for pid in pool}
-    pid = sorted(pool, key=lambda p: (counts[p], p))[0]
+
+    # NOTIONAL BREAKS THE TIE BEFORE HEADCOUNT DOES, added 2026-09-08 with the
+    # full-size track.
+    #
+    # The headcount rule ranks accounts that are equally able to carry the
+    # strategy, and until there were only micro baskets that was every
+    # incubator. It is not true of a full-size book: HO and RB are $42,000 a
+    # point where MES is $5, so "fewest active strategies, ties alphabetical"
+    # would hand an unrouted promotion a position fifty times the size on the
+    # strength of an empty account and a leading letter. `Incubator-FullSize`
+    # starting empty made it the winner of exactly that tie.
+    #
+    # A promotion whose SYMBOL routed is unaffected - `pool` is already the
+    # accounts carrying that contract, and for HO/PL/RB/ETH that is the
+    # full-size track and nothing else. This only decides the case where the
+    # contract could not route at all, and there the smaller book is the one
+    # to guess with.
+    # Named rather than derived. "Is this account small enough to guess with"
+    # has no honest formula: Incubator-Odd carries 6E at $125,000 a point,
+    # which is larger than HO, so neither a micro flag nor a point value
+    # separates the tracks the way the risk actually does.
+    default_pool = [p for p in pool if p in DEFAULT_ROUTING_TRACKS] or pool
+    pid = sorted(default_pool, key=lambda p: (counts[p], p))[0]
     tally = ", ".join(f"{p}={counts[p]}" for p in pool)
 
     # THE TIMEFRAME IS RECORDED, NOT FILTERED ON, and the distinction is

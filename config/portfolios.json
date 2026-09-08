@@ -37,7 +37,8 @@
       },
       "active_strategies": [
         "t3_braid_scalp_20260823_NQ_1h_VA",
-        "t3_braid_scalp_20260823_NQ_1h_VB"
+        "t3_braid_scalp_20260823_NQ_1h_VB",
+        "t3_braid_scalp_20260823_RTY_30m_VB"
       ],
       "strategy_allocations": {
         "t3_braid_scalp_20260823_NQ_1h_VA": {
@@ -112,6 +113,44 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_NQ_1h.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "t3_braid_scalp_20260823_RTY_30m_VB": {
+          "strat": "t3_braid_scalp_20260823_RTY_30m_VB",
+          "symbol": "RTY",
+          "timeframe": "30m",
+          "version": "B",
+          "allocation": 1,
+          "regime_filter": "Q1",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/t3_braid_scalp_20260823_RTY_30m_VB/strat.py",
+          "registered_utc": "2026-09-08T12:45:50+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "--portfolio Incubator-Odd",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_RTY_30m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "t3_braid_scalp_20260823_RTY_30m_VB",
+              "symbol": "RTY",
+              "timeframe": "30m",
+              "version": "B",
+              "allocation": 1,
+              "regime_filter": "Q1",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/t3_braid_scalp_20260823_RTY_30m_VB/strat.py",
+              "registered_utc": "2026-09-08T12:45:50+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "--portfolio Incubator-Odd",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_RTY_30m.json (Gate R's certification target)"
               }
             }
           ]
@@ -221,7 +260,8 @@
       },
       "active_strategies": [
         "t3_braid_scalp_20260823_GC_30m_VA",
-        "t3_braid_scalp_20260823_GC_30m_VB"
+        "t3_braid_scalp_20260823_GC_30m_VB",
+        "t3_braid_scalp_20260823_YM_30m_VA"
       ],
       "strategy_allocations": {
         "t3_braid_scalp_20260823_GC_30m_VA": {
@@ -299,6 +339,44 @@
               }
             }
           ]
+        },
+        "t3_braid_scalp_20260823_YM_30m_VA": {
+          "strat": "t3_braid_scalp_20260823_YM_30m_VA",
+          "symbol": "YM",
+          "timeframe": "30m",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q2",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/t3_braid_scalp_20260823_YM_30m_VA/strat.py",
+          "registered_utc": "2026-09-08T12:45:53+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "--portfolio Incubator-Even",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_YM_30m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "t3_braid_scalp_20260823_YM_30m_VA",
+              "symbol": "YM",
+              "timeframe": "30m",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q2",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/t3_braid_scalp_20260823_YM_30m_VA/strat.py",
+              "registered_utc": "2026-09-08T12:45:53+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "--portfolio Incubator-Even",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_YM_30m.json (Gate R's certification target)"
+              }
+            }
+          ]
         }
       }
     },
@@ -370,6 +448,114 @@
       },
       "active_strategies": [],
       "strategy_allocations": {}
+    },
+    "Incubator-FullSize": {
+      "portfolio_id": "Incubator-FullSize",
+      "account_type": "incubator_sim",
+      "target_account": "SimIncubator-FullSize",
+      "default_account_size": 50000,
+      "risk_profile": {
+        "fixed_risk_budget_usd": 250.0,
+        "max_trailing_drawdown_usd": 2500.0,
+        "max_forward_incubation_dd_pct": 0.4,
+        "clamping": {
+          "min_contracts": 1,
+          "max_contracts": 5
+        }
+      },
+      "basket": {
+        "assets": [
+          "HO",
+          "PL",
+          "RB",
+          "ETH"
+        ],
+        "correlation_group": "FullSize_Energy_Metals_Crypto",
+        "regime_quadrants": [
+          "Q1_HIGH_VOL_TREND",
+          "Q2_HIGH_VOL_CHOP",
+          "Q3_LOW_VOL_TREND",
+          "Q4_LOW_VOL_MEAN_REVERSION"
+        ],
+        "structures": [
+          "BREAKOUT_EXPANSION",
+          "VOLATILITY_PULLBACK"
+        ]
+      },
+      "active_strategies": [],
+      "strategy_allocations": {}
+    },
+    "Eval-FullSize": {
+      "portfolio_id": "Eval-FullSize",
+      "account_type": "prop_evaluation",
+      "target_account": "UNBOUND_PENDING_NT8_EVAL",
+      "default_account_size": 50000,
+      "risk_profile": {
+        "fixed_risk_budget_usd": 250.0,
+        "max_trailing_drawdown_usd": 2500.0,
+        "max_forward_incubation_dd_pct": 0.4,
+        "clamping": {
+          "min_contracts": 1,
+          "max_contracts": 5
+        }
+      },
+      "basket": {
+        "assets": [
+          "HO",
+          "PL",
+          "RB",
+          "ETH"
+        ],
+        "correlation_group": "FullSize_Energy_Metals_Crypto",
+        "regime_quadrants": [
+          "Q1_HIGH_VOL_TREND",
+          "Q2_HIGH_VOL_CHOP",
+          "Q3_LOW_VOL_TREND",
+          "Q4_LOW_VOL_MEAN_REVERSION"
+        ],
+        "structures": [
+          "BREAKOUT_EXPANSION",
+          "VOLATILITY_PULLBACK"
+        ]
+      },
+      "active_strategies": [],
+      "strategy_allocations": {}
+    },
+    "Prop-FullSize": {
+      "portfolio_id": "Prop-FullSize",
+      "account_type": "prop_eval",
+      "target_account": "UNBOUND_PENDING_NT8_PROP",
+      "default_account_size": 50000,
+      "risk_profile": {
+        "fixed_risk_budget_usd": 250.0,
+        "max_trailing_drawdown_usd": 2500.0,
+        "max_forward_incubation_dd_pct": 0.4,
+        "clamping": {
+          "min_contracts": 1,
+          "max_contracts": 5
+        }
+      },
+      "basket": {
+        "assets": [
+          "HO",
+          "PL",
+          "RB",
+          "ETH"
+        ],
+        "correlation_group": "FullSize_Energy_Metals_Crypto",
+        "regime_quadrants": [
+          "Q1_HIGH_VOL_TREND",
+          "Q2_HIGH_VOL_CHOP",
+          "Q3_LOW_VOL_TREND",
+          "Q4_LOW_VOL_MEAN_REVERSION"
+        ],
+        "structures": [
+          "BREAKOUT_EXPANSION",
+          "VOLATILITY_PULLBACK"
+        ]
+      },
+      "active_strategies": [],
+      "strategy_allocations": {}
     }
   },
   "asset_metadata": {
@@ -407,6 +593,26 @@
       "point_value": 0.5,
       "tick_size": 1.0,
       "sector": "Equity_Index"
+    },
+    "HO": {
+      "point_value": 42000.0,
+      "tick_size": 0.0001,
+      "sector": "Energy"
+    },
+    "RB": {
+      "point_value": 42000.0,
+      "tick_size": 0.0001,
+      "sector": "Energy"
+    },
+    "PL": {
+      "point_value": 50.0,
+      "tick_size": 0.1,
+      "sector": "Metals"
+    },
+    "ETH": {
+      "point_value": 50.0,
+      "tick_size": 0.5,
+      "sector": "Crypto"
     }
   }
 }

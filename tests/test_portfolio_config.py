@@ -92,7 +92,15 @@ EXECUTION_ACCOUNTS = {"Incubator-Odd": "SimIncubator1",
                       "Prop-Odd": "SimProp1",
                       "Incubator-Even": "SimIncubator2",
                       "Eval-Even": "Sim101",
-                      "Prop-Even": "SimProp2"}
+                      "Prop-Even": "SimProp2",
+                      # The full-size track, 2026-09-08. Only the incubation
+                      # rung has a real NT8 account so far; the two above it
+                      # carry UNBOUND_ placeholders that resolve here but name
+                      # no broker account, so a promotion INTO them is a
+                      # deliberate step that needs the account created first.
+                      "Incubator-FullSize": "SimIncubator-FullSize",
+                      "Eval-FullSize": "UNBOUND_PENDING_NT8_EVAL",
+                      "Prop-FullSize": "UNBOUND_PENDING_NT8_PROP"}
 
 # The strategies the shipped routing table is EXPECTED to hold, named one by
 # one. This list used to be "nothing, anywhere", which was true until
@@ -142,6 +150,7 @@ EXPECTED_ASSIGNMENTS = {
         "sma_momentum_crossover_20260818_NQ_5m_VA",           #  5m, NQ
         "t3_braid_scalp_20260823_NQ_1h_VA",                   #  1h, NQ
         "t3_braid_scalp_20260823_NQ_1h_VB",                   #  1h, NQ
+        "t3_braid_scalp_20260823_RTY_30m_VB",                 # 30m, RTY->M2K
         "ema_crossover_20260821_NQ_1h_VA",                    #  1h, NQ
         "ema_crossover_20260821_NQ_1h_VB",                    #  1h, NQ
         "ema_crossover_20260821_NQ_15m_VA",                   # 15m, NQ
@@ -155,6 +164,7 @@ EXPECTED_ASSIGNMENTS = {
         "sma_momentum_crossover_20260818_ES_15m_VB",          # 15m, ES
         "t3_braid_scalp_20260823_GC_30m_VA",                  # 30m, GC
         "t3_braid_scalp_20260823_GC_30m_VB",                  # 30m, GC
+        "t3_braid_scalp_20260823_YM_30m_VA",                  # 30m, YM->MYM
         "ema_crossover_20260821_ES_30m_VA",                   # 30m, ES
         "ema_crossover_20260821_ES_15m_VA",                   # 15m, ES
         "ma_anchoring_spread_20260820_GC_1h_VA",              #  1h, GC
@@ -164,6 +174,12 @@ EXPECTED_ASSIGNMENTS = {
     "Eval-Even":      [],
     "Prop-Odd":       [],
     "Prop-Even":      [],
+    # The full-size track, 2026-09-08. Empty until the six HO/PL/RB/ETH
+    # packages are registered; a name appears here in the same commit that
+    # registers it.
+    "Incubator-FullSize": [],
+    "Eval-FullSize":      [],
+    "Prop-FullSize":      [],
 }
 
 # M2K and MYM added 2026-09-08 to carry t3_braid_scalp_20260823's RTY and YM
@@ -175,10 +191,19 @@ EXPECTED_ASSIGNMENTS = {
 # whole system". Pull the definitions before either trades real size.
 REQUESTED_POINT_VALUES = {"MNQ": 2.0, "MES": 5.0, "MGC": 10.0,
                           "6E": 125_000.0, "6J": 12_500_000.0,
-                          "M2K": 5.0, "MYM": 0.5}
+                          "M2K": 5.0, "MYM": 0.5,
+                          # The full-size track, 2026-09-08. Unlike M2K/MYM
+                          # these four DO reconcile: `python -m backtest.specs`
+                          # reports only M2K and MYM as UNVERIFIED, so HO, RB,
+                          # PL and ETH are checked against the definitions
+                          # under /mnt/backtest/reference/futures/.
+                          "HO": 42_000.0, "RB": 42_000.0,
+                          "PL": 50.0, "ETH": 50.0}
 REQUESTED_TICK_SIZES = {"MNQ": 0.25, "MES": 0.25, "MGC": 0.10,
                         "6E": 0.00005, "6J": 0.0000005,
-                        "M2K": 0.10, "MYM": 1.0}
+                        "M2K": 0.10, "MYM": 1.0,
+                        "HO": 0.0001, "RB": 0.0001,
+                        "PL": 0.10, "ETH": 0.50}
 
 # The repository's regime -> quadrant id map, built HERE from
 # `backtest.profiler.REGIMES` rather than imported. `REGIMES` is a tuple in
@@ -237,7 +262,9 @@ def test_all_six_target_accounts_exist_and_are_well_formed() -> None:
     cfg = config()
     assert set(REQUIRED_PORTFOLIOS) == {"Incubator-Odd", "Incubator-Even",
                                         "Eval-Odd", "Eval-Even",
-                                        "Prop-Odd", "Prop-Even"}
+                                        "Prop-Odd", "Prop-Even",
+                                        "Incubator-FullSize",
+                                        "Eval-FullSize", "Prop-FullSize"}
     assert set(cfg["portfolios"]) == set(REQUIRED_PORTFOLIOS), (
         sorted(cfg["portfolios"]))
     assert cfg["version"] == "1.1.0"

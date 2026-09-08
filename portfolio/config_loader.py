@@ -129,7 +129,12 @@ DEFAULT_CONFIG_PATH = "config/portfolios.json"
 #: two hops. They carry `prop_eval` - the enum already had it, so no account
 #: type was invented for them.
 REQUIRED_PORTFOLIOS = ("Incubator-Odd", "Eval-Odd", "Prop-Odd",
-                       "Incubator-Even", "Eval-Even", "Prop-Even")
+                       "Incubator-Even", "Eval-Even", "Prop-Even",
+                       # The full-size track, 2026-09-08. Three rungs at once,
+                       # for the reason PROMOTION_ROUTES states: a lone
+                       # incubation rung is a ladder with no exit.
+                       "Incubator-FullSize", "Eval-FullSize",
+                       "Prop-FullSize")
 
 INCUBATOR_ACCOUNT_TYPE = "incubator_sim"
 PROP_ACCOUNT_TYPE = "prop_eval"
