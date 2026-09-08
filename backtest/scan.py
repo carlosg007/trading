@@ -433,26 +433,45 @@ def _gate1_status(gate1: Any) -> str | None:
     return gate1 if gate1 is None or isinstance(gate1, str) else str(gate1)
 
 
-def fragility_of(row: dict) -> str | None:
+def fragility_of(row: dict, *, prune_spikes: bool = True) -> str | None:
     """
     Why this cell cannot be a winner, or None when it can.
 
     Order matters only for the message: a ruinous spike is reported as ruinous,
     because "the account died" is the finding an operator has to act on and
     "the neighbours fall away" is a comment on a curve that no longer exists.
+
+    THE TWO BARS ARE INDEPENDENT, AND ONLY ONE OF THEM IS NEGOTIABLE
+    ===============================================================
+    `prune_spikes=False` (2026-09-08, `--allow-isolated-spikes`) drops the
+    ISOLATED SPIKE bar only. That bar is a judgement call - PLATEAU_SPIKE_RATIO
+    is 0.5 and the comment saying so has always called it one - so a caller who
+    would rather let Stage 3's holdout arbitrate a sharp neighbourhood can have
+    that, and the spike is still MEASURED and still reported on every row.
+
+    The RUIN bar is not negotiable and takes no flag. It fires at
+    RUIN_MIN_DRAWDOWN_PCT, which is -100%: the account reached zero on the very
+    bars the parameters were selected on. That is not a drawdown ceiling to be
+    tuned against an account size - it is scale-free, so no position sizing and
+    no downstream risk manager makes it survivable, and there is no alpha to
+    discover in an equity curve that hit zero. `charter_audit`'s ruin guard
+    exists for the same reason and was added after three configurations of
+    `t3_braid_scalp_20260823` reached the incubator having drawn -194% and
+    -206%.
     """
     dd = row.get("max_drawdown_pct")
     if dd is not None and not pd.isna(dd) \
             and float(dd) <= RUIN_MIN_DRAWDOWN_PCT:
         return FRAGILE_RUIN
-    if bool(row.get("is_spike")):
+    if prune_spikes and bool(row.get("is_spike")):
         return FRAGILE_SPIKE
     return None
 
 
 def _select_best_row(rows: Iterable[dict],
                      rank: str = RANK_PLATEAU,
-                     prune_fragile: bool = True) -> tuple[dict | None, str]:
+                     prune_fragile: bool = True,
+                     prune_spikes: bool = True) -> tuple[dict | None, str]:
     """
     The winning row and the label for HOW it won, from one rule.
 
@@ -515,7 +534,8 @@ def _select_best_row(rows: Iterable[dict],
     # label this stage can print on its least defensible row.
     eligible = measurable
     if prune_fragile:
-        eligible = [r for r in measurable if fragility_of(r) is None]
+        eligible = [r for r in measurable
+                    if fragility_of(r, prune_spikes=prune_spikes) is None]
         if not eligible:
             return None, SELECTED_PRUNED_FRAGILE
 
@@ -1091,7 +1111,8 @@ def _finalise_scan(symbol: str,
                    filter_info: dict | None,
                    offered_total: int,
                    suppressed_total: int,
-                   extra: dict | None = None) -> dict[str, Any]:
+                   extra: dict | None = None,
+                   prune_spikes: bool = True) -> dict[str, Any]:
     """
     Turn one trade list per surviving combination into the scan result.
 
@@ -1164,7 +1185,8 @@ def _finalise_scan(symbol: str,
     table = pd.DataFrame([{k: v for k, v in r.items() if k != "_metrics"}
                           for r in rows])
 
-    best, selection = _select_best_row(rows, rank=rank)
+    best, selection = _select_best_row(rows, rank=rank,
+                                       prune_spikes=prune_spikes)
     # What the pre-charter rule would have picked, kept for one comparison:
     # whether ranking on the plateau moved the winner at all. It is recorded,
     # never acted on.
@@ -1300,7 +1322,8 @@ def scan_symbol(strategy_path: str | Path,
                 base_params: dict | None = None,
                 max_cells: int = MAX_CELLS,
                 strat_name: str | None = None,
-                rank: str = RANK_PLATEAU) -> dict[str, Any]:
+                rank: str = RANK_PLATEAU,
+                prune_spikes: bool = True) -> dict[str, Any]:
     """
     Sweep `grid` over one symbol's bars and pick a winner.
 
@@ -1393,6 +1416,7 @@ def scan_symbol(strategy_path: str | Path,
     days = session_days(bars)
     return _finalise_scan(
         symbol=symbol, cfg=cfg, grid=grid, rank=rank, strat_name=strat_name,
+        prune_spikes=prune_spikes,
         valid=valid, rejected=rejected, n_combinations=len(combos),
         trade_lists=trade_lists, days=days, filter_info=filter_info,
         offered_total=offered_total, suppressed_total=suppressed_total)
@@ -1459,6 +1483,7 @@ def scan_symbol_chunked(strategy_path: str | Path,
                         max_cells: int = MAX_CELLS,
                         strat_name: str | None = None,
                         rank: str = RANK_PLATEAU,
+                        prune_spikes: bool = True,
                         chunk_years: int = DEFAULT_CHUNK_YEARS,
                         warmup_bars: int | str = "auto",
                         settlement_bars: int | None = None,
@@ -1791,6 +1816,7 @@ def scan_symbol_chunked(strategy_path: str | Path,
 
     return _finalise_scan(
         symbol=symbol, cfg=cfg, grid=grid, rank=rank, strat_name=strat_name,
+        prune_spikes=prune_spikes,
         valid=valid, rejected=rejected, n_combinations=len(combos),
         trade_lists=merged, days=session_days(day_frames),
         filter_info=filter_info, offered_total=offered_total,
@@ -2585,6 +2611,19 @@ def build_parser() -> argparse.ArgumentParser:
                         f"parameters to every bar it reads, so a holdout it "
                         f"has optimised over is no longer a holdout. There is "
                         f"no override.")
+    p.add_argument("--allow-isolated-spikes", dest="prune_spikes",
+                   action="store_false", default=True,
+                   help="Let a cell whose grid neighbours keep under "
+                        f"{PLATEAU_SPIKE_RATIO:.2f} of its Sharpe still win "
+                        "its sweep, and advance to Stage 3 for the holdout to "
+                        "arbitrate. The spike is still measured and still "
+                        "reported on every row; it just stops deciding "
+                        "eligibility. Does NOT touch the ruin bar: a cell "
+                        f"that drew past {RUIN_MIN_DRAWDOWN_PCT:.0f} pct "
+                        "took the "
+                        "account to zero on its own selection bars, which no "
+                        "position sizing downstream can make survivable, and "
+                        "there is no flag for it.")
     p.add_argument("--select", dest="rank", default=RANK_PLATEAU,
                    choices=[RANK_PLATEAU, RANK_SHARPE],
                    help=f"How the winner is ranked. {RANK_PLATEAU} (default): "
@@ -3121,6 +3160,7 @@ def main(argv: list[str] | None = None) -> int:
                             path, LakeSource(symbol=sym, tf=tf), sym, cfg,
                             grid, base_params=base_params,
                             strat_name=strat_name, rank=args.rank,
+                            prune_spikes=args.prune_spikes,
                             chunk_years=args.chunk_years,
                             warmup_bars=args.chunk_warmup,
                             settlement_bars=args.chunk_settlement,
@@ -3135,7 +3175,8 @@ def main(argv: list[str] | None = None) -> int:
                         scan = scan_symbol(path, bars, sym, cfg, grid,
                                            base_params=base_params,
                                            strat_name=strat_name,
-                                           rank=args.rank)
+                                           rank=args.rank,
+                                           prune_spikes=args.prune_spikes)
                     print(format_scan_summary(scan))
                     csv = write_scan_table(scan, tf_dir)
                 print(f"  table      → {csv}")

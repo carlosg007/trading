@@ -1834,6 +1834,22 @@ def test_stage2_refuses_a_spike_and_a_ruinous_cell() -> None:
     # report Stage 2's one deliberate anti-overfitting verdict as "stage 2
     # recorded no parameters" - which reads as a broken run and sends an
     # operator hunting a crash that never happened.
+    # The spike bar is negotiable (2026-09-08, --allow-isolated-spikes); the
+    # ruin bar is not. Pinned together so a later "soften the fragility
+    # screen" cannot quietly take both.
+    from backtest.scan import fragility_of, FRAGILE_SPIKE, FRAGILE_RUIN
+    spike_cell = {"is_spike": True, "max_drawdown_pct": -12.0}
+    ruin_cell = {"is_spike": False, "max_drawdown_pct": -100.0}
+    check("a spike is pruned by default",
+          fragility_of(spike_cell) == FRAGILE_SPIKE)
+    check("...and --allow-isolated-spikes lets it through",
+          fragility_of(spike_cell, prune_spikes=False) is None)
+    check("a RUINOUS cell is pruned by default",
+          fragility_of(ruin_cell) == FRAGILE_RUIN)
+    check("...and NO flag lets it through: -100% is the account reaching "
+          "zero on its own selection bars, which position sizing cannot undo",
+          fragility_of(ruin_cell, prune_spikes=False) == FRAGILE_RUIN)
+
     from backtest.audit_gates import stage2_skip_reason
     fragile = stage2_skip_reason(STAGE2_PRUNED_FRAGILE)
     check("a fragility prune says the sweep RAN and locked no winner",
