@@ -1049,16 +1049,26 @@ ALL_QUADRANTS_FAILED = "FAILED_ALL_QUADRANT_CHECK"
 # survives the other three" are the same statement. They are not.
 ALL_QUADRANT_MIN_TRADES = 20
 ALL_QUADRANT_MIN_SHARPE = 0.05
-# Dollars, quadrant-local, on the default $100,000 of starting capital - see
-# `profiler._quadrant_risk`, which is where the figure this compares against is
-# measured. A CAP on the fall, so a quadrant is refused for drawing more.
-ALL_QUADRANT_MAX_DRAWDOWN_PNL = 15_000.0
+# RETIRED 2026-09-08. Was 15_000.0: a quadrant-local cap in DOLLARS, on an
+# assumed $100,000 of starting capital. That makes it a statement about an
+# ACCOUNT, not about an edge - the same measurement on a $250,000 account is a
+# different verdict on identical bars - and CLAUDE.md puts anything that
+# depends on an account balance behind CrossTrade NAM, which enforces it
+# against a real one. The quadrant-local drawdown is still MEASURED and still
+# reported on every row; it simply no longer refuses a certification here.
+#
+# This is NOT the ruin guard, which stays: `charter_audit`'s ruin bar and
+# `scan.fragility_of` both key on RUIN_MIN_DRAWDOWN_PCT (-100%), a scale-free
+# statement that the account reached zero on its own selection bars. Position
+# sizing moves a dollar drawdown; it does not move an equity curve that hit
+# zero.
+ALL_QUADRANT_MAX_DRAWDOWN_PNL = None
 
 
 def all_quadrant_gate(profile: dict | None,
                       min_trades: int = ALL_QUADRANT_MIN_TRADES,
                       min_sharpe: float = ALL_QUADRANT_MIN_SHARPE,
-                      max_drawdown: float = ALL_QUADRANT_MAX_DRAWDOWN_PNL,
+                      max_drawdown: float | None = ALL_QUADRANT_MAX_DRAWDOWN_PNL,
                       ) -> dict:
     """
     Did the edge hold in EVERY quadrant individually, not just its own?
@@ -1082,9 +1092,18 @@ def all_quadrant_gate(profile: dict | None,
     the request, not a bug to tune the thresholds around.
 
     The consequence to expect: near-zero promotions until either the
-    thresholds move or the strategies change. `--no-require-all-quadrants`
-    restores the charter's behaviour without editing this file, so the two
-    regimes of operation are a flag rather than a patch.
+    thresholds move or the strategies change.
+
+    THAT IS WHAT HAPPENED, AND THE GATE IS NOW ADVISORY (2026-09-08)
+    ---------------------------------------------------------------
+    Enforced for one day, this refused every configuration of
+    `t3_braid_scalp_20260823` across 43 pairs. The paragraph above predicted
+    exactly that, so the gate is not wrong - it is answering a question the
+    rest of the pipeline does not ask. It is still measured on every audit and
+    still reported in full; it simply no longer refuses a certification unless
+    a caller passes `--require-all-quadrants`. The dollar drawdown cap that
+    used to be one of its bars is retired outright - see
+    ALL_QUADRANT_MAX_DRAWDOWN_PNL.
 
     A quadrant the strategy NEVER TRADED is a FAIL, not a skip. The profiler
     omits a zero-trade quadrant from the breakdown entirely, so an absent key
@@ -1126,7 +1145,11 @@ def all_quadrant_gate(profile: dict | None,
         if sharpe is None or sharpe < float(min_sharpe):
             why.append("no per-trade Sharpe was recorded" if sharpe is None
                        else f"Sharpe {sharpe:.3f} < {float(min_sharpe):.2f}")
-        if dd is None or abs(dd) > float(max_drawdown):
+        # `max_drawdown=None` is the default since 2026-09-08: the quadrant
+        # drawdown is REPORTED on the row below and grades nothing. A caller
+        # that passes a number gets the old dollar bar back.
+        if max_drawdown is not None and (dd is None
+                                         or abs(dd) > float(max_drawdown)):
             why.append("no drawdown was recorded" if dd is None
                        else f"drawdown ${abs(dd):,.2f} past the "
                             f"${float(max_drawdown):,.0f} cap")
@@ -1147,8 +1170,10 @@ def all_quadrant_gate(profile: dict | None,
                "value": (f"n={r['trade_count']} net={r['net_pnl']} "
                          f"sharpe={r['sharpe_trade']} dd={r['max_drawdown_pnl']}"),
                "threshold": (f"n>={int(min_trades)}, net>0, "
-                             f"sharpe>={float(min_sharpe):.2f}, "
-                             f"|dd|<=${float(max_drawdown):,.0f}"),
+                             f"sharpe>={float(min_sharpe):.2f}"
+                             + (f", |dd|<=${float(max_drawdown):,.0f}"
+                                if max_drawdown is not None
+                                else "; drawdown reported, not graded")),
                "status": r["status"], "note": r["reason"]} for r in rows]
     return {
         "name": name,
@@ -1157,22 +1182,24 @@ def all_quadrant_gate(profile: dict | None,
         "checks": checks,
         "thresholds": {"min_trades": int(min_trades),
                        "min_sharpe": float(min_sharpe),
-                       "max_drawdown_pnl": float(max_drawdown)},
+                       "max_drawdown_pnl": (None if max_drawdown is None
+                                            else float(max_drawdown))},
         "note": ("every quadrant cleared" if not failed else
                  f"{len(failed)} of 4 quadrant(s) failed: "
                  + "; ".join(f"{r['quadrant']} ({r['reason']})"
                              for r in failed)
                  + ". A regime SPECIALIST is expected to fail this - it is "
                    "stood down outside its own quadrant and never trades the "
-                   "others. Re-run with --no-require-all-quadrants for the "
-                   "charter's Gate-R-only verdict."),
+                   "others, so this is ADVISORY and refuses nothing by "
+                   "itself. Pass --require-all-quadrants to give it "
+                   "authority, for an all-weather mandate."),
     }
 
 
 def charter_audit(audit: dict, gate_r: dict, retention: dict,
                   in_sample_metrics: dict | None = None,
                   holdout_profile: dict | None = None,
-                  require_all_quadrants: bool = True) -> dict:
+                  require_all_quadrants: bool = False) -> dict:
     """
     Fold Gate R into the audit and make it the verdict. Charter clause 3.
 
@@ -1222,17 +1249,30 @@ def charter_audit(audit: dict, gate_r: dict, retention: dict,
     gates[GATE_R] = gate_r
     ruin = ruin_guard(in_sample_metrics)
     gates[GATE_RUIN] = ruin
-    # Gate Q is OPT-OUT, not opt-in, because it was requested as a promotion
-    # requirement. It is recorded on the audit whenever it ran, and its absence
-    # from `gates` is what says it was waived - a gate that wrote a PASS when
-    # switched off would be indistinguishable from one that measured four
-    # quadrants and liked them.
-    gate_q = (all_quadrant_gate(holdout_profile)
-              if require_all_quadrants else None)
-    if gate_q is not None:
-        gates[GATE_Q] = gate_q
+    # Gate Q is ADVISORY by default since 2026-09-08, and is ALWAYS measured.
+    #
+    # It was added 2026-09-07 as a hard promotion requirement, with its own
+    # docstring conceding that it "contradicts the charter's premise", that a
+    # regime specialist "will fail this gate by construction rather than by
+    # defect", and that the consequence to expect was "near-zero promotions".
+    # That is what happened. Certifying on it asked every specialist this
+    # pipeline is built to produce to also be an all-weather system.
+    #
+    # So it now scores like Gates 1-3, for the same stated reason they are
+    # advisory: it grades market states a regime-gated strategy is STOOD DOWN
+    # in and never trades. `require_all_quadrants=True` restores its authority
+    # for a caller that wants an all-weather bar.
+    #
+    # It is recorded under `gates` either way, so the measurement never
+    # disappears - the earlier "absence means waived" convention is replaced by
+    # an explicit `advisory` marker, because a gate that is missing and a gate
+    # that is present-but-toothless are different things to read off an audit,
+    # and only one of them can be told apart from a gate that never ran.
+    gate_q = all_quadrant_gate(holdout_profile)
+    gate_q["advisory"] = not require_all_quadrants
+    gates[GATE_Q] = gate_q
     out["gates"] = gates
-    q_ok = gate_q is None or gate_q["status"] == PASS
+    q_ok = (not require_all_quadrants) or gate_q["status"] == PASS
     if ruin["status"] != PASS:
         # A NOT EVALUATED ruin guard is not a pass either: it means nothing on
         # the metrics dict states the account survived, and this gate exists
@@ -1257,7 +1297,10 @@ def charter_audit(audit: dict, gate_r: dict, retention: dict,
         "quadrant Stage 1 designated. Gates 1, 2 and 3 are computed and "
         "reported as EVIDENCE and cannot fail a certification; they score the "
         "blended sample across every market state, which a regime-gated "
-        "strategy does not trade. The ONE hard exception is the ruin guard: "
+        "strategy does not trade. Gate Q joined them as ADVISORY on "
+        "2026-09-08 for the same reason - it grades the three quadrants the "
+        "supervisor stands the strategy down in - and is measured and "
+        "reported on every audit. The ONE hard exception is the ruin guard: "
         "an in-sample account that reached zero refuses certification whatever "
         "Gate R measured, because no quadrant restriction makes a blown "
         "account survivable.")
@@ -1653,7 +1696,7 @@ def certify_symbol(symbol: str, path: Path, tf: str, args: argparse.Namespace,
                 in_sample_metrics=block.get("metrics"),
                 holdout_profile=ho_profile,
                 require_all_quadrants=getattr(
-                    args, "require_all_quadrants", True))),
+                    args, "require_all_quadrants", False))),
             # The WHOLE holdout breakdown, not only the certified quadrant.
             # Gate R scores one row of it; the other three are what a live
             # supervisor is being told to stand the strategy down in, and a
@@ -1923,19 +1966,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--is-end", default=CHARTER_IS_END,
                    help=f"In-sample end (default {CHARTER_IS_END}). Required, "
                         f"and must fall before --holdout-start.")
-    p.add_argument("--no-require-all-quadrants", dest="require_all_quadrants",
-                   action="store_false", default=True,
-                   help="Waive Gate Q, the all-quadrant robustness bar, and "
-                        "certify on Gate R alone as the charter does. Gate Q "
-                        "requires positive expectancy, per-trade Sharpe >= "
-                        f"{ALL_QUADRANT_MIN_SHARPE:.2f} and a quadrant-local "
-                        f"drawdown within ${ALL_QUADRANT_MAX_DRAWDOWN_PNL:,.0f} "
-                        f"in EACH of Q1-Q4 over >= {ALL_QUADRANT_MIN_TRADES} "
-                        "holdout trades. A regime SPECIALIST is expected to "
-                        "fail it: Stage 1 designates one home quadrant and "
-                        "the live supervisor stands the strategy down in the "
-                        "other three, so it never trades them. Waiving it is "
-                        "recorded by the gate's ABSENCE from the audit.")
+    p.add_argument("--require-all-quadrants", dest="require_all_quadrants",
+                   action="store_true", default=False,
+                   help="Give Gate Q, the all-quadrant robustness bar, the "
+                        "authority to REFUSE a certification. Off by default: "
+                        "Gate Q is measured and reported on every audit but "
+                        "is ADVISORY, like Gates 1-3, because it grades the "
+                        "three quadrants a regime-gated strategy is stood "
+                        "down in and never trades. It requires positive "
+                        "expectancy and per-trade Sharpe >= "
+                        f"{ALL_QUADRANT_MIN_SHARPE:.2f} in EACH of Q1-Q4 over "
+                        f">= {ALL_QUADRANT_MIN_TRADES} holdout trades. Pass "
+                        "this only for an all-weather mandate: a regime "
+                        "SPECIALIST fails it by construction, which is why it "
+                        "no longer certifies anything on its own.")
     p.add_argument("--holdout-start", default=HOLDOUT_START,
                    help=f"Holdout start (default {HOLDOUT_START})")
     p.add_argument("--holdout-end", default=None,

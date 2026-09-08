@@ -67,7 +67,7 @@ sys.path.insert(0, str(REPO))
 
 import backtest.discord_reporter as dr                            # noqa: E402
 from backtest.audit_gates import (GATE_RUIN, RUIN_CHECK_FAILED,  # noqa: E402
-                                  GATE_R, PROP_FIRM_FIELDS,       # noqa: E402
+                                  GATE_R, GATE_Q, PROP_FIRM_FIELDS,  # noqa: E402
                                   UnknownRegimeError,
                                   WindowOverlapError,
                                   _assert_no_prop_firm_rules,
@@ -508,9 +508,16 @@ def test_no_aggregate_pruning() -> None:
           "the verdict reads as MOVED rather than quietly dropped",
           a["aggregate_status"] == FAIL and a["aggregate_passed"] is False
           and a["aggregate_is_advisory"] is True)
-    check("...and all five gates are still on the file in full",
-          set(a["gates"]) == {"gate1", "gate2", "gate3", GATE_R, GATE_RUIN},
+    check("...and all six gates are still on the file in full - Gate Q "
+          "included, since 2026-09-08 it is always measured and recorded "
+          "even when advisory",
+          set(a["gates"]) == {"gate1", "gate2", "gate3", GATE_R, GATE_RUIN,
+                              GATE_Q},
           str(sorted(a["gates"])))
+    check("...and with no holdout profile Gate Q says NOT EVALUATED rather "
+          "than inventing a pass",
+          a["gates"][GATE_Q]["status"] == NOT_EVALUATED
+          and a["gates"][GATE_Q]["advisory"] is True)
     check("the file says IN WORDS which gate the verdict came from",
           a["verdict_gate"] == GATE_R and "clause 3" in a["verdict_basis"])
 
@@ -1647,15 +1654,16 @@ def test_all_quadrant_gate() -> None:
           spec["status"] == FAIL
           and sum(1 for r in spec["quadrants"] if r["status"] != PASS) == 3,
           spec["status"])
-    check("...and the note says a specialist is EXPECTED to fail it",
+    check("...and the note says a specialist is EXPECTED to fail it, and "
+          "that the gate is advisory",
           "specialist" in spec["note"].lower()
-          and "--no-require-all-quadrants" in spec["note"])
+          and "advisory" in spec["note"].lower()
+          and "--require-all-quadrants" in spec["note"])
 
     # Each bar, one at a time, so a pass cannot come from the wrong column.
     for label, bad in (
             ("negative expectancy", _qrisk(-800, 0.20, -3000)),
             ("Sharpe below the floor", _qrisk(5000, 0.01, -3000)),
-            ("drawdown past the cap", _qrisk(5000, 0.20, -22_000)),
             ("too few trades to measure", _qrisk(5000, 0.20, -3000, n=6)),
             ("no Sharpe recorded at all", _qrisk(5000, None, -3000))):
         prof = {"regime_breakdown": {r: _qrisk(5000, 0.20, -3000)
@@ -1663,6 +1671,22 @@ def test_all_quadrant_gate() -> None:
         prof["regime_breakdown"][REGIMES[0]] = bad
         check(f"one quadrant with {label} fails the gate",
               all_quadrant_gate(prof)["status"] == FAIL, label)
+
+    check("a deep quadrant drawdown no longer fails the gate: the dollar cap "
+          "was retired 2026-09-08 as account governance, and belongs to "
+          "CrossTrade",
+          all_quadrant_gate({"regime_breakdown": {
+              r: _qrisk(5000, 0.20, -22_000) for r in REGIMES}})["status"]
+          == PASS)
+    check("...but it is still MEASURED and reported on the row, so retiring "
+          "the bar did not retire the evidence",
+          all(r["max_drawdown_pnl"] == -22_000 for r in all_quadrant_gate(
+              {"regime_breakdown": {r: _qrisk(5000, 0.20, -22_000)
+                                    for r in REGIMES}})["quadrants"]))
+    check("...and a caller that passes a cap explicitly still gets the bar",
+          all_quadrant_gate({"regime_breakdown": {
+              r: _qrisk(5000, 0.20, -22_000) for r in REGIMES}},
+              max_drawdown=15_000.0)["status"] == FAIL)
 
     check("no breakdown at all is NOT EVALUATED, which is not a pass",
           all_quadrant_gate({})["status"] == NOT_EVALUATED)
@@ -1681,14 +1705,33 @@ def test_all_quadrant_gate() -> None:
                      "gate2": {"name": "g2", "status": PASS, "checks": []},
                      "gate3": {"name": "g3", "status": PASS, "checks": []}}}
 
+    # ADVISORY by default from 2026-09-08. The specialist that Gate Q was
+    # written to refuse is exactly the strategy this pipeline is built to
+    # produce - Stage 1 designates one home quadrant and the supervisor stands
+    # it down in the other three - so the gate is measured, reported, and
+    # certifies nothing on its own.
+    advisory = charter_audit(agg, passing_r, ret, in_sample_metrics=alive,
+                             holdout_profile=specialist)
+    check("a specialist that Gate Q fails is still CERTIFIED: the gate is "
+          "advisory and Gate R is the verdict",
+          advisory["passed"] is True and advisory["status"] == PASS,
+          advisory["status"])
+    check("...and Gate Q is still recorded, still FAIL, and marked advisory - "
+          "the measurement does not disappear with its authority",
+          GATE_Q in advisory["gates"]
+          and advisory["gates"][GATE_Q]["status"] == FAIL
+          and advisory["gates"][GATE_Q]["advisory"] is True)
+
     refused = charter_audit(agg, passing_r, ret, in_sample_metrics=alive,
-                            holdout_profile=specialist)
-    check("Gate Q refuses a certification Gate R passed",
+                            holdout_profile=specialist,
+                            require_all_quadrants=True)
+    check("Gate Q refuses a certification Gate R passed when it is ARMED",
           refused["passed"] is False
           and refused["status"] == ALL_QUADRANTS_FAILED, refused["status"])
     check("...under its OWN token, so it is never read as a blown account",
           refused["status"] != "FAILED_RUIN_CHECK"
-          and GATE_Q in refused["gates"])
+          and GATE_Q in refused["gates"]
+          and refused["gates"][GATE_Q]["advisory"] is False)
 
     passed = charter_audit(agg, passing_r, ret, in_sample_metrics=alive,
                            holdout_profile=healthy)
@@ -1700,9 +1743,12 @@ def test_all_quadrant_gate() -> None:
     waived = charter_audit(agg, passing_r, ret, in_sample_metrics=alive,
                            holdout_profile=specialist,
                            require_all_quadrants=False)
-    check("waiving it is recorded by the gate's ABSENCE, never by a written "
-          "PASS", waived["passed"] is True and GATE_Q not in waived["gates"]
-          and waived["all_quadrant_gate"] is None)
+    check("an advisory Gate Q reports its REAL status, never a written PASS: "
+          "a gate switched off must not be readable as four quadrants it "
+          "measured and liked",
+          waived["passed"] is True
+          and waived["gates"][GATE_Q]["status"] == FAIL
+          and waived["all_quadrant_gate"] is not None)
 
     # Ruin outranks it: a blown account must not be relabelled by a
     # robustness bar it also missed.
