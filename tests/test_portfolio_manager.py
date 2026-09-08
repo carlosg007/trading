@@ -28,14 +28,14 @@ WHAT THIS COVERS, and why each one is here rather than assumed:
     integer and an order that fills normally.
   * **THE FLOOR, NOT ROUNDING.** 2.5 contracts is 2. Rounding up overshoots the
     budget by 25% in the same direction every time, invisibly.
-  * **THE FLOOR CLAMP BREACHING THE BUDGET, AND SAYING SO.** One MCL contract
-    at ATR 3.00 risks $300 against a $250 budget, and the sizer cannot express
+  * **THE FLOOR CLAMP BREACHING THE BUDGET, AND SAYING SO.** One M2K contract
+    at ATR 60.0 risks $300 against a $250 budget, and the sizer cannot express
     0.83 contracts. The clamp stands and `budget_breached` reports it; a limit
     that is silently exceeded is worse than one that is not enforced.
   * **NETTING AS A PARTITION.** Opposing signals cancel to zero, reinforcing
     ones stack, and a symbol routed to a basket that does not hold it RAISES —
     the point of a basket is that it names what may be held there.
-  * **ROUTING BY BASKET AND BY TRACK.** MNQ/MCL to Odd, MES/MGC to Even, on
+  * **ROUTING BY BASKET AND BY TRACK.** MNQ/M2K to Odd, MES/MGC to Even, on
     whichever of the incubator and prop tracks the signal named. The `account`
     on the payload is what decides where money moves.
   * **THE REGIME GATE.** A symbol whose quadrant is not the portfolio's
@@ -74,9 +74,9 @@ from portfolio.volatility_sizer import (SizingError,             # noqa: E402
 # config. This is the one place the suite compares the SIZER against the
 # numbers a human signed off; reading them out of the file under test would
 # pass whatever they were changed to.
-POINT_VALUE = {"MNQ": 2.0, "MES": 5.0, "MCL": 100.0, "MGC": 10.0}
+POINT_VALUE = {"MNQ": 2.0, "MES": 5.0, "M2K": 5.0, "MGC": 10.0}
 
-ODD_ASSETS = ("MNQ", "MCL")
+ODD_ASSETS = ("MNQ", "M2K")
 EVEN_ASSETS = ("MES", "MGC")
 # The quadrants each basket is configured to trade, as this repository's ids.
 ODD_QUADRANTS = ("Q1", "Q2", "Q3", "Q4")   # ALL FOUR since 2026-08-24
@@ -124,7 +124,7 @@ def regimes(**overrides) -> dict:
     """
     base = {
         "MNQ": {"atr_14": 50.0, "quadrant": "Q3"},    # 50 x $2   = $100/ct
-        "MCL": {"atr_14": 1.00, "quadrant": "Q3"},    # 1 x $100  = $100/ct
+        "M2K": {"atr_14": 20.0, "quadrant": "Q3"},    # 20 x $5   = $100/ct
         "MES": {"atr_14": 10.0, "quadrant": "Q1"},    # 10 x $5   = $50/ct
         "MGC": {"atr_14": 5.00, "quadrant": "Q1"},    # 5 x $10   = $50/ct
     }
@@ -153,7 +153,7 @@ def raises(exc, fn, *args, **kwargs) -> str:
 # ==========================================================================
 def test_the_sizing_math_matches_the_four_point_values() -> None:
     """
-    THE REQUEST'S FIRST CLAUSE: MNQ $2, MES $5, MCL $100, MGC $10.
+    THE REQUEST'S FIRST CLAUSE: MNQ $2, MES $5, M2K $5, MGC $10.
 
     Every expectation is worked on paper:
 
@@ -170,8 +170,8 @@ def test_the_sizing_math_matches_the_four_point_values() -> None:
         ("MNQ", 25.0, 250.0, 5, 50.0),      # 250/50  = 5.0  -> 5
         ("MES", 10.0, 250.0, 5, 50.0),      # 250/50  = 5.0  -> 5
         ("MES", 20.0, 250.0, 2, 100.0),     # 250/100 = 2.5  -> 2
-        ("MCL", 1.00, 250.0, 2, 100.0),     # 250/100 = 2.5  -> 2
-        ("MCL", 0.50, 250.0, 5, 50.0),      # 250/50  = 5.0  -> 5
+        ("M2K", 20.0, 250.0, 2, 100.0),     # 250/100 = 2.5  -> 2
+        ("M2K", 10.0, 250.0, 5, 50.0),      # 250/50  = 5.0  -> 5
         ("MGC", 5.00, 250.0, 5, 50.0),      # 250/50  = 5.0  -> 5
         ("MGC", 12.5, 250.0, 2, 125.0),     # 250/125 = 2.0  -> 2
     ]
@@ -220,7 +220,7 @@ def test_the_clamps_bound_the_size_at_both_ends() -> None:
     assert big["raw_contracts"] > 5
 
     # A huge ATR would buy less than one: clamped UP to 1.
-    small = size_detail("MCL", 10.0)
+    small = size_detail("M2K", 200.0)
     assert small["contracts"] == 1, small
     assert small["clamp"] == "floor", small
     assert small["raw_contracts"] < 1
@@ -230,12 +230,12 @@ def test_the_clamps_bound_the_size_at_both_ends() -> None:
 
     # And the clamps are honoured when the caller moves them.
     assert calculate_position_size("MNQ", 0.5, max_contracts=3) == 3
-    assert calculate_position_size("MCL", 10.0, min_contracts=2) == 2
+    assert calculate_position_size("M2K", 200.0, min_contracts=2) == 2
 
 
 def test_the_floor_clamp_breaches_the_budget_and_reports_it() -> None:
     """
-    ONE MCL CONTRACT AT ATR 3.00 RISKS $300 AGAINST A $250 BUDGET, and the
+    ONE M2K CONTRACT AT ATR 60.0 RISKS $300 AGAINST A $250 BUDGET, and the
     sizer cannot express 0.83 contracts. The clamp stands — refusing the trade
     outright is a different strategy from the one configured — so what matters
     is that the breach is on the record rather than rounded away.
@@ -244,7 +244,7 @@ def test_the_floor_clamp_breaches_the_budget_and_reports_it() -> None:
     the account carries more risk than the configuration says, the order is
     well formed, and nothing anywhere reads differently.
     """
-    d = size_detail("MCL", 3.0, risk_budget_usd=250.0)
+    d = size_detail("M2K", 60.0, risk_budget_usd=250.0)
     assert d["contracts"] == 1, d
     assert d["clamp"] == "floor"
     assert d["risk_per_contract_usd"] == 300.0
@@ -252,12 +252,12 @@ def test_the_floor_clamp_breaches_the_budget_and_reports_it() -> None:
     assert d["budget_breached"] is True, d
 
     # And it is NOT set when the size fits inside the budget.
-    ok = size_detail("MCL", 1.0, risk_budget_usd=250.0)
+    ok = size_detail("M2K", 20.0, risk_budget_usd=250.0)
     assert ok["budget_breached"] is False, ok
     assert ok["risk_usd"] == 200.0          # 2 contracts x $100
 
     # min_contracts=0 is the way to decline instead of breaching.
-    stood_down = size_detail("MCL", 3.0, min_contracts=0)
+    stood_down = size_detail("M2K", 60.0, min_contracts=0)
     assert stood_down["contracts"] == 0 and not stood_down["budget_breached"]
 
 
@@ -341,18 +341,18 @@ def test_reinforcing_signals_stack() -> None:
     """
     pm = manager()
     net = pm.aggregate_signals([
-        signal("MCL", LONG, "Prop-Odd", strategy_id="a"),
-        signal("MCL", LONG, "Prop-Odd", strategy_id="b"),
-        signal("MCL", LONG, "Prop-Odd", strategy_id="c"),
+        signal("M2K", LONG, "Incubator-Odd", strategy_id="a"),
+        signal("M2K", LONG, "Incubator-Odd", strategy_id="b"),
+        signal("M2K", LONG, "Incubator-Odd", strategy_id="c"),
     ])
-    assert net["Prop-Odd"]["MCL"]["net_units"] == 3
-    assert net["Prop-Odd"]["MCL"]["direction"] == LONG
+    assert net["Incubator-Odd"]["M2K"]["net_units"] == 3
+    assert net["Incubator-Odd"]["M2K"]["direction"] == LONG
 
     weighted = pm.aggregate_signals([
-        signal("MCL", LONG, "Prop-Odd", units=2),
-        signal("MCL", SHORT, "Prop-Odd", units=1),
+        signal("M2K", LONG, "Incubator-Odd", units=2),
+        signal("M2K", SHORT, "Incubator-Odd", units=1),
     ])
-    assert weighted["Prop-Odd"]["MCL"]["net_units"] == 1
+    assert weighted["Incubator-Odd"]["M2K"]["net_units"] == 1
 
     shorts = pm.aggregate_signals([
         signal("MGC", SHORT, "Prop-Even"),
@@ -389,13 +389,13 @@ def test_netting_is_per_portfolio_and_per_symbol() -> None:
     net = pm.aggregate_signals([
         signal("MNQ", LONG, "Incubator-Odd"),
         signal("MNQ", SHORT, "Prop-Odd"),
-        signal("MCL", LONG, "Incubator-Odd"),
+        signal("M2K", LONG, "Incubator-Odd"),
     ])
     assert net["Incubator-Odd"]["MNQ"]["net_units"] == 1
     assert net["Prop-Odd"]["MNQ"]["net_units"] == -1
-    assert net["Incubator-Odd"]["MCL"]["net_units"] == 1
+    assert net["Incubator-Odd"]["M2K"]["net_units"] == 1
     assert set(net) == {"Incubator-Odd", "Prop-Odd"}
-    assert set(net["Incubator-Odd"]) == {"MNQ", "MCL"}
+    assert set(net["Incubator-Odd"]) == {"MNQ", "M2K"}
 
 
 def test_a_symbol_outside_the_basket_is_refused() -> None:
@@ -455,7 +455,7 @@ def test_an_unassigned_strategy_cannot_be_routed() -> None:
 # ==========================================================================
 def test_each_basket_routes_to_its_own_account() -> None:
     """
-    THE REQUEST'S THIRD CLAUSE. MNQ and MCL reach an Odd account; MES and MGC
+    THE REQUEST'S THIRD CLAUSE. MNQ and M2K reach an Odd account; MES and MGC
     reach an Even one; and the `account` field on the payload is what decides
     where money actually moves.
 
@@ -472,15 +472,15 @@ def test_each_basket_routes_to_its_own_account() -> None:
     accounts = {pid: portfolio["target_account"]
                 for pid, portfolio in load_portfolio_config()["portfolios"].items()}
     net = pm.aggregate_signals([
-        signal("MNQ", LONG, "Incubator-Odd"),
-        signal("MCL", LONG, "Prop-Odd"),
+        signal("MNQ", LONG, "Prop-Odd"),
+        signal("M2K", LONG, "Incubator-Odd"),
         signal("MES", SHORT, "Incubator-Even"),
         signal("MGC", LONG, "Prop-Even"),
     ])
     payloads = pm.build_order_payloads(net, regimes())
     routed = {p["symbol"]: p["account"] for p in payloads}
-    assert routed == {"MNQ": accounts["Incubator-Odd"],
-                      "MCL": accounts["Prop-Odd"],
+    assert routed == {"MNQ": accounts["Prop-Odd"],
+                      "M2K": accounts["Incubator-Odd"],
                       "MES": accounts["Incubator-Even"],
                       "MGC": accounts["Prop-Even"]}, routed
 
@@ -646,8 +646,8 @@ def test_a_flat_net_produces_no_order_and_no_flatten() -> None:
     shut positions it never opened.
     """
     pm = manager()
-    net = pm.aggregate_signals([signal("MCL", LONG, "Prop-Odd"),
-                                signal("MCL", SHORT, "Prop-Odd")])
+    net = pm.aggregate_signals([signal("M2K", LONG, "Incubator-Odd"),
+                                signal("M2K", SHORT, "Incubator-Odd")])
     plan = pm.build_order_plan(net, regimes())
     assert plan[0]["payload"] is None
     assert "netted flat" in plan[0]["skipped_reason"]
@@ -662,13 +662,17 @@ def test_the_plan_records_what_the_payload_list_cannot() -> None:
     about a trading day. The plan carries every decision, declined ones
     included.
     """
-    pm = manager()
-    # The regime-blocked leg is on the EVEN track: the Odd basket declares all
-    # four quadrants since 2026-08-24, so nothing routed there can be stood
-    # down on regime any more.
+    # NARROWED, not the live table. The Even track was widened to all four
+    # quadrants after this case was written - every portfolio in
+    # config/portfolios.json now declares all four - so read off the file
+    # there is nothing left anywhere to stand down on regime, and the
+    # regime-blocked leg below would quietly become a third payload. That is
+    # the case `narrowed_manager` exists for, and its own docstring says so.
+    pm = narrowed_manager("Prop-Even", ["Q1_HIGH_VOL_TREND",
+                                        "Q2_HIGH_VOL_CHOP"])
     net = pm.aggregate_signals([
         signal("MNQ", LONG, "Incubator-Odd"),     # trades
-        signal("MCL", LONG, "Incubator-Odd"),     # trades
+        signal("M2K", LONG, "Incubator-Odd"),     # trades
         signal("MES", LONG, "Prop-Even"),         # blocked by regime
         signal("MGC", LONG, "Prop-Even"),         # netted flat
         signal("MGC", SHORT, "Prop-Even"),
@@ -683,12 +687,12 @@ def test_the_plan_records_what_the_payload_list_cannot() -> None:
 
     by_symbol = {r["symbol"]: r for r in plan}
     assert by_symbol["MNQ"]["payload"] is not None
-    assert by_symbol["MCL"]["payload"] is not None
+    assert by_symbol["M2K"]["payload"] is not None
     assert "Q3" in by_symbol["MES"]["skipped_reason"]
     assert "netted flat" in by_symbol["MGC"]["skipped_reason"]
 
     text = pm.describe_plan(plan)
-    for symbol in ("MNQ", "MCL", "MES", "MGC"):
+    for symbol in ("MNQ", "M2K", "MES", "MGC"):
         assert symbol in text, symbol
     assert "SKIP" in text and "BUY" in text
 
