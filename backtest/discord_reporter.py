@@ -2419,6 +2419,13 @@ def stage3_rows_from_audit(blob: dict[str, Any],
             # from a pass - `status` above is what says that.
             "regime_starvation": (gate_r.get("regime_starvation")
                                   or {}).get("message"),
+            # "primary" or "secondary_starvation_fallback". A card that showed
+            # only the certified quadrant would read identically for a clean
+            # primary pass and for one that reached its second-ranked
+            # environment after a drought in its first, and those are
+            # different pieces of evidence about the same strategy.
+            "certified_on": gate_r.get("certified_on"),
+            "primary_quadrant": gate_r.get("primary_quadrant"),
             "params": blob.get("params") or {},
             "params_locked": bool(blob.get("params_locked")),
             "in_stage1": bool(blob.get("in_stage1", True)),
@@ -3006,9 +3013,17 @@ def format_stage3_promotions(strat: str, blob: dict[str, Any],
             state = "**NOT PROMOTED**"
         else:
             state = "staged" if row.get("incubator_dir") else "not staged"
+        # A fallback certification is MARKED on the row it certified. Without
+        # it this line reads identically whether the quadrant is the one Stage
+        # 1 designated or the second-ranked one it reached after a drought in
+        # the first, and the reader acting on this section is the person who
+        # most needs to tell those apart.
+        fb = ("" if row.get("certified_on") != "secondary_starvation_fallback"
+              else f" · ⤷ 2nd `{row.get('primary_quadrant') or '?'}` starved")
         lines.append(f"• **{sym} {tf}** V{ver} `{quad}` · PF "
                      f"**{_regime_pf_cell(row)}** (n="
-                     f"{_fmt_count(row.get('oos_trade_count'))}) · {state}")
+                     f"{_fmt_count(row.get('oos_trade_count'))}) · {state}"
+                     f"{fb}")
         lines.append(f"  params `{compact_params(stage3_param_text(row.get('params')))}`")
         # The blended pair, for the rows somebody is about to act on. A
         # holdout factor read alone lets an edge that collapsed from 2.40 to

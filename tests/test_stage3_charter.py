@@ -1790,6 +1790,86 @@ def test_quadrant_risk_is_quadrant_local() -> None:
           _quadrant_risk([-10, -20, -5])["sharpe_trade"] < 0)
 
 
+def test_the_starvation_only_fallback() -> None:
+    """
+    Gate R may certify on the PRE-DECLARED secondary, and only on starvation.
+
+    Requested 2026-09-08. The rule that keeps this one test rather than two:
+    a primary that traded `min_trades` times and lost is a hard FAIL with no
+    second look. Starvation is different in kind - the primary was never
+    measured - so a quadrant Stage 1 declared IN SAMPLE stands in for it.
+
+    Pinned here because every part of it is load bearing and none of it is
+    visible from the value alone: a fallback that also fired on a performance
+    failure would be the best-of-N selection this gate exists to prevent, and
+    a fallback that accepted an INELIGIBLE runner-up would certify in an
+    environment the screen refused.
+    """
+    from backtest.audit_gates import (regime_gate, CERTIFIED_ON_PRIMARY,
+                                      CERTIFIED_ON_FALLBACK)
+    print("\nGate R: the starvation-only secondary fallback (2026-09-08)")
+
+    HVT = "High Volatility / Trending"
+
+    def prof(**rows):
+        return {"regime_breakdown": {
+            r: {"trade_count": n, "profit_factor": pf, "win_rate": 50.0,
+                "net_pnl": 1000.0, "sharpe_trade": 0.1,
+                "max_drawdown_pnl": -500.0}
+            for r, (n, pf) in rows.items()}}
+
+    eligible = [{"regime": HVT, "quadrant": "Q1", "eligible": True,
+                 "profit_factor": 1.01, "trade_count": 411, "net_pnl": 9000.0,
+                 "score": 5000.0}]
+
+    starved = prof(**{LV_RANGING: (16, 1.40), HVT: (300, 1.20)})
+    g = regime_gate(starved, LV_RANGING, 1.00, 30, secondary_regimes=eligible)
+    check("a STARVED primary falls back to the pre-declared secondary",
+          g["status"] == PASS
+          and g["certified_on"] == CERTIFIED_ON_FALLBACK, str(g["status"]))
+    check("...and the CERTIFIED quadrant becomes the one that carried it, so "
+          "the live supervisor is handed a single environment",
+          g["quadrant"] == "Q1" and g["target_regime"] == HVT, g["quadrant"])
+    check("...with the designation kept beside it rather than overwritten",
+          g["primary_quadrant"] == "Q4" and g["primary_regime"] == LV_RANGING)
+    check("...and the starvation diagnostic still reports the PRIMARY's "
+          "drought, which is why the fallback ran at all",
+          bool(g["regime_starvation"]))
+
+    # THE RULE THAT MAKES IT ONE TEST AND NOT TWO.
+    lost = prof(**{LV_RANGING: (300, 0.88), HVT: (300, 1.20)})
+    g = regime_gate(lost, LV_RANGING, 1.00, 30, secondary_regimes=eligible)
+    check("a primary that traded ENOUGH and LOST is a hard FAIL, and the "
+          "secondary is never looked at",
+          g["status"] == FAIL and g["fallback"] is None
+          and g["certified_on"] == CERTIFIED_ON_PRIMARY, str(g["fallback"]))
+
+    # An INELIGIBLE runner-up is not an environment the screen would designate.
+    ineligible = [{"regime": HVT, "quadrant": "Q1", "eligible": False,
+                   "profit_factor": 1.40, "trade_count": 12}]
+    g = regime_gate(starved, LV_RANGING, 1.00, 30,
+                    secondary_regimes=ineligible)
+    check("an INELIGIBLE secondary is refused - the screen declined that "
+          "quadrant and a fallback cannot reach past it",
+          g["status"] == FAIL and g["fallback"] is None)
+
+    # The fallback can fail on its own terms.
+    both_thin = prof(**{LV_RANGING: (16, 1.40), HVT: (9, 1.20)})
+    g = regime_gate(both_thin, LV_RANGING, 1.00, 30,
+                    secondary_regimes=eligible)
+    check("a secondary that is itself starved FAILS, and the target stays "
+          "the designation rather than moving to a quadrant that certified "
+          "nothing",
+          g["status"] == FAIL and g["quadrant"] == "Q4"
+          and g["fallback"]["status"] == FAIL, str(g["quadrant"]))
+
+    # And with nothing declared, the gate is exactly what it was.
+    g = regime_gate(starved, LV_RANGING, 1.00, 30, secondary_regimes=None)
+    check("no declared secondary leaves the pre-2026-09-08 behaviour intact",
+          g["status"] == FAIL and g["fallback"] is None
+          and g["certified_on"] == CERTIFIED_ON_PRIMARY)
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="stage3charter_") as td:
         tmp = Path(td)
@@ -1813,6 +1893,7 @@ def main() -> int:
         test_regime_starvation_is_never_certified()
         test_version_b_survivor_is_audited_as_version_b()
         test_all_quadrant_gate()
+        test_the_starvation_only_fallback()
         test_quadrant_risk_is_quadrant_local()
 
     print("\n" + "=" * 60)

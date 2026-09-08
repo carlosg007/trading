@@ -2330,10 +2330,17 @@ def write_best_params(scan: dict, strategy: str, symbol: str, tf: str,
         # target quadrant on this file is a name with no evidence under it, and
         # Gate R would be certifying a choice nobody can audit.
         "regime_scores": (stage1_pair or {}).get("regime_scores") or {},
-        # Positive-expectancy runners-up. Metadata for the live supervisor,
-        # never a second certification target: two permitted quadrants give
-        # Gate R two chances at a 1.00 holdout profit factor, which is the
-        # best-of-N selection the single-quadrant rule exists to prevent.
+        # Positive-expectancy runners-up, declared in sample by Stage 1.
+        # Carried for the live supervisor, and - since 2026-09-08 - read by
+        # Gate R in ONE case: when the primary quadrant placed fewer than
+        # MIN_REGIME_TRADES holdout trades and was never measured at all. It
+        # is still not a general second certification target, because two
+        # permitted quadrants give Gate R two chances at a 1.00 holdout profit
+        # factor, which is the best-of-N selection the single-quadrant rule
+        # exists to prevent; the gate refuses the fallback whenever the primary
+        # traded enough and lost. What makes this field load bearing rather
+        # than descriptive is that it is written from IN-SAMPLE bars here, so
+        # the alternative is named before the holdout is read.
         "secondary_regimes": (stage1_pair or {}).get("secondary_regimes") or [],
         "regime_applied_to_sweep": False,
         # The window is written whole rather than left to `start`/`end` alone,

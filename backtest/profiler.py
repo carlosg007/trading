@@ -436,10 +436,21 @@ def designate(breakdown: dict | None, total_profiled: int,
 
     `secondaries` are the OTHER quadrants with positive expectancy - eligible
     ones that lost on score, and profitable ones disqualified only on sample
-    size, each carrying why. They are metadata for the live supervisor and are
-    NOT a second certification target: naming two quadrants a strategy may
-    trade doubles Gate R's chances of clearing 1.00 out of sample, which is
-    the best-of-four selection Gate R exists to avoid.
+    size, each carrying why.
+
+    They are NOT a second certification target in the general case: naming two
+    quadrants a strategy may trade doubles Gate R's chances of clearing 1.00
+    out of sample, which is the best-of-four selection Gate R exists to avoid.
+
+    THE ONE EXCEPTION, 2026-09-08: `audit_gates.regime_gate` may certify on the
+    top `eligible` entry here when the PRIMARY quadrant placed fewer than
+    `MIN_REGIME_TRADES` holdout trades - i.e. when the primary was never
+    measured. That is not a second chance at a bar the primary missed; it is a
+    first measurement in a pre-declared alternative, and the gate refuses the
+    fallback outright when the primary traded enough and lost. The declaration
+    is made HERE, from in-sample bars, which is what keeps the choice off the
+    holdout - so the order and the `eligible` flag on these rows are load
+    bearing rather than descriptive.
     """
     floor = designation_floor(total_profiled, min_trades, fraction)
     rows = rank_quadrants(breakdown, floor, min_profit_factor, score_mode)

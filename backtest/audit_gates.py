@@ -517,11 +517,14 @@ def load_params(strat_name: str, symbol: str, out_dir: Path,
         "best_params_regime": _named_regime(blob.get("optimal_regime")),
         "best_params_quadrant": blob.get("target_quadrant"),
         # The four-quadrant table the designation beat, and the
-        # positive-expectancy runners-up. Reported on the audit, never scored:
-        # certifying in a secondary quadrant as well would give Gate R two
-        # chances at a 1.00 holdout profit factor. `regime_scores` is what the
-        # REGIME STARVATION diagnostic reads to say where the candidate was
-        # actually dominant in sample.
+        # positive-expectancy runners-up. `secondary_regimes` is scored in ONE
+        # case only - `regime_gate`'s starvation-only fallback, when the
+        # primary placed too few holdout trades to be measured. Certifying in
+        # a secondary as a matter of course would give Gate R two chances at a
+        # 1.00 holdout profit factor, so the gate refuses it whenever the
+        # primary traded enough and lost. `regime_scores` is what the REGIME
+        # STARVATION diagnostic reads to say where the candidate was actually
+        # dominant in sample.
         "regime_scores": blob.get("regime_scores") or (
             (blob.get("stage1_regime") or {}).get("regime_scores") or {}),
         "secondary_regimes": blob.get("secondary_regimes") or (
@@ -756,10 +759,77 @@ def regime_starvation(regime: str | None, n_holdout: int,
     }
 
 
+CERTIFIED_ON_PRIMARY = "primary"
+CERTIFIED_ON_FALLBACK = "secondary_starvation_fallback"
+
+
+def _evaluate_quadrant(profile: dict | None, regime: str,
+                       min_profit_factor: float, min_trades: int) -> dict:
+    """
+    One quadrant against Gate R's two bars. The primary and any fallback are
+    measured HERE, by one body of code, so the secondary can never be held to
+    a different bar than the quadrant it stands in for.
+    """
+    stats = ((profile or {}).get("regime_breakdown") or {}).get(regime) or {}
+    pf = _num(stats.get("profit_factor"))
+    n = int(stats.get("trade_count", 0) or 0)
+    count_ok = n >= int(min_trades)
+    # An undefined profit factor over enough trades cannot clear a bar it was
+    # never measured against. It is only reachable when the quadrant has trades
+    # but the profiler recorded no factor for them, which is a broken profile
+    # rather than a break-even one - `pf is None and count_ok` must not read as
+    # a pass through `None >= 1.00` raising or, worse, being skipped.
+    pf_ok = pf is not None and pf >= float(min_profit_factor)
+    return {
+        "stats": stats, "pf": pf, "n": n, "quad": quadrant_id(regime),
+        "count_ok": count_ok, "pf_ok": pf_ok,
+        "checks": [
+            {"label": "Trades in quadrant", "value": n,
+             "threshold": f">= {int(min_trades)}",
+             "status": PASS if count_ok else FAIL,
+             "note": ("" if count_ok else
+                      f"the strategy never traded {regime} out of sample"
+                      if n == 0 else
+                      f"{n} trade(s) in {regime} is too thin to separate an "
+                      f"edge from a run of luck")},
+            {"label": "Profit factor in quadrant",
+             "value": "not measured" if pf is None else round(pf, 2),
+             "threshold": f">= {float(min_profit_factor):.2f}",
+             "status": PASS if pf_ok else FAIL,
+             "note": ("" if pf_ok else
+                      f"no profit factor was recorded for {regime}"
+                      if pf is None else
+                      f"{pf:.2f} in {regime}, below "
+                      f"{float(min_profit_factor):.2f}")},
+        ],
+    }
+
+
+def _fallback_candidate(secondary_regimes: Any) -> dict | None:
+    """
+    The pre-declared secondary a starved primary may fall back to, or None.
+
+    ELIGIBLE ONLY. `profiler.designate_regime` keeps two kinds of runner-up:
+    quadrants that cleared every designation bar and lost on score, and
+    profitable ones disqualified on sample size. Only the first kind is a
+    quadrant the screen was willing to designate, and certifying in one the
+    screen refused would let a fallback reach an environment the primary path
+    could never have been given.
+
+    The list arrives ranked, so the first eligible entry is the highest-scoring
+    one. Nothing here reads the holdout.
+    """
+    for row in (secondary_regimes or []):
+        if isinstance(row, dict) and row.get("eligible") and row.get("regime"):
+            return row
+    return None
+
+
 def regime_gate(profile: dict | None, regime: str | None,
                 min_profit_factor: float = MIN_REGIME_PROFIT_FACTOR,
                 min_trades: int = MIN_REGIME_TRADES,
-                regime_scores: dict | None = None) -> dict:
+                regime_scores: dict | None = None,
+                secondary_regimes: Any = None) -> dict:
     """
     Did the edge survive out of sample INSIDE its designated quadrant?
 
@@ -784,6 +854,32 @@ def regime_gate(profile: dict | None, regime: str | None,
       there, and the note says which.
     - **FAIL on the profit factor** when it traded enough and did not pay.
 
+    THE STARVATION-ONLY FALLBACK (2026-09-08)
+    =========================================
+    A primary quadrant that came in UNDER `min_trades` was never measured, and
+    `secondary_regimes` - the positive-expectancy runner-up Stage 1 declared
+    from IN-SAMPLE evidence and Stage 2 carried - is evaluated in its place,
+    against these same two bars.
+
+    The rule that keeps this one test rather than two: **the fallback runs only
+    on starvation, never after a performance failure.** A primary that traded
+    `min_trades` times and finished below the factor is a hard FAIL and stops
+    there. Looking at a second quadrant after seeing a real result in the first
+    is the best-of-N selection this gate exists to prevent - it would give Gate
+    R two chances at a 1.00 holdout profit factor and pass close to everything.
+    Starvation is the opposite case: there is no result to be disappointed by,
+    so the pre-declared alternative is a first measurement, not a second.
+
+    Two further limits. The secondary is named IN SAMPLE and never read off the
+    holdout, so nothing here chooses a quadrant because these bars liked it.
+    And only a secondary marked `eligible` may be used - one the screen
+    disqualified is not an environment the primary path could have reached
+    either.
+
+    `certified_on` records which quadrant carried it, `target_regime` becomes
+    the one that did, and `primary_regime` keeps the designation beside it. A
+    live supervisor is still handed exactly ONE quadrant.
+
     A profit factor of `inf` (the quadrant never lost) clears, and the
     profiler's 999 sentinel for the same case is passed through rather than
     normalised - rewriting another module's sentinel inside a gate is how two
@@ -800,12 +896,56 @@ def regime_gate(profile: dict | None, regime: str | None,
                      "scope travels, or name it with --regime."),
         }
 
-    stats = ((profile or {}).get("regime_breakdown") or {}).get(regime) or {}
-    pf = _num(stats.get("profit_factor"))
-    n = int(stats.get("trade_count", 0) or 0)
-    quad = quadrant_id(regime)
+    prim_regime = regime
+    prim = _evaluate_quadrant(profile, regime, min_profit_factor, min_trades)
+    stats, pf, n, quad = prim["stats"], prim["pf"], prim["n"], prim["quad"]
+    count_ok, pf_ok, checks = prim["count_ok"], prim["pf_ok"], prim["checks"]
 
-    count_ok = n >= int(min_trades)
+    # ---- the STARVATION-ONLY fallback (2026-09-08) ---------------------
+    #
+    # Reached only when the primary quadrant produced FEWER THAN `min_trades`
+    # holdout trades - that is, when it was never measured at all. A primary
+    # that traded enough and finished below the profit factor is a hard FAIL
+    # and stops here: looking at a second quadrant after seeing a real result
+    # in the first is the best-of-N selection this gate exists to prevent, and
+    # it is the difference between one test and two.
+    #
+    # The secondary is PRE-DECLARED from in-sample evidence by
+    # `profiler.designate_regime` and travels on the Stage 2 handoff. It is
+    # never chosen from the holdout, and only a secondary that cleared the
+    # designation bars in sample (`eligible`) is eligible here - a quadrant the
+    # screen refused is not a quadrant this may certify.
+    fallback = None
+    if not count_ok:
+        cand = _fallback_candidate(secondary_regimes)
+        if cand is not None:
+            alt_regime = str(cand.get("regime"))
+            alt = _evaluate_quadrant(profile, alt_regime,
+                                     min_profit_factor, min_trades)
+            fallback = {
+                "attempted": True,
+                "regime": alt_regime,
+                "quadrant": quadrant_id(alt_regime) or cand.get("quadrant"),
+                "trigger": (f"the primary quadrant {quad} placed {n} holdout "
+                            f"trade(s), below the {int(min_trades)} needed to "
+                            f"measure it at all"),
+                "in_sample": {k: cand.get(k) for k in
+                              ("profit_factor", "trade_count", "net_pnl",
+                               "score", "eligible")},
+                "measured": {"profit_factor": alt["pf"],
+                             "trade_count": alt["n"]},
+                "status": PASS if (alt["count_ok"] and alt["pf_ok"]) else FAIL,
+            }
+            checks = checks + [{**c, "label": f"{c['label']} (secondary)"}
+                               for c in alt["checks"]]
+            if alt["count_ok"] and alt["pf_ok"]:
+                # The certification MOVES to the quadrant that carried it, and
+                # `target_regime` is what promote.py writes into the package's
+                # regime_filter - so the live supervisor is told the one
+                # quadrant this was actually certified in, exactly as before.
+                regime, quad = alt_regime, fallback["quadrant"]
+                stats, pf, n = alt["stats"], alt["pf"], alt["n"]
+                count_ok, pf_ok = True, True
     # An undefined profit factor over enough trades cannot clear a bar it was
     # never measured against. It is only reachable when the quadrant has trades
     # but the profiler recorded no factor for them, which is a broken profile
@@ -813,35 +953,29 @@ def regime_gate(profile: dict | None, regime: str | None,
     # a pass through `None >= 1.00` raising or, worse, being skipped.
     pf_ok = pf is not None and pf >= float(min_profit_factor)
 
-    checks = [
-        {"label": "Trades in quadrant", "value": n,
-         "threshold": f">= {int(min_trades)}",
-         "status": PASS if count_ok else FAIL,
-         "note": ("" if count_ok else
-                  f"the strategy never traded {regime} out of sample"
-                  if n == 0 else
-                  f"{n} trade(s) in {regime} is too thin to separate an edge "
-                  f"from a run of luck")},
-        {"label": "Profit factor in quadrant",
-         "value": "not measured" if pf is None else round(pf, 2),
-         "threshold": f">= {float(min_profit_factor):.2f}",
-         "status": PASS if pf_ok else FAIL,
-         "note": ("" if pf_ok else
-                  f"no profit factor was recorded for {regime}" if pf is None
-                  else f"{pf:.2f} in {regime}, below "
-                       f"{float(min_profit_factor):.2f}")},
-    ]
     # Starvation is a FAIL on the trade count, whatever the factor did. A
     # quadrant with three holdout trades and a 999 profit factor fails here and
     # passes the factor row, so keying the diagnostic on the overall status
-    # would attach it to exactly the cases where it is least needed.
-    starved = (None if count_ok else
-               regime_starvation(regime, n, regime_scores))
+    # would attach it to exactly the cases where it is least needed. It is
+    # reported on the PRIMARY quadrant even when a fallback then carried the
+    # certification: the drought is what happened, and a card that dropped the
+    # diagnostic the moment the fallback worked would hide why it ran.
+    starved = (None if prim["count_ok"] else
+               regime_starvation(prim_regime, prim["n"], regime_scores))
+    certified_on = (CERTIFIED_ON_FALLBACK
+                    if (fallback or {}).get("status") == PASS
+                    else CERTIFIED_ON_PRIMARY)
     return {
         "name": name,
         "status": PASS if (count_ok and pf_ok) else FAIL,
         "target_regime": regime,
         "quadrant": quad,
+        # What Stage 1 designated, kept beside the certified quadrant so the
+        # two can never be confused once a fallback has moved one of them.
+        "primary_regime": prim_regime,
+        "primary_quadrant": prim["quad"],
+        "certified_on": certified_on,
+        "fallback": fallback,
         "regime_starvation": starved,
         "measured": {
             "profit_factor": pf,
@@ -850,10 +984,20 @@ def regime_gate(profile: dict | None, regime: str | None,
             "net_pnl": _num(stats.get("net_pnl")),
         },
         "checks": checks,
-        "note": ("the certification: the edge is measured only where Stage 1 "
-                 "said it lives. Performance in the other three quadrants is "
-                 "reported and never scored - a live supervisor stands the "
-                 "strategy down there."),
+        "note": (
+            ("the certification: the edge is measured only where Stage 1 "
+             "said it lives. Performance in the other three quadrants is "
+             "reported and never scored - a live supervisor stands the "
+             "strategy down there.")
+            if certified_on == CERTIFIED_ON_PRIMARY else
+            (f"CERTIFIED ON THE SECONDARY. {prim['quad']} placed "
+             f"{prim['n']} holdout trade(s), below the {int(min_trades)} "
+             f"needed to measure it, so the pre-declared secondary {quad} was "
+             f"evaluated instead - one test, not two. The primary was never "
+             f"judged on edge and this is not a second look at a quadrant "
+             f"that failed. {quad} is what the live supervisor is told to "
+             f"trade; it is stood down everywhere else, including "
+             f"{prim['quad']}.")),
     }
 
 
@@ -1670,7 +1814,13 @@ def certify_symbol(symbol: str, path: Path, tf: str, args: argparse.Namespace,
                       if ho_block.get("result") is not None else None)
         gate_r = regime_gate(ho_profile, regime,
                              args.regime_min_pf, args.regime_min_trades,
-                             regime_scores=prov.get("regime_scores"))
+                             regime_scores=prov.get("regime_scores"),
+                             # PRE-DECLARED in sample and carried on the
+                             # Stage 2 handoff. Passed rather than looked up
+                             # from the holdout profile: the whole point of
+                             # the fallback is that the alternative quadrant
+                             # was named before these bars were read.
+                             secondary_regimes=prov.get("secondary_regimes"))
         # Printed on the console the moment it is known, not left to be found
         # in the JSON. A Gate R that failed on sample size and one that failed
         # on edge print the same word on the certification leaderboard, and the
@@ -1849,6 +1999,17 @@ def certify_symbol(symbol: str, path: Path, tf: str, args: argparse.Namespace,
             "regime_starvation": {
                 ver: ((v["gate_audit"]["gates"][GATE_R]
                        .get("regime_starvation") or {}).get("message"))
+                for ver, v in versions.items()},
+            # WHICH quadrant carried the certification. "primary" or
+            # "secondary_starvation_fallback" - a strategy certified on its
+            # fallback is trading a quadrant Stage 1 ranked second, and a
+            # reader who cannot see that from the handoff would have to open
+            # the per-pair audit to find out which environment is live.
+            "certified_on": {
+                ver: v["gate_audit"]["gates"][GATE_R].get("certified_on")
+                for ver, v in versions.items()},
+            "primary_quadrant": {
+                ver: v["gate_audit"]["gates"][GATE_R].get("primary_quadrant")
                 for ver, v in versions.items()},
             "retention": {ver: v["retention"]["metrics"]
                           for ver, v in versions.items()},
@@ -2298,6 +2459,9 @@ def write_stage3_summary(strat_name: str, out_dir: Path, results: list[dict],
                 # above is what says that.
                 "regime_starvation": (r.get("regime_starvation")
                                       or {}).get(ver),
+                "certified_on": (r.get("certified_on") or {}).get(ver),
+                "primary_quadrant": (r.get("primary_quadrant")
+                                     or {}).get(ver),
                 "params": r.get("params") or {},
                 "params_locked": bool(r.get("params_locked")),
                 "in_stage1": bool(r.get("in_stage1", True)),
@@ -2329,6 +2493,7 @@ def write_stage3_summary(strat_name: str, out_dir: Path, results: list[dict],
             "holdout_profit_factor": None, "retention": {},
             "gate1": NOT_EVALUATED, "gate2": NOT_EVALUATED,
             "gate3": NOT_EVALUATED, "regime_starvation": None,
+            "certified_on": None, "primary_quadrant": None,
             "params": {}, "params_locked": False,
             "in_stage1": bool(e.get("in_stage1", True)),
             "exclude_days": [], "audit_file": None,
@@ -2494,6 +2659,8 @@ def audit_to_result(blob: dict, path: Path) -> dict:
         "regime_starvation": {
             ver: ((gate_r_of(v).get("regime_starvation") or {}).get("message"))
             for ver, v in versions.items()},
+        "certified_on": {ver: gate_r_of(v).get("certified_on")
+                         for ver, v in versions.items()},
         "retention": {ver: ((v.get("retention") or {}).get("metrics") or {})
                       for ver, v in versions.items()},
         "exclude_days": list((blob.get("entry_filters") or {})
