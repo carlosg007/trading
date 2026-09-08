@@ -20,14 +20,14 @@
     "use_stiffness_filter": true,
     "use_news_filter": false,
     "sl_atr_mult": 1.5,
-    "tp_atr_mult": 1.5,
+    "tp_atr_mult": 2.0,
     "trailing": false
   },
-  "params_source": "locked from dual_metrics_HO.json",
+  "params_source": "t3_braid_scalp_20260823.py DEFAULT_PARAMS",
   "params_conflict": [],
   "risk": {
     "sl_atr_mult": 1.5,
-    "tp_atr_mult": 1.5,
+    "tp_atr_mult": 2.0,
     "trailing": false
   },
   "day_of_week_gate": {
@@ -56,29 +56,11 @@
   "source": "/home/cgrullon/src/trading/strategies/experimental/t3_braid_scalp_20260823.py",
   "source_sha256": "7947879906b65bca846ba7866963262866c49757e0eaf8b387e5399fd87aac07",
   "promoted_sha256": "7947879906b65bca846ba7866963262866c49757e0eaf8b387e5399fd87aac07",
-  "promoted_utc": "2026-09-08T11:35:19+00:00",
-  "costs_included": true,
+  "promoted_utc": "2026-09-08T13:37:13+00:00",
+  "costs_included": false,
   "variants_tested": null,
-  "metrics_status": "RECORDED \u00b7 locked from dual_metrics_HO.json",
-  "metrics": {
-    "sharpe": 0.4016835849643455,
-    "sortino": 0.6239484224574957,
-    "calmar": 0.15288736904860697,
-    "profit_factor": 1.0571174766396552,
-    "win_rate": 0.5093696763202725,
-    "max_drawdown_pct": -35.96931835601934,
-    "total_return_pct": 145.14739999999762,
-    "annualized_return_pct": 5.499254449923563,
-    "trade_count": 5870,
-    "total_pnl": 145147.40000000058,
-    "total_costs": 76192.59999999829,
-    "final_equity": 245147.39999999764,
-    "n_days": 4221,
-    "start": "2013-01-01 23:00:00+00:00",
-    "end": "2026-08-07 20:00:00+00:00",
-    "bars": 77003,
-    "initial_capital": 100000.0
-  },
+  "metrics_status": "NOT RECORDED",
+  "metrics": null,
   "gate_audit_status": "PASS",
   "gate_audit": {
     "gate1": "FAIL",
@@ -135,8 +117,8 @@
       "exclude_days": null
     },
     "status": "PASS",
-    "snapshot_gate_status": "FAIL",
-    "agrees_with_snapshot": false
+    "snapshot_gate_status": "NOT EVALUATED",
+    "agrees_with_snapshot": null
   },
   "gates_overridden": false,
   "oos_status": "passed_gate3",
