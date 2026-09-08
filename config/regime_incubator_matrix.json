@@ -1,6 +1,6 @@
 {
-  "version": "1.0.0",
-  "generated_utc": "2026-09-07T22:50:08+00:00",
+  "version": "1.1.0",
+  "generated_utc": "2026-09-08T11:38:45+00:00",
   "purpose": "Tracks candidate / incubating / deployed strategies per market regime quadrant and asset class. This file is an INDEX, never an authority: config/portfolios.json decides what is routed and approved_incubator/<id>/meta.json decides what was certified. A disagreement is resolved against those two, never against this.",
   "quadrant_authority": {
     "module": "mdlib/regimes.py",
@@ -380,5 +380,182 @@
         "deployed": []
       }
     }
-  }
+  },
+  "strategies": {
+    "Q1": [
+      {
+        "strategy": "t3_braid_scalp_20260823_GC_30m_VA",
+        "module": "t3_braid_scalp_20260823",
+        "symbol": "GC",
+        "timeframe": "30m",
+        "version": "A",
+        "target_regime": "High Volatility / Trending",
+        "state": "incubating",
+        "routed": true,
+        "portfolio": "Incubator-Even",
+        "package": "strategies/approved_incubator/t3_braid_scalp_20260823_GC_30m_VA",
+        "promoted_utc": "2026-09-08T11:34:50+00:00",
+        "note": null
+      },
+      {
+        "strategy": "t3_braid_scalp_20260823_GC_30m_VB",
+        "module": "t3_braid_scalp_20260823",
+        "symbol": "GC",
+        "timeframe": "30m",
+        "version": "B",
+        "target_regime": "High Volatility / Trending",
+        "state": "incubating",
+        "routed": true,
+        "portfolio": "Incubator-Even",
+        "package": "strategies/approved_incubator/t3_braid_scalp_20260823_GC_30m_VB",
+        "promoted_utc": "2026-09-08T11:34:54+00:00",
+        "note": null
+      },
+      {
+        "strategy": "t3_braid_scalp_20260823_RB_30m_VA",
+        "module": "t3_braid_scalp_20260823",
+        "symbol": "RB",
+        "timeframe": "30m",
+        "version": "A",
+        "target_regime": "High Volatility / Trending",
+        "state": "candidate",
+        "routed": false,
+        "portfolio": null,
+        "package": "strategies/approved_incubator/t3_braid_scalp_20260823_RB_30m_VA",
+        "promoted_utc": "2026-09-08T11:34:58+00:00",
+        "note": "PROMOTED BUT NOT ROUTED - promote.py refused the registration because no incubator portfolio's basket carries this contract or its micro, so the live loop would refuse it on every asset and it could never place an order. It is not tradeable until a basket carries the contract."
+      },
+      {
+        "strategy": "t3_braid_scalp_20260823_RTY_30m_VB",
+        "module": "t3_braid_scalp_20260823",
+        "symbol": "RTY",
+        "timeframe": "30m",
+        "version": "B",
+        "target_regime": "High Volatility / Trending",
+        "state": "candidate",
+        "routed": false,
+        "portfolio": null,
+        "package": "strategies/approved_incubator/t3_braid_scalp_20260823_RTY_30m_VB",
+        "promoted_utc": "2026-09-08T11:35:01+00:00",
+        "note": "PROMOTED BUT NOT ROUTED - promote.py refused the registration because no incubator portfolio's basket carries this contract or its micro, so the live loop would refuse it on every asset and it could never place an order. It is not tradeable until a basket carries the contract."
+      }
+    ],
+    "Q2": [
+      {
+        "strategy": "t3_braid_scalp_20260823_ETH_1h_VA",
+        "module": "t3_braid_scalp_20260823",
+        "symbol": "ETH",
+        "timeframe": "1h",
+        "version": "A",
+        "target_regime": "High Volatility / Ranging",
+        "state": "candidate",
+        "routed": false,
+        "portfolio": null,
+        "package": "strategies/approved_incubator/t3_braid_scalp_20260823_ETH_1h_VA",
+        "promoted_utc": "2026-09-08T11:35:12+00:00",
+        "note": "PROMOTED BUT NOT ROUTED - promote.py refused the registration because no incubator portfolio's basket carries this contract or its micro, so the live loop would refuse it on every asset and it could never place an order. It is not tradeable until a basket carries the contract."
+      },
+      {
+        "strategy": "t3_braid_scalp_20260823_ETH_1h_VB",
+        "module": "t3_braid_scalp_20260823",
+        "symbol": "ETH",
+        "timeframe": "1h",
+        "version": "B",
+        "target_regime": "High Volatility / Ranging",
+        "state": "candidate",
+        "routed": false,
+        "portfolio": null,
+        "package": "strategies/approved_incubator/t3_braid_scalp_20260823_ETH_1h_VB",
+        "promoted_utc": "2026-09-08T11:35:15+00:00",
+        "note": "PROMOTED BUT NOT ROUTED - promote.py refused the registration because no incubator portfolio's basket carries this contract or its micro, so the live loop would refuse it on every asset and it could never place an order. It is not tradeable until a basket carries the contract."
+      },
+      {
+        "strategy": "t3_braid_scalp_20260823_HO_15m_VB",
+        "module": "t3_braid_scalp_20260823",
+        "symbol": "HO",
+        "timeframe": "15m",
+        "version": "B",
+        "target_regime": "High Volatility / Ranging",
+        "state": "candidate",
+        "routed": false,
+        "portfolio": null,
+        "package": "strategies/approved_incubator/t3_braid_scalp_20260823_HO_15m_VB",
+        "promoted_utc": "2026-09-08T11:34:47+00:00",
+        "note": "PROMOTED BUT NOT ROUTED - promote.py refused the registration because no incubator portfolio's basket carries this contract or its micro, so the live loop would refuse it on every asset and it could never place an order. It is not tradeable until a basket carries the contract."
+      },
+      {
+        "strategy": "t3_braid_scalp_20260823_HO_1h_VA",
+        "module": "t3_braid_scalp_20260823",
+        "symbol": "HO",
+        "timeframe": "1h",
+        "version": "A",
+        "target_regime": "High Volatility / Ranging",
+        "state": "candidate",
+        "routed": false,
+        "portfolio": null,
+        "package": "strategies/approved_incubator/t3_braid_scalp_20260823_HO_1h_VA",
+        "promoted_utc": "2026-09-08T11:35:19+00:00",
+        "note": "PROMOTED BUT NOT ROUTED - promote.py refused the registration because no incubator portfolio's basket carries this contract or its micro, so the live loop would refuse it on every asset and it could never place an order. It is not tradeable until a basket carries the contract."
+      },
+      {
+        "strategy": "t3_braid_scalp_20260823_NQ_1h_VA",
+        "module": "t3_braid_scalp_20260823",
+        "symbol": "NQ",
+        "timeframe": "1h",
+        "version": "A",
+        "target_regime": "High Volatility / Ranging",
+        "state": "incubating",
+        "routed": true,
+        "portfolio": "Incubator-Odd",
+        "package": "strategies/approved_incubator/t3_braid_scalp_20260823_NQ_1h_VA",
+        "promoted_utc": "2026-09-08T11:35:23+00:00",
+        "note": null
+      },
+      {
+        "strategy": "t3_braid_scalp_20260823_NQ_1h_VB",
+        "module": "t3_braid_scalp_20260823",
+        "symbol": "NQ",
+        "timeframe": "1h",
+        "version": "B",
+        "target_regime": "High Volatility / Ranging",
+        "state": "incubating",
+        "routed": true,
+        "portfolio": "Incubator-Odd",
+        "package": "strategies/approved_incubator/t3_braid_scalp_20260823_NQ_1h_VB",
+        "promoted_utc": "2026-09-08T11:35:27+00:00",
+        "note": null
+      },
+      {
+        "strategy": "t3_braid_scalp_20260823_PL_1h_VA",
+        "module": "t3_braid_scalp_20260823",
+        "symbol": "PL",
+        "timeframe": "1h",
+        "version": "A",
+        "target_regime": "High Volatility / Ranging",
+        "state": "candidate",
+        "routed": false,
+        "portfolio": null,
+        "package": "strategies/approved_incubator/t3_braid_scalp_20260823_PL_1h_VA",
+        "promoted_utc": "2026-09-08T11:35:30+00:00",
+        "note": "PROMOTED BUT NOT ROUTED - promote.py refused the registration because no incubator portfolio's basket carries this contract or its micro, so the live loop would refuse it on every asset and it could never place an order. It is not tradeable until a basket carries the contract."
+      },
+      {
+        "strategy": "t3_braid_scalp_20260823_YM_30m_VA",
+        "module": "t3_braid_scalp_20260823",
+        "symbol": "YM",
+        "timeframe": "30m",
+        "version": "A",
+        "target_regime": "High Volatility / Ranging",
+        "state": "candidate",
+        "routed": false,
+        "portfolio": null,
+        "package": "strategies/approved_incubator/t3_braid_scalp_20260823_YM_30m_VA",
+        "promoted_utc": "2026-09-08T11:35:08+00:00",
+        "note": "PROMOTED BUT NOT ROUTED - promote.py refused the registration because no incubator portfolio's basket carries this contract or its micro, so the live loop would refuse it on every asset and it could never place an order. It is not tradeable until a basket carries the contract."
+      }
+    ],
+    "Q3": [],
+    "Q4": []
+  },
+  "strategies_note": "Promoted packages indexed by the quadrant Gate R CERTIFIED them in, resolved from each meta.json's target_regime against this file's own `quadrants` labels rather than a second copy of the numbering. `routed` is the load-bearing field: an entry with routed=false is on disk and in git but absent from config/portfolios.json, and CANNOT trade. Counting entries here as live strategies is the mistake this field exists to prevent."
 }
