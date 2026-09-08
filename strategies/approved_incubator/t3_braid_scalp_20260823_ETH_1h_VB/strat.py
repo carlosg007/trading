@@ -27,7 +27,7 @@ from backtest.engine import BacktestConfig
 
 TIMEFRAME = '1h'
 SYMBOLS = ['ETH']
-DEFAULT_PARAMS = {'t3_period': 14, 't3_vfactor': 0.7, 'braid_fast': 3, 'braid_slow': 7, 'stiffness_period': 20, 'stiffness_threshold': 35.0, 'use_t3_filter': True, 'use_braid_filter': True, 'use_stiffness_filter': True, 'use_news_filter': False, 'sl_atr_mult': 1.5, 'tp_atr_mult': 2.0, 'trailing': True}
+DEFAULT_PARAMS = {'t3_period': 5, 't3_vfactor': 0.7, 'braid_fast': 3, 'braid_slow': 7, 'stiffness_period': 20, 'stiffness_threshold': 35.0, 'use_t3_filter': True, 'use_braid_filter': True, 'use_stiffness_filter': True, 'use_news_filter': False, 'sl_atr_mult': 1.5, 'tp_atr_mult': 2.0, 'trailing': False}
 ML_THRESHOLD = 0.48
 
 _BASELINE_PATH = Path(__file__).with_name("baseline.py")
