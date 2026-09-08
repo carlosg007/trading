@@ -1,0 +1,147 @@
+{
+  "name": "compressed_bollinger_reversion_20260901_ETH_5m_VB",
+  "strategy": "compressed_bollinger_reversion_20260901",
+  "symbol": "ETH",
+  "version": "B",
+  "description": "Promoted Version B (baseline + causal ML filter).",
+  "symbols": [
+    "ETH"
+  ],
+  "timeframe": "5m",
+  "params": {
+    "bb_len": 20,
+    "bb_mult": 2.0,
+    "rsi_thresh": 25.0,
+    "rsi_len": 14,
+    "use_regime_filter": true,
+    "use_alpha_trigger": true,
+    "use_midline_exit": true,
+    "use_news_filter": false,
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": null,
+    "trailing": false
+  },
+  "params_source": "locked from dual_metrics_ETH.json",
+  "params_conflict": [],
+  "risk": {
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": null,
+    "trailing": false
+  },
+  "day_of_week_gate": {
+    "status": "EVALUATED",
+    "version": "B",
+    "versions_profiled": [
+      "A",
+      "B"
+    ],
+    "blocked_weekdays": [],
+    "blocked_weekday": null,
+    "blocked_day": null,
+    "blocked_day_name": null,
+    "worst_weekday": 0,
+    "worst_day": "Mon",
+    "block_rule": "negative_expectancy",
+    "min_trades": 20,
+    "reason": "Monday is the weakest session but its expectancy is 95.42 per trade, which is not negative. Nothing is blocked: cutting a profitable session removes realised edge, and being fifth of five is not evidence against a weekday. Pass --block-worst-always to block it anyway.",
+    "selected_in_sample": true,
+    "note": "The weekday was chosen in-sample, on a window that spans the Stage 3 holdout. It is a live-supervision instruction, not evidence: no gate was scored on it and nothing was pruned for it.",
+    "source": "/mnt/backtest/artifacts/pipeline/compressed_bollinger_reversion_20260901/dow_gate_ETH_5m.json",
+    "source_sha256": "4bdef27a113123dfdc93a92e23a19c526999c97a211270ebc71cfee91ba08653"
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/compressed_bollinger_reversion_20260901.py",
+  "source_sha256": "24614502fcf07f46ff002a31719b82cff7fa1a39d7636f87287cf5e54bfd53c0",
+  "promoted_sha256": "7ed6509b52a7a5c6df9724bc6ae68c2c2fd0c69349cfcfbadfee1b2f14ca6ef2",
+  "promoted_utc": "2026-09-08T19:30:17+00:00",
+  "costs_included": true,
+  "variants_tested": null,
+  "metrics_status": "RECORDED \u00b7 locked from dual_metrics_ETH.json",
+  "metrics": {
+    "sharpe": 0.6185384814847918,
+    "sortino": 1.3229419794963846,
+    "calmar": 0.5340775358532794,
+    "profit_factor": 1.6305055018067276,
+    "win_rate": 0.5185185185185185,
+    "max_drawdown_pct": -4.5653650246259,
+    "total_return_pct": 17.91652000000008,
+    "annualized_return_pct": 2.4382589026229473,
+    "trade_count": 81,
+    "total_pnl": 17916.520000000135,
+    "total_costs": 4145.979999999866,
+    "final_equity": 117916.52000000008,
+    "n_days": 1724,
+    "start": "2021-02-07 23:00:00+00:00",
+    "end": "2026-08-08 22:50:00+00:00",
+    "bars": 342966,
+    "initial_capital": 100000.0
+  },
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "FAIL",
+    "gate2": "FAIL",
+    "gate3": "FAIL",
+    "gate_regime": "PASS",
+    "gate_ruin": "PASS",
+    "gate_all_quadrants": "FAIL"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/compressed_bollinger_reversion_20260901/gate_audit_ETH_5m.json",
+    "audit_sha256": "209108f5ee9398a76b0901b416d09cf603a2ba4a4e4a780716546e30731d4852",
+    "audit_symbol": "ETH",
+    "audit_timeframe": "5m",
+    "target_quadrant": "Q2",
+    "target_regime": "High Volatility / Ranging",
+    "audit_generated_utc": "2026-09-08T19:28:05+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "bb_len": 20,
+      "bb_mult": 2.0,
+      "rsi_thresh": 25.0,
+      "rsi_len": 14,
+      "sl_atr_mult": 2.0,
+      "tp_atr_mult": null,
+      "trailing": false
+    },
+    "params_source": "stage 2 winner (best_params_ETH_5m.json)",
+    "variants_tested": 108,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "FAIL",
+    "agrees_with_snapshot": false
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [
+    "import from 'backtest.event_calendar' is not allowed"
+  ],
+  "notes": "",
+  "ml_threshold": 0.48,
+  "baseline": "baseline.py"
+}
