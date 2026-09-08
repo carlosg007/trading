@@ -1,0 +1,19 @@
+{
+  "ETH": {
+    "1h": {
+      "theta_vol": 31.43663787841797,
+      "is_start": "2013-01-01",
+      "is_end": "2022-12-31",
+      "atr_length": 14,
+      "adx_length": 14,
+      "adx_trend_threshold": 25.0,
+      "observed_first_bar": "2021-02-07 23:00:00+00:00",
+      "observed_last_in_sample_bar": "2022-12-30 15:00:00+00:00",
+      "in_sample_bars": 11094,
+      "coverage_note": "THE WINDOW LABEL IS THE CHARTER'S; THE DATA IS NOT. CME Ether futures began trading 2021-02-08, so the 2013-01-01..2022-12-31 in-sample window holds 690 days of bars out of 3651 - 19% of it. This theta_vol is a median over the 2021 top and the 2022 bear market and nothing before them, which is a narrower and more volatile sample than every other anchor in this system. It is pinned rather than recomputed because the in-sample window is CLOSED: ETH history accumulating after 2022-12-31 is holdout, and folding it in would move a boundary that certified strategies were already measured against.",
+      "pinned_utc": "2026-09-08",
+      "pinned_from": "mdlib.regimes.provenance('ETH','1h') - byte-exact",
+      "file_note": "Pinned in-sample theta_vol anchors, per (SYMBOL, TIMEFRAME). This file WINS over the regime cache - see realtime/regime_daemon.py load_theta_anchors - because it is the deliberate act and the cache is only what happens to exist. An anchor is per TIMEFRAME: NQ's theta_vol is 7.90 at 15m and 11.33 at 30m, a 43% different boundary on the same tape. Symbols absent here resolve from the cache."
+    }
+  }
+}
