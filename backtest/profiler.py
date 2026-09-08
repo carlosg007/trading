@@ -637,7 +637,8 @@ class RegimeProfiler:
                  version: str = "", quiet: bool = False,
                  min_trades: int = DESIGNATION_MIN_TRADES,
                  min_trade_fraction: float = DESIGNATION_MIN_TRADE_FRACTION,
-                 min_profit_factor: float = DESIGNATION_MIN_PROFIT_FACTOR):
+                 min_profit_factor: float = DESIGNATION_MIN_PROFIT_FACTOR,
+                 target_quadrants=()):
         """
         `version` suffixes the artifact filename ("a" ->
         `regime_profile_NQ_15m_version_a.json`) and is empty by default, so a
@@ -671,6 +672,19 @@ class RegimeProfiler:
         self.min_trades = int(min_trades)
         self.min_trade_fraction = float(min_trade_fraction)
         self.min_profit_factor = float(min_profit_factor)
+        # The module's TARGET_QUADRANTS, or () when it declares none.
+        #
+        # PASSED IN RATHER THAN LEFT OFF (2026-09-08). `generate_profile` calls
+        # `designate` and writes the answer into
+        # `regime_profile_<SYM>_<TF>_version_<v>.json`, and Stage 1 calls
+        # `designate` AGAIN with the declaration to build the handoff. Omitted
+        # here, the two disagreed for every configuration whose best-scoring
+        # eligible quadrant was outside the declared set: on
+        # compressed_bollinger_reversion_20260901, six of fourteen artifacts
+        # named a home quadrant the handoff did not, and two designated
+        # nothing where the handoff carried Q4. The artifact is the file a
+        # human opens; the handoff is the one that certifies.
+        self.target_quadrants = normalize_target_quadrants(target_quadrants)
         self.out_dir = _resolve_out_dir(out_dir, strat_name)
         os.makedirs(self.out_dir, exist_ok=True)
 
@@ -901,7 +915,8 @@ class RegimeProfiler:
         decision = designate(profile, placed,
                              min_trades=self.min_trades,
                              fraction=self.min_trade_fraction,
-                             min_profit_factor=self.min_profit_factor)
+                             min_profit_factor=self.min_profit_factor,
+                             target_quadrants=self.target_quadrants)
         primary = decision["primary"]
         best_regime = primary["regime"] if primary else "None"
 

@@ -407,14 +407,48 @@ def test_regime_starvation() -> None:
           "candidate was actually dominant IN SAMPLE",
           diag["message"] == ("[REGIME STARVATION] Quadrant Q4 "
                               "(Low Volatility / Ranging) had only 1 holdout "
-                              "trades. Candidate was dominant in Q1 "
+                              "trades. Candidate was dominant among "
+                              "designatable quadrants in Q1 "
                               "(High Volatility / Trending) in sample."),
           diag["message"])
+    check("...and with no eligibility stated and nothing declared, the "
+          "dominant quadrant is the top scorer exactly as before - a MISSING "
+          "`eligible` flag is 'not stated', never 'not designatable'",
+          diag["dominant_quadrant"] == "Q1" and diag["passed_over"] is None)
     check("...and the dominance is read from the STAGE 2 handoff, never "
           "re-derived from the holdout — naming a new quadrant off the "
           "holdout is the best-of-four pick Gate R exists to avoid",
           diag["dominant_basis"].startswith("in-sample")
           and diag["dominant_quadrant"] == "Q1")
+
+    # THE TWO WAYS A HIGHER SCORER IS NOT A DESIGNATION (2026-09-08). Both
+    # produced "Candidate was dominant in Q1" before, which reads as "Gate R
+    # certified the wrong quadrant" and sent a reader hunting a bug in the
+    # gate. Measured on compressed_bollinger_reversion_20260901, where the
+    # module declares TARGET_QUADRANTS=("Q4",).
+    ineligible = {TRENDING: {**scores[TRENDING], "eligible": False,
+                             "reason": "47 trades is below the sample floor "
+                                       "of 50"},
+                  LV_RANGING: {**scores[LV_RANGING], "eligible": True}}
+    d = regime_starvation(LV_RANGING, 12, ineligible)
+    check("an INELIGIBLE top scorer is not called dominant, and the message "
+          "carries the bar it missed",
+          d["dominant_quadrant"] == "Q4"
+          and d["passed_over"]["quadrant"] == "Q1"
+          and "sample floor" in d["message"], d["message"])
+
+    eligible_both = {TRENDING: {**scores[TRENDING], "eligible": True},
+                     LV_RANGING: {**scores[LV_RANGING], "eligible": True}}
+    d = regime_starvation(LV_RANGING, 12, eligible_both,
+                          declared_quadrants=("Q4",))
+    check("a top scorer the MODULE excluded is not called dominant either, "
+          "and the message names the declaration that excluded it",
+          d["dominant_quadrant"] == "Q4"
+          and d["passed_over"]["quadrant"] == "Q1"
+          and "TARGET_QUADRANTS=Q4" in d["message"], d["message"])
+    check("...and the declaration is recorded on the diagnostic, so a reader "
+          "does not have to open the strategy module to learn why",
+          d["declared_quadrants"] == ["Q4"])
 
     # A quadrant that traded enough and lost is NOT starvation. Attaching the
     # diagnostic there would send the operator to re-designate a quadrant

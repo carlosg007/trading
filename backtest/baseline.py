@@ -1032,7 +1032,8 @@ def profile_versions(bars: pd.DataFrame, out: dict, symbol: str, tf: str,
                      quiet: bool = True,
                      min_profit_factor: float = MIN_REGIME_PROFIT_FACTOR,
                      min_trades: int = STAGE1_MIN_TRADES,
-                     min_trade_fraction: float = STAGE1_MIN_TRADE_FRACTION
+                     min_trade_fraction: float = STAGE1_MIN_TRADE_FRACTION,
+                     target_quadrants=()
                      ) -> dict[str, dict | None]:
     """
     The four-quadrant regime profile of BOTH versions of one configuration.
@@ -1070,6 +1071,10 @@ def profile_versions(bars: pd.DataFrame, out: dict, symbol: str, tf: str,
             out_dir=out_dir, version=label.lower(), quiet=quiet,
             min_trades=min_trades, min_trade_fraction=min_trade_fraction,
             min_profit_factor=min_profit_factor,
+            # The module's declaration, so the artifact this writes names the
+            # SAME home quadrant the handoff will. Without it the profiler
+            # designates unrestricted and the two files disagree.
+            target_quadrants=target_quadrants,
         ).generate_profile()
     return profiles
 
@@ -1157,7 +1162,8 @@ def run_symbol(symbol: str, path: Path, tf: str, params: dict,
         bars, out, symbol, tf, strat_name, out_dir,
         min_profit_factor=args.min_profit_factor,
         min_trades=args.min_trades,
-        min_trade_fraction=args.min_trade_fraction)
+        min_trade_fraction=args.min_trade_fraction,
+        target_quadrants=getattr(args, "target_quadrants", ()))
     t_profile = time.time() - t_profile
 
     # WHERE THE TIME WENT, per configuration. A screen is 8 to 108 of these and

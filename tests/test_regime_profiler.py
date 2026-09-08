@@ -120,11 +120,12 @@ def synthetic_trades(bars: pd.DataFrame, n_win: int = 60,
                          "pnl": pnl, "direction": "long"})
 
 
-def _profile(bars, trades, symbol="NQ", tf="15m", version="a", out_dir=None):
+def _profile(bars, trades, symbol="NQ", tf="15m", version="a", out_dir=None,
+             target_quadrants=()):
     from backtest.profiler import RegimeProfiler
     return RegimeProfiler(bars, _Result(trades), "regime_smoke", symbol, tf,
-                          out_dir=out_dir, version=version,
-                          quiet=True).generate_profile()
+                          out_dir=out_dir, version=version, quiet=True,
+                          target_quadrants=target_quadrants).generate_profile()
 
 
 # --------------------------------------------------------------------------
@@ -353,6 +354,74 @@ def _check_true_home_regime(tmp_dir: str | None = None) -> None:
           str(sorted(prof["regime_scores"])))
 
 
+def _check_the_declaration_reaches_the_artifact(tmp_dir: str | None = None
+                                                ) -> None:
+    """
+    The module's TARGET_QUADRANTS must restrict the designation the PROFILER
+    writes, not only the one Stage 1 computes afterwards.
+
+    `generate_profile`'s own comment promises "this artifact and the handoff
+    written beside it can never name different home quadrants for the same
+    result", and until 2026-09-08 it could: the profiler called `designate`
+    with no declaration while Stage 1 called it with one. On
+    compressed_bollinger_reversion_20260901 six of fourteen artifacts named a
+    home quadrant the handoff did not, and two designated nothing where the
+    handoff carried Q4. The artifact is the file a human opens.
+    """
+    print("\n6. TARGET_QUADRANTS restricts the profiler's own designation")
+    bars = synthetic_bars()
+    trades = synthetic_trades(bars)
+
+    free = _profile(bars, trades, out_dir=tmp_dir)
+    quads = [r.get("quadrant") for r in (free.get("regime_scores") or {}).values()
+             if r.get("eligible")]
+    check("the unrestricted profile designates something to restrict away",
+          bool(free.get("optimal_quadrant")), str(free.get("optimal_quadrant")))
+
+    # PINNED ON `designate` DIRECTLY, not on the synthetic bars. Whether the
+    # fixture happens to make two quadrants eligible is a property of the
+    # random walk, and a case that quietly proves nothing on most seeds is
+    # worse than no case at all. Two eligible quadrants, Q2 outscoring Q4,
+    # which is the shape compressed_bollinger_reversion_20260901 hit.
+    from backtest.profiler import designate
+    bd = {"High Volatility / Ranging": {"trade_count": 113,
+                                        "profit_factor": 1.08,
+                                        "net_pnl": 4917.0, "win_rate": 50.0},
+          "Low Volatility / Ranging": {"trade_count": 122,
+                                       "profit_factor": 1.09,
+                                       "net_pnl": 1506.0, "win_rate": 50.0}}
+    kw = dict(min_trades=50, fraction=0.10, min_profit_factor=1.00)
+    unrestricted = designate(bd, 235, **kw)
+    check("unrestricted, the higher-scoring Q2 is designated",
+          unrestricted["primary"]["quadrant"] == "Q2",
+          str(unrestricted["primary"]))
+    held_q4 = designate(bd, 235, target_quadrants=("Q4",), **kw)
+    check("declaring Q4 alone designates Q4 even though Q2 scores higher and "
+          "is eligible - the declaration RESTRICTS, it does not relax a bar",
+          held_q4["primary"]["quadrant"] == "Q4"
+          and held_q4["designation_restricted"] is True,
+          str(held_q4["primary"]))
+    widened = designate(bd, 235, target_quadrants=("Q2", "Q4"), **kw)
+    check("declaring both returns the higher scorer, which is what widening "
+          "compressed_bollinger_reversion_20260901 to (Q2, Q4) buys it",
+          widened["primary"]["quadrant"] == "Q2", str(widened["primary"]))
+
+    other = next((q for q in quads if q != free.get("optimal_quadrant")), None)
+    if other is None:
+        return
+
+    held = _profile(bars, trades, out_dir=tmp_dir, target_quadrants=(other,))
+    check("declaring the OTHER eligible quadrant moves the artifact's own "
+          "designation to it",
+          held.get("optimal_quadrant") == other,
+          f"declared {other}, artifact says {held.get('optimal_quadrant')}")
+    d = held.get("designation") or {}
+    check("...and the artifact RECORDS that it was restricted, so the two "
+          "designations can be told apart on disk",
+          d.get("designation_restricted") is True
+          and list(d.get("declared_quadrants") or []) == [other], str(d)[:160])
+
+
 def _isolated(fn):
     with tempfile.TemporaryDirectory() as tmp:
         prior = os.environ.get("BT_ARTIFACTS")
@@ -364,6 +433,10 @@ def _isolated(fn):
                 os.environ.pop("BT_ARTIFACTS", None)
             else:
                 os.environ["BT_ARTIFACTS"] = prior
+
+
+def test_the_declaration_reaches_the_artifact():
+    _isolated(_check_the_declaration_reaches_the_artifact)
 
 
 def test_profiler_generates_a_four_quadrant_profile():
@@ -394,7 +467,8 @@ def main() -> int:
         os.environ["BT_ARTIFACTS"] = tmp
         for fn in (_check_generate_profile, _check_screen_consumes_a_real_profile,
                    _check_no_trades, _check_version_b_alone,
-                   _check_true_home_regime):
+                   _check_true_home_regime,
+                   _check_the_declaration_reaches_the_artifact):
             try:
                 fn(None)
             except AssertionError:

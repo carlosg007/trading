@@ -189,7 +189,8 @@ from backtest.pipeline import (ML_THRESHOLD_DEFAULT,
                                STAGE3_SUMMARY_FILE, next_step, pipeline_dir,
                                read_stage, stage_banner, write_stage)
 from backtest.profiler import (REGIME_TO_QUADRANT, REGIMES,        # noqa: E402
-                               RegimeProfiler)
+                               RegimeProfiler,
+                               normalize_target_quadrants)
 from backtest.promote import INCUBATOR, promote, sha256            # noqa: E402
 from backtest.report import (FAIL, NOT_EVALUATED, PASS,            # noqa: E402
                              audit_acceptance_gates, criterion_text,
@@ -713,7 +714,8 @@ def target_regime(prov: dict, target: dict | None,
 
 
 def regime_starvation(regime: str | None, n_holdout: int,
-                      regime_scores: dict | None) -> dict | None:
+                      regime_scores: dict | None,
+                      declared_quadrants: Any = None) -> dict | None:
     """
     The diagnostic for a Gate R that failed on SAMPLE, not on edge.
 
@@ -737,7 +739,47 @@ def regime_starvation(regime: str | None, n_holdout: int,
         return None
     rows = [r for r in (regime_scores or {}).values()
             if isinstance(r, dict) and r.get("score") is not None]
-    dominant = max(rows, key=lambda r: r["score"]) if rows else None
+    # DESIGNATABLE ONLY (2026-09-08). `dominant` used to be a bare max over
+    # every scored quadrant, which named quadrants the designation was never
+    # allowed to pick and read as "you certified the wrong one".
+    #
+    # Two ways a higher-scoring quadrant is not a designation. It can be
+    # INELIGIBLE - on compressed_bollinger_reversion_20260901's YM 30m, Q2
+    # outscored Q4 on 47 trades against a floor of 50. Or the module can
+    # DECLARE a narrower scope: the same strategy declares
+    # TARGET_QUADRANTS = ("Q4",), so on ETH 5m, HO 30m and NQ 30m an eligible
+    # Q2 scoring three to five times higher was excluded on purpose.
+    #
+    # The top scorer is still reported when it is not the designatable one,
+    # WITH why it was passed over - that is the finding. Dropping it entirely
+    # would hide the thing worth knowing; presenting it as "dominant" without
+    # the reason is what sent a reader looking for a bug in Gate R.
+    # `is not False`, never a truthiness test. A scored row carries `eligible`
+    # only on handoffs written after the flag existed, and a MISSING flag is
+    # "not stated" rather than "not designatable" - reading absence as
+    # ineligible emptied this list on every older file and erased the
+    # diagnostic entirely, which is worse than the misleading name it replaced.
+    designatable = [r for r in rows if r.get("eligible") is not False]
+    if declared_quadrants:
+        allowed = {str(q).upper() for q in declared_quadrants}
+        designatable = [r for r in designatable
+                        if str(r.get("quadrant") or "").upper() in allowed]
+    dominant = max(designatable, key=lambda r: r["score"]) if designatable \
+        else None
+    top = max(rows, key=lambda r: r["score"]) if rows else None
+    passed_over = None
+    if top is not None and (dominant is None or top is not dominant):
+        why = str(top.get("reason") or "").strip()
+        if top.get("eligible") is False and why:
+            excluded = why
+        elif declared_quadrants:
+            excluded = (f"outside the module's declared "
+                        f"TARGET_QUADRANTS={'/'.join(declared_quadrants)}")
+        else:
+            excluded = "not designatable"
+        passed_over = {"regime": top.get("regime"),
+                       "quadrant": top.get("quadrant"),
+                       "score": top.get("score"), "reason": excluded}
     return {
         "target_regime": regime,
         "target_quadrant": quadrant_id(regime),
@@ -745,17 +787,25 @@ def regime_starvation(regime: str | None, n_holdout: int,
         "dominant_regime": (dominant or {}).get("regime"),
         "dominant_quadrant": (dominant or {}).get("quadrant"),
         "dominant_score": (dominant or {}).get("score"),
-        "dominant_basis": "in-sample alpha score, from the stage 2 handoff",
+        "dominant_basis": ("in-sample alpha score among DESIGNATABLE "
+                           "quadrants, from the stage 2 handoff"),
+        "declared_quadrants": list(declared_quadrants or []),
+        # The highest scorer overall when it is not the designatable one, and
+        # why it was passed over. Absent when they are the same quadrant.
+        "passed_over": passed_over,
         "message": (
             f"[REGIME STARVATION] Quadrant "
             f"{quadrant_id(regime) or '?'} ({regime}) had only "
             f"{int(n_holdout)} holdout trades."
-            + (f" Candidate was dominant in "
+            + (f" Candidate was dominant among designatable quadrants in "
                f"{(dominant or {}).get('quadrant')} "
                f"({(dominant or {}).get('regime')}) in sample."
                if dominant else
-               " No in-sample quadrant scores travelled with this handoff, so "
-               "where it was dominant cannot be stated.")),
+               " No designatable in-sample quadrant scores travelled with "
+               "this handoff, so where it was dominant cannot be stated.")
+            + (f" {passed_over['quadrant']} ({passed_over['regime']}) scored "
+               f"higher and was NOT a candidate: {passed_over['reason']}."
+               if passed_over else "")),
     }
 
 
@@ -829,7 +879,8 @@ def regime_gate(profile: dict | None, regime: str | None,
                 min_profit_factor: float = MIN_REGIME_PROFIT_FACTOR,
                 min_trades: int = MIN_REGIME_TRADES,
                 regime_scores: dict | None = None,
-                secondary_regimes: Any = None) -> dict:
+                secondary_regimes: Any = None,
+                declared_quadrants: Any = None) -> dict:
     """
     Did the edge survive out of sample INSIDE its designated quadrant?
 
@@ -961,7 +1012,8 @@ def regime_gate(profile: dict | None, regime: str | None,
     # certification: the drought is what happened, and a card that dropped the
     # diagnostic the moment the fallback worked would hide why it ran.
     starved = (None if prim["count_ok"] else
-               regime_starvation(prim_regime, prim["n"], regime_scores))
+               regime_starvation(prim_regime, prim["n"], regime_scores,
+                                 declared_quadrants=declared_quadrants))
     certified_on = (CERTIFIED_ON_FALLBACK
                     if (fallback or {}).get("status") == PASS
                     else CERTIFIED_ON_PRIMARY)
@@ -1820,7 +1872,9 @@ def certify_symbol(symbol: str, path: Path, tf: str, args: argparse.Namespace,
                              # from the holdout profile: the whole point of
                              # the fallback is that the alternative quadrant
                              # was named before these bars were read.
-                             secondary_regimes=prov.get("secondary_regimes"))
+                             secondary_regimes=prov.get("secondary_regimes"),
+                             declared_quadrants=getattr(
+                                 args, "target_quadrants", ()))
         # Printed on the console the moment it is known, not left to be found
         # in the JSON. A Gate R that failed on sample size and one that failed
         # on edge print the same word on the certification leaderboard, and the
@@ -2861,6 +2915,13 @@ def main(argv: list[str] | None = None) -> int:
 
     tf = (tfs[0] if tfs else None) or info.get("timeframe") or "15m"
     args.tf = tf
+    # The module's declared scope, resolved ONCE and in the same place Stage 1
+    # resolves it. Gate R does not enforce it - Stage 1 already restricted the
+    # designation and the handoff carries the result - but the STARVATION
+    # diagnostic needs it to say why a higher-scoring quadrant was not a
+    # candidate, instead of naming it as though it should have been certified.
+    args.target_quadrants = normalize_target_quadrants(
+        info.get("target_quadrants"))
     grid = info.get("param_grid") or {}
 
     try:

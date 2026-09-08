@@ -32,7 +32,7 @@ below, the run is the finding — do not edit this block to match it.
        trailing = False (fixed); tp_atr_mult = None (fixed)
 
     4. METADATA & FRAMEWORK HOOKS
-       TARGET_QUADRANTS = ("Q4",);  PORTFOLIO_GROUP = "Range_Fade"
+       TARGET_QUADRANTS = ("Q2", "Q4");  PORTFOLIO_GROUP = "Range_Fade"
        The signal array must handle the dynamic SMA midline crossing as the
        exit trigger for the simulator loop.
 
@@ -119,8 +119,25 @@ CORRELATION_PROFILE = (
 #: Q3 Low-Vol/Trending, Q4 Low-Vol/Ranging, 0 UNDEFINED (warm-up, not a
 #: quadrant). The ids are pinned against `backtest.profiler` in the test suite
 #: so a future edit cannot drift them.
-TARGET_REGIMES = ("Low Volatility / Ranging",)
-TARGET_QUADRANTS = ("Q4",)
+#: WIDENED 2026-09-08 from ("Q4",) to both RANGING quadrants.
+#:
+#: The premise is a range fade, and Q2 and Q4 are the same premise at two
+#: volatility levels - High-Vol/Ranging and Low-Vol/Ranging. Declaring Q4
+#: alone said the edge needed low volatility as well as chop, which was never
+#: what the request argued; it was the quadrant the write-up happened to name.
+#:
+#: The narrower declaration was COSTING designations, not just narrowing them.
+#: Stage 1 restricts the home quadrant to the declared set, so on ETH 5m, HO
+#: 30m and NQ 30m an ELIGIBLE Q2 scoring three to five times higher than Q4
+#: was passed over, Q4 was designated, and Gate R then failed all three on Q4
+#: starvation in the holdout. Q2 was never evaluated on those bars.
+#:
+#: This is a widening on IN-SAMPLE evidence and it re-opens the screen: every
+#: pair has to go back through Stage 1, and any certification carried by the
+#: old declaration is superseded rather than amended. Nothing of this module
+#: is promoted, so there is nothing live to reconcile.
+TARGET_REGIMES = ("High Volatility / Ranging", "Low Volatility / Ranging")
+TARGET_QUADRANTS = ("Q2", "Q4")
 
 ATR_PERIOD = 14
 ADX_PERIOD = 14
