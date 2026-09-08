@@ -9,7 +9,7 @@
   ],
   "timeframe": "1h",
   "params": {
-    "t3_period": 14,
+    "t3_period": 5,
     "t3_vfactor": 0.7,
     "braid_fast": 3,
     "braid_slow": 7,
@@ -21,14 +21,14 @@
     "use_news_filter": false,
     "sl_atr_mult": 1.5,
     "tp_atr_mult": 2.0,
-    "trailing": true
+    "trailing": false
   },
-  "params_source": "locked from dual_metrics_ETH.json",
+  "params_source": "t3_braid_scalp_20260823.py DEFAULT_PARAMS",
   "params_conflict": [],
   "risk": {
     "sl_atr_mult": 1.5,
     "tp_atr_mult": 2.0,
-    "trailing": true
+    "trailing": false
   },
   "day_of_week_gate": {
     "status": "EVALUATED",
@@ -56,29 +56,11 @@
   "source": "/home/cgrullon/src/trading/strategies/experimental/t3_braid_scalp_20260823.py",
   "source_sha256": "7947879906b65bca846ba7866963262866c49757e0eaf8b387e5399fd87aac07",
   "promoted_sha256": "7947879906b65bca846ba7866963262866c49757e0eaf8b387e5399fd87aac07",
-  "promoted_utc": "2026-09-08T11:35:12+00:00",
-  "costs_included": true,
+  "promoted_utc": "2026-09-08T13:37:24+00:00",
+  "costs_included": false,
   "variants_tested": null,
-  "metrics_status": "RECORDED \u00b7 locked from dual_metrics_ETH.json",
-  "metrics": {
-    "sharpe": 0.8762176542370731,
-    "sortino": 1.4601834259547186,
-    "calmar": 0.6733177431701913,
-    "profit_factor": 1.1071807106130591,
-    "win_rate": 0.44651162790697674,
-    "max_drawdown_pct": -29.829620683728752,
-    "total_return_pct": 249.78360000000475,
-    "annualized_return_pct": 20.0848128783911,
-    "trade_count": 2580,
-    "total_pnl": 249783.59999999963,
-    "total_costs": 130891.40000000036,
-    "final_equity": 349783.60000000475,
-    "n_days": 1724,
-    "start": "2021-02-07 23:00:00+00:00",
-    "end": "2026-08-08 22:00:00+00:00",
-    "bars": 32467,
-    "initial_capital": 100000.0
-  },
+  "metrics_status": "NOT RECORDED",
+  "metrics": null,
   "gate_audit_status": "PASS",
   "gate_audit": {
     "gate1": "FAIL",
@@ -135,8 +117,8 @@
       "exclude_days": null
     },
     "status": "PASS",
-    "snapshot_gate_status": "FAIL",
-    "agrees_with_snapshot": false
+    "snapshot_gate_status": "NOT EVALUATED",
+    "agrees_with_snapshot": null
   },
   "gates_overridden": false,
   "oos_status": "passed_gate3",
