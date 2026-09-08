@@ -162,11 +162,13 @@ EXPECTED_ASSIGNMENTS = {
         "t3_braid_scalp_20260823_NQ_1h_VA",                   #  1h, NQ
         "t3_braid_scalp_20260823_NQ_1h_VB",                   #  1h, NQ
         "t3_braid_scalp_20260823_RTY_30m_VB",                 # 30m, RTY->M2K
+        "compressed_bollinger_reversion_20260901_NQ_15m_VA",  # 15m, NQ
     ],
     "Incubator-Even": [
         "t3_braid_scalp_20260823_GC_30m_VA",                  # 30m, GC
         "t3_braid_scalp_20260823_GC_30m_VB",                  # 30m, GC
         "t3_braid_scalp_20260823_YM_30m_VA",                  # 30m, YM->MYM
+        "compressed_bollinger_reversion_20260901_ES_15m_VA",  # 15m, ES
     ],
     "Eval-Odd":       [],
     "Eval-Even":      [],
@@ -184,6 +186,7 @@ EXPECTED_ASSIGNMENTS = {
         "t3_braid_scalp_20260823_RB_30m_VA",                  # 30m, RB
         "t3_braid_scalp_20260823_ETH_1h_VA",                  #  1h, ETH
         "t3_braid_scalp_20260823_ETH_1h_VB",                  #  1h, ETH
+        "compressed_bollinger_reversion_20260901_ETH_5m_VB",  #  5m, ETH
     ],
     "Eval-FullSize":      [],
     "Prop-FullSize":      [],
