@@ -146,38 +146,45 @@ EXECUTION_ACCOUNTS = {"Incubator-Odd": "SimIncubator1",
 #
 #     ls /mnt/backtest/artifacts/nt8_bars/ | grep '^CL'
 EXPECTED_ASSIGNMENTS = {
+    # PURGED ENTRIES REMOVED 2026-09-08. This dict declared five
+    # sma_momentum_crossover_20260818, ema_crossover_20260821 and
+    # ma_anchoring_spread_20260820 packages that `6938ce8 incubator:
+    # unregister every strategy and purge the 52 dereferenced packages` had
+    # already taken out of the routing table. The assertion below is an exact
+    # list comparison, so a name declared here and absent from the config
+    # fails it exactly as loudly as one registered without being declared -
+    # and the guard was reading as broken rather than as a finding.
+    #
+    # Twelve registered, twelve packages on disk, and they are all
+    # t3_braid_scalp_20260823. Order matters: `active_strategies` is compared
+    # element-wise, so these follow the order promote.py appended them in.
     "Incubator-Odd":  [
-        "sma_momentum_crossover_20260818_NQ_5m_VA",           #  5m, NQ
         "t3_braid_scalp_20260823_NQ_1h_VA",                   #  1h, NQ
         "t3_braid_scalp_20260823_NQ_1h_VB",                   #  1h, NQ
         "t3_braid_scalp_20260823_RTY_30m_VB",                 # 30m, RTY->M2K
-        "ema_crossover_20260821_NQ_1h_VA",                    #  1h, NQ
-        "ema_crossover_20260821_NQ_1h_VB",                    #  1h, NQ
-        "ema_crossover_20260821_NQ_15m_VA",                   # 15m, NQ
-        "ma_anchoring_spread_20260820_NQ_15m_VA",             # 15m, NQ
     ],
     "Incubator-Even": [
-        "sma_momentum_crossover_20260818_GC_1h_VA",           #  1h, GC
-        "sma_momentum_crossover_20260818_ES_15m_VA",          # 15m, ES
-        "sma_momentum_crossover_20260818_GC_5m_VA",           #  5m, GC
-        "sma_momentum_crossover_20260818_GC_1h_VB",           #  1h, GC
-        "sma_momentum_crossover_20260818_ES_15m_VB",          # 15m, ES
         "t3_braid_scalp_20260823_GC_30m_VA",                  # 30m, GC
         "t3_braid_scalp_20260823_GC_30m_VB",                  # 30m, GC
         "t3_braid_scalp_20260823_YM_30m_VA",                  # 30m, YM->MYM
-        "ema_crossover_20260821_ES_30m_VA",                   # 30m, ES
-        "ema_crossover_20260821_ES_15m_VA",                   # 15m, ES
-        "ma_anchoring_spread_20260820_GC_1h_VA",              #  1h, GC
-        "ma_anchoring_spread_20260820_GC_1h_VB",              #  1h, GC
     ],
     "Eval-Odd":       [],
     "Eval-Even":      [],
     "Prop-Odd":       [],
     "Prop-Even":      [],
-    # The full-size track, 2026-09-08. Empty until the six HO/PL/RB/ETH
-    # packages are registered; a name appears here in the same commit that
-    # registers it.
-    "Incubator-FullSize": [],
+    # The full-size track, 2026-09-08. These six certified on contracts with
+    # no micro this repository can trade, which is why they are here and not
+    # on a micro rung - see DEFAULT_ROUTING_TRACKS in backtest/promote.py.
+    # The two rungs above are empty and their accounts are UNBOUND_
+    # placeholders: nothing has been promoted up the full-size ladder yet.
+    "Incubator-FullSize": [
+        "t3_braid_scalp_20260823_HO_15m_VB",                  # 15m, HO
+        "t3_braid_scalp_20260823_HO_1h_VA",                   #  1h, HO
+        "t3_braid_scalp_20260823_PL_1h_VA",                   #  1h, PL
+        "t3_braid_scalp_20260823_RB_30m_VA",                  # 30m, RB
+        "t3_braid_scalp_20260823_ETH_1h_VA",                  #  1h, ETH
+        "t3_braid_scalp_20260823_ETH_1h_VB",                  #  1h, ETH
+    ],
     "Eval-FullSize":      [],
     "Prop-FullSize":      [],
 }

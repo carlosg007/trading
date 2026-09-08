@@ -482,8 +482,244 @@
           "VOLATILITY_PULLBACK"
         ]
       },
-      "active_strategies": [],
-      "strategy_allocations": {}
+      "active_strategies": [
+        "t3_braid_scalp_20260823_HO_15m_VB",
+        "t3_braid_scalp_20260823_HO_1h_VA",
+        "t3_braid_scalp_20260823_PL_1h_VA",
+        "t3_braid_scalp_20260823_RB_30m_VA",
+        "t3_braid_scalp_20260823_ETH_1h_VA",
+        "t3_braid_scalp_20260823_ETH_1h_VB"
+      ],
+      "strategy_allocations": {
+        "t3_braid_scalp_20260823_HO_15m_VB": {
+          "strat": "t3_braid_scalp_20260823_HO_15m_VB",
+          "symbol": "HO",
+          "timeframe": "15m",
+          "version": "B",
+          "allocation": 1,
+          "regime_filter": "Q2",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/t3_braid_scalp_20260823_HO_15m_VB/strat.py",
+          "registered_utc": "2026-09-08T13:37:12+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "--portfolio Incubator-FullSize",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_HO_15m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "t3_braid_scalp_20260823_HO_15m_VB",
+              "symbol": "HO",
+              "timeframe": "15m",
+              "version": "B",
+              "allocation": 1,
+              "regime_filter": "Q2",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/t3_braid_scalp_20260823_HO_15m_VB/strat.py",
+              "registered_utc": "2026-09-08T13:37:12+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "--portfolio Incubator-FullSize",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_HO_15m.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "t3_braid_scalp_20260823_HO_1h_VA": {
+          "strat": "t3_braid_scalp_20260823_HO_1h_VA",
+          "symbol": "HO",
+          "timeframe": "1h",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q2",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/t3_braid_scalp_20260823_HO_1h_VA/strat.py",
+          "registered_utc": "2026-09-08T13:37:16+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "--portfolio Incubator-FullSize",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_HO_1h.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "t3_braid_scalp_20260823_HO_1h_VA",
+              "symbol": "HO",
+              "timeframe": "1h",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q2",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/t3_braid_scalp_20260823_HO_1h_VA/strat.py",
+              "registered_utc": "2026-09-08T13:37:16+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "--portfolio Incubator-FullSize",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_HO_1h.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "t3_braid_scalp_20260823_PL_1h_VA": {
+          "strat": "t3_braid_scalp_20260823_PL_1h_VA",
+          "symbol": "PL",
+          "timeframe": "1h",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q2",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/t3_braid_scalp_20260823_PL_1h_VA/strat.py",
+          "registered_utc": "2026-09-08T13:37:19+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "--portfolio Incubator-FullSize",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_PL_1h.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "t3_braid_scalp_20260823_PL_1h_VA",
+              "symbol": "PL",
+              "timeframe": "1h",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q2",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/t3_braid_scalp_20260823_PL_1h_VA/strat.py",
+              "registered_utc": "2026-09-08T13:37:19+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "--portfolio Incubator-FullSize",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_PL_1h.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "t3_braid_scalp_20260823_RB_30m_VA": {
+          "strat": "t3_braid_scalp_20260823_RB_30m_VA",
+          "symbol": "RB",
+          "timeframe": "30m",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q1",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/t3_braid_scalp_20260823_RB_30m_VA/strat.py",
+          "registered_utc": "2026-09-08T13:37:23+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "--portfolio Incubator-FullSize",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_RB_30m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "t3_braid_scalp_20260823_RB_30m_VA",
+              "symbol": "RB",
+              "timeframe": "30m",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q1",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/t3_braid_scalp_20260823_RB_30m_VA/strat.py",
+              "registered_utc": "2026-09-08T13:37:23+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "--portfolio Incubator-FullSize",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_RB_30m.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "t3_braid_scalp_20260823_ETH_1h_VA": {
+          "strat": "t3_braid_scalp_20260823_ETH_1h_VA",
+          "symbol": "ETH",
+          "timeframe": "1h",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q2",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/t3_braid_scalp_20260823_ETH_1h_VA/strat.py",
+          "registered_utc": "2026-09-08T13:37:26+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "--portfolio Incubator-FullSize",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_ETH_1h.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "t3_braid_scalp_20260823_ETH_1h_VA",
+              "symbol": "ETH",
+              "timeframe": "1h",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q2",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/t3_braid_scalp_20260823_ETH_1h_VA/strat.py",
+              "registered_utc": "2026-09-08T13:37:26+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "--portfolio Incubator-FullSize",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_ETH_1h.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "t3_braid_scalp_20260823_ETH_1h_VB": {
+          "strat": "t3_braid_scalp_20260823_ETH_1h_VB",
+          "symbol": "ETH",
+          "timeframe": "1h",
+          "version": "B",
+          "allocation": 1,
+          "regime_filter": "Q2",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/t3_braid_scalp_20260823_ETH_1h_VB/strat.py",
+          "registered_utc": "2026-09-08T13:37:30+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "--portfolio Incubator-FullSize",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_ETH_1h.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "t3_braid_scalp_20260823_ETH_1h_VB",
+              "symbol": "ETH",
+              "timeframe": "1h",
+              "version": "B",
+              "allocation": 1,
+              "regime_filter": "Q2",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/t3_braid_scalp_20260823_ETH_1h_VB/strat.py",
+              "registered_utc": "2026-09-08T13:37:30+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "--portfolio Incubator-FullSize",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_ETH_1h.json (Gate R's certification target)"
+              }
+            }
+          ]
+        }
+      }
     },
     "Eval-FullSize": {
       "portfolio_id": "Eval-FullSize",
@@ -496,7 +732,7 @@
         "max_forward_incubation_dd_pct": 0.4,
         "clamping": {
           "min_contracts": 1,
-          "max_contracts": 5
+          "max_contracts": 1
         }
       },
       "basket": {
