@@ -27,6 +27,19 @@
       "coverage_note": "SAME CAVEAT AS ETH 1h, AND THE SAME REASON. CME Ether futures began 2021-02-08, so the 2013-01-01..2022-12-31 in-sample window holds bars from 2021-02-07 only - roughly a fifth of its nominal span, spanning the 2021 top and the 2022 bear market and nothing before them. Pinned because the in-sample window is CLOSED: ETH history after 2022-12-31 is holdout, and a cache rebuild folding it in would move a boundary compressed_bollinger_reversion_20260901_ETH_5m_VB was already certified against, with every log line still reading correctly. AN ANCHOR IS PER TIMEFRAME: ETH is 31.4366 at 1h and 7.6425 at 5m.",
       "pinned_utc": "2026-09-08",
       "pinned_from": "mdlib.regimes.provenance('ETH','5m') - byte-exact"
+    },
+    "30m": {
+      "theta_vol": 21.01512336730957,
+      "is_start": "2013-01-01",
+      "is_end": "2022-12-31",
+      "atr_length": 14,
+      "adx_length": 14,
+      "adx_trend_threshold": 25.0,
+      "observed_first_bar": "2021-02-07 23:00:00+00:00",
+      "in_sample_bars_note": "64339 rows cached in total",
+      "coverage_note": "SAME CAVEAT AS ETH 1h AND 5m, AND THE SAME REASON. CME Ether futures began 2021-02-08, so the 2013-01-01..2022-12-31 in-sample window holds bars from 2021-02-07 only - roughly a fifth of its nominal span, spanning the 2021 top and the 2022 bear market and nothing before them. Pinned because the in-sample window is CLOSED: ETH history after 2022-12-31 is holdout, and a cache rebuild folding it in would move a boundary intrinsic_alpha_engine_20260831_ETH_30m_VB was already certified against, with every log line still reading correctly. AN ANCHOR IS PER TIMEFRAME: ETH is 31.4366 at 1h, 21.0151 at 30m and 7.6425 at 5m. Until this was pinned the pair resolved to nothing at all - `theta_for('ETH','30m')` raised ThetaAnchorMissing and the strategy was unclassifiable, which downstream reads as 'not in the permitted quadrant' and is indistinguishable from a quiet market.",
+      "pinned_utc": "2026-09-09",
+      "pinned_from": "mdlib.regimes.provenance('ETH','30m') - byte-exact"
     }
   }
 }
