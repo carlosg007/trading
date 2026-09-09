@@ -1444,20 +1444,6 @@
             3
           ]
         },
-        "sma_momentum_crossover_20260818_YM_30m_VB": {
-          "strat": "sma_momentum_crossover_20260818_YM_30m_VB",
-          "symbol": "YM",
-          "timeframe": "30m",
-          "version": "B",
-          "allocation": 1,
-          "regime_filter": "Q1",
-          "status": "incubating",
-          "path": "strategies/approved_incubator/sma_momentum_crossover_20260818_YM_30m_VB/strat.py",
-          "registered_by": "scripts/register_incubator_batch.py",
-          "blocked_weekdays": [
-            2
-          ]
-        },
         "double_rsi_momentum_pullback_20260830_GC_1h_VA": {
           "strat": "double_rsi_momentum_pullback_20260830_GC_1h_VA",
           "symbol": "GC",
@@ -2252,6 +2238,44 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_GC_5m.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "sma_momentum_crossover_20260818_YM_30m_VB": {
+          "strat": "sma_momentum_crossover_20260818_YM_30m_VB",
+          "symbol": "YM",
+          "timeframe": "30m",
+          "version": "B",
+          "allocation": 1,
+          "regime_filter": "Q1",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/sma_momentum_crossover_20260818_YM_30m_VB/strat.py",
+          "registered_utc": "2026-09-09T13:23:36+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "already registered on Incubator-Even; a re-promotion does not move an account",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_YM_30m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "sma_momentum_crossover_20260818_YM_30m_VB",
+              "symbol": "YM",
+              "timeframe": "30m",
+              "version": "B",
+              "allocation": 1,
+              "regime_filter": "Q1",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/sma_momentum_crossover_20260818_YM_30m_VB/strat.py",
+              "registered_utc": "2026-09-09T13:23:36+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "already registered on Incubator-Even; a re-promotion does not move an account",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_YM_30m.json (Gate R's certification target)"
               }
             }
           ]
