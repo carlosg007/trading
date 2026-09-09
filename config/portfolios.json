@@ -300,7 +300,10 @@
       "active_strategies": [
         "t3_braid_scalp_20260823_GC_30m_VA",
         "t3_braid_scalp_20260823_GC_30m_VB",
-        "compressed_bollinger_reversion_20260901_ES_15m_VA"
+        "compressed_bollinger_reversion_20260901_ES_15m_VA",
+        "sma_momentum_crossover_20260818_YM_1h_VA",
+        "sma_momentum_crossover_20260818_YM_30m_VA",
+        "sma_momentum_crossover_20260818_YM_30m_VB"
       ],
       "strategy_allocations": {
         "t3_braid_scalp_20260823_GC_30m_VA": {
@@ -416,6 +419,48 @@
               }
             }
           ]
+        },
+        "sma_momentum_crossover_20260818_YM_1h_VA": {
+          "strat": "sma_momentum_crossover_20260818_YM_1h_VA",
+          "symbol": "YM",
+          "timeframe": "1h",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q2",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/sma_momentum_crossover_20260818_YM_1h_VA/strat.py",
+          "registered_by": "scripts/register_incubator_batch.py",
+          "blocked_weekdays": [
+            3
+          ]
+        },
+        "sma_momentum_crossover_20260818_YM_30m_VA": {
+          "strat": "sma_momentum_crossover_20260818_YM_30m_VA",
+          "symbol": "YM",
+          "timeframe": "30m",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q1",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/sma_momentum_crossover_20260818_YM_30m_VA/strat.py",
+          "registered_by": "scripts/register_incubator_batch.py",
+          "blocked_weekdays": [
+            3
+          ]
+        },
+        "sma_momentum_crossover_20260818_YM_30m_VB": {
+          "strat": "sma_momentum_crossover_20260818_YM_30m_VB",
+          "symbol": "YM",
+          "timeframe": "30m",
+          "version": "B",
+          "allocation": 1,
+          "regime_filter": "Q1",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/sma_momentum_crossover_20260818_YM_30m_VB/strat.py",
+          "registered_by": "scripts/register_incubator_batch.py",
+          "blocked_weekdays": [
+            2
+          ]
         }
       }
     },
@@ -530,7 +575,8 @@
         "compressed_bollinger_reversion_20260901_ETH_5m_VB",
         "intrinsic_alpha_engine_20260831_ETH_1h_VA",
         "intrinsic_alpha_engine_20260831_ETH_30m_VB",
-        "intrinsic_alpha_engine_20260831_ETH_5m_VB"
+        "intrinsic_alpha_engine_20260831_ETH_5m_VB",
+        "sma_momentum_crossover_20260818_ETH_30m_VA"
       ],
       "strategy_allocations": {
         "t3_braid_scalp_20260823_HO_15m_VB": {
@@ -873,6 +919,20 @@
                 "regime_filter": "gate_audit_ETH_5m.json (Gate R's certification target)"
               }
             }
+          ]
+        },
+        "sma_momentum_crossover_20260818_ETH_30m_VA": {
+          "strat": "sma_momentum_crossover_20260818_ETH_30m_VA",
+          "symbol": "ETH",
+          "timeframe": "30m",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q1",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/sma_momentum_crossover_20260818_ETH_30m_VA/strat.py",
+          "registered_by": "scripts/register_incubator_batch.py",
+          "blocked_weekdays": [
+            1
           ]
         }
       }

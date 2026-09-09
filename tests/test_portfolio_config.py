@@ -168,6 +168,12 @@ EXPECTED_ASSIGNMENTS = {
         "t3_braid_scalp_20260823_GC_30m_VA",                  # 30m, GC
         "t3_braid_scalp_20260823_GC_30m_VB",                  # 30m, GC
         "compressed_bollinger_reversion_20260901_ES_15m_VA",  # 15m, ES
+        # Routed 2026-09-09 by scripts/register_incubator_batch.py, which is
+        # why these three are grouped after the hand-registered ones: it
+        # appends, and this list is compared element-wise.
+        "sma_momentum_crossover_20260818_YM_1h_VA",           #  1h, YM->MYM
+        "sma_momentum_crossover_20260818_YM_30m_VA",          # 30m, YM->MYM
+        "sma_momentum_crossover_20260818_YM_30m_VB",          # 30m, YM->MYM
     ],
     "Eval-Odd":       [],
     "Eval-Even":      [],
@@ -207,6 +213,10 @@ EXPECTED_ASSIGNMENTS = {
         "intrinsic_alpha_engine_20260831_ETH_1h_VA",          #  1h, ETH
         "intrinsic_alpha_engine_20260831_ETH_30m_VB",         # 30m, ETH
         "intrinsic_alpha_engine_20260831_ETH_5m_VB",          #  5m, ETH
+        # Routed 2026-09-09 by the batch registrar. Only reachable because
+        # bd32b0c pinned the ETH 30m anchor - before that the pair resolved
+        # to nothing and the registrar's second gate refused it.
+        "sma_momentum_crossover_20260818_ETH_30m_VA",         # 30m, ETH
     ],
     "Eval-FullSize":      [],
     "Prop-FullSize":      [],
