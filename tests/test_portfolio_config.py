@@ -167,14 +167,23 @@ EXPECTED_ASSIGNMENTS = {
     "Incubator-Even": [
         "t3_braid_scalp_20260823_GC_30m_VA",                  # 30m, GC
         "t3_braid_scalp_20260823_GC_30m_VB",                  # 30m, GC
-        "t3_braid_scalp_20260823_YM_30m_VA",                  # 30m, YM->MYM
         "compressed_bollinger_reversion_20260901_ES_15m_VA",  # 15m, ES
     ],
     "Eval-Odd":       [],
     "Eval-Even":      [],
     "Prop-Odd":       [],
     "Prop-Even":      [],
-    # The full-size track, 2026-09-08. These ten certified on contracts with
+    # ADMINISTRATIVELY PRUNED 2026-09-09: t3_braid_scalp_20260823_RB_30m_VA
+    # (from the full-size rung) and _YM_30m_VA (from Incubator-Even). Both
+    # cleared Gate R on a profit factor of 1.00 that `backtest/profiler.py`
+    # had already rounded to two places - their quadrant net P&L is -799.02
+    # and -1,256.20, so the true factor is below the 1.00 bar the gate
+    # compares against. The gate code is deliberately NOT changed here; the
+    # rounding is repo-wide and re-cutting it would re-open every cached
+    # certification. These two are unrouted instead, so no money is allocated
+    # to a negative-expectancy quadrant. The packages remain on disk and
+    # appear in the manifest as NOT ROUTED.
+    # The full-size track, 2026-09-08. These nine certified on contracts with
     # no micro this repository can trade, which is why they are here and not
     # on a micro rung - see DEFAULT_ROUTING_TRACKS in backtest/promote.py.
     # The two rungs above are empty and their accounts are UNBOUND_
@@ -183,7 +192,6 @@ EXPECTED_ASSIGNMENTS = {
         "t3_braid_scalp_20260823_HO_15m_VB",                  # 15m, HO
         "t3_braid_scalp_20260823_HO_1h_VA",                   #  1h, HO
         "t3_braid_scalp_20260823_PL_1h_VA",                   #  1h, PL
-        "t3_braid_scalp_20260823_RB_30m_VA",                  # 30m, RB
         "t3_braid_scalp_20260823_ETH_1h_VA",                  #  1h, ETH
         "t3_braid_scalp_20260823_ETH_1h_VB",                  #  1h, ETH
         "compressed_bollinger_reversion_20260901_ETH_5m_VB",  #  5m, ETH

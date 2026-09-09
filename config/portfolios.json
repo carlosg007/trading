@@ -300,7 +300,6 @@
       "active_strategies": [
         "t3_braid_scalp_20260823_GC_30m_VA",
         "t3_braid_scalp_20260823_GC_30m_VB",
-        "t3_braid_scalp_20260823_YM_30m_VA",
         "compressed_bollinger_reversion_20260901_ES_15m_VA"
       ],
       "strategy_allocations": {
@@ -376,44 +375,6 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_GC_30m.json (Gate R's certification target)"
-              }
-            }
-          ]
-        },
-        "t3_braid_scalp_20260823_YM_30m_VA": {
-          "strat": "t3_braid_scalp_20260823_YM_30m_VA",
-          "symbol": "YM",
-          "timeframe": "30m",
-          "version": "A",
-          "allocation": 1,
-          "regime_filter": "Q2",
-          "status": "incubating",
-          "path": "strategies/approved_incubator/t3_braid_scalp_20260823_YM_30m_VA/strat.py",
-          "registered_utc": "2026-09-08T12:45:53+00:00",
-          "registered_by": "backtest/promote.py",
-          "routing_basis": "--portfolio Incubator-Even",
-          "resolved_from": {
-            "symbol": "--symbol",
-            "timeframe": "--timeframe",
-            "regime_filter": "gate_audit_YM_30m.json (Gate R's certification target)"
-          },
-          "configurations": [
-            {
-              "strat": "t3_braid_scalp_20260823_YM_30m_VA",
-              "symbol": "YM",
-              "timeframe": "30m",
-              "version": "A",
-              "allocation": 1,
-              "regime_filter": "Q2",
-              "status": "incubating",
-              "path": "strategies/approved_incubator/t3_braid_scalp_20260823_YM_30m_VA/strat.py",
-              "registered_utc": "2026-09-08T12:45:53+00:00",
-              "registered_by": "backtest/promote.py",
-              "routing_basis": "--portfolio Incubator-Even",
-              "resolved_from": {
-                "symbol": "--symbol",
-                "timeframe": "--timeframe",
-                "regime_filter": "gate_audit_YM_30m.json (Gate R's certification target)"
               }
             }
           ]
@@ -564,10 +525,12 @@
         "t3_braid_scalp_20260823_HO_15m_VB",
         "t3_braid_scalp_20260823_HO_1h_VA",
         "t3_braid_scalp_20260823_PL_1h_VA",
-        "t3_braid_scalp_20260823_RB_30m_VA",
         "t3_braid_scalp_20260823_ETH_1h_VA",
         "t3_braid_scalp_20260823_ETH_1h_VB",
-        "compressed_bollinger_reversion_20260901_ETH_5m_VB"
+        "compressed_bollinger_reversion_20260901_ETH_5m_VB",
+        "intrinsic_alpha_engine_20260831_ETH_1h_VA",
+        "intrinsic_alpha_engine_20260831_ETH_30m_VB",
+        "intrinsic_alpha_engine_20260831_ETH_5m_VB"
       ],
       "strategy_allocations": {
         "t3_braid_scalp_20260823_HO_15m_VB": {
@@ -684,44 +647,6 @@
             }
           ]
         },
-        "t3_braid_scalp_20260823_RB_30m_VA": {
-          "strat": "t3_braid_scalp_20260823_RB_30m_VA",
-          "symbol": "RB",
-          "timeframe": "30m",
-          "version": "A",
-          "allocation": 1,
-          "regime_filter": "Q1",
-          "status": "incubating",
-          "path": "strategies/approved_incubator/t3_braid_scalp_20260823_RB_30m_VA/strat.py",
-          "registered_utc": "2026-09-08T13:37:23+00:00",
-          "registered_by": "backtest/promote.py",
-          "routing_basis": "--portfolio Incubator-FullSize",
-          "resolved_from": {
-            "symbol": "--symbol",
-            "timeframe": "--timeframe",
-            "regime_filter": "gate_audit_RB_30m.json (Gate R's certification target)"
-          },
-          "configurations": [
-            {
-              "strat": "t3_braid_scalp_20260823_RB_30m_VA",
-              "symbol": "RB",
-              "timeframe": "30m",
-              "version": "A",
-              "allocation": 1,
-              "regime_filter": "Q1",
-              "status": "incubating",
-              "path": "strategies/approved_incubator/t3_braid_scalp_20260823_RB_30m_VA/strat.py",
-              "registered_utc": "2026-09-08T13:37:23+00:00",
-              "registered_by": "backtest/promote.py",
-              "routing_basis": "--portfolio Incubator-FullSize",
-              "resolved_from": {
-                "symbol": "--symbol",
-                "timeframe": "--timeframe",
-                "regime_filter": "gate_audit_RB_30m.json (Gate R's certification target)"
-              }
-            }
-          ]
-        },
         "t3_braid_scalp_20260823_ETH_1h_VA": {
           "strat": "t3_braid_scalp_20260823_ETH_1h_VA",
           "symbol": "ETH",
@@ -828,6 +753,120 @@
               "registered_utc": "2026-09-08T19:30:19+00:00",
               "registered_by": "backtest/promote.py",
               "routing_basis": "trades ETH; declares Q2; fewest active strategies (Incubator-FullSize=6), ties alphabetical; certified on 5m bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_ETH_5m.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "intrinsic_alpha_engine_20260831_ETH_1h_VA": {
+          "strat": "intrinsic_alpha_engine_20260831_ETH_1h_VA",
+          "symbol": "ETH",
+          "timeframe": "1h",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q3",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/intrinsic_alpha_engine_20260831_ETH_1h_VA/strat.py",
+          "registered_utc": "2026-09-09T03:03:55+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades ETH; declares Q3; fewest active strategies (Incubator-FullSize=7), ties alphabetical; certified on 1h bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_ETH_1h.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "intrinsic_alpha_engine_20260831_ETH_1h_VA",
+              "symbol": "ETH",
+              "timeframe": "1h",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q3",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/intrinsic_alpha_engine_20260831_ETH_1h_VA/strat.py",
+              "registered_utc": "2026-09-09T03:03:55+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades ETH; declares Q3; fewest active strategies (Incubator-FullSize=7), ties alphabetical; certified on 1h bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_ETH_1h.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "intrinsic_alpha_engine_20260831_ETH_30m_VB": {
+          "strat": "intrinsic_alpha_engine_20260831_ETH_30m_VB",
+          "symbol": "ETH",
+          "timeframe": "30m",
+          "version": "B",
+          "allocation": 1,
+          "regime_filter": "Q4",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/intrinsic_alpha_engine_20260831_ETH_30m_VB/strat.py",
+          "registered_utc": "2026-09-09T03:03:58+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades ETH; declares Q4; fewest active strategies (Incubator-FullSize=8), ties alphabetical; certified on 30m bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_ETH_30m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "intrinsic_alpha_engine_20260831_ETH_30m_VB",
+              "symbol": "ETH",
+              "timeframe": "30m",
+              "version": "B",
+              "allocation": 1,
+              "regime_filter": "Q4",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/intrinsic_alpha_engine_20260831_ETH_30m_VB/strat.py",
+              "registered_utc": "2026-09-09T03:03:58+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades ETH; declares Q4; fewest active strategies (Incubator-FullSize=8), ties alphabetical; certified on 30m bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_ETH_30m.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "intrinsic_alpha_engine_20260831_ETH_5m_VB": {
+          "strat": "intrinsic_alpha_engine_20260831_ETH_5m_VB",
+          "symbol": "ETH",
+          "timeframe": "5m",
+          "version": "B",
+          "allocation": 1,
+          "regime_filter": "Q4",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/intrinsic_alpha_engine_20260831_ETH_5m_VB/strat.py",
+          "registered_utc": "2026-09-09T03:04:03+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades ETH; declares Q4; fewest active strategies (Incubator-FullSize=9), ties alphabetical; certified on 5m bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_ETH_5m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "intrinsic_alpha_engine_20260831_ETH_5m_VB",
+              "symbol": "ETH",
+              "timeframe": "5m",
+              "version": "B",
+              "allocation": 1,
+              "regime_filter": "Q4",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/intrinsic_alpha_engine_20260831_ETH_5m_VB/strat.py",
+              "registered_utc": "2026-09-09T03:04:03+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades ETH; declares Q4; fewest active strategies (Incubator-FullSize=9), ties alphabetical; certified on 5m bars",
               "resolved_from": {
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
