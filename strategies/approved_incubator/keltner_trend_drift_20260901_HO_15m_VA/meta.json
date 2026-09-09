@@ -38,19 +38,33 @@
     "trailing": true
   },
   "day_of_week_gate": {
-    "status": "NOT EVALUATED",
-    "blocked_weekdays": [],
-    "blocked_weekday": null,
+    "status": "EVALUATED",
     "version": "A",
+    "versions_profiled": [
+      "A"
+    ],
+    "blocked_weekdays": [
+      4
+    ],
+    "blocked_weekday": 4,
+    "blocked_day": "Fri",
+    "blocked_day_name": "Friday",
+    "worst_weekday": 4,
+    "worst_day": "Fri",
+    "block_rule": "negative_expectancy",
+    "min_trades": 20,
+    "reason": "Friday is the weakest session (expectancy -29.46 per trade over 1,274 trades) and its expectancy is negative",
+    "selected_in_sample": true,
+    "note": "The weekday was chosen in-sample, on a window that spans the Stage 3 holdout. It is a live-supervision instruction, not evidence: no gate was scored on it and nothing was pruned for it.",
     "source": "/mnt/backtest/artifacts/pipeline/keltner_trend_drift_20260901/dow_gate_HO_15m.json",
-    "reason": "dow_gate_HO_15m.json does not exist. Stage 4.5 (backtest/dow_gate.py) was not run for this pair; no weekday is blocked and none was cleared."
+    "source_sha256": "9671b7a32b5e791069b2e83698f0579c2521fc9bbd9cd2b06ec5f74a73c3196a"
   },
   "source": "/home/cgrullon/src/trading/strategies/experimental/keltner_trend_drift_20260901.py",
   "source_sha256": "da6dcbae3ef30e00684d1435c8438eff93c2d96857e2d6cd3be96bc37f69a9e7",
   "promoted_sha256": "da6dcbae3ef30e00684d1435c8438eff93c2d96857e2d6cd3be96bc37f69a9e7",
-  "promoted_utc": "2026-09-09T03:18:36+00:00",
+  "promoted_utc": "2026-09-09T12:42:48+00:00",
   "costs_included": false,
-  "variants_tested": 54,
+  "variants_tested": null,
   "metrics_status": "NOT RECORDED",
   "metrics": null,
   "gate_audit_status": "PASS",
@@ -64,7 +78,7 @@
   },
   "certification": {
     "audit_file": "/mnt/backtest/artifacts/pipeline/keltner_trend_drift_20260901/gate_audit_HO_15m.json",
-    "audit_sha256": "9df4965679f5d2c0c4962136adea8df30d54df4af5a402e6065d5e48a32f3926",
+    "audit_sha256": "361974a01b137decf2a4c9985405fb558b937eb06df2f99c16dc033580ccad76",
     "audit_symbol": "HO",
     "audit_timeframe": "15m",
     "target_quadrant": "Q3",
@@ -117,37 +131,5 @@
   "audit_warnings": [
     "import from 'backtest.event_calendar' is not allowed"
   ],
-  "notes": "Stage 3 certified HO 15m in Low Volatility / Trending; staged by backtest/audit_gates.py, not committed.",
-  "seal": {
-    "algorithm": "sha256",
-    "strategy_code": {
-      "path": "/home/cgrullon/src/trading/strategies/approved_incubator/keltner_trend_drift_20260901_HO_15m_VA/strat.py",
-      "sha256": "da6dcbae3ef30e00684d1435c8438eff93c2d96857e2d6cd3be96bc37f69a9e7"
-    },
-    "winning_parameters": {
-      "path": "/mnt/backtest/artifacts/pipeline/keltner_trend_drift_20260901/best_params_HO_15m.json",
-      "sha256": "951df6186a1a1d8aec6f99c8d4355f2d1c920e6753c0c4ce5beb4ff59d976e77"
-    },
-    "gate_audit": {
-      "path": "/mnt/backtest/artifacts/pipeline/keltner_trend_drift_20260901/gate_audit_HO_15m.json",
-      "sha256": "9df4965679f5d2c0c4962136adea8df30d54df4af5a402e6065d5e48a32f3926"
-    },
-    "metrics_handoff": {
-      "path": null,
-      "sha256": "NOT AVAILABLE"
-    },
-    "rule": "The three hashes are sealed together because they can be separated: the same code under a different winning cell is a different strategy with the same code checksum.",
-    "certified_symbol": "HO",
-    "certified_timeframe": "15m",
-    "target_regime": "Low Volatility / Trending",
-    "target_quadrant": "Q3",
-    "params": {
-      "ema_fast": 50,
-      "keltner_len": 20,
-      "keltner_mult": 1.5,
-      "sl_atr_mult": 3.0,
-      "trailing": true
-    },
-    "params_locked": true
-  }
+  "notes": ""
 }
