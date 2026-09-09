@@ -1,0 +1,145 @@
+{
+  "name": "energy_intraday_nonlinear_ar_20260902_RB_1h_VA",
+  "strategy": "energy_intraday_nonlinear_ar_20260902",
+  "symbol": "RB",
+  "version": "A",
+  "description": "Promoted Version A (rule-based baseline).",
+  "symbols": [
+    "RB"
+  ],
+  "timeframe": "1h",
+  "params": {
+    "sma_L_len": 20,
+    "adx_thresh": 25.0,
+    "vol_sma_len": 20,
+    "session_start_et": "09:00",
+    "session_end_et": "14:30",
+    "use_baseline_filter": true,
+    "use_alpha_trigger": true,
+    "use_volume_filter": true,
+    "use_news_filter": false,
+    "sl_atr_mult": 1.5,
+    "tp_atr_mult": 3.0,
+    "trailing": true
+  },
+  "params_source": "energy_intraday_nonlinear_ar_20260902.py DEFAULT_PARAMS",
+  "params_conflict": [],
+  "risk": {
+    "sl_atr_mult": 1.5,
+    "tp_atr_mult": 3.0,
+    "trailing": true
+  },
+  "day_of_week_gate": {
+    "status": "NOT EVALUATED",
+    "blocked_weekdays": [],
+    "blocked_weekday": null,
+    "version": "A",
+    "source": "/mnt/backtest/artifacts/pipeline/energy_intraday_nonlinear_ar_20260902/dow_gate_RB_1h.json",
+    "reason": "dow_gate_RB_1h.json does not exist. Stage 4.5 (backtest/dow_gate.py) was not run for this pair; no weekday is blocked and none was cleared."
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/energy_intraday_nonlinear_ar_20260902.py",
+  "source_sha256": "d3bf63c643b8b51664b6ec149731c082168403077873fe8c1503212603565712",
+  "promoted_sha256": "d3bf63c643b8b51664b6ec149731c082168403077873fe8c1503212603565712",
+  "promoted_utc": "2026-09-09T02:36:52+00:00",
+  "costs_included": false,
+  "variants_tested": 135,
+  "metrics_status": "NOT RECORDED",
+  "metrics": null,
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "FAIL",
+    "gate2": "FAIL",
+    "gate3": "PASS",
+    "gate_regime": "PASS",
+    "gate_ruin": "PASS",
+    "gate_all_quadrants": "FAIL"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/energy_intraday_nonlinear_ar_20260902/gate_audit_RB_1h.json",
+    "audit_sha256": "3d0ac2eb1666dfbff5591a0df9d40af994cb072fdbb83614d53896c9d7a9d77e",
+    "audit_symbol": "RB",
+    "audit_timeframe": "1h",
+    "target_quadrant": "Q1",
+    "target_regime": "High Volatility / Trending",
+    "audit_generated_utc": "2026-09-09T02:36:52+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "sma_L_len": 10,
+      "adx_thresh": 20.0,
+      "sl_atr_mult": 2.0,
+      "tp_atr_mult": 3.0,
+      "trailing": false
+    },
+    "params_source": "stage 2 winner (best_params_RB_1h.json)",
+    "variants_tested": 135,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "NOT EVALUATED",
+    "agrees_with_snapshot": null
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [
+    "import from 'backtest.event_calendar' is not allowed"
+  ],
+  "notes": "Stage 3 certified RB 1h in High Volatility / Trending; staged by backtest/audit_gates.py, not committed.",
+  "seal": {
+    "algorithm": "sha256",
+    "strategy_code": {
+      "path": "/home/cgrullon/src/trading/strategies/approved_incubator/energy_intraday_nonlinear_ar_20260902_RB_1h_VA/strat.py",
+      "sha256": "d3bf63c643b8b51664b6ec149731c082168403077873fe8c1503212603565712"
+    },
+    "winning_parameters": {
+      "path": "/mnt/backtest/artifacts/pipeline/energy_intraday_nonlinear_ar_20260902/best_params_RB_1h.json",
+      "sha256": "f8c8f4717716caeb06db8d0920cf229acc9dbbcc11ce39388126141fa02fd75f"
+    },
+    "gate_audit": {
+      "path": "/mnt/backtest/artifacts/pipeline/energy_intraday_nonlinear_ar_20260902/gate_audit_RB_1h.json",
+      "sha256": "3d0ac2eb1666dfbff5591a0df9d40af994cb072fdbb83614d53896c9d7a9d77e"
+    },
+    "metrics_handoff": {
+      "path": null,
+      "sha256": "NOT AVAILABLE"
+    },
+    "rule": "The three hashes are sealed together because they can be separated: the same code under a different winning cell is a different strategy with the same code checksum.",
+    "certified_symbol": "RB",
+    "certified_timeframe": "1h",
+    "target_regime": "High Volatility / Trending",
+    "target_quadrant": "Q1",
+    "params": {
+      "sma_L_len": 10,
+      "adx_thresh": 20.0,
+      "sl_atr_mult": 2.0,
+      "tp_atr_mult": 3.0,
+      "trailing": false
+    },
+    "params_locked": true
+  }
+}

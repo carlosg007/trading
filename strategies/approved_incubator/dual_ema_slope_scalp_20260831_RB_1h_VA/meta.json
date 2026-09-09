@@ -1,0 +1,151 @@
+{
+  "name": "dual_ema_slope_scalp_20260831_RB_1h_VA",
+  "strategy": "dual_ema_slope_scalp_20260831",
+  "symbol": "RB",
+  "version": "A",
+  "description": "Promoted Version A (rule-based baseline).",
+  "symbols": [
+    "RB"
+  ],
+  "timeframe": "1h",
+  "params": {
+    "fast_ema": 7,
+    "slow_ema": 17,
+    "htf_ema": 50,
+    "htf_fast_ema": 7,
+    "htf_slow_ema": 17,
+    "min_slope": 0.15,
+    "vol_mult": 1.0,
+    "volume_sma_len": 20,
+    "session_start_et": "09:30",
+    "session_end_et": "16:00",
+    "use_baseline_filter": true,
+    "use_alpha_trigger": true,
+    "use_volume_filter": true,
+    "use_session_filter": false,
+    "use_news_filter": false,
+    "sl_atr_mult": 1.0,
+    "tp_atr_mult": 3.0,
+    "trailing": false
+  },
+  "params_source": "dual_ema_slope_scalp_20260831.py DEFAULT_PARAMS",
+  "params_conflict": [],
+  "risk": {
+    "sl_atr_mult": 1.0,
+    "tp_atr_mult": 3.0,
+    "trailing": false
+  },
+  "day_of_week_gate": {
+    "status": "NOT EVALUATED",
+    "blocked_weekdays": [],
+    "blocked_weekday": null,
+    "version": "A",
+    "source": "/mnt/backtest/artifacts/pipeline/dual_ema_slope_scalp_20260831/dow_gate_RB_1h.json",
+    "reason": "dow_gate_RB_1h.json does not exist. Stage 4.5 (backtest/dow_gate.py) was not run for this pair; no weekday is blocked and none was cleared."
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/dual_ema_slope_scalp_20260831.py",
+  "source_sha256": "59723e3ceebf4501ad78c2762af0a0f61b3c29897d6729ee248b21380346f5a5",
+  "promoted_sha256": "59723e3ceebf4501ad78c2762af0a0f61b3c29897d6729ee248b21380346f5a5",
+  "promoted_utc": "2026-09-09T01:51:14+00:00",
+  "costs_included": false,
+  "variants_tested": 162,
+  "metrics_status": "NOT RECORDED",
+  "metrics": null,
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "FAIL",
+    "gate2": "FAIL",
+    "gate3": "FAIL",
+    "gate_regime": "PASS",
+    "gate_ruin": "PASS",
+    "gate_all_quadrants": "FAIL"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/dual_ema_slope_scalp_20260831/gate_audit_RB_1h.json",
+    "audit_sha256": "36df461175fab6013f8e9f337bb321130d46cc92a0ee0718ba2b9b223a036ca7",
+    "audit_symbol": "RB",
+    "audit_timeframe": "1h",
+    "target_quadrant": "Q1",
+    "target_regime": "High Volatility / Trending",
+    "audit_generated_utc": "2026-09-09T01:51:14+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "fast_ema": 7,
+      "min_slope": 0.15,
+      "sl_atr_mult": 1.0,
+      "tp_atr_mult": 2.0,
+      "trailing": false
+    },
+    "params_source": "stage 2 winner (best_params_RB_1h.json)",
+    "variants_tested": 162,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "NOT EVALUATED",
+    "agrees_with_snapshot": null
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [
+    "import from 'backtest.event_calendar' is not allowed"
+  ],
+  "notes": "Stage 3 certified RB 1h in High Volatility / Trending; staged by backtest/audit_gates.py, not committed.",
+  "seal": {
+    "algorithm": "sha256",
+    "strategy_code": {
+      "path": "/home/cgrullon/src/trading/strategies/approved_incubator/dual_ema_slope_scalp_20260831_RB_1h_VA/strat.py",
+      "sha256": "59723e3ceebf4501ad78c2762af0a0f61b3c29897d6729ee248b21380346f5a5"
+    },
+    "winning_parameters": {
+      "path": "/mnt/backtest/artifacts/pipeline/dual_ema_slope_scalp_20260831/best_params_RB_1h.json",
+      "sha256": "0e293b0997b0fc03566f95d91e05c3c6107f76d268d6fc7a615bedbc09af2dc9"
+    },
+    "gate_audit": {
+      "path": "/mnt/backtest/artifacts/pipeline/dual_ema_slope_scalp_20260831/gate_audit_RB_1h.json",
+      "sha256": "36df461175fab6013f8e9f337bb321130d46cc92a0ee0718ba2b9b223a036ca7"
+    },
+    "metrics_handoff": {
+      "path": null,
+      "sha256": "NOT AVAILABLE"
+    },
+    "rule": "The three hashes are sealed together because they can be separated: the same code under a different winning cell is a different strategy with the same code checksum.",
+    "certified_symbol": "RB",
+    "certified_timeframe": "1h",
+    "target_regime": "High Volatility / Trending",
+    "target_quadrant": "Q1",
+    "params": {
+      "fast_ema": 7,
+      "min_slope": 0.15,
+      "sl_atr_mult": 1.0,
+      "tp_atr_mult": 2.0,
+      "trailing": false
+    },
+    "params_locked": true
+  }
+}

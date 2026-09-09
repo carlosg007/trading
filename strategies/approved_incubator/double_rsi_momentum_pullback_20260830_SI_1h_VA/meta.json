@@ -1,0 +1,145 @@
+{
+  "name": "double_rsi_momentum_pullback_20260830_SI_1h_VA",
+  "strategy": "double_rsi_momentum_pullback_20260830",
+  "symbol": "SI",
+  "version": "A",
+  "description": "Promoted Version A (rule-based baseline).",
+  "symbols": [
+    "SI"
+  ],
+  "timeframe": "1h",
+  "params": {
+    "rsi_fast_len": 5,
+    "rsi_slow_len": 21,
+    "pullback_window": 3,
+    "volume_sma_len": 20,
+    "volume_mult": 1.1,
+    "rsi_exit_long": 80.0,
+    "rsi_exit_short": 20.0,
+    "use_baseline_filter": true,
+    "use_alpha_trigger": true,
+    "use_volume_filter": true,
+    "use_news_filter": false,
+    "sl_atr_mult": 1.5,
+    "tp_atr_mult": 3.0,
+    "trailing": false
+  },
+  "params_source": "double_rsi_momentum_pullback_20260830.py DEFAULT_PARAMS",
+  "params_conflict": [],
+  "risk": {
+    "sl_atr_mult": 1.5,
+    "tp_atr_mult": 3.0,
+    "trailing": false
+  },
+  "day_of_week_gate": {
+    "status": "NOT EVALUATED",
+    "blocked_weekdays": [],
+    "blocked_weekday": null,
+    "version": "A",
+    "source": "/mnt/backtest/artifacts/pipeline/double_rsi_momentum_pullback_20260830/dow_gate_SI_1h.json",
+    "reason": "dow_gate_SI_1h.json does not exist. Stage 4.5 (backtest/dow_gate.py) was not run for this pair; no weekday is blocked and none was cleared."
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/double_rsi_momentum_pullback_20260830.py",
+  "source_sha256": "d6e295b941ca9bbee04fe1ad9a100d55dbf003592a3ed926b717482c5e78b1bd",
+  "promoted_sha256": "d6e295b941ca9bbee04fe1ad9a100d55dbf003592a3ed926b717482c5e78b1bd",
+  "promoted_utc": "2026-09-09T00:41:40+00:00",
+  "costs_included": false,
+  "variants_tested": 162,
+  "metrics_status": "NOT RECORDED",
+  "metrics": null,
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "FAIL",
+    "gate2": "FAIL",
+    "gate3": "PASS",
+    "gate_regime": "PASS",
+    "gate_ruin": "PASS",
+    "gate_all_quadrants": "FAIL"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/double_rsi_momentum_pullback_20260830/gate_audit_SI_1h.json",
+    "audit_sha256": "e0b44ff39c4703256eff8ef0f3bee761f797578b1c0554d1cc1b6b70a8c251a2",
+    "audit_symbol": "SI",
+    "audit_timeframe": "1h",
+    "target_quadrant": "Q3",
+    "target_regime": "Low Volatility / Trending",
+    "audit_generated_utc": "2026-09-09T00:41:40+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "rsi_fast_len": 7,
+      "rsi_slow_len": 14,
+      "sl_atr_mult": 2.0,
+      "tp_atr_mult": 3.0,
+      "trailing": false
+    },
+    "params_source": "stage 2 winner (best_params_SI_1h.json)",
+    "variants_tested": 162,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "NOT EVALUATED",
+    "agrees_with_snapshot": null
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [],
+  "notes": "Stage 3 certified SI 1h in Low Volatility / Trending; staged by backtest/audit_gates.py, not committed.",
+  "seal": {
+    "algorithm": "sha256",
+    "strategy_code": {
+      "path": "/home/cgrullon/src/trading/strategies/approved_incubator/double_rsi_momentum_pullback_20260830_SI_1h_VA/strat.py",
+      "sha256": "d6e295b941ca9bbee04fe1ad9a100d55dbf003592a3ed926b717482c5e78b1bd"
+    },
+    "winning_parameters": {
+      "path": "/mnt/backtest/artifacts/pipeline/double_rsi_momentum_pullback_20260830/best_params_SI_1h.json",
+      "sha256": "81b56cf165841c3966f41cf051b6a5d0087b9d05e8a77167e3c9efc1a64a7a41"
+    },
+    "gate_audit": {
+      "path": "/mnt/backtest/artifacts/pipeline/double_rsi_momentum_pullback_20260830/gate_audit_SI_1h.json",
+      "sha256": "e0b44ff39c4703256eff8ef0f3bee761f797578b1c0554d1cc1b6b70a8c251a2"
+    },
+    "metrics_handoff": {
+      "path": null,
+      "sha256": "NOT AVAILABLE"
+    },
+    "rule": "The three hashes are sealed together because they can be separated: the same code under a different winning cell is a different strategy with the same code checksum.",
+    "certified_symbol": "SI",
+    "certified_timeframe": "1h",
+    "target_regime": "Low Volatility / Trending",
+    "target_quadrant": "Q3",
+    "params": {
+      "rsi_fast_len": 7,
+      "rsi_slow_len": 14,
+      "sl_atr_mult": 2.0,
+      "tp_atr_mult": 3.0,
+      "trailing": false
+    },
+    "params_locked": true
+  }
+}

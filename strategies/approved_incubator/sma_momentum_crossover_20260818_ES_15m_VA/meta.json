@@ -1,0 +1,143 @@
+{
+  "name": "sma_momentum_crossover_20260818_ES_15m_VA",
+  "strategy": "sma_momentum_crossover_20260818",
+  "symbol": "ES",
+  "version": "A",
+  "description": "Promoted Version A (rule-based baseline).",
+  "symbols": [
+    "ES"
+  ],
+  "timeframe": "15m",
+  "params": {
+    "fast_window": 10,
+    "slow_window": 30,
+    "macro_window": 200,
+    "adx_threshold": 20.0,
+    "use_macro_anchor": true,
+    "use_adx_filter": true,
+    "use_news_filter": false,
+    "sl_atr_mult": 1.0,
+    "tp_atr_mult": 2.0,
+    "trailing": false
+  },
+  "params_source": "sma_momentum_crossover_20260818.py DEFAULT_PARAMS",
+  "params_conflict": [],
+  "risk": {
+    "sl_atr_mult": 1.0,
+    "tp_atr_mult": 2.0,
+    "trailing": false
+  },
+  "day_of_week_gate": {
+    "status": "NOT EVALUATED",
+    "blocked_weekdays": [],
+    "blocked_weekday": null,
+    "version": "A",
+    "source": "/mnt/backtest/artifacts/pipeline/sma_momentum_crossover_20260818/dow_gate_ES_15m.json",
+    "reason": "dow_gate_ES_15m.json does not exist. Stage 4.5 (backtest/dow_gate.py) was not run for this pair; no weekday is blocked and none was cleared."
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/sma_momentum_crossover_20260818.py",
+  "source_sha256": "fbd447f1f683fb03a1a7e1e41f90fe0e0a7e7f7ff43df8b842ed074869534c75",
+  "promoted_sha256": "fbd447f1f683fb03a1a7e1e41f90fe0e0a7e7f7ff43df8b842ed074869534c75",
+  "promoted_utc": "2026-09-09T08:13:42+00:00",
+  "costs_included": false,
+  "variants_tested": 54,
+  "metrics_status": "NOT RECORDED",
+  "metrics": null,
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "FAIL",
+    "gate2": "FAIL",
+    "gate3": "PASS",
+    "gate_regime": "PASS",
+    "gate_ruin": "PASS",
+    "gate_all_quadrants": "FAIL"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/sma_momentum_crossover_20260818/gate_audit_ES_15m.json",
+    "audit_sha256": "14f18533a7fe15855049d0100f05fa3c53cbb7ef3f83fa128440dcbf8ba4323c",
+    "audit_symbol": "ES",
+    "audit_timeframe": "15m",
+    "target_quadrant": "Q2",
+    "target_regime": "High Volatility / Ranging",
+    "audit_generated_utc": "2026-09-09T08:13:42+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "fast_window": 15,
+      "slow_window": 50,
+      "tp_atr_mult": 3.0,
+      "sl_atr_mult": 1.0,
+      "trailing": false
+    },
+    "params_source": "stage 2 winner (best_params_ES_15m.json)",
+    "variants_tested": 54,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "NOT EVALUATED",
+    "agrees_with_snapshot": null
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [
+    "import from 'backtest.event_calendar' is not allowed"
+  ],
+  "notes": "Stage 3 certified ES 15m in High Volatility / Ranging; staged by backtest/audit_gates.py, not committed.",
+  "seal": {
+    "algorithm": "sha256",
+    "strategy_code": {
+      "path": "/home/cgrullon/src/trading/strategies/approved_incubator/sma_momentum_crossover_20260818_ES_15m_VA/strat.py",
+      "sha256": "fbd447f1f683fb03a1a7e1e41f90fe0e0a7e7f7ff43df8b842ed074869534c75"
+    },
+    "winning_parameters": {
+      "path": "/mnt/backtest/artifacts/pipeline/sma_momentum_crossover_20260818/best_params_ES_15m.json",
+      "sha256": "d18a93c589570e31c2dd62992451c9dd9e8da8064adb043ce6dadcd2ef967fe8"
+    },
+    "gate_audit": {
+      "path": "/mnt/backtest/artifacts/pipeline/sma_momentum_crossover_20260818/gate_audit_ES_15m.json",
+      "sha256": "14f18533a7fe15855049d0100f05fa3c53cbb7ef3f83fa128440dcbf8ba4323c"
+    },
+    "metrics_handoff": {
+      "path": null,
+      "sha256": "NOT AVAILABLE"
+    },
+    "rule": "The three hashes are sealed together because they can be separated: the same code under a different winning cell is a different strategy with the same code checksum.",
+    "certified_symbol": "ES",
+    "certified_timeframe": "15m",
+    "target_regime": "High Volatility / Ranging",
+    "target_quadrant": "Q2",
+    "params": {
+      "fast_window": 15,
+      "slow_window": 50,
+      "tp_atr_mult": 3.0,
+      "sl_atr_mult": 1.0,
+      "trailing": false
+    },
+    "params_locked": true
+  }
+}

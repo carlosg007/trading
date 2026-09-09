@@ -1,0 +1,147 @@
+{
+  "name": "double_rsi_momentum_pullback_20260830_ETH_15m_VB",
+  "strategy": "double_rsi_momentum_pullback_20260830",
+  "symbol": "ETH",
+  "version": "B",
+  "description": "Promoted Version B (baseline + causal ML filter).",
+  "symbols": [
+    "ETH"
+  ],
+  "timeframe": "15m",
+  "params": {
+    "rsi_fast_len": 5,
+    "rsi_slow_len": 21,
+    "pullback_window": 3,
+    "volume_sma_len": 20,
+    "volume_mult": 1.1,
+    "rsi_exit_long": 80.0,
+    "rsi_exit_short": 20.0,
+    "use_baseline_filter": true,
+    "use_alpha_trigger": true,
+    "use_volume_filter": true,
+    "use_news_filter": false,
+    "sl_atr_mult": 1.5,
+    "tp_atr_mult": 3.0,
+    "trailing": false
+  },
+  "params_source": "double_rsi_momentum_pullback_20260830.py DEFAULT_PARAMS",
+  "params_conflict": [],
+  "risk": {
+    "sl_atr_mult": 1.5,
+    "tp_atr_mult": 3.0,
+    "trailing": false
+  },
+  "day_of_week_gate": {
+    "status": "NOT EVALUATED",
+    "blocked_weekdays": [],
+    "blocked_weekday": null,
+    "version": "B",
+    "source": "/mnt/backtest/artifacts/pipeline/double_rsi_momentum_pullback_20260830/dow_gate_ETH_15m.json",
+    "reason": "dow_gate_ETH_15m.json does not exist. Stage 4.5 (backtest/dow_gate.py) was not run for this pair; no weekday is blocked and none was cleared."
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/double_rsi_momentum_pullback_20260830.py",
+  "source_sha256": "d6e295b941ca9bbee04fe1ad9a100d55dbf003592a3ed926b717482c5e78b1bd",
+  "promoted_sha256": "edd3e346058ec88149b7046b7bdfc5d32614ef667581f962fc7a21be653d1131",
+  "promoted_utc": "2026-09-09T00:37:55+00:00",
+  "costs_included": false,
+  "variants_tested": 162,
+  "metrics_status": "NOT RECORDED",
+  "metrics": null,
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "PASS",
+    "gate2": "FAIL",
+    "gate3": "FAIL",
+    "gate_regime": "PASS",
+    "gate_ruin": "PASS",
+    "gate_all_quadrants": "FAIL"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/double_rsi_momentum_pullback_20260830/gate_audit_ETH_15m.json",
+    "audit_sha256": "08d1657f38cb220d0581776cddc4cc3f33b37f3b73b70bd0fec8d7cee1f24c45",
+    "audit_symbol": "ETH",
+    "audit_timeframe": "15m",
+    "target_quadrant": "Q1",
+    "target_regime": "High Volatility / Trending",
+    "audit_generated_utc": "2026-09-09T00:37:55+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "rsi_fast_len": 7,
+      "rsi_slow_len": 21,
+      "sl_atr_mult": 1.0,
+      "tp_atr_mult": 2.0,
+      "trailing": true
+    },
+    "params_source": "stage 2 winner (best_params_ETH_15m.json)",
+    "variants_tested": 162,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "NOT EVALUATED",
+    "agrees_with_snapshot": null
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [],
+  "notes": "Stage 3 certified ETH 15m in High Volatility / Trending; staged by backtest/audit_gates.py, not committed.",
+  "ml_threshold": 0.48,
+  "baseline": "baseline.py",
+  "seal": {
+    "algorithm": "sha256",
+    "strategy_code": {
+      "path": "/home/cgrullon/src/trading/strategies/approved_incubator/double_rsi_momentum_pullback_20260830_ETH_15m_VB/baseline.py",
+      "sha256": "d6e295b941ca9bbee04fe1ad9a100d55dbf003592a3ed926b717482c5e78b1bd"
+    },
+    "winning_parameters": {
+      "path": "/mnt/backtest/artifacts/pipeline/double_rsi_momentum_pullback_20260830/best_params_ETH_15m.json",
+      "sha256": "a6248cd1d7e0fcd4d95587ae92a1f07221e11c1cdd7ea72876775426915191b0"
+    },
+    "gate_audit": {
+      "path": "/mnt/backtest/artifacts/pipeline/double_rsi_momentum_pullback_20260830/gate_audit_ETH_15m.json",
+      "sha256": "08d1657f38cb220d0581776cddc4cc3f33b37f3b73b70bd0fec8d7cee1f24c45"
+    },
+    "metrics_handoff": {
+      "path": null,
+      "sha256": "NOT AVAILABLE"
+    },
+    "rule": "The three hashes are sealed together because they can be separated: the same code under a different winning cell is a different strategy with the same code checksum.",
+    "certified_symbol": "ETH",
+    "certified_timeframe": "15m",
+    "target_regime": "High Volatility / Trending",
+    "target_quadrant": "Q1",
+    "params": {
+      "rsi_fast_len": 7,
+      "rsi_slow_len": 21,
+      "sl_atr_mult": 1.0,
+      "tp_atr_mult": 2.0,
+      "trailing": true
+    },
+    "params_locked": true
+  }
+}

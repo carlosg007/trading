@@ -1,0 +1,138 @@
+{
+  "name": "ema_crossover_20260821_NG_15m_VB",
+  "strategy": "ema_crossover_20260821",
+  "symbol": "NG",
+  "version": "B",
+  "description": "Promoted Version B (baseline + causal ML filter).",
+  "symbols": [
+    "NG"
+  ],
+  "timeframe": "15m",
+  "params": {
+    "fast_period": 9,
+    "slow_period": 21,
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": null,
+    "trailing": true
+  },
+  "params_source": "ema_crossover_20260821.py DEFAULT_PARAMS",
+  "params_conflict": [],
+  "risk": {
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": null,
+    "trailing": true
+  },
+  "day_of_week_gate": {
+    "status": "NOT EVALUATED",
+    "blocked_weekdays": [],
+    "blocked_weekday": null,
+    "version": "B",
+    "source": "/mnt/backtest/artifacts/pipeline/ema_crossover_20260821/dow_gate_NG_15m.json",
+    "reason": "dow_gate_NG_15m.json does not exist. Stage 4.5 (backtest/dow_gate.py) was not run for this pair; no weekday is blocked and none was cleared."
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/ema_crossover_20260821.py",
+  "source_sha256": "9c290bc1e02d816f675ee2752d856aac563d8ae4f7563b0452fdac597d31857b",
+  "promoted_sha256": "42155cd2cf2236c51126df3bb1ed8a39c3aa263911201a8692838976dfe3c1a8",
+  "promoted_utc": "2026-09-08T22:35:05+00:00",
+  "costs_included": false,
+  "variants_tested": 108,
+  "metrics_status": "NOT RECORDED",
+  "metrics": null,
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "FAIL",
+    "gate2": "FAIL",
+    "gate3": "PASS",
+    "gate_regime": "PASS",
+    "gate_ruin": "PASS",
+    "gate_all_quadrants": "FAIL"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/ema_crossover_20260821/gate_audit_NG_15m.json",
+    "audit_sha256": "eeaabffa9bf7303a5e41392346ac12f9296c72d6c719ecbd0bd77224fb2a7b3b",
+    "audit_symbol": "NG",
+    "audit_timeframe": "15m",
+    "target_quadrant": "Q2",
+    "target_regime": "High Volatility / Ranging",
+    "audit_generated_utc": "2026-09-08T22:35:05+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "fast_period": 20,
+      "slow_period": 89,
+      "sl_atr_mult": 2.0,
+      "tp_atr_mult": null,
+      "trailing": false
+    },
+    "params_source": "stage 2 winner (best_params_NG_15m.json)",
+    "variants_tested": 108,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "NOT EVALUATED",
+    "agrees_with_snapshot": null
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [],
+  "notes": "Stage 3 certified NG 15m in High Volatility / Ranging; staged by backtest/audit_gates.py, not committed.",
+  "ml_threshold": 0.48,
+  "baseline": "baseline.py",
+  "seal": {
+    "algorithm": "sha256",
+    "strategy_code": {
+      "path": "/home/cgrullon/src/trading/strategies/approved_incubator/ema_crossover_20260821_NG_15m_VB/baseline.py",
+      "sha256": "9c290bc1e02d816f675ee2752d856aac563d8ae4f7563b0452fdac597d31857b"
+    },
+    "winning_parameters": {
+      "path": "/mnt/backtest/artifacts/pipeline/ema_crossover_20260821/best_params_NG_15m.json",
+      "sha256": "d93d3085d709146629498a4aac374ca234a6f91fc644fd942f4b7b28f5c8cf53"
+    },
+    "gate_audit": {
+      "path": "/mnt/backtest/artifacts/pipeline/ema_crossover_20260821/gate_audit_NG_15m.json",
+      "sha256": "eeaabffa9bf7303a5e41392346ac12f9296c72d6c719ecbd0bd77224fb2a7b3b"
+    },
+    "metrics_handoff": {
+      "path": null,
+      "sha256": "NOT AVAILABLE"
+    },
+    "rule": "The three hashes are sealed together because they can be separated: the same code under a different winning cell is a different strategy with the same code checksum.",
+    "certified_symbol": "NG",
+    "certified_timeframe": "15m",
+    "target_regime": "High Volatility / Ranging",
+    "target_quadrant": "Q2",
+    "params": {
+      "fast_period": 20,
+      "slow_period": 89,
+      "sl_atr_mult": 2.0,
+      "tp_atr_mult": null,
+      "trailing": false
+    },
+    "params_locked": true
+  }
+}

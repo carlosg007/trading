@@ -1,0 +1,155 @@
+{
+  "name": "keltner_trend_drift_20260901_6B_1h_VB",
+  "strategy": "keltner_trend_drift_20260901",
+  "symbol": "6B",
+  "version": "B",
+  "description": "Promoted Version B (baseline + causal ML filter).",
+  "symbols": [
+    "6B"
+  ],
+  "timeframe": "1h",
+  "params": {
+    "ema_fast": 50,
+    "keltner_len": 20,
+    "keltner_mult": 2.0,
+    "session_start_et": "09:30",
+    "session_end_et": "16:00",
+    "allowed_days": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "use_baseline_filter": true,
+    "use_alpha_trigger": true,
+    "use_time_filter": false,
+    "use_day_filter": false,
+    "use_news_filter": false,
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": null,
+    "trailing": true
+  },
+  "params_source": "keltner_trend_drift_20260901.py DEFAULT_PARAMS",
+  "params_conflict": [],
+  "risk": {
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": null,
+    "trailing": true
+  },
+  "day_of_week_gate": {
+    "status": "NOT EVALUATED",
+    "blocked_weekdays": [],
+    "blocked_weekday": null,
+    "version": "B",
+    "source": "/mnt/backtest/artifacts/pipeline/keltner_trend_drift_20260901/dow_gate_6B_1h.json",
+    "reason": "dow_gate_6B_1h.json does not exist. Stage 4.5 (backtest/dow_gate.py) was not run for this pair; no weekday is blocked and none was cleared."
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/keltner_trend_drift_20260901.py",
+  "source_sha256": "da6dcbae3ef30e00684d1435c8438eff93c2d96857e2d6cd3be96bc37f69a9e7",
+  "promoted_sha256": "f4351829ad4b06b9e0a105588091aad3047e009a560991fa6872d053e1d1da81",
+  "promoted_utc": "2026-09-09T03:14:16+00:00",
+  "costs_included": false,
+  "variants_tested": 54,
+  "metrics_status": "NOT RECORDED",
+  "metrics": null,
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "FAIL",
+    "gate2": "FAIL",
+    "gate3": "PASS",
+    "gate_regime": "PASS",
+    "gate_ruin": "PASS",
+    "gate_all_quadrants": "FAIL"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/keltner_trend_drift_20260901/gate_audit_6B_1h.json",
+    "audit_sha256": "b308c4227db0e0e91f198b0190c55ac6a77febe41e86714f0061028f712e8e71",
+    "audit_symbol": "6B",
+    "audit_timeframe": "1h",
+    "target_quadrant": "Q3",
+    "target_regime": "Low Volatility / Trending",
+    "audit_generated_utc": "2026-09-09T03:14:16+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "ema_fast": 50,
+      "keltner_len": 40,
+      "keltner_mult": 2.5,
+      "sl_atr_mult": 2.0,
+      "trailing": true
+    },
+    "params_source": "stage 2 winner (best_params_6B_1h.json)",
+    "variants_tested": 54,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "NOT EVALUATED",
+    "agrees_with_snapshot": null
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [
+    "import from 'backtest.event_calendar' is not allowed"
+  ],
+  "notes": "Stage 3 certified 6B 1h in Low Volatility / Trending; staged by backtest/audit_gates.py, not committed.",
+  "ml_threshold": 0.48,
+  "baseline": "baseline.py",
+  "seal": {
+    "algorithm": "sha256",
+    "strategy_code": {
+      "path": "/home/cgrullon/src/trading/strategies/approved_incubator/keltner_trend_drift_20260901_6B_1h_VB/baseline.py",
+      "sha256": "da6dcbae3ef30e00684d1435c8438eff93c2d96857e2d6cd3be96bc37f69a9e7"
+    },
+    "winning_parameters": {
+      "path": "/mnt/backtest/artifacts/pipeline/keltner_trend_drift_20260901/best_params_6B_1h.json",
+      "sha256": "a222322a4ec1beca229b5661d826974c9694c282bf15d2b6354b69ec63ff8b36"
+    },
+    "gate_audit": {
+      "path": "/mnt/backtest/artifacts/pipeline/keltner_trend_drift_20260901/gate_audit_6B_1h.json",
+      "sha256": "b308c4227db0e0e91f198b0190c55ac6a77febe41e86714f0061028f712e8e71"
+    },
+    "metrics_handoff": {
+      "path": null,
+      "sha256": "NOT AVAILABLE"
+    },
+    "rule": "The three hashes are sealed together because they can be separated: the same code under a different winning cell is a different strategy with the same code checksum.",
+    "certified_symbol": "6B",
+    "certified_timeframe": "1h",
+    "target_regime": "Low Volatility / Trending",
+    "target_quadrant": "Q3",
+    "params": {
+      "ema_fast": 50,
+      "keltner_len": 40,
+      "keltner_mult": 2.5,
+      "sl_atr_mult": 2.0,
+      "trailing": true
+    },
+    "params_locked": true
+  }
+}

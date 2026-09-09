@@ -1,0 +1,146 @@
+{
+  "name": "ma_anchoring_spread_20260820_PL_5m_VA",
+  "strategy": "ma_anchoring_spread_20260820",
+  "symbol": "PL",
+  "version": "A",
+  "description": "Promoted Version A (rule-based baseline).",
+  "symbols": [
+    "PL"
+  ],
+  "timeframe": "5m",
+  "params": {
+    "fast_window": 21,
+    "slow_window": 200,
+    "spread_threshold": 0.015,
+    "exit_revert_mult": 0.5,
+    "use_macro_anchor": true,
+    "use_spread_hurdle": true,
+    "use_spread_expansion": true,
+    "use_news_filter": false,
+    "sl_atr_mult": 1.5,
+    "tp_atr_mult": 3.0,
+    "trailing": false
+  },
+  "params_source": "ma_anchoring_spread_20260820.py DEFAULT_PARAMS",
+  "params_conflict": [],
+  "risk": {
+    "sl_atr_mult": 1.5,
+    "tp_atr_mult": 3.0,
+    "trailing": false
+  },
+  "day_of_week_gate": {
+    "status": "NOT EVALUATED",
+    "blocked_weekdays": [],
+    "blocked_weekday": null,
+    "version": "A",
+    "source": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/dow_gate_PL_5m.json",
+    "reason": "dow_gate_PL_5m.json does not exist. Stage 4.5 (backtest/dow_gate.py) was not run for this pair; no weekday is blocked and none was cleared."
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/ma_anchoring_spread_20260820.py",
+  "source_sha256": "296538f7b4199e7eb5fc5000a9b6271c2b779160e9a9d6bcce4e002d00394e4d",
+  "promoted_sha256": "296538f7b4199e7eb5fc5000a9b6271c2b779160e9a9d6bcce4e002d00394e4d",
+  "promoted_utc": "2026-09-09T07:13:30+00:00",
+  "costs_included": false,
+  "variants_tested": 270,
+  "metrics_status": "NOT RECORDED",
+  "metrics": null,
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "FAIL",
+    "gate2": "NOT EVALUATED",
+    "gate3": "PASS",
+    "gate_regime": "PASS",
+    "gate_ruin": "PASS",
+    "gate_all_quadrants": "FAIL"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/gate_audit_PL_5m.json",
+    "audit_sha256": "f5918d16706f8bcabdc8ad3905564979e09fd65bbfe87fa0de95c11d87d32e40",
+    "audit_symbol": "PL",
+    "audit_timeframe": "5m",
+    "target_quadrant": "Q1",
+    "target_regime": "High Volatility / Trending",
+    "audit_generated_utc": "2026-09-09T07:13:30+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "fast_window": 30,
+      "slow_window": 100,
+      "spread_threshold": 0.025,
+      "sl_atr_mult": 1.5,
+      "tp_atr_mult": 2.0,
+      "trailing": true
+    },
+    "params_source": "stage 2 winner (best_params_PL_5m.json)",
+    "variants_tested": 270,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "NOT EVALUATED",
+    "agrees_with_snapshot": null
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [
+    "import from 'backtest.event_calendar' is not allowed"
+  ],
+  "notes": "Stage 3 certified PL 5m in High Volatility / Trending; staged by backtest/audit_gates.py, not committed.",
+  "seal": {
+    "algorithm": "sha256",
+    "strategy_code": {
+      "path": "/home/cgrullon/src/trading/strategies/approved_incubator/ma_anchoring_spread_20260820_PL_5m_VA/strat.py",
+      "sha256": "296538f7b4199e7eb5fc5000a9b6271c2b779160e9a9d6bcce4e002d00394e4d"
+    },
+    "winning_parameters": {
+      "path": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/best_params_PL_5m.json",
+      "sha256": "0e1f639513f8cf832b3de204b0db1a055a6ccfe13d698ad543b99612f40f45f7"
+    },
+    "gate_audit": {
+      "path": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/gate_audit_PL_5m.json",
+      "sha256": "f5918d16706f8bcabdc8ad3905564979e09fd65bbfe87fa0de95c11d87d32e40"
+    },
+    "metrics_handoff": {
+      "path": null,
+      "sha256": "NOT AVAILABLE"
+    },
+    "rule": "The three hashes are sealed together because they can be separated: the same code under a different winning cell is a different strategy with the same code checksum.",
+    "certified_symbol": "PL",
+    "certified_timeframe": "5m",
+    "target_regime": "High Volatility / Trending",
+    "target_quadrant": "Q1",
+    "params": {
+      "fast_window": 30,
+      "slow_window": 100,
+      "spread_threshold": 0.025,
+      "sl_atr_mult": 1.5,
+      "tp_atr_mult": 2.0,
+      "trailing": true
+    },
+    "params_locked": true
+  }
+}
