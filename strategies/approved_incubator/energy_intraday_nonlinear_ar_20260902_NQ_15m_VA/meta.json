@@ -30,19 +30,31 @@
     "trailing": true
   },
   "day_of_week_gate": {
-    "status": "NOT EVALUATED",
+    "status": "EVALUATED",
+    "version": "A",
+    "versions_profiled": [
+      "A"
+    ],
     "blocked_weekdays": [],
     "blocked_weekday": null,
-    "version": "A",
+    "blocked_day": null,
+    "blocked_day_name": null,
+    "worst_weekday": 1,
+    "worst_day": "Tue",
+    "block_rule": "negative_expectancy",
+    "min_trades": 20,
+    "reason": "Tuesday is the weakest session but its expectancy is 1.17 per trade, which is not negative. Nothing is blocked: cutting a profitable session removes realised edge, and being fifth of five is not evidence against a weekday. Pass --block-worst-always to block it anyway.",
+    "selected_in_sample": true,
+    "note": "The weekday was chosen in-sample, on a window that spans the Stage 3 holdout. It is a live-supervision instruction, not evidence: no gate was scored on it and nothing was pruned for it.",
     "source": "/mnt/backtest/artifacts/pipeline/energy_intraday_nonlinear_ar_20260902/dow_gate_NQ_15m.json",
-    "reason": "dow_gate_NQ_15m.json does not exist. Stage 4.5 (backtest/dow_gate.py) was not run for this pair; no weekday is blocked and none was cleared."
+    "source_sha256": "636b0e860ac198cadef66308b4fba48a117b58e083804f49777667b64e0fa1fc"
   },
   "source": "/home/cgrullon/src/trading/strategies/experimental/energy_intraday_nonlinear_ar_20260902.py",
   "source_sha256": "d3bf63c643b8b51664b6ec149731c082168403077873fe8c1503212603565712",
   "promoted_sha256": "d3bf63c643b8b51664b6ec149731c082168403077873fe8c1503212603565712",
-  "promoted_utc": "2026-09-09T02:42:13+00:00",
+  "promoted_utc": "2026-09-09T12:42:12+00:00",
   "costs_included": false,
-  "variants_tested": 135,
+  "variants_tested": null,
   "metrics_status": "NOT RECORDED",
   "metrics": null,
   "gate_audit_status": "PASS",
@@ -56,7 +68,7 @@
   },
   "certification": {
     "audit_file": "/mnt/backtest/artifacts/pipeline/energy_intraday_nonlinear_ar_20260902/gate_audit_NQ_15m.json",
-    "audit_sha256": "8f6099a0e5653a4044bb5c045878766d1dedd222cf18cb78979165f88158d4a0",
+    "audit_sha256": "5a03165fb395faded9e5c301d3832585ecd58e70ab8c5e3b599705833bdbfa87",
     "audit_symbol": "NQ",
     "audit_timeframe": "15m",
     "target_quadrant": "Q1",
@@ -109,37 +121,5 @@
   "audit_warnings": [
     "import from 'backtest.event_calendar' is not allowed"
   ],
-  "notes": "Stage 3 certified NQ 15m in High Volatility / Trending; staged by backtest/audit_gates.py, not committed.",
-  "seal": {
-    "algorithm": "sha256",
-    "strategy_code": {
-      "path": "/home/cgrullon/src/trading/strategies/approved_incubator/energy_intraday_nonlinear_ar_20260902_NQ_15m_VA/strat.py",
-      "sha256": "d3bf63c643b8b51664b6ec149731c082168403077873fe8c1503212603565712"
-    },
-    "winning_parameters": {
-      "path": "/mnt/backtest/artifacts/pipeline/energy_intraday_nonlinear_ar_20260902/best_params_NQ_15m.json",
-      "sha256": "d43bbee41a894f53b916f00faab185a96d67bcf32320240e3ea668f92e08e1f7"
-    },
-    "gate_audit": {
-      "path": "/mnt/backtest/artifacts/pipeline/energy_intraday_nonlinear_ar_20260902/gate_audit_NQ_15m.json",
-      "sha256": "8f6099a0e5653a4044bb5c045878766d1dedd222cf18cb78979165f88158d4a0"
-    },
-    "metrics_handoff": {
-      "path": null,
-      "sha256": "NOT AVAILABLE"
-    },
-    "rule": "The three hashes are sealed together because they can be separated: the same code under a different winning cell is a different strategy with the same code checksum.",
-    "certified_symbol": "NQ",
-    "certified_timeframe": "15m",
-    "target_regime": "High Volatility / Trending",
-    "target_quadrant": "Q1",
-    "params": {
-      "sma_L_len": 20,
-      "adx_thresh": 30.0,
-      "sl_atr_mult": 1.5,
-      "tp_atr_mult": 3.0,
-      "trailing": false
-    },
-    "params_locked": true
-  }
+  "notes": ""
 }
