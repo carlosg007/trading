@@ -174,7 +174,7 @@ EXPECTED_ASSIGNMENTS = {
     "Eval-Even":      [],
     "Prop-Odd":       [],
     "Prop-Even":      [],
-    # The full-size track, 2026-09-08. These six certified on contracts with
+    # The full-size track, 2026-09-08. These ten certified on contracts with
     # no micro this repository can trade, which is why they are here and not
     # on a micro rung - see DEFAULT_ROUTING_TRACKS in backtest/promote.py.
     # The two rungs above are empty and their accounts are UNBOUND_
@@ -187,6 +187,18 @@ EXPECTED_ASSIGNMENTS = {
         "t3_braid_scalp_20260823_ETH_1h_VA",                  #  1h, ETH
         "t3_braid_scalp_20260823_ETH_1h_VB",                  #  1h, ETH
         "compressed_bollinger_reversion_20260901_ETH_5m_VB",  #  5m, ETH
+        # intrinsic_alpha_engine_20260831, registered 2026-09-08 by 3fb3fac /
+        # de584b5 / 7bd5e71 and declared here 2026-09-09. ETH has no micro,
+        # so it lands on the full-size rung like every ETH package above it.
+        # ETH 30m is registered but the regime daemon cannot classify it -
+        # there is no ETH_30m regime cache and no pinned anchor, so
+        # `theta_for("ETH", "30m")` raises ThetaAnchorMissing. That is a
+        # LIVE gap, not a routing one: the row belongs here because the
+        # config holds it, and this list's job is to say the registration
+        # was deliberate, not that the strategy can trade today.
+        "intrinsic_alpha_engine_20260831_ETH_1h_VA",          #  1h, ETH
+        "intrinsic_alpha_engine_20260831_ETH_30m_VB",         # 30m, ETH
+        "intrinsic_alpha_engine_20260831_ETH_5m_VB",          #  5m, ETH
     ],
     "Eval-FullSize":      [],
     "Prop-FullSize":      [],
