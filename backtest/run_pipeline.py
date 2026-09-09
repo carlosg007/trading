@@ -524,6 +524,62 @@ def dow_gate_file(strat: str, symbol: str, timeframe: str,
     return path if path.exists() else None
 
 
+def _generated_utc(path: str | Path | None) -> datetime | None:
+    """`generated_utc` off a pipeline artifact, or None if it is unreadable."""
+    if not path:
+        return None
+    try:
+        stamp = json.loads(Path(path).read_text()).get("generated_utc")
+        return datetime.fromisoformat(str(stamp)) if stamp else None
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def dow_gate_staleness(dow_gate: str | Path | None,
+                       audit_file: str | Path | None) -> str | None:
+    """
+    Why this pair's Stage 4.5 verdict should not be trusted, or None.
+
+    THE FAILURE THIS CATCHES, observed on
+    `sma_momentum_crossover_20260818_YM_30m_VB` on 2026-09-09. `dow_gate_file`
+    asks only whether the artifact EXISTS, and an artifact from an earlier
+    Stage 4.5 run exists just as convincingly as a current one. That package
+    was promoted at 08:11:19 against a gate audit generated at 08:11:19, and
+    the pair's Stage 4.5 verdict was not rewritten until 08:33:00 - so the
+    weekday stamped into its meta.json came from a PREVIOUS run. It blocked
+    Wednesday; the current verdict blocks nothing, and the strategy sat
+    stood-down on a session no live evidence supported, with every log line
+    reading correctly.
+
+    The test is ordering, not age: a verdict generated BEFORE the
+    certification it is being attached to was measured on a configuration that
+    is no longer the one being promoted. Equal timestamps pass - Stage 4.5 and
+    Stage 3 inside one `run_pipeline` invocation can share a second.
+
+    A REASON, NOT A REFUSAL. Stage 4.5 prunes nothing and its weekday is an
+    instruction for the live supervisor rather than evidence about an edge, so
+    a stale one must not discard a certification that already cleared Gate R.
+    The caller records this and promotes anyway, and
+    `scripts/check_strategy_days.py` is the standing check that catches what
+    slips through.
+
+    Unreadable timestamps return None. Neither file having a `generated_utc`
+    is the pre-2026 artifact shape, and inventing staleness from a missing
+    field would warn on every older campaign.
+    """
+    dow_at = _generated_utc(dow_gate)
+    audit_at = _generated_utc(audit_file)
+    if dow_at is None or audit_at is None:
+        return None
+    if dow_at >= audit_at:
+        return None
+    return (f"the stage 4.5 verdict was generated {dow_at.isoformat()}, "
+            f"BEFORE the gate audit it is being attached to "
+            f"({audit_at.isoformat()}) - it describes an earlier run's "
+            f"configuration. Re-run stage 4.5 for this pair and re-promote, "
+            f"or the package carries a weekday nobody measured for it.")
+
+
 def promote_cmd(strat: str, version: str, source: str | Path,
                 audit_file: str | Path, symbol: str,
                 timeframe: str,
@@ -1095,7 +1151,12 @@ def _promote_only(args: argparse.Namespace) -> int:
         f"  Stages 1-4 are NOT run. Stage 5 promotes what Stage 3 already\n"
         f"  recorded as certified, through promote.py "
         f"--require-certification.\n"
-        f"  --symbols/--tf/--start/--end are not used by this path."))
+        f"  --symbols/--tf/--start/--end are not used by this path.\n"
+        f"  STAGE 4.5 IS NOT RUN EITHER. Each promotion takes whatever\n"
+        f"  dow_gate_<SYM>_<TF>.json is already on disk - a verdict older\n"
+        f"  than the certification is stamped in as though it were current,\n"
+        f"  so any pair reported STALE below needs stage 4.5 re-run and the\n"
+        f"  package re-promoted."))
 
     outcome = auto_promote(strat, out_dir=out_dir, dry_run=dry,
                            promote_max=args.promote_max)
@@ -1521,6 +1582,16 @@ def auto_promote(strat: str, *, out_dir: str | None = None,
             print(f"  DOW GATE {record['symbol']} {record['timeframe']}: "
                   f"NOT EVALUATED — stage 4.5 left no verdict for this pair, "
                   f"so no weekday is blocked on the promoted package.")
+        else:
+            # EXISTING IS NOT THE SAME AS CURRENT. An artifact left by an
+            # earlier campaign passes `dow_gate_file`'s existence test and
+            # would be stamped into meta.json as this promotion's weekday.
+            stale = dow_gate_staleness(dow, audit)
+            record["dow_gate_stale"] = stale
+            if stale:
+                print(f"  ! DOW GATE {record['symbol']} "
+                      f"{record['timeframe']}: STALE — {stale}",
+                      file=sys.stderr, flush=True)
         cmd = promote_cmd(strat, record["version"], source, audit,
                           record["symbol"], record["timeframe"], metrics,
                           dow_gate=dow)

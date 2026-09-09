@@ -886,6 +886,53 @@ def test_stage4_runs_version_b() -> None:
           and "--tf" not in rp.stage2_cmd("demo", "a", "b"))
 
 
+def test_dow_gate_staleness_is_detected(tmp: Path) -> None:
+    """
+    A Stage 4.5 verdict generated BEFORE the gate audit it is attached to is
+    reported STALE rather than stamped in as current.
+
+    THE CASE THIS ENCODES, observed 2026-09-09 on
+    `sma_momentum_crossover_20260818_YM_30m_VB`. Its gate audit was generated
+    at 08:11:19 and it was promoted at 08:11:19; the pair's Stage 4.5 verdict
+    was not rewritten until 08:33:00. The weekday stamped into meta.json
+    therefore came from a PREVIOUS run - it blocked Wednesday where the
+    current verdict blocks nothing - and the package sat stood down on a
+    session no live evidence supported. `dow_gate_file` had said yes, because
+    it asks only whether the file EXISTS.
+    """
+    audit = tmp / "gate_audit_YM_30m.json"
+    fresh = tmp / "dow_gate_fresh.json"
+    stale = tmp / "dow_gate_stale.json"
+    same = tmp / "dow_gate_same.json"
+    nostamp = tmp / "dow_gate_nostamp.json"
+    audit.write_text(json.dumps({"generated_utc": "2026-09-09T08:11:19+00:00"}))
+    fresh.write_text(json.dumps({"generated_utc": "2026-09-09T08:33:00+00:00"}))
+    stale.write_text(json.dumps({"generated_utc": "2026-09-08T22:04:11+00:00"}))
+    same.write_text(json.dumps({"generated_utc": "2026-09-09T08:11:19+00:00"}))
+    nostamp.write_text(json.dumps({"versions": {}}))
+
+    check("a verdict newer than the audit is not stale",
+          rp.dow_gate_staleness(fresh, audit) is None)
+    # Equal stamps pass: stage 3 and stage 4.5 inside one run_pipeline
+    # invocation can share a second, and warning there would fire on every
+    # correct run.
+    check("an equal timestamp is not stale",
+          rp.dow_gate_staleness(same, audit) is None)
+    reason = rp.dow_gate_staleness(stale, audit)
+    check("a verdict older than the audit IS stale", bool(reason))
+    check("the reason names both timestamps",
+          bool(reason) and "2026-09-08T22:04:11" in reason
+          and "2026-09-09T08:11:19" in reason)
+    # A missing stamp is the pre-2026 artifact shape. Inventing staleness from
+    # an absent field would warn on every older campaign.
+    check("an artifact with no generated_utc is not called stale",
+          rp.dow_gate_staleness(nostamp, audit) is None)
+    check("a missing dow gate is not called stale",
+          rp.dow_gate_staleness(None, audit) is None)
+    check("an unreadable audit is not called stale",
+          rp.dow_gate_staleness(fresh, tmp / "absent.json") is None)
+
+
 def main() -> int:
     print("=" * 60)
     print("  backtest/run_pipeline.py - the unified orchestrator")
@@ -912,6 +959,7 @@ def main() -> int:
         test_auto_promote(tmp)
         test_auto_promote_every_timeframe(tmp)
         test_promote_only(tmp)
+        test_dow_gate_staleness_is_detected(tmp)
         test_failure_reasons_are_distinguished()
         test_summary_table(tmp)
         test_dry_run_launches_nothing(tmp)
