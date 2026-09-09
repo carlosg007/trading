@@ -146,80 +146,139 @@ EXECUTION_ACCOUNTS = {"Incubator-Odd": "SimIncubator1",
 #
 #     ls /mnt/backtest/artifacts/nt8_bars/ | grep '^CL'
 EXPECTED_ASSIGNMENTS = {
-    # PURGED ENTRIES REMOVED 2026-09-08. This dict declared five
-    # sma_momentum_crossover_20260818, ema_crossover_20260821 and
-    # ma_anchoring_spread_20260820 packages that `6938ce8 incubator:
-    # unregister every strategy and purge the 52 dereferenced packages` had
-    # already taken out of the routing table. The assertion below is an exact
-    # list comparison, so a name declared here and absent from the config
-    # fails it exactly as loudly as one registered without being declared -
-    # and the guard was reading as broken rather than as a finding.
+    # REGENERATED 2026-09-09 from config/portfolios.json after Stage 4.5 ran
+    # for the whole incubator and 160 promotions re-stamped their
+    # `day_of_week_gate`. The book went 20 -> 100 in one operator pass.
     #
-    # Twelve registered, twelve packages on disk, and they are all
-    # t3_braid_scalp_20260823. Order matters: `active_strategies` is compared
-    # element-wise, so these follow the order promote.py appended them in.
-    "Incubator-Odd":  [
+    # ORDER MATTERS: `active_strategies` is compared element-wise, so these
+    # follow the order promote.py appended them in. Regenerate rather than
+    # hand-edit - transcribing a hundred names is how a guard stops describing
+    # the config and starts describing the day it was written, which is the
+    # failure test_regime_daemon's four-account assertion had.
+    #
+    # THREE PACKAGES ARE DELIBERATELY ABSENT and must stay absent:
+    # t3_braid_scalp_20260823_RB_30m_VA, _YM_30m_VA and
+    # ma_anchoring_spread_20260820_ZS_1h_VA each cleared Gate R on a profit
+    # factor `backtest/profiler.py` had already rounded to 1.00 while their
+    # quadrant net P&L is negative (-799.02, -1,256.20, -32.04). A promotion
+    # run that re-registers one of them fails here, which is the point.
+    #
+    # All 100 below were audited against the four registration gates on
+    # 2026-09-09: symbol in its portfolio's basket, a theta_vol anchor
+    # resolving for its (symbol, TIMEFRAME), positive net P&L in the certified
+    # quadrant, and Stage 4.5 EVALUATED. Zero problems.
+    "Incubator-Odd":         [
         "t3_braid_scalp_20260823_NQ_1h_VA",                   #  1h, NQ
         "t3_braid_scalp_20260823_NQ_1h_VB",                   #  1h, NQ
-        "t3_braid_scalp_20260823_RTY_30m_VB",                 # 30m, RTY->M2K
+        "t3_braid_scalp_20260823_RTY_30m_VB",                 # 30m, RTY
         "compressed_bollinger_reversion_20260901_NQ_15m_VA",  # 15m, NQ
+        "double_rsi_momentum_pullback_20260830_NQ_15m_VA",    # 15m, NQ
+        "dual_ema_slope_scalp_20260831_6J_30m_VA",            # 30m, 6J
+        "dual_ema_slope_scalp_20260831_6J_30m_VB",            # 30m, 6J
+        "dual_ema_slope_scalp_20260831_NQ_1h_VA",             #  1h, NQ
+        "dual_ema_slope_scalp_20260831_NQ_1h_VB",             #  1h, NQ
+        "dual_ema_slope_scalp_20260831_RTY_1h_VB",            #  1h, RTY
+        "ema_crossover_20260821_6J_5m_VA",                    #  5m, 6J
+        "ema_crossover_20260821_6J_5m_VB",                    #  5m, 6J
+        "ema_crossover_20260821_NQ_15m_VA",                   # 15m, NQ
+        "ema_crossover_20260821_NQ_1h_VA",                    #  1h, NQ
+        "ema_crossover_20260821_NQ_1h_VB",                    #  1h, NQ
+        "ema_crossover_20260821_RTY_15m_VA",                  # 15m, RTY
+        "ema_crossover_20260821_RTY_15m_VB",                  # 15m, RTY
+        "energy_intraday_nonlinear_ar_20260902_NQ_15m_VA",    # 15m, NQ
+        "energy_intraday_nonlinear_ar_20260902_NQ_30m_VA",    # 30m, NQ
+        "keltner_trend_drift_20260901_6J_30m_VB",             # 30m, 6J
+        "keltner_trend_drift_20260901_NQ_30m_VA",             # 30m, NQ
+        "keltner_trend_drift_20260901_NQ_30m_VB",             # 30m, NQ
+        "ma_anchoring_spread_20260820_NQ_15m_VA",             # 15m, NQ
+        "ma_anchoring_spread_20260820_NQ_15m_VB",             # 15m, NQ
+        "ma_anchoring_spread_20260820_RTY_1h_VA",             #  1h, RTY
+        "ma_anchoring_spread_20260820_RTY_1h_VB",             #  1h, RTY
+        "sma_momentum_crossover_20260818_6E_1h_VA",           #  1h, 6E
+        "sma_momentum_crossover_20260818_NQ_5m_VA",           #  5m, NQ
+        "sma_momentum_crossover_20260818_RTY_5m_VA",          #  5m, RTY
     ],
-    "Incubator-Even": [
+    "Eval-Odd":              [],
+    "Prop-Odd":              [],
+    "Incubator-Even":        [
         "t3_braid_scalp_20260823_GC_30m_VA",                  # 30m, GC
         "t3_braid_scalp_20260823_GC_30m_VB",                  # 30m, GC
         "compressed_bollinger_reversion_20260901_ES_15m_VA",  # 15m, ES
-        # Routed 2026-09-09 by scripts/register_incubator_batch.py, which is
-        # why these three are grouped after the hand-registered ones: it
-        # appends, and this list is compared element-wise.
-        "sma_momentum_crossover_20260818_YM_1h_VA",           #  1h, YM->MYM
-        "sma_momentum_crossover_20260818_YM_30m_VA",          # 30m, YM->MYM
-        "sma_momentum_crossover_20260818_YM_30m_VB",          # 30m, YM->MYM
+        "sma_momentum_crossover_20260818_YM_1h_VA",           #  1h, YM
+        "sma_momentum_crossover_20260818_YM_30m_VA",          # 30m, YM
+        "sma_momentum_crossover_20260818_YM_30m_VB",          # 30m, YM
+        "double_rsi_momentum_pullback_20260830_GC_1h_VA",     #  1h, GC
+        "double_rsi_momentum_pullback_20260830_GC_1h_VB",     #  1h, GC
+        "double_rsi_momentum_pullback_20260830_GC_30m_VA",    # 30m, GC
+        "double_rsi_momentum_pullback_20260830_YM_15m_VB",    # 15m, YM
+        "dual_ema_slope_scalp_20260831_GC_1h_VA",             #  1h, GC
+        "dual_ema_slope_scalp_20260831_GC_30m_VA",            # 30m, GC
+        "dual_ema_slope_scalp_20260831_YM_15m_VA",            # 15m, YM
+        "dual_ema_slope_scalp_20260831_YM_30m_VA",            # 30m, YM
+        "ema_crossover_20260821_ES_15m_VA",                   # 15m, ES
+        "ema_crossover_20260821_ES_30m_VA",                   # 30m, ES
+        "energy_intraday_nonlinear_ar_20260902_ES_30m_VA",    # 30m, ES
+        "energy_intraday_nonlinear_ar_20260902_ES_30m_VB",    # 30m, ES
+        "energy_intraday_nonlinear_ar_20260902_YM_30m_VA",    # 30m, YM
+        "keltner_trend_drift_20260901_GC_1h_VA",              #  1h, GC
+        "ma_anchoring_spread_20260820_GC_1h_VA",              #  1h, GC
+        "ma_anchoring_spread_20260820_GC_1h_VB",              #  1h, GC
+        "sma_momentum_crossover_20260818_ES_15m_VA",          # 15m, ES
+        "sma_momentum_crossover_20260818_ES_15m_VB",          # 15m, ES
+        "sma_momentum_crossover_20260818_GC_1h_VA",           #  1h, GC
+        "sma_momentum_crossover_20260818_GC_1h_VB",           #  1h, GC
+        "sma_momentum_crossover_20260818_GC_5m_VA",           #  5m, GC
     ],
-    "Eval-Odd":       [],
-    "Eval-Even":      [],
-    "Prop-Odd":       [],
-    "Prop-Even":      [],
-    # ADMINISTRATIVELY PRUNED 2026-09-09: t3_braid_scalp_20260823_RB_30m_VA
-    # (from the full-size rung) and _YM_30m_VA (from Incubator-Even). Both
-    # cleared Gate R on a profit factor of 1.00 that `backtest/profiler.py`
-    # had already rounded to two places - their quadrant net P&L is -799.02
-    # and -1,256.20, so the true factor is below the 1.00 bar the gate
-    # compares against. The gate code is deliberately NOT changed here; the
-    # rounding is repo-wide and re-cutting it would re-open every cached
-    # certification. These two are unrouted instead, so no money is allocated
-    # to a negative-expectancy quadrant. The packages remain on disk and
-    # appear in the manifest as NOT ROUTED.
-    # The full-size track, 2026-09-08. These nine certified on contracts with
-    # no micro this repository can trade, which is why they are here and not
-    # on a micro rung - see DEFAULT_ROUTING_TRACKS in backtest/promote.py.
-    # The two rungs above are empty and their accounts are UNBOUND_
-    # placeholders: nothing has been promoted up the full-size ladder yet.
-    "Incubator-FullSize": [
+    "Eval-Even":             [],
+    "Prop-Even":             [],
+    "Incubator-FullSize":    [
         "t3_braid_scalp_20260823_HO_15m_VB",                  # 15m, HO
         "t3_braid_scalp_20260823_HO_1h_VA",                   #  1h, HO
         "t3_braid_scalp_20260823_PL_1h_VA",                   #  1h, PL
         "t3_braid_scalp_20260823_ETH_1h_VA",                  #  1h, ETH
         "t3_braid_scalp_20260823_ETH_1h_VB",                  #  1h, ETH
         "compressed_bollinger_reversion_20260901_ETH_5m_VB",  #  5m, ETH
-        # intrinsic_alpha_engine_20260831, registered 2026-09-08 by 3fb3fac /
-        # de584b5 / 7bd5e71 and declared here 2026-09-09. ETH has no micro,
-        # so it lands on the full-size rung like every ETH package above it.
-        # ETH 30m is registered but the regime daemon cannot classify it -
-        # there is no ETH_30m regime cache and no pinned anchor, so
-        # `theta_for("ETH", "30m")` raises ThetaAnchorMissing. That is a
-        # LIVE gap, not a routing one: the row belongs here because the
-        # config holds it, and this list's job is to say the registration
-        # was deliberate, not that the strategy can trade today.
         "intrinsic_alpha_engine_20260831_ETH_1h_VA",          #  1h, ETH
         "intrinsic_alpha_engine_20260831_ETH_30m_VB",         # 30m, ETH
         "intrinsic_alpha_engine_20260831_ETH_5m_VB",          #  5m, ETH
-        # Routed 2026-09-09 by the batch registrar. Only reachable because
-        # bd32b0c pinned the ETH 30m anchor - before that the pair resolved
-        # to nothing and the registrar's second gate refused it.
         "sma_momentum_crossover_20260818_ETH_30m_VA",         # 30m, ETH
+        "double_rsi_momentum_pullback_20260830_RB_1h_VA",     #  1h, RB
+        "double_rsi_momentum_pullback_20260830_RB_1h_VB",     #  1h, RB
+        "dual_ema_slope_scalp_20260831_ETH_30m_VA",           # 30m, ETH
+        "dual_ema_slope_scalp_20260831_HO_1h_VA",             #  1h, HO
+        "dual_ema_slope_scalp_20260831_HO_1h_VB",             #  1h, HO
+        "dual_ema_slope_scalp_20260831_HO_30m_VA",            # 30m, HO
+        "dual_ema_slope_scalp_20260831_HO_5m_VB",             #  5m, HO
+        "dual_ema_slope_scalp_20260831_PL_1h_VA",             #  1h, PL
+        "dual_ema_slope_scalp_20260831_RB_1h_VA",             #  1h, RB
+        "ema_crossover_20260821_ETH_5m_VB",                   #  5m, ETH
+        "energy_intraday_nonlinear_ar_20260902_HO_30m_VA",    # 30m, HO
+        "energy_intraday_nonlinear_ar_20260902_RB_1h_VA",     #  1h, RB
+        "energy_intraday_nonlinear_ar_20260902_RB_30m_VA",    # 30m, RB
+        "energy_intraday_nonlinear_ar_20260902_RB_30m_VB",    # 30m, RB
+        "energy_intraday_nonlinear_ar_20260902_RB_5m_VB",     #  5m, RB
+        "keltner_trend_drift_20260901_ETH_1h_VA",             #  1h, ETH
+        "keltner_trend_drift_20260901_HO_15m_VA",             # 15m, HO
+        "keltner_trend_drift_20260901_PL_30m_VB",             # 30m, PL
+        "ma_anchoring_spread_20260820_ETH_5m_VA",             #  5m, ETH
+        "ma_anchoring_spread_20260820_PL_15m_VA",             # 15m, PL
+        "ma_anchoring_spread_20260820_PL_15m_VB",             # 15m, PL
+        "ma_anchoring_spread_20260820_PL_1h_VA",              #  1h, PL
+        "ma_anchoring_spread_20260820_PL_5m_VA",              #  5m, PL
+        "ma_anchoring_spread_20260820_PL_5m_VB",              #  5m, PL
+        "ma_anchoring_spread_20260820_RB_1h_VA",              #  1h, RB
+        "sma_momentum_crossover_20260818_HO_15m_VA",          # 15m, HO
+        "sma_momentum_crossover_20260818_HO_15m_VB",          # 15m, HO
+        "sma_momentum_crossover_20260818_HO_30m_VA",          # 30m, HO
+        "sma_momentum_crossover_20260818_HO_30m_VB",          # 30m, HO
+        "sma_momentum_crossover_20260818_HO_5m_VA",           #  5m, HO
+        "sma_momentum_crossover_20260818_PL_30m_VA",          # 30m, PL
+        "sma_momentum_crossover_20260818_PL_30m_VB",          # 30m, PL
+        "sma_momentum_crossover_20260818_RB_1h_VA",           #  1h, RB
+        "sma_momentum_crossover_20260818_RB_30m_VA",          # 30m, RB
     ],
-    "Eval-FullSize":      [],
-    "Prop-FullSize":      [],
+    "Eval-FullSize":         [],
+    "Prop-FullSize":         [],
 }
 
 # M2K and MYM added 2026-09-08 to carry t3_braid_scalp_20260823's RTY and YM
