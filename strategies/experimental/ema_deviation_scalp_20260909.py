@@ -91,16 +91,52 @@ import pandas as pd
 # The contract
 # ---------------------------------------------------------------------------
 
-#: The bar this was designed on. ASSUMED - the request named no timeframe.
+#: The bar the DEFAULTS are set for, and the one the engine actually uses.
+#:
+#: THIS STAYS SINGULAR AND IT STAYS DECLARED. `agents.tier3_workers` reads
+#: `getattr(module, "TIMEFRAME", None)` and its caller resolves
+#: `explicit or info["timeframe"] or DEFAULT_TIMEFRAME` - and DEFAULT_TIMEFRAME
+#: is "1d". Replacing this with the plural below would not raise: it would
+#: silently run a five-minute scalp on DAILY bars, with every log line reading
+#: correctly and a tear sheet nobody could tell was wrong from the numbers.
+#: Nothing in this repository reads a `TIMEFRAMES`.
+#:
 #: Stage 1 screens the ladder and the winning (tf, params) pair is the claim,
-#: never the parameters alone. A 20 EMA is ~100 minutes at 5m and ~10 hours at
-#: 30m, so the anchor means a different thing on every rung.
+#: never the parameters alone. A 20 EMA is ~100 minutes at 5m and ~20 hours at
+#: 1h, so the anchor means a different thing on every rung.
 TIMEFRAME = "5m"
 
-#: ASSUMED - the request named no assets. Index futures, which is where the
-#: overshoot-and-reclaim premise has the most participants replacing
-#: liquidity. All four are verified in `backtest/specs.py`.
-SYMBOLS = ["NQ", "ES", "RTY", "YM"]
+#: The ladder Stage 1 is meant to screen this strategy across.
+#:
+#: DESCRIPTIVE ONLY - no loader, engine or pipeline stage reads this name, and
+#: declaring it does not run anything. A timeframe is selected per run with
+#: `--timeframe`, and the rung is chosen by Stage 1 measuring all four rather
+#: than by a list in a module. It is written down so the intended ladder is
+#: recoverable from the module rather than from whoever typed the last command.
+#:
+#: 1m is deliberately absent. `intraday_start_year` exists because pre-2013
+#: 1-minute data is sparse for ten symbols, and a scalp is the archetype most
+#: sensitive to that - the bars would reconcile against daily volume and still
+#: behave differently.
+TIMEFRAMES = ["5m", "15m", "30m", "1h"]
+
+#: The full lake basket, 2026-09-09. Every one reconciles against the
+#: Databento definitions: `python -m backtest.specs` reports UNVERIFIED for
+#: M2K and MYM alone, and neither is here.
+#:
+#: THIS IS A DECLARATION OF WHERE THE PREMISE MIGHT HOLD, NOT A CLAIM THAT IT
+#: DOES. Cross-sectional by default - each contract is its own simulation on
+#: its own multiplier, tick size and commission, and symbols are never blended
+#: into one equity curve. An overshoot-and-reclaim edge is a statement about
+#: who replaces consumed liquidity, and that is a different population in ZB
+#: than in BTC; Stage 1 and Gate R settle it per symbol.
+#:
+#: Two carried caveats, both from CLAUDE.md and neither caught by the spec
+#: reconciler above, which checks the CONTRACT rather than the bars: SI
+#: definitions stop at 2016 and CL at 2025-12. Check coverage before reading a
+#: result on either.
+SYMBOLS = ["ES", "NQ", "YM", "RTY", "CL", "NG", "RB", "HO", "GC", "SI", "PL",
+           "6E", "6B", "6J", "6S", "ZB", "ZN", "BTC", "ETH"]
 
 STRATEGY_NAME = "EMA_DEVIATION_SCALP"
 STRATEGY_MODULE = "ema_deviation_scalp_20260909"
