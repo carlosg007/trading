@@ -146,27 +146,37 @@ EXECUTION_ACCOUNTS = {"Incubator-Odd": "SimIncubator1",
 #
 #     ls /mnt/backtest/artifacts/nt8_bars/ | grep '^CL'
 EXPECTED_ASSIGNMENTS = {
-    # REGENERATED 2026-09-09 from config/portfolios.json after Stage 4.5 ran
-    # for the whole incubator and 160 promotions re-stamped their
-    # `day_of_week_gate`. The book went 20 -> 100 in one operator pass.
+    # REGENERATED 2026-09-09 after scripts/register_incubator_batch.py routed
+    # seven ema_deviation_scalp_20260909 packages: Odd +4, Even +2,
+    # FullSize +1, taking the book 100 -> 107.
     #
     # ORDER MATTERS: `active_strategies` is compared element-wise, so these
-    # follow the order promote.py appended them in. Regenerate rather than
-    # hand-edit - transcribing a hundred names is how a guard stops describing
-    # the config and starts describing the day it was written, which is the
-    # failure test_regime_daemon's four-account assertion had.
+    # follow the order promote.py and the registrar appended them in.
+    # Regenerate rather than hand-edit - transcribing a hundred names is how a
+    # guard stops describing the config and starts describing the day it was
+    # written, which is the failure test_regime_daemon's four-account
+    # assertion had.
     #
-    # THREE PACKAGES ARE DELIBERATELY ABSENT and must stay absent:
-    # t3_braid_scalp_20260823_RB_30m_VA, _YM_30m_VA and
-    # ma_anchoring_spread_20260820_ZS_1h_VA each cleared Gate R on a profit
-    # factor `backtest/profiler.py` had already rounded to 1.00 while their
-    # quadrant net P&L is negative (-799.02, -1,256.20, -32.04). A promotion
-    # run that re-registers one of them fails here, which is the point.
+    # FOUR PACKAGES ARE DELIBERATELY ABSENT AND MUST STAY ABSENT. Each cleared
+    # Gate R on a profit factor `backtest/profiler.py` had already rounded to
+    # 1.00 while its certified-quadrant net P&L is negative, so anything in
+    # [0.995, 1.000) passed a `>= 1.00` bar:
     #
-    # All 100 below were audited against the four registration gates on
-    # 2026-09-09: symbol in its portfolio's basket, a theta_vol anchor
-    # resolving for its (symbol, TIMEFRAME), positive net P&L in the certified
-    # quadrant, and Stage 4.5 EVALUATED. Zero problems.
+    #   t3_braid_scalp_20260823_RB_30m_VA             net   -799.02
+    #   t3_braid_scalp_20260823_YM_30m_VA             net -1,256.20
+    #   ma_anchoring_spread_20260820_ZS_1h_VA         net    -32.04
+    #   ema_deviation_scalp_20260909_NQ_30m_VB        net    -76.28
+    #
+    # The first two reached the live routing table and had to be pruned by
+    # hand; the last two were refused by the registrar before they got there.
+    # A promotion run that re-registers any of them fails here, which is the
+    # point.
+    #
+    # All 107 below were audited against the four registration gates: symbol
+    # in its portfolio's basket, a theta_vol anchor resolving for its
+    # (symbol, TIMEFRAME), positive net P&L in the certified quadrant, and
+    # Stage 4.5 EVALUATED. regime_daemon reports 107 on the switchboard with
+    # zero missing anchors.
     "Incubator-Odd":         [
         "t3_braid_scalp_20260823_NQ_1h_VA",                   #  1h, NQ
         "t3_braid_scalp_20260823_NQ_1h_VB",                   #  1h, NQ
@@ -197,6 +207,10 @@ EXPECTED_ASSIGNMENTS = {
         "sma_momentum_crossover_20260818_6E_1h_VA",           #  1h, 6E
         "sma_momentum_crossover_20260818_NQ_5m_VA",           #  5m, NQ
         "sma_momentum_crossover_20260818_RTY_5m_VA",          #  5m, RTY
+        "ema_deviation_scalp_20260909_NQ_15m_VA",             # 15m, NQ
+        "ema_deviation_scalp_20260909_NQ_30m_VA",             # 30m, NQ
+        "ema_deviation_scalp_20260909_RTY_30m_VA",            # 30m, RTY
+        "ema_deviation_scalp_20260909_RTY_30m_VB",            # 30m, RTY
     ],
     "Eval-Odd":              [],
     "Prop-Odd":              [],
@@ -228,6 +242,8 @@ EXPECTED_ASSIGNMENTS = {
         "sma_momentum_crossover_20260818_GC_1h_VA",           #  1h, GC
         "sma_momentum_crossover_20260818_GC_1h_VB",           #  1h, GC
         "sma_momentum_crossover_20260818_GC_5m_VA",           #  5m, GC
+        "ema_deviation_scalp_20260909_YM_30m_VA",             # 30m, YM
+        "ema_deviation_scalp_20260909_YM_30m_VB",             # 30m, YM
     ],
     "Eval-Even":             [],
     "Prop-Even":             [],
@@ -276,6 +292,7 @@ EXPECTED_ASSIGNMENTS = {
         "sma_momentum_crossover_20260818_PL_30m_VB",          # 30m, PL
         "sma_momentum_crossover_20260818_RB_1h_VA",           #  1h, RB
         "sma_momentum_crossover_20260818_RB_30m_VA",          # 30m, RB
+        "ema_deviation_scalp_20260909_ETH_30m_VA",            # 30m, ETH
     ],
     "Eval-FullSize":         [],
     "Prop-FullSize":         [],
