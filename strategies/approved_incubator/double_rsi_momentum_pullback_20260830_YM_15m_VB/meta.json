@@ -32,19 +32,34 @@
     "trailing": false
   },
   "day_of_week_gate": {
-    "status": "NOT EVALUATED",
-    "blocked_weekdays": [],
-    "blocked_weekday": null,
+    "status": "EVALUATED",
     "version": "B",
+    "versions_profiled": [
+      "A",
+      "B"
+    ],
+    "blocked_weekdays": [
+      0
+    ],
+    "blocked_weekday": 0,
+    "blocked_day": "Mon",
+    "blocked_day_name": "Monday",
+    "worst_weekday": 0,
+    "worst_day": "Mon",
+    "block_rule": "negative_expectancy",
+    "min_trades": 20,
+    "reason": "Monday is the weakest session (expectancy -7.76 per trade over 332 trades) and its expectancy is negative",
+    "selected_in_sample": true,
+    "note": "The weekday was chosen in-sample, on a window that spans the Stage 3 holdout. It is a live-supervision instruction, not evidence: no gate was scored on it and nothing was pruned for it.",
     "source": "/mnt/backtest/artifacts/pipeline/double_rsi_momentum_pullback_20260830/dow_gate_YM_15m.json",
-    "reason": "dow_gate_YM_15m.json does not exist. Stage 4.5 (backtest/dow_gate.py) was not run for this pair; no weekday is blocked and none was cleared."
+    "source_sha256": "67cb7c9602c9d8041b91b057e9f6f2f9284a5582bd8f2800b1ae42f3e51a5f1a"
   },
   "source": "/home/cgrullon/src/trading/strategies/experimental/double_rsi_momentum_pullback_20260830.py",
   "source_sha256": "d6e295b941ca9bbee04fe1ad9a100d55dbf003592a3ed926b717482c5e78b1bd",
   "promoted_sha256": "b360fda232b90e938455f44856ef620a9465061a29dc3f291650fa8dfec40465",
-  "promoted_utc": "2026-09-09T00:39:06+00:00",
+  "promoted_utc": "2026-09-09T12:40:23+00:00",
   "costs_included": false,
-  "variants_tested": 162,
+  "variants_tested": null,
   "metrics_status": "NOT RECORDED",
   "metrics": null,
   "gate_audit_status": "PASS",
@@ -58,7 +73,7 @@
   },
   "certification": {
     "audit_file": "/mnt/backtest/artifacts/pipeline/double_rsi_momentum_pullback_20260830/gate_audit_YM_15m.json",
-    "audit_sha256": "99f711e87cf7ba4761b1041a376f4644149d46e4a57c881686581d6e6a6fea94",
+    "audit_sha256": "404b448b06d1f4c47ed25b153a61b9564ef452c1210b09b9add0d3cc82d75bf5",
     "audit_symbol": "YM",
     "audit_timeframe": "15m",
     "target_quadrant": "Q1",
@@ -109,39 +124,7 @@
   "gates_overridden": false,
   "oos_status": "passed_gate3",
   "audit_warnings": [],
-  "notes": "Stage 3 certified YM 15m in High Volatility / Trending; staged by backtest/audit_gates.py, not committed.",
+  "notes": "",
   "ml_threshold": 0.48,
-  "baseline": "baseline.py",
-  "seal": {
-    "algorithm": "sha256",
-    "strategy_code": {
-      "path": "/home/cgrullon/src/trading/strategies/approved_incubator/double_rsi_momentum_pullback_20260830_YM_15m_VB/baseline.py",
-      "sha256": "d6e295b941ca9bbee04fe1ad9a100d55dbf003592a3ed926b717482c5e78b1bd"
-    },
-    "winning_parameters": {
-      "path": "/mnt/backtest/artifacts/pipeline/double_rsi_momentum_pullback_20260830/best_params_YM_15m.json",
-      "sha256": "dfc851d2b81049df4af9934edca1be6711eb695050e9caed9906d26ad93a47a1"
-    },
-    "gate_audit": {
-      "path": "/mnt/backtest/artifacts/pipeline/double_rsi_momentum_pullback_20260830/gate_audit_YM_15m.json",
-      "sha256": "99f711e87cf7ba4761b1041a376f4644149d46e4a57c881686581d6e6a6fea94"
-    },
-    "metrics_handoff": {
-      "path": null,
-      "sha256": "NOT AVAILABLE"
-    },
-    "rule": "The three hashes are sealed together because they can be separated: the same code under a different winning cell is a different strategy with the same code checksum.",
-    "certified_symbol": "YM",
-    "certified_timeframe": "15m",
-    "target_regime": "High Volatility / Trending",
-    "target_quadrant": "Q1",
-    "params": {
-      "rsi_fast_len": 7,
-      "rsi_slow_len": 28,
-      "sl_atr_mult": 2.0,
-      "tp_atr_mult": null,
-      "trailing": false
-    },
-    "params_locked": true
-  }
+  "baseline": "baseline.py"
 }
