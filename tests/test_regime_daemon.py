@@ -829,14 +829,39 @@ def test_an_end_to_end_pass_produces_a_routable_order(tmp_path, monkeypatch):
     assert "SECRET_WEBHOOK_KEY" not in redact(command)
 
 
-def test_the_real_repository_config_loads_and_names_four_accounts(tmp_path):
-    """The daemon validates the routing table on construction, so a config that
-    stopped describing the four-account architecture fails here rather than at
-    the moment an order needs an account."""
+def test_the_real_repository_config_loads_and_names_the_nine_rungs(tmp_path):
+    """
+    The daemon validates the routing table on construction, so a config that
+    stopped describing the account architecture fails here rather than at the
+    moment an order needs an account.
+
+    THE SHAPE IS A LADDER, NOT A LIST: three tracks (Odd, Even, FullSize) x
+    three rungs (Incubator -> Eval -> Prop), and it is asserted as that product
+    rather than as nine transcribed strings. This test previously named four
+    accounts and `{MNQ, MES, MCL, MGC}`; the Eval and FullSize ladders were
+    added underneath it and it sat red, which is the failure mode a frozen
+    transcription always has - it stops describing the architecture and starts
+    describing the day it was written.
+
+    `tradeable_symbols` is asserted against the UNION OF THE BASKETS for the
+    same reason. A hard-coded roster goes stale on the next basket edit; the
+    invariant that actually matters is that the daemon considers exactly what
+    the routing table says the accounts hold - no symbol it cannot place, and
+    none of them dropped.
+    """
     daemon = make_daemon(tmp_path)
-    assert sorted(daemon.config["portfolios"]) == [
-        "Incubator-Even", "Incubator-Odd", "Prop-Even", "Prop-Odd"]
-    assert set(daemon.tradeable_symbols) == {"MNQ", "MES", "MCL", "MGC"}
+    expected_rungs = sorted(f"{rung}-{track}"
+                            for rung in ("Incubator", "Eval", "Prop")
+                            for track in ("Odd", "Even", "FullSize"))
+    assert sorted(daemon.config["portfolios"]) == expected_rungs
+
+    basket_union = {
+        asset
+        for portfolio in daemon.config["portfolios"].values()
+        for asset in (portfolio.get("basket") or {}).get("assets") or []
+    }
+    assert set(daemon.tradeable_symbols) == basket_union
+    assert basket_union, "the routing table declares no tradeable asset at all"
 
 
 def test_a_broken_symbol_model_does_not_fall_back_to_the_shared_one(tmp_path):
