@@ -56,12 +56,12 @@
     "selected_in_sample": true,
     "note": "The weekday was chosen in-sample, on a window that spans the Stage 3 holdout. It is a live-supervision instruction, not evidence: no gate was scored on it and nothing was pruned for it.",
     "source": "/mnt/backtest/artifacts/pipeline/dual_ema_slope_scalp_20260831/dow_gate_6J_30m.json",
-    "source_sha256": "4aa544adbccc330d655b6bead3899c801e603d7e22250edc12a4d1d1362708a9"
+    "source_sha256": "31f6e2a5dd175ed42e2468de85bb6f02e4e169494a8c5ecd251e7dae0d06523e"
   },
   "source": "/home/cgrullon/src/trading/strategies/experimental/dual_ema_slope_scalp_20260831.py",
   "source_sha256": "59723e3ceebf4501ad78c2762af0a0f61b3c29897d6729ee248b21380346f5a5",
   "promoted_sha256": "59723e3ceebf4501ad78c2762af0a0f61b3c29897d6729ee248b21380346f5a5",
-  "promoted_utc": "2026-09-09T12:40:27+00:00",
+  "promoted_utc": "2026-09-09T12:56:40+00:00",
   "costs_included": false,
   "variants_tested": null,
   "metrics_status": "NOT RECORDED",
