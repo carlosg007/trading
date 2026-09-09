@@ -1,0 +1,90 @@
+# USER-SCOPE variant of ../trading-regime-daemon.service.
+#
+# THREE LINES DIFFER FROM THE SYSTEM UNIT, AND ONLY THREE. Everything else is
+# byte-identical on purpose: the hardening, the ReadWritePaths and the
+# ExecStart are the same, so the two scopes cannot drift into running the
+# daemon differently.
+#
+# THE FAILURE CAME IN TWO LAYERS, and fixing one only exposed the other.
+#
+# 1. `ProtectKernelModules=yes` IS REMOVED -> this was the 218/CAPABILITIES.
+#    Not obvious, because the unit contains no CapabilityBoundingSet or
+#    AmbientCapabilities line to point at: the directive IMPLIES
+#    `CapabilityBoundingSet=~CAP_SYS_MODULE`, and a user manager holds no
+#    privilege to alter a bounding set.
+#
+#        Failed to drop capabilities: Operation not permitted
+#        Failed at step CAPABILITIES spawning .../python3
+#
+#    Isolated with `systemd-run --user --property=ProtectKernelModules=yes
+#    /bin/true`, which reproduces 218 on its own. Every other hardening
+#    directive here was tested the same way and PASSES under --user:
+#    ProtectKernelTunables, RestrictNamespaces, RestrictSUIDSGID,
+#    LockPersonality, NoNewPrivileges, ProtectSystem=strict,
+#    ProtectHome=read-only, PrivateTmp. So one line is dropped rather than the
+#    hardening block being thinned out until something worked.
+#
+#    Nothing is actually given up: an unprivileged user process has no
+#    CAP_SYS_MODULE to begin with, which is exactly why the bounding set
+#    cannot be narrowed. The protection is redundant here, not sacrificed.
+#
+# 2. `User=` and `Group=` ARE REMOVED -> this was a 217/USER underneath it.
+#
+#        Failed to keep CAP_SYS_ADMIN: Operation not permitted
+#        Failed at step USER spawning .../python3
+#
+#    A BARE `systemd-run --user --property=User=cgrullon /bin/true` SUCCEEDS,
+#    which is misleading and cost a wrong fix on the first attempt. It passes
+#    only because that command builds no mount namespace. Combined with
+#    ProtectSystem=strict / ProtectHome / ReadWritePaths, systemd must keep
+#    CAP_SYS_ADMIN across the credential change to set the namespace up, and
+#    an unprivileged manager cannot. The lines are redundant in this scope
+#    anyway - the user manager already runs as cgrullon.
+#
+# 3. `WantedBy=default.target` replaces `multi-user.target`, which is a system
+#    target and means nothing to a user manager.
+#
+# THE SYSTEM UNIT KEEPS ALL THREE and must. Under `systemd --system` the
+# manager is privileged, so the bounding set is real protection there, and
+# dropping `User=` would run the daemon as ROOT - leaving root-owned files in
+# logs/ and data/ that the next non-root run cannot reopen.
+
+[Unit]
+Description=Trading regime daemon (publishes the live quadrant)
+Documentation=file:///home/cgrullon/src/trading/deploy/RUNBOOK.md
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=/mnt/backtest
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/cgrullon/src/trading
+EnvironmentFile=-/home/cgrullon/src/trading/deploy/systemd/trading.env
+
+# --publish is what reads bars and writes the state file. Without it the
+# command reports what is wired up and touches nothing.
+ExecStart=/home/cgrullon/src/trading/.venv/bin/python3 \
+    /home/cgrullon/src/trading/realtime/regime_daemon.py \
+    --publish --feed auto --tf 1h --bars 400
+
+TimeoutStopSec=60
+LimitNOFILE=65536
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/cgrullon/src/trading/data /home/cgrullon/src/trading/logs
+# Numba's cache — see NUMBA_CACHE_DIR in trading.env. Without it the
+# read-only home makes pandas_ta's @njit(cache=True) RAISE on import.
+ReadWritePaths=/home/cgrullon/src/trading/.cache
+ProtectKernelTunables=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+StandardOutput=append:/home/cgrullon/src/trading/logs/regime_daemon.log
+StandardError=append:/home/cgrullon/src/trading/logs/regime_daemon.err
+
+[Install]
+WantedBy=default.target
