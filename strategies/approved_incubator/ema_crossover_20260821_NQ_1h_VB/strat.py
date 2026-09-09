@@ -1,5 +1,5 @@
 """
-ema_crossover_20260821 - Version B (ML-filtered), promoted 2026-09-08.
+ema_crossover_20260821 - Version B (ML-filtered), promoted 2026-09-09.
 
 Baseline signals from `baseline.py` (SHA-256 9c290bc1e02d816f675ee2752d856aac563d8ae4f7563b0452fdac597d31857b), with the causal ML
 filter applied on top. This is the pipeline, not a new idea: every entry here
