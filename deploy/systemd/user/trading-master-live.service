@@ -1,0 +1,219 @@
+# USER-SCOPE variant of ../trading-master-live.service. Generated, not hand-edited: the
+# body below is that file with three kinds of line changed and nothing else,
+# so the two scopes cannot drift into running the service differently.
+#
+# WHAT DIFFERS, AND WHY - the same two layered failures the regime daemon hit
+# (449fce0), each with its own exit code and neither pointing at itself:
+#
+#   ProtectKernelModules=yes   REMOVED
+#       218/CAPABILITIES, "Failed to drop capabilities: Operation not
+#       permitted". There is no CapabilityBoundingSet line to grep for: the
+#       directive IMPLIES CapabilityBoundingSet=~CAP_SYS_MODULE, and a user
+#       manager cannot narrow a bounding set. Reproduced alone with
+#       `systemd-run --user --property=ProtectKernelModules=yes /bin/true`.
+#
+#   User= / Group=             REMOVED
+#       217/USER, "Failed to keep CAP_SYS_ADMIN: Operation not permitted".
+#       The fatal pair is `User=` WITH `RestrictNamespaces=yes`: systemd must
+#       keep CAP_SYS_ADMIN across the credential change to build the
+#       namespace, and an unprivileged manager cannot. Tested pairwise -
+#       User= alone passes, and so does User= with ProtectSystem=strict,
+#       ProtectHome=read-only or PrivateTmp. Only RestrictNamespaces breaks
+#       it.
+#
+#   WantedBy=default.target    REPLACES multi-user.target, which is a system
+#       target and means nothing to a user manager.
+#
+# EVERY OTHER HARDENING DIRECTIVE IS KEPT, each verified under --user in
+# combination with ProtectSystem=strict rather than bare (a bare probe builds
+# no mount namespace and passes things that fail in situ - that false pass
+# cost a wrong fix on the regime daemon): ProtectKernelTunables,
+# ProtectControlGroups, RestrictNamespaces, RestrictRealtime, RestrictSUIDSGID,
+# LockPersonality, NoNewPrivileges, ProtectSystem=strict, ProtectHome=read-only,
+# PrivateTmp, MemoryDenyWriteExecute.
+#
+# Nothing is really given up: an unprivileged process has no CAP_SYS_MODULE to
+# begin with, which is exactly why the bounding set cannot be narrowed.
+#
+# THE SYSTEM UNIT KEEPS ALL THREE and must. Under `systemd --system` the
+# manager is privileged, so the bounding set is real protection there, and
+# dropping User= would run the service as ROOT - leaving root-owned files in
+# logs/, data/ and /mnt/backtest/artifacts that the next non-root run cannot
+# reopen.
+
+# The execution loop. Signals -> gates -> risk firewall -> CrossTrade.
+#
+# INSTALL
+#   sudo cp deploy/systemd/*.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now trading-master-live
+#
+# THIS UNIT SHIPS IN DRY RUN. `--live` is the only flag that arms the socket,
+# and arming it is an edit somebody makes on purpose, on the box, with the
+# runbook open. A unit file that shipped live would arm real money on a
+# `systemctl enable` typed from memory.
+
+[Unit]
+Description=Trading execution loop (master_live)
+Documentation=file:///home/cgrullon/src/trading/deploy/RUNBOOK.md
+# The regime daemon publishes the state file this loop READS. Wanted, not
+# Requires: a loop with no regime state declines every signal and says so on
+# every line, which is the correct behaviour and is better than not starting.
+Wants=trading-regime-daemon.service
+After=network-online.target trading-regime-daemon.service
+# The timer that brings this back after a close. NOT `Requires=` and not
+# `Wants=` on the timer: this unit must remain startable by hand, at any hour,
+# without the timer being enabled - and the timer is what starts IT, never the
+# other way round.
+Wants=network-online.target
+# The lake and the NT8 spool both live on the NFS mount. Starting before it is
+# mounted gives a loop that reads nothing and reports a quiet market.
+RequiresMountsFor=/mnt/backtest
+
+# Five restarts inside five minutes is not a transient fault, it is a broken
+# deploy: stop and stay stopped so somebody looks, rather than crash-looping
+# against a broker all night. These live in [Unit], NOT [Service] — systemd
+# silently IGNORES them under [Service] and the rate limit then does nothing
+# while looking configured. `systemd-analyze verify` is what says so.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=/home/cgrullon/src/trading
+
+# Credentials come from the .env FILE, read directly by resolve_credentials and
+# deliberately never placed in the environment - everything in the environment
+# is inherited by every subprocess, which is how a broker key reaches an
+# unrelated tool's debug output. EnvironmentFile carries only non-secret paths.
+EnvironmentFile=-/home/cgrullon/src/trading/deploy/systemd/trading.env
+
+# NOT for journald — this unit writes to FILES (StandardOutput=append: below),
+# and not for stdout either: every print() in master_live.py already passes
+# flush=True, verified by AST, so the cycle log is current to the second
+# without this.
+#
+# It is here for the THREE UNFLUSHED stderr prints — all of them
+# `[master_live] REFUSING TO START: ...`, the messages that say why the loop
+# would not come up. Those are the lines somebody reads at the worst moment,
+# they land in master_live.err, and the process exits immediately after
+# writing them. Python line-buffers stderr and flushes at exit, so they do
+# arrive today; this removes the dependency on that being true of whichever
+# interpreter and redirection the unit runs under next.
+Environment=PYTHONUNBUFFERED=1
+
+# `--live` IS WHAT ARMS THIS. `master_live.resolve_dry_run` returns
+# `not args.live`, so dry run is the DEFAULT and removing `--dry-run` changes
+# NOTHING — a unit carrying neither flag still sends no order. On 2026-08-27 a
+# deployment did exactly that: `--dry-run` was removed, the ExecStart was
+# verified clean, and the loop went on formatting payloads into a socket it
+# never opened while everyone believed it was armed. The flags are separate on
+# purpose, so arming is a word an operator means rather than a double negative
+# typed by habit.
+#
+# To STAND IT DOWN: delete this line. Do NOT add `--dry-run` beside it —
+# passing both is refused outright, which is correct and is not what somebody
+# editing under pressure expects.
+ExecStart=/home/cgrullon/src/trading/.venv/bin/python3 \
+    /home/cgrullon/src/trading/master_live.py \
+    --live \
+    --tf 1h \
+    --feed auto \
+    --interval-sec 60 \
+    --session-cutoff-utc 20:55 \
+    --max-session-loss-usd 1000 \
+    --max-regime-write-age-sec 900 \
+    --halt-when-closed
+
+# THE MARKET-HOURS GATE, and it is here rather than in the code's defaults.
+# `--halt-when-closed` makes the loop EXIT at every CME close - the 17:00-18:00
+# ET daily maintenance halt, the Friday 17:00 ET weekend close - with status 3,
+# which RestartPreventExitStatus below tells systemd to leave alone.
+# `trading-master-live.timer` starts it again at 17:55 ET Sunday through
+# Thursday, and the process holds the last five minutes before the open with
+# everything already loaded.
+#
+# IT EXITS RATHER THAN SLEEPING BECAUSE ONLY EXIT RETURNS THE MEMORY. Measured
+# 2026-09-06: this loop was at 18.5 GB RSS after 47 hours on a 24 GB box and
+# had OOM-killed `pytest tests/`. A sleeping process keeps all of it -
+# `gc.collect()` returns arenas to the OS only when they are entirely empty,
+# and a fragmented 18 GB heap is not. The daily halt now caps growth at one
+# session instead of a week.
+#
+# The flag is OFF in the code's defaults on purpose: a dry run somebody starts
+# by hand at 17:30 should keep printing rather than vanish. A supervised
+# process wants the opposite, and this line is where that is said.
+#
+# NOTHING IS FLATTENED AND NOTHING IS CANCELLED at the close. The loop sends
+# market orders inside one call and holds no resting order; the stand-down
+# REPORTS what the book and the engine state still hold, loudly if it is going
+# into a 49-hour weekend, and stops. Being flat over a weekend is a trading
+# decision - CrossTrade NAM and the operator own it, not a scheduler.
+
+# THE STALENESS GUARD, and it is the PUBLISHER's clock rather than the
+# market's. `trading-regime-daemon.timer` writes data/live_regime_state.json;
+# if that stops, the quadrant this loop reads freezes at whatever it last said
+# and every permission granted on it is a permission for a market that has
+# since moved. At 900s the loop prints CRITICAL and stands every strategy down
+# for the cycle rather than trading a snapshot nobody refreshed.
+#
+# NOT `--max-regime-age-sec`, which compares max(write age, BAR age) and
+# therefore cannot be defaulted: this unit runs --tf 1h, and a 1h bar is
+# legitimately ~3,600s old in the ordinary course of an hour that has not
+# finished. A 900s limit there would refuse three quarters of every hour.
+
+# SIGTERM, then time to finish the cycle it is in. A cycle is signals -> gates
+# -> sizing -> dispatch, and killing it between the send and the record leaves
+# an order on a broker with nothing on disk saying so. 90s is generous against
+# a 60s interval plus a 2s socket timeout.
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStopSec=90
+# A second signal is what the code treats as "stop now"; systemd sends SIGKILL
+# only after the timeout above.
+SendSIGKILL=yes
+
+Restart=always
+RestartSec=10s
+
+LimitNOFILE=65536
+# Never restart into a busy market on a schedule nobody chose.
+#
+# 2 is REFUSING TO START - a bad config, an unreadable state file, a holiday
+# calendar that does not parse. 3 is the MARKET-HOURS gate: the exchange is
+# shut and the loop got out of memory on purpose.
+#
+# 3 HAS TO BE HERE OR THE WHOLE GATE IS INERT. `Restart=always` restarts on a
+# clean exit as readily as on a crash, so without this line the loop would exit
+# at 17:00, come back ten seconds later, exit again, and spend the weekend
+# crash-looping through a dispatcher load every ten seconds - which is worse
+# than the resident process it replaced. This is also why the code's default
+# exit status is 3 and not 0.
+RestartPreventExitStatus=2 3
+
+# --- sandboxing -----------------------------------------------------------
+# The loop reads the repo and the NFS mount and writes state, logs and the
+# ledger. It has no business anywhere else on the filesystem.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/cgrullon/src/trading/data /home/cgrullon/src/trading/logs
+# Numba's cache — see NUMBA_CACHE_DIR in trading.env. Without it the
+# read-only home makes pandas_ta's @njit(cache=True) RAISE on import.
+ReadWritePaths=/home/cgrullon/src/trading/.cache
+ReadWritePaths=/mnt/backtest/artifacts
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=no
+# numpy/numba need it; denying it breaks the numeric stack rather than hardening it.
+
+StandardOutput=append:/home/cgrullon/src/trading/logs/master_live.log
+StandardError=append:/home/cgrullon/src/trading/logs/master_live.err
+
+[Install]
+WantedBy=default.target
