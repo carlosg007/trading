@@ -1,0 +1,151 @@
+{
+  "name": "intrinsic_alpha_engine_20260831_ETH_30m_VB",
+  "strategy": "intrinsic_alpha_engine_20260831",
+  "symbol": "ETH",
+  "version": "B",
+  "description": "Promoted Version B (baseline + causal ML filter).",
+  "symbols": [
+    "ETH"
+  ],
+  "timeframe": "30m",
+  "params": {
+    "delta_pct": 0.002,
+    "os_mult": 1.5,
+    "vol_mult": 1.0,
+    "ema_baseline_len": 20,
+    "volume_sma_len": 20,
+    "session_start_et": "09:30",
+    "session_end_et": "16:00",
+    "use_baseline_filter": true,
+    "use_alpha_trigger": true,
+    "use_volume_filter": true,
+    "use_session_filter": false,
+    "use_news_filter": false,
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": null,
+    "trailing": false
+  },
+  "params_source": "locked from dual_metrics_ETH.json",
+  "params_conflict": [],
+  "risk": {
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": null,
+    "trailing": false
+  },
+  "day_of_week_gate": {
+    "status": "EVALUATED",
+    "version": "B",
+    "versions_profiled": [
+      "A",
+      "B"
+    ],
+    "blocked_weekdays": [
+      3
+    ],
+    "blocked_weekday": 3,
+    "blocked_day": "Thu",
+    "blocked_day_name": "Thursday",
+    "worst_weekday": 3,
+    "worst_day": "Thu",
+    "block_rule": "negative_expectancy",
+    "min_trades": 20,
+    "reason": "Thursday is the weakest session (expectancy -202.56 per trade over 105 trades) and its expectancy is negative",
+    "selected_in_sample": true,
+    "note": "The weekday was chosen in-sample, on a window that spans the Stage 3 holdout. It is a live-supervision instruction, not evidence: no gate was scored on it and nothing was pruned for it.",
+    "source": "/mnt/backtest/artifacts/pipeline/intrinsic_alpha_engine_20260831/dow_gate_ETH_30m.json",
+    "source_sha256": "15aedcfc50666374300cbd27557b034f3ab01db0470c5a754286d03b15ef6e29"
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/intrinsic_alpha_engine_20260831.py",
+  "source_sha256": "da8f6be64e0deb00461cbc6f062643730d6b68652aab1dcfc6b3193b02b15f15",
+  "promoted_sha256": "cdd4a96d706a29914e10bdc5810b75756294da6a767de431f83041032bf6b6e3",
+  "promoted_utc": "2026-09-09T03:03:56+00:00",
+  "costs_included": true,
+  "variants_tested": null,
+  "metrics_status": "RECORDED \u00b7 locked from dual_metrics_ETH.json",
+  "metrics": {
+    "sharpe": 0.15094514135688547,
+    "sortino": 0.32390341201419615,
+    "calmar": 0.04330990333101472,
+    "profit_factor": 1.0329807859256883,
+    "win_rate": 0.3638095238095238,
+    "max_drawdown_pct": -26.97510532294991,
+    "total_return_pct": 8.270499999999736,
+    "annualized_return_pct": 1.1682892038809012,
+    "trade_count": 525,
+    "total_pnl": 8270.5,
+    "total_costs": 24929.499999999993,
+    "final_equity": 108270.49999999974,
+    "n_days": 1724,
+    "start": "2021-02-07 23:00:00+00:00",
+    "end": "2026-08-08 22:30:00+00:00",
+    "bars": 64339,
+    "initial_capital": 100000.0
+  },
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "FAIL",
+    "gate2": "FAIL",
+    "gate3": "FAIL",
+    "gate_regime": "PASS",
+    "gate_ruin": "PASS",
+    "gate_all_quadrants": "FAIL"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/intrinsic_alpha_engine_20260831/gate_audit_ETH_30m.json",
+    "audit_sha256": "4810adbd4bcff05634fb17567a9086350c71962b9590c1fcbef6f0b1c3951124",
+    "audit_symbol": "ETH",
+    "audit_timeframe": "30m",
+    "target_quadrant": "Q4",
+    "target_regime": "Low Volatility / Ranging",
+    "audit_generated_utc": "2026-09-09T02:59:52+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "delta_pct": 0.002,
+      "os_mult": 1.5,
+      "sl_atr_mult": 2.0,
+      "tp_atr_mult": null,
+      "trailing": false
+    },
+    "params_source": "stage 2 winner (best_params_ETH_30m.json)",
+    "variants_tested": 162,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "FAIL",
+    "agrees_with_snapshot": false
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [
+    "import from 'backtest.event_calendar' is not allowed"
+  ],
+  "notes": "",
+  "ml_threshold": 0.48,
+  "baseline": "baseline.py"
+}
