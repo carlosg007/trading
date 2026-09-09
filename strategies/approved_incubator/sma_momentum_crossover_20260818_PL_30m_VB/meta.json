@@ -28,19 +28,34 @@
     "trailing": false
   },
   "day_of_week_gate": {
-    "status": "NOT EVALUATED",
-    "blocked_weekdays": [],
-    "blocked_weekday": null,
+    "status": "EVALUATED",
     "version": "B",
+    "versions_profiled": [
+      "A",
+      "B"
+    ],
+    "blocked_weekdays": [
+      4
+    ],
+    "blocked_weekday": 4,
+    "blocked_day": "Fri",
+    "blocked_day_name": "Friday",
+    "worst_weekday": 4,
+    "worst_day": "Fri",
+    "block_rule": "negative_expectancy",
+    "min_trades": 20,
+    "reason": "Friday is the weakest session (expectancy -126.25 per trade over 45 trades) and its expectancy is negative",
+    "selected_in_sample": true,
+    "note": "The weekday was chosen in-sample, on a window that spans the Stage 3 holdout. It is a live-supervision instruction, not evidence: no gate was scored on it and nothing was pruned for it.",
     "source": "/mnt/backtest/artifacts/pipeline/sma_momentum_crossover_20260818/dow_gate_PL_30m.json",
-    "reason": "dow_gate_PL_30m.json does not exist. Stage 4.5 (backtest/dow_gate.py) was not run for this pair; no weekday is blocked and none was cleared."
+    "source_sha256": "c85953c46916e093376fbf3941accdd59f014b6b54268b45fce3d98eee3af5fc"
   },
   "source": "/home/cgrullon/src/trading/strategies/experimental/sma_momentum_crossover_20260818.py",
   "source_sha256": "fbd447f1f683fb03a1a7e1e41f90fe0e0a7e7f7ff43df8b842ed074869534c75",
   "promoted_sha256": "fe6f73059cbd4bc4738a637ed09557da9d12ae1a9618ec01431bde4bfc0de601",
-  "promoted_utc": "2026-09-09T08:10:17+00:00",
+  "promoted_utc": "2026-09-09T12:44:36+00:00",
   "costs_included": false,
-  "variants_tested": 54,
+  "variants_tested": null,
   "metrics_status": "NOT RECORDED",
   "metrics": null,
   "gate_audit_status": "PASS",
@@ -54,7 +69,7 @@
   },
   "certification": {
     "audit_file": "/mnt/backtest/artifacts/pipeline/sma_momentum_crossover_20260818/gate_audit_PL_30m.json",
-    "audit_sha256": "51f53cb0c4173ac6edf4d746dab4b5a8fe9b0e1cbddfdce9a9109b0e5588f992",
+    "audit_sha256": "726de4aa87278e1a7d3029f5849ed8380b4e28d3a1ec319bf46ecd541c61e13a",
     "audit_symbol": "PL",
     "audit_timeframe": "30m",
     "target_quadrant": "Q4",
@@ -107,39 +122,7 @@
   "audit_warnings": [
     "import from 'backtest.event_calendar' is not allowed"
   ],
-  "notes": "Stage 3 certified PL 30m in Low Volatility / Ranging; staged by backtest/audit_gates.py, not committed.",
+  "notes": "",
   "ml_threshold": 0.48,
-  "baseline": "baseline.py",
-  "seal": {
-    "algorithm": "sha256",
-    "strategy_code": {
-      "path": "/home/cgrullon/src/trading/strategies/approved_incubator/sma_momentum_crossover_20260818_PL_30m_VB/baseline.py",
-      "sha256": "fbd447f1f683fb03a1a7e1e41f90fe0e0a7e7f7ff43df8b842ed074869534c75"
-    },
-    "winning_parameters": {
-      "path": "/mnt/backtest/artifacts/pipeline/sma_momentum_crossover_20260818/best_params_PL_30m.json",
-      "sha256": "0d9bcc6ba067ce6fcb38db30774b3cfaa5b73bc40bf4265471090caab1f88c58"
-    },
-    "gate_audit": {
-      "path": "/mnt/backtest/artifacts/pipeline/sma_momentum_crossover_20260818/gate_audit_PL_30m.json",
-      "sha256": "51f53cb0c4173ac6edf4d746dab4b5a8fe9b0e1cbddfdce9a9109b0e5588f992"
-    },
-    "metrics_handoff": {
-      "path": null,
-      "sha256": "NOT AVAILABLE"
-    },
-    "rule": "The three hashes are sealed together because they can be separated: the same code under a different winning cell is a different strategy with the same code checksum.",
-    "certified_symbol": "PL",
-    "certified_timeframe": "30m",
-    "target_regime": "Low Volatility / Ranging",
-    "target_quadrant": "Q4",
-    "params": {
-      "fast_window": 15,
-      "slow_window": 50,
-      "tp_atr_mult": 3.0,
-      "sl_atr_mult": 1.0,
-      "trailing": false
-    },
-    "params_locked": true
-  }
+  "baseline": "baseline.py"
 }
