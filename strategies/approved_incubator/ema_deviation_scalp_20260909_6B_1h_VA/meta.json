@@ -1,0 +1,147 @@
+{
+  "name": "ema_deviation_scalp_20260909_6B_1h_VA",
+  "strategy": "ema_deviation_scalp_20260909",
+  "symbol": "6B",
+  "version": "A",
+  "description": "Promoted Version A (rule-based baseline).",
+  "symbols": [
+    "6B"
+  ],
+  "timeframe": "1h",
+  "params": {
+    "ema_window": 20,
+    "deviation_atr_mult": 2.0,
+    "stretch_lookback": 5,
+    "k_period": 8,
+    "d_period": 3,
+    "smooth_k": 3,
+    "oversold": 20.0,
+    "overbought": 80.0,
+    "stoch_lookback": 3,
+    "use_stretch_filter": true,
+    "use_stoch_filter": true,
+    "use_stoch_exit": false,
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": 1.0,
+    "trailing": false
+  },
+  "params_source": "locked from dual_metrics_6B.json",
+  "params_conflict": [],
+  "risk": {
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": 1.0,
+    "trailing": false
+  },
+  "day_of_week_gate": {
+    "status": "EVALUATED",
+    "version": "A",
+    "versions_profiled": [
+      "A",
+      "B"
+    ],
+    "blocked_weekdays": [
+      2
+    ],
+    "blocked_weekday": 2,
+    "blocked_day": "Wed",
+    "blocked_day_name": "Wednesday",
+    "worst_weekday": 2,
+    "worst_day": "Wed",
+    "block_rule": "negative_expectancy",
+    "min_trades": 20,
+    "reason": "Wednesday is the weakest session (expectancy -29.65 per trade over 90 trades) and its expectancy is negative",
+    "selected_in_sample": true,
+    "note": "The weekday was chosen in-sample, on a window that spans the Stage 3 holdout. It is a live-supervision instruction, not evidence: no gate was scored on it and nothing was pruned for it.",
+    "source": "/mnt/backtest/artifacts/pipeline/ema_deviation_scalp_20260909/dow_gate_6B_1h.json",
+    "source_sha256": "4142695646d98b7cc38300fd52076c789e26938f74497c66b9a402be3df13eb4"
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/ema_deviation_scalp_20260909.py",
+  "source_sha256": "2cdecad91b56f45cf46e80eaa130518f741ad01eac25d37fc380f8ce7469b8a7",
+  "promoted_sha256": "2cdecad91b56f45cf46e80eaa130518f741ad01eac25d37fc380f8ce7469b8a7",
+  "promoted_utc": "2026-09-09T16:50:36+00:00",
+  "costs_included": true,
+  "variants_tested": null,
+  "metrics_status": "RECORDED \u00b7 locked from dual_metrics_6B.json",
+  "metrics": {
+    "sharpe": 0.2327971303751987,
+    "sortino": 0.3254360615323833,
+    "calmar": 0.07399221893978347,
+    "profit_factor": 1.1336469718988118,
+    "win_rate": 0.655860349127182,
+    "max_drawdown_pct": -3.9160929366118036,
+    "total_return_pct": 4.9634199999999185,
+    "annualized_return_pct": 0.2897604059543202,
+    "trade_count": 401,
+    "total_pnl": 4963.419999999896,
+    "total_costs": 6849.080000000078,
+    "final_equity": 104963.41999999991,
+    "n_days": 4219,
+    "start": "2013-01-02 11:00:00+00:00",
+    "end": "2026-08-07 20:00:00+00:00",
+    "bars": 79542,
+    "initial_capital": 100000.0
+  },
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "PASS",
+    "gate2": "FAIL",
+    "gate3": "PASS",
+    "gate_regime": "PASS",
+    "gate_ruin": "PASS",
+    "gate_all_quadrants": "FAIL"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/ema_deviation_scalp_20260909/gate_audit_6B_1h.json",
+    "audit_sha256": "9694df0721e71713ba05d8e9d3ec74dd58e4c3d3ba0a28c26b98393b5a0883d2",
+    "audit_symbol": "6B",
+    "audit_timeframe": "1h",
+    "target_quadrant": "Q4",
+    "target_regime": "Low Volatility / Ranging",
+    "audit_generated_utc": "2026-09-09T14:14:37+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "ema_window": 20,
+      "deviation_atr_mult": 2.0,
+      "k_period": 8,
+      "sl_atr_mult": 2.0,
+      "trailing": false
+    },
+    "params_source": "stage 2 winner (best_params_6B_1h.json)",
+    "variants_tested": 54,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "NOT EVALUATED",
+    "agrees_with_snapshot": false
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [],
+  "notes": ""
+}
