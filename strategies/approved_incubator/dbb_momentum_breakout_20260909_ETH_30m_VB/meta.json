@@ -1,0 +1,142 @@
+{
+  "name": "dbb_momentum_breakout_20260909_ETH_30m_VB",
+  "strategy": "dbb_momentum_breakout_20260909",
+  "symbol": "ETH",
+  "version": "B",
+  "description": "Promoted Version B (baseline + causal ML filter).",
+  "symbols": [
+    "ETH"
+  ],
+  "timeframe": "30m",
+  "params": {
+    "sma_window": 50,
+    "inner_sd": 1.0,
+    "outer_sd": 3.0,
+    "use_neutral_filter": true,
+    "use_outer_guard": false,
+    "use_baseline_exit": true,
+    "sl_atr_mult": 1.5,
+    "tp_atr_mult": null,
+    "trailing": false
+  },
+  "params_source": "locked from dual_metrics_ETH.json",
+  "params_conflict": [],
+  "risk": {
+    "sl_atr_mult": 1.5,
+    "tp_atr_mult": null,
+    "trailing": false
+  },
+  "day_of_week_gate": {
+    "status": "EVALUATED",
+    "version": "B",
+    "versions_profiled": [
+      "A",
+      "B"
+    ],
+    "blocked_weekdays": [
+      3
+    ],
+    "blocked_weekday": 3,
+    "blocked_day": "Thu",
+    "blocked_day_name": "Thursday",
+    "worst_weekday": 3,
+    "worst_day": "Thu",
+    "block_rule": "negative_expectancy",
+    "min_trades": 20,
+    "reason": "Thursday is the weakest session (expectancy -339.90 per trade over 86 trades) and its expectancy is negative",
+    "selected_in_sample": true,
+    "note": "The weekday was chosen in-sample, on a window that spans the Stage 3 holdout. It is a live-supervision instruction, not evidence: no gate was scored on it and nothing was pruned for it.",
+    "source": "/mnt/backtest/artifacts/pipeline/dbb_momentum_breakout_20260909/dow_gate_ETH_30m.json",
+    "source_sha256": "aa764d4d897e376e1a7e623e73e1dd7b6f2679c6830f71a28462c2c67ef403ab"
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/dbb_momentum_breakout_20260909.py",
+  "source_sha256": "80b7830c3528966c36f4ad78fc875b418dcee77d1a2644db4c17d7598691b599",
+  "promoted_sha256": "37a5e628960d4c228e4da3d2c40e369a1c456bd20c907d51afd5d8830c111b37",
+  "promoted_utc": "2026-09-10T15:58:08+00:00",
+  "costs_included": true,
+  "variants_tested": null,
+  "metrics_status": "RECORDED \u00b7 locked from dual_metrics_ETH.json",
+  "metrics": {
+    "sharpe": -0.4979060726995454,
+    "sortino": -0.8721984877726761,
+    "calmar": -0.20199351636086,
+    "profit_factor": 0.7719619697654895,
+    "win_rate": 0.2469437652811736,
+    "max_drawdown_pct": -71.54174350977085,
+    "total_return_pct": -65.62322000000034,
+    "annualized_return_pct": -14.450968338125348,
+    "trade_count": 409,
+    "total_pnl": -65623.22,
+    "total_costs": 17723.22000000002,
+    "final_equity": 34376.779999999664,
+    "n_days": 1724,
+    "start": "2021-02-07 23:00:00+00:00",
+    "end": "2026-08-08 22:30:00+00:00",
+    "bars": 64339,
+    "initial_capital": 100000.0
+  },
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "FAIL",
+    "gate2": "FAIL",
+    "gate3": "PASS",
+    "gate_regime": "PASS",
+    "gate_ruin": "PASS",
+    "gate_all_quadrants": "FAIL"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/dbb_momentum_breakout_20260909/gate_audit_ETH_30m.json",
+    "audit_sha256": "f74ec3626fd65573f0cbc187c071bf0eecc625c73576b8780bb7bfaa8d6976fc",
+    "audit_symbol": "ETH",
+    "audit_timeframe": "30m",
+    "target_quadrant": "Q1",
+    "target_regime": "High Volatility / Trending",
+    "audit_generated_utc": "2026-09-10T15:45:02+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "sma_window": 50,
+      "inner_sd": 1.0,
+      "sl_atr_mult": 1.5,
+      "use_outer_guard": false
+    },
+    "params_source": "stage 2 winner (best_params_ETH_30m.json)",
+    "variants_tested": 36,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "FAIL",
+    "agrees_with_snapshot": false
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [],
+  "notes": "",
+  "ml_threshold": 0.48,
+  "baseline": "baseline.py"
+}
