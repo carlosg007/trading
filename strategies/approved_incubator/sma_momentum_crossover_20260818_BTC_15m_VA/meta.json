@@ -9,40 +9,73 @@
   ],
   "timeframe": "15m",
   "params": {
-    "fast_window": 10,
+    "fast_window": 5,
     "slow_window": 30,
     "macro_window": 200,
     "adx_threshold": 20.0,
     "use_macro_anchor": true,
     "use_adx_filter": true,
     "use_news_filter": false,
-    "sl_atr_mult": 1.0,
-    "tp_atr_mult": 2.0,
+    "sl_atr_mult": 1.5,
+    "tp_atr_mult": 3.0,
     "trailing": false
   },
-  "params_source": "sma_momentum_crossover_20260818.py DEFAULT_PARAMS",
+  "params_source": "locked from dual_metrics_BTC.json",
   "params_conflict": [],
   "risk": {
-    "sl_atr_mult": 1.0,
-    "tp_atr_mult": 2.0,
+    "sl_atr_mult": 1.5,
+    "tp_atr_mult": 3.0,
     "trailing": false
   },
   "day_of_week_gate": {
-    "status": "NOT EVALUATED",
-    "blocked_weekdays": [],
-    "blocked_weekday": null,
+    "status": "EVALUATED",
     "version": "A",
+    "versions_profiled": [
+      "A",
+      "B"
+    ],
+    "blocked_weekdays": [
+      2
+    ],
+    "blocked_weekday": 2,
+    "blocked_day": "Wed",
+    "blocked_day_name": "Wednesday",
+    "worst_weekday": 2,
+    "worst_day": "Wed",
+    "block_rule": "negative_expectancy",
+    "min_trades": 20,
+    "reason": "Wednesday is the weakest session (expectancy -39.81 per trade over 413 trades) and its expectancy is negative",
+    "selected_in_sample": true,
+    "note": "The weekday was chosen in-sample, on a window that spans the Stage 3 holdout. It is a live-supervision instruction, not evidence: no gate was scored on it and nothing was pruned for it.",
     "source": "/mnt/backtest/artifacts/pipeline/sma_momentum_crossover_20260818/dow_gate_BTC_15m.json",
-    "reason": "dow_gate_BTC_15m.json does not exist. Stage 4.5 (backtest/dow_gate.py) was not run for this pair; no weekday is blocked and none was cleared."
+    "source_sha256": "2aa29bdf6e665701e3ced2f7a331f43474a7edb48f6ab935c080c3c7cb72a69e"
   },
   "source": "/home/cgrullon/src/trading/strategies/experimental/sma_momentum_crossover_20260818.py",
   "source_sha256": "fbd447f1f683fb03a1a7e1e41f90fe0e0a7e7f7ff43df8b842ed074869534c75",
   "promoted_sha256": "fbd447f1f683fb03a1a7e1e41f90fe0e0a7e7f7ff43df8b842ed074869534c75",
-  "promoted_utc": "2026-09-09T08:12:50+00:00",
-  "costs_included": false,
-  "variants_tested": 54,
-  "metrics_status": "NOT RECORDED",
-  "metrics": null,
+  "promoted_utc": "2026-09-10T23:40:40+00:00",
+  "costs_included": true,
+  "variants_tested": null,
+  "metrics_status": "RECORDED \u00b7 locked from dual_metrics_BTC.json",
+  "metrics": {
+    "sharpe": 0.25686533900101133,
+    "sortino": 0.41719926930628,
+    "calmar": 0.03567212260713617,
+    "profit_factor": 1.016743883205242,
+    "win_rate": 0.3627402661409561,
+    "max_drawdown_pct": -71.38259530878899,
+    "total_return_pct": 30.932180000000685,
+    "annualized_return_pct": 2.546368691870704,
+    "trade_count": 2029,
+    "total_pnl": 30932.180000001317,
+    "total_costs": 110742.81999999855,
+    "final_equity": 130932.18000000069,
+    "n_days": 2701,
+    "start": "2017-12-17 23:00:00+00:00",
+    "end": "2026-08-08 21:45:00+00:00",
+    "bars": 199424,
+    "initial_capital": 100000.0
+  },
   "gate_audit_status": "PASS",
   "gate_audit": {
     "gate1": "FAIL",
@@ -54,7 +87,7 @@
   },
   "certification": {
     "audit_file": "/mnt/backtest/artifacts/pipeline/sma_momentum_crossover_20260818/gate_audit_BTC_15m.json",
-    "audit_sha256": "a80b2527e3b25c242b750040ff9cd3e4493a7574dcaae7a29b355d2a88ee43b3",
+    "audit_sha256": "a9e0d154f1740a92353d97955b26ce07d1fcf5bfc44419c83466a8b124c63303",
     "audit_symbol": "BTC",
     "audit_timeframe": "15m",
     "target_quadrant": "Q2",
@@ -99,45 +132,13 @@
       "exclude_days": null
     },
     "status": "PASS",
-    "snapshot_gate_status": "NOT EVALUATED",
-    "agrees_with_snapshot": null
+    "snapshot_gate_status": "FAIL",
+    "agrees_with_snapshot": false
   },
   "gates_overridden": false,
   "oos_status": "passed_gate3",
   "audit_warnings": [
     "import from 'backtest.event_calendar' is not allowed"
   ],
-  "notes": "Stage 3 certified BTC 15m in High Volatility / Ranging; staged by backtest/audit_gates.py, not committed.",
-  "seal": {
-    "algorithm": "sha256",
-    "strategy_code": {
-      "path": "/home/cgrullon/src/trading/strategies/approved_incubator/sma_momentum_crossover_20260818_BTC_15m_VA/strat.py",
-      "sha256": "fbd447f1f683fb03a1a7e1e41f90fe0e0a7e7f7ff43df8b842ed074869534c75"
-    },
-    "winning_parameters": {
-      "path": "/mnt/backtest/artifacts/pipeline/sma_momentum_crossover_20260818/best_params_BTC_15m.json",
-      "sha256": "7c5b4fce63e3c6a1c629e3d4256343cbde800ba33e49396bd92749c9ae702d2c"
-    },
-    "gate_audit": {
-      "path": "/mnt/backtest/artifacts/pipeline/sma_momentum_crossover_20260818/gate_audit_BTC_15m.json",
-      "sha256": "a80b2527e3b25c242b750040ff9cd3e4493a7574dcaae7a29b355d2a88ee43b3"
-    },
-    "metrics_handoff": {
-      "path": null,
-      "sha256": "NOT AVAILABLE"
-    },
-    "rule": "The three hashes are sealed together because they can be separated: the same code under a different winning cell is a different strategy with the same code checksum.",
-    "certified_symbol": "BTC",
-    "certified_timeframe": "15m",
-    "target_regime": "High Volatility / Ranging",
-    "target_quadrant": "Q2",
-    "params": {
-      "fast_window": 5,
-      "slow_window": 30,
-      "tp_atr_mult": 3.0,
-      "sl_atr_mult": 1.5,
-      "trailing": false
-    },
-    "params_locked": true
-  }
+  "notes": ""
 }
