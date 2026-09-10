@@ -1287,8 +1287,45 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         for tf in certify_tfs:
+            # `--no-promote`, ALWAYS, AND ONLY ON THIS PATH.
+            #
+            # Stage 3 stages a package for everything it certifies
+            # (`audit_gates.seal_and_promote`, Charter clause 6), and run
+            # standalone that is correct: nothing else is going to write one,
+            # and the directory is the record that a version was certified.
+            #
+            # Under THIS orchestrator it is not, because Stage 4.5 has not run
+            # yet and cannot have. `promote.load_dow_gate` looks up
+            # `dow_gate_<SYM>_<TF>.json` by convention when no path is passed,
+            # so Stage 3's staging is not merely missing the flag - the file it
+            # would read does not exist for another ten minutes. Every package
+            # Stage 3 stages here is therefore stamped
+            # `day_of_week_gate.status: NOT EVALUATED` BY CONSTRUCTION, with a
+            # reason reading "Stage 4.5 was not run for this pair" that is true
+            # only of the instant it was written.
+            #
+            # That is invisible when Stage 5 runs, because promote.py rewrites
+            # meta.json wholesale. It is NOT invisible when Stage 5 does not -
+            # a run without --auto-promote, or one where the --promote-max bar
+            # refused the batch - and what is left on disk is a package that
+            # looks promoted, reads as though the week was profiled and cleared
+            # to a hurried eye, and stands nothing down. On
+            # dbb_momentum_breakout_20260909 that was 15 packages written
+            # 18:02-18:10 against a gate written 18:11-18:14, and CL 30m alone
+            # blocked Friday on Version A and Monday on Version B - two
+            # measured negative-expectancy sessions both packages would have
+            # traded.
+            #
+            # So the invariant this orchestrator enforces is: A PACKAGE
+            # APPEARS ON DISK ONLY AFTER STAGE 4.5 HAS RETURNED A VERDICT FOR
+            # ITS PAIR. Stage 3 still certifies, and `certified: true` on the
+            # summary is set from the gate verdict and not from the staging
+            # (`audit_gates` line ~2490), so `auto_promote`'s winners are
+            # unchanged. What is given up is the `seal` block, which only
+            # Stage 3 writes - and Stage 5 overwrites it anyway whenever it
+            # runs, which is why 110 of the 187 packages on disk have none.
             run_step(stage3_cmd(strat, tf, args.start, args.end,
-                                out_dir=out_dir,
+                                out_dir=out_dir, promote=False,
                                 ml_threshold=args.ml_threshold),
                      f"STAGE 3 · audit_gates.py · certify {tf} on the holdout",
                      dry_run=dry)
@@ -1534,6 +1571,33 @@ def auto_promote(strat: str, *, out_dir: str | None = None,
         print(f"  Cannot resolve the strategy module to promote from: {e}",
               file=sys.stderr)
         return {"returncode": 1, "promotions": [], "rows": rows, "commit": None}
+
+    # STAGE 4.5 COVERAGE, STATED BEFORE THE FIRST ROW IS PROMOTED.
+    #
+    # The ordering itself is positional - `main()` runs Stage 4.5 to completion
+    # and only then calls this function, and `run_step` is a blocking
+    # `subprocess.run` - but positional ordering is exactly what nobody can
+    # check afterwards from a promoted package. This says out loud how many of
+    # the rows about to be promoted have a verdict on disk, at the moment the
+    # loop starts, so a run that promoted 15 packages against 0 gate files is
+    # legible in its own log rather than reconstructable from mtimes.
+    #
+    # A REPORT, NOT A REFUSAL, and deliberately so. Stage 4.5 prunes nothing:
+    # its weekday is an instruction for the live supervisor, not evidence about
+    # an edge, and a certification that cleared Gate R must not be discarded
+    # because a day-of-week profiler raised. `--promote-only` legitimately runs
+    # with no Stage 4.5 at all, and a package promoted before the stage existed
+    # is a third valid state.
+    covered = {(str(r.get("symbol")), str(r.get("timeframe")))
+               for r in winners
+               if dow_gate_file(strat, str(r.get("symbol")),
+                                str(r.get("timeframe")), out_dir) is not None}
+    pairs = {(str(r.get("symbol")), str(r.get("timeframe"))) for r in winners}
+    print(f"\n  STAGE 4.5 COVERAGE  {len(covered)}/{len(pairs)} certified "
+          f"pair(s) have a dow_gate verdict on disk"
+          + ("" if len(covered) == len(pairs) else
+             "; the rest promote as NOT EVALUATED and block no weekday"),
+          flush=True)
 
     promotions: list[dict[str, Any]] = []
     failures = 0
