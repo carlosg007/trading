@@ -151,7 +151,7 @@ EXPECTED_ASSIGNMENTS = {
     # --- BEGIN GENERATED STAMP (rewritten on every sync) ---
     # REGENERATED 2026-09-10 by scripts/register_incubator_batch.py --write, which now rewrites
     # this constant in the same run that registers into config/portfolios.json.
-    # This run routed 0 package(s); the book stands at 135.
+    # This run routed 0 package(s); the book stands at 171.
     #
     # THIS IS NO LONGER A HUMAN DECLARATION. It is regenerated from the config it
     # describes, so it cannot contradict it and cannot catch an assignment nobody
@@ -332,6 +332,42 @@ EXPECTED_ASSIGNMENTS = {
         "multi_ema_cci_trend_20260910_BTC_15m_VA",             # 15m, BTC
         "multi_ema_cci_trend_20260910_ZW_1h_VB",               #  1h, ZW
         "semafor_ha_momentum_20260910_NG_5m_VA",               #  5m, NG
+        "dual_ema_slope_scalp_20260831_BTC_1h_VA",             #  1h, BTC
+        "double_rsi_momentum_pullback_20260830_BTC_15m_VA",    # 15m, BTC
+        "double_rsi_momentum_pullback_20260830_BTC_1h_VA",     #  1h, BTC
+        "double_rsi_momentum_pullback_20260830_BTC_30m_VA",    # 30m, BTC
+        "double_rsi_momentum_pullback_20260830_CL_15m_VA",     # 15m, CL
+        "double_rsi_momentum_pullback_20260830_CL_1h_VA",      #  1h, CL
+        "double_rsi_momentum_pullback_20260830_CL_1h_VB",      #  1h, CL
+        "double_rsi_momentum_pullback_20260830_ETH_15m_VA",    # 15m, ETH
+        "double_rsi_momentum_pullback_20260830_ETH_15m_VB",    # 15m, ETH
+        "double_rsi_momentum_pullback_20260830_LE_30m_VA",     # 30m, LE
+        "ema_crossover_20260821_BTC_5m_VA",                    #  5m, BTC
+        "ema_crossover_20260821_CL_15m_VA",                    # 15m, CL
+        "ema_crossover_20260821_CL_15m_VB",                    # 15m, CL
+        "ema_crossover_20260821_LE_30m_VA",                    # 30m, LE
+        "ema_crossover_20260821_NG_15m_VA",                    # 15m, NG
+        "ema_crossover_20260821_NG_15m_VB",                    # 15m, NG
+        "ema_crossover_20260821_NG_30m_VA",                    # 30m, NG
+        "ema_crossover_20260821_ZW_15m_VB",                    # 15m, ZW
+        "energy_intraday_nonlinear_ar_20260902_ETH_15m_VB",    # 15m, ETH
+        "keltner_trend_drift_20260901_BTC_1h_VA",              #  1h, BTC
+        "keltner_trend_drift_20260901_BTC_30m_VA",             # 30m, BTC
+        "keltner_trend_drift_20260901_CL_1h_VA",               #  1h, CL
+        "keltner_trend_drift_20260901_CL_1h_VB",               #  1h, CL
+        "keltner_trend_drift_20260901_CL_30m_VA",              # 30m, CL
+        "keltner_trend_drift_20260901_CL_30m_VB",              # 30m, CL
+        "ma_anchoring_spread_20260820_BTC_30m_VB",             # 30m, BTC
+        "ma_anchoring_spread_20260820_CL_15m_VB",              # 15m, CL
+        "ma_anchoring_spread_20260820_CL_1h_VA",               #  1h, CL
+        "ma_anchoring_spread_20260820_ETH_15m_VA",             # 15m, ETH
+        "ma_anchoring_spread_20260820_ETH_15m_VB",             # 15m, ETH
+        "ma_anchoring_spread_20260820_LE_1h_VA",               #  1h, LE
+        "sma_momentum_crossover_20260818_BTC_15m_VA",          # 15m, BTC
+        "sma_momentum_crossover_20260818_BTC_5m_VA",           #  5m, BTC
+        "sma_momentum_crossover_20260818_CL_15m_VA",           # 15m, CL
+        "sma_momentum_crossover_20260818_LE_5m_VB",            #  5m, LE
+        "sma_momentum_crossover_20260818_NG_1h_VA",            #  1h, NG
     ],
     "Eval-FullSize":     [],
     "Prop-FullSize":     [],
