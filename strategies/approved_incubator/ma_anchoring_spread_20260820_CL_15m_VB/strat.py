@@ -1,5 +1,5 @@
 """
-ma_anchoring_spread_20260820 - Version B (ML-filtered), promoted 2026-09-09.
+ma_anchoring_spread_20260820 - Version B (ML-filtered), promoted 2026-09-10.
 
 Baseline signals from `baseline.py` (SHA-256 296538f7b4199e7eb5fc5000a9b6271c2b779160e9a9d6bcce4e002d00394e4d), with the causal ML
 filter applied on top. This is the pipeline, not a new idea: every entry here
@@ -27,7 +27,7 @@ from backtest.engine import BacktestConfig
 
 TIMEFRAME = '15m'
 SYMBOLS = ['CL']
-DEFAULT_PARAMS = {'fast_window': 21, 'slow_window': 200, 'spread_threshold': 0.015, 'exit_revert_mult': 0.5, 'use_macro_anchor': True, 'use_spread_hurdle': True, 'use_spread_expansion': True, 'use_news_filter': False, 'sl_atr_mult': 1.5, 'tp_atr_mult': 3.0, 'trailing': False}
+DEFAULT_PARAMS = {'fast_window': 30, 'slow_window': 100, 'spread_threshold': 0.015, 'exit_revert_mult': 0.5, 'use_macro_anchor': True, 'use_spread_hurdle': True, 'use_spread_expansion': True, 'use_news_filter': False, 'sl_atr_mult': 2.0, 'tp_atr_mult': 3.0, 'trailing': True}
 ML_THRESHOLD = 0.48
 
 _BASELINE_PATH = Path(__file__).with_name("baseline.py")
