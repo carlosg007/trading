@@ -53,12 +53,12 @@
     "selected_in_sample": true,
     "note": "The weekday was chosen in-sample, on a window that spans the Stage 3 holdout. It is a live-supervision instruction, not evidence: no gate was scored on it and nothing was pruned for it.",
     "source": "/mnt/backtest/artifacts/pipeline/ema_deviation_scalp_20260909/dow_gate_6B_1h.json",
-    "source_sha256": "4142695646d98b7cc38300fd52076c789e26938f74497c66b9a402be3df13eb4"
+    "source_sha256": "174a6b2625dca4c836cc4f2b1f8335a7d42cd076bee183f40b4c59fabe1a7a5d"
   },
   "source": "/home/cgrullon/src/trading/strategies/experimental/ema_deviation_scalp_20260909.py",
   "source_sha256": "2cdecad91b56f45cf46e80eaa130518f741ad01eac25d37fc380f8ce7469b8a7",
   "promoted_sha256": "2cdecad91b56f45cf46e80eaa130518f741ad01eac25d37fc380f8ce7469b8a7",
-  "promoted_utc": "2026-09-09T16:50:36+00:00",
+  "promoted_utc": "2026-09-10T13:02:21+00:00",
   "costs_included": true,
   "variants_tested": null,
   "metrics_status": "RECORDED \u00b7 locked from dual_metrics_6B.json",
@@ -92,12 +92,12 @@
   },
   "certification": {
     "audit_file": "/mnt/backtest/artifacts/pipeline/ema_deviation_scalp_20260909/gate_audit_6B_1h.json",
-    "audit_sha256": "9694df0721e71713ba05d8e9d3ec74dd58e4c3d3ba0a28c26b98393b5a0883d2",
+    "audit_sha256": "86ebe560569dde2e0261c008871f438f09385435b0bd0284db648ce750069c35",
     "audit_symbol": "6B",
     "audit_timeframe": "1h",
     "target_quadrant": "Q4",
     "target_regime": "Low Volatility / Ranging",
-    "audit_generated_utc": "2026-09-09T14:14:37+00:00",
+    "audit_generated_utc": "2026-09-10T13:00:25+00:00",
     "in_sample": {
       "start": "2013-01-01",
       "end": "2022-12-31"
