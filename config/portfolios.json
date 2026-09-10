@@ -425,7 +425,7 @@
           "timeframe": "1h",
           "version": "B",
           "allocation": 1,
-          "regime_filter": "Q3",
+          "regime_filter": "Q2",
           "status": "incubating",
           "path": "strategies/approved_incubator/dual_ema_slope_scalp_20260831_RTY_1h_VB/strat.py",
           "registered_utc": "2026-09-09T12:57:31+00:00",
@@ -443,7 +443,7 @@
               "timeframe": "1h",
               "version": "B",
               "allocation": 1,
-              "regime_filter": "Q3",
+              "regime_filter": "Q2",
               "status": "incubating",
               "path": "strategies/approved_incubator/dual_ema_slope_scalp_20260831_RTY_1h_VB/strat.py",
               "registered_utc": "2026-09-09T12:57:31+00:00",
@@ -453,9 +453,11 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_RTY_1h.json (Gate R's certification target)"
-              }
+              },
+              "certified_on": "secondary_starvation_fallback"
             }
-          ]
+          ],
+          "certified_on": "secondary_starvation_fallback"
         },
         "ema_crossover_20260821_6J_5m_VA": {
           "strat": "ema_crossover_20260821_6J_5m_VA",
@@ -843,7 +845,7 @@
           "timeframe": "30m",
           "version": "A",
           "allocation": 1,
-          "regime_filter": "Q3",
+          "regime_filter": "Q2",
           "status": "incubating",
           "path": "strategies/approved_incubator/keltner_trend_drift_20260901_NQ_30m_VA/strat.py",
           "registered_utc": "2026-09-09T12:59:09+00:00",
@@ -861,7 +863,7 @@
               "timeframe": "30m",
               "version": "A",
               "allocation": 1,
-              "regime_filter": "Q3",
+              "regime_filter": "Q2",
               "status": "incubating",
               "path": "strategies/approved_incubator/keltner_trend_drift_20260901_NQ_30m_VA/strat.py",
               "registered_utc": "2026-09-09T12:59:09+00:00",
@@ -871,9 +873,11 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_NQ_30m.json (Gate R's certification target)"
-              }
+              },
+              "certified_on": "secondary_starvation_fallback"
             }
-          ]
+          ],
+          "certified_on": "secondary_starvation_fallback"
         },
         "keltner_trend_drift_20260901_NQ_30m_VB": {
           "strat": "keltner_trend_drift_20260901_NQ_30m_VB",
@@ -881,7 +885,7 @@
           "timeframe": "30m",
           "version": "B",
           "allocation": 1,
-          "regime_filter": "Q3",
+          "regime_filter": "Q2",
           "status": "incubating",
           "path": "strategies/approved_incubator/keltner_trend_drift_20260901_NQ_30m_VB/strat.py",
           "registered_utc": "2026-09-09T12:59:12+00:00",
@@ -899,7 +903,7 @@
               "timeframe": "30m",
               "version": "B",
               "allocation": 1,
-              "regime_filter": "Q3",
+              "regime_filter": "Q2",
               "status": "incubating",
               "path": "strategies/approved_incubator/keltner_trend_drift_20260901_NQ_30m_VB/strat.py",
               "registered_utc": "2026-09-09T12:59:12+00:00",
@@ -909,9 +913,11 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_NQ_30m.json (Gate R's certification target)"
-              }
+              },
+              "certified_on": "secondary_starvation_fallback"
             }
-          ]
+          ],
+          "certified_on": "secondary_starvation_fallback"
         },
         "ma_anchoring_spread_20260820_NQ_15m_VA": {
           "strat": "ma_anchoring_spread_20260820_NQ_15m_VA",
@@ -957,7 +963,7 @@
           "timeframe": "15m",
           "version": "B",
           "allocation": 1,
-          "regime_filter": "Q2",
+          "regime_filter": "Q1",
           "status": "incubating",
           "path": "strategies/approved_incubator/ma_anchoring_spread_20260820_NQ_15m_VB/strat.py",
           "registered_utc": "2026-09-09T12:59:34+00:00",
@@ -975,7 +981,7 @@
               "timeframe": "15m",
               "version": "B",
               "allocation": 1,
-              "regime_filter": "Q2",
+              "regime_filter": "Q1",
               "status": "incubating",
               "path": "strategies/approved_incubator/ma_anchoring_spread_20260820_NQ_15m_VB/strat.py",
               "registered_utc": "2026-09-09T12:59:34+00:00",
@@ -985,9 +991,11 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_NQ_15m.json (Gate R's certification target)"
-              }
+              },
+              "certified_on": "secondary_starvation_fallback"
             }
-          ]
+          ],
+          "certified_on": "secondary_starvation_fallback"
         },
         "ma_anchoring_spread_20260820_RTY_1h_VA": {
           "strat": "ma_anchoring_spread_20260820_RTY_1h_VA",
@@ -1337,7 +1345,7 @@
           "timeframe": "1h",
           "version": "B",
           "allocation": 1,
-          "regime_filter": "Q3",
+          "regime_filter": "Q2",
           "status": "incubating",
           "path": "strategies/approved_incubator/dbb_momentum_breakout_20260909_NQ_1h_VB/strat.py",
           "registered_utc": "2026-09-10T15:57:48+00:00",
@@ -1355,7 +1363,7 @@
               "timeframe": "1h",
               "version": "B",
               "allocation": 1,
-              "regime_filter": "Q3",
+              "regime_filter": "Q2",
               "status": "incubating",
               "path": "strategies/approved_incubator/dbb_momentum_breakout_20260909_NQ_1h_VB/strat.py",
               "registered_utc": "2026-09-10T15:57:48+00:00",
@@ -1365,9 +1373,11 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_NQ_1h.json (Gate R's certification target)"
-              }
+              },
+              "certified_on": "secondary_starvation_fallback"
             }
-          ]
+          ],
+          "certified_on": "secondary_starvation_fallback"
         },
         "dbb_momentum_breakout_20260909_RTY_1h_VB": {
           "strat": "dbb_momentum_breakout_20260909_RTY_1h_VB",
@@ -1541,7 +1551,7 @@
           "timeframe": "1h",
           "version": "B",
           "allocation": 1,
-          "regime_filter": "Q1",
+          "regime_filter": "Q4",
           "status": "incubating",
           "path": "strategies/approved_incubator/multi_ema_cci_trend_20260910_6J_1h_VB/strat.py",
           "registered_utc": "2026-09-10T19:35:34+00:00",
@@ -1562,7 +1572,7 @@
               "timeframe": "1h",
               "version": "B",
               "allocation": 1,
-              "regime_filter": "Q1",
+              "regime_filter": "Q4",
               "status": "incubating",
               "path": "strategies/approved_incubator/multi_ema_cci_trend_20260910_6J_1h_VB/strat.py",
               "registered_utc": "2026-09-10T19:35:34+00:00",
@@ -1575,9 +1585,11 @@
               },
               "blocked_weekdays": [
                 0
-              ]
+              ],
+              "certified_on": "secondary_starvation_fallback"
             }
-          ]
+          ],
+          "certified_on": "secondary_starvation_fallback"
         }
       }
     },
@@ -1716,7 +1728,6 @@
         "dbb_momentum_breakout_20260909_YM_30m_VB",
         "semafor_ha_momentum_20260910_ES_5m_VA",
         "multi_ema_cci_trend_20260910_GC_30m_VA",
-        "multi_ema_cci_trend_20260910_YM_30m_VB",
         "multi_ema_cci_trend_20260910_GC_1h_VA"
       ],
       "strategy_allocations": {
@@ -2362,7 +2373,7 @@
           "timeframe": "1h",
           "version": "A",
           "allocation": 1,
-          "regime_filter": "Q3",
+          "regime_filter": "Q1",
           "status": "incubating",
           "path": "strategies/approved_incubator/keltner_trend_drift_20260901_GC_1h_VA/strat.py",
           "registered_utc": "2026-09-09T12:59:01+00:00",
@@ -2380,7 +2391,7 @@
               "timeframe": "1h",
               "version": "A",
               "allocation": 1,
-              "regime_filter": "Q3",
+              "regime_filter": "Q1",
               "status": "incubating",
               "path": "strategies/approved_incubator/keltner_trend_drift_20260901_GC_1h_VA/strat.py",
               "registered_utc": "2026-09-09T12:59:01+00:00",
@@ -2390,9 +2401,11 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_GC_1h.json (Gate R's certification target)"
-              }
+              },
+              "certified_on": "secondary_starvation_fallback"
             }
-          ]
+          ],
+          "certified_on": "secondary_starvation_fallback"
         },
         "ma_anchoring_spread_20260820_GC_1h_VA": {
           "strat": "ma_anchoring_spread_20260820_GC_1h_VA",
@@ -2780,7 +2793,7 @@
           "timeframe": "1h",
           "version": "A",
           "allocation": 1,
-          "regime_filter": "Q3",
+          "regime_filter": "Q4",
           "status": "incubating",
           "path": "strategies/approved_incubator/dbb_momentum_breakout_20260909_GC_1h_VA/strat.py",
           "registered_utc": "2026-09-10T15:57:41+00:00",
@@ -2798,7 +2811,7 @@
               "timeframe": "1h",
               "version": "A",
               "allocation": 1,
-              "regime_filter": "Q3",
+              "regime_filter": "Q4",
               "status": "incubating",
               "path": "strategies/approved_incubator/dbb_momentum_breakout_20260909_GC_1h_VA/strat.py",
               "registered_utc": "2026-09-10T15:57:41+00:00",
@@ -2808,9 +2821,11 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_GC_1h.json (Gate R's certification target)"
-              }
+              },
+              "certified_on": "secondary_starvation_fallback"
             }
-          ]
+          ],
+          "certified_on": "secondary_starvation_fallback"
         },
         "dbb_momentum_breakout_20260909_YM_30m_VB": {
           "strat": "dbb_momentum_breakout_20260909_YM_30m_VB",
@@ -2818,7 +2833,7 @@
           "timeframe": "30m",
           "version": "B",
           "allocation": 1,
-          "regime_filter": "Q3",
+          "regime_filter": "Q2",
           "status": "incubating",
           "path": "strategies/approved_incubator/dbb_momentum_breakout_20260909_YM_30m_VB/strat.py",
           "registered_utc": "2026-09-10T15:58:25+00:00",
@@ -2836,7 +2851,7 @@
               "timeframe": "30m",
               "version": "B",
               "allocation": 1,
-              "regime_filter": "Q3",
+              "regime_filter": "Q2",
               "status": "incubating",
               "path": "strategies/approved_incubator/dbb_momentum_breakout_20260909_YM_30m_VB/strat.py",
               "registered_utc": "2026-09-10T15:58:25+00:00",
@@ -2846,9 +2861,11 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_YM_30m.json (Gate R's certification target)"
-              }
+              },
+              "certified_on": "secondary_starvation_fallback"
             }
-          ]
+          ],
+          "certified_on": "secondary_starvation_fallback"
         },
         "semafor_ha_momentum_20260910_ES_5m_VA": {
           "strat": "semafor_ha_momentum_20260910_ES_5m_VA",
@@ -2938,57 +2955,13 @@
             }
           ]
         },
-        "multi_ema_cci_trend_20260910_YM_30m_VB": {
-          "strat": "multi_ema_cci_trend_20260910_YM_30m_VB",
-          "symbol": "YM",
-          "timeframe": "30m",
-          "version": "B",
-          "allocation": 1,
-          "regime_filter": "Q1",
-          "status": "incubating",
-          "path": "strategies/approved_incubator/multi_ema_cci_trend_20260910_YM_30m_VB/strat.py",
-          "registered_utc": "2026-09-10T19:35:22+00:00",
-          "registered_by": "backtest/promote.py",
-          "routing_basis": "trades YM; declares Q1; fewest active strategies (Incubator-Even=33), ties alphabetical; certified on 30m bars",
-          "resolved_from": {
-            "symbol": "--symbol",
-            "timeframe": "--timeframe",
-            "regime_filter": "gate_audit_YM_30m.json (Gate R's certification target)"
-          },
-          "blocked_weekdays": [
-            2
-          ],
-          "configurations": [
-            {
-              "strat": "multi_ema_cci_trend_20260910_YM_30m_VB",
-              "symbol": "YM",
-              "timeframe": "30m",
-              "version": "B",
-              "allocation": 1,
-              "regime_filter": "Q1",
-              "status": "incubating",
-              "path": "strategies/approved_incubator/multi_ema_cci_trend_20260910_YM_30m_VB/strat.py",
-              "registered_utc": "2026-09-10T19:35:22+00:00",
-              "registered_by": "backtest/promote.py",
-              "routing_basis": "trades YM; declares Q1; fewest active strategies (Incubator-Even=33), ties alphabetical; certified on 30m bars",
-              "resolved_from": {
-                "symbol": "--symbol",
-                "timeframe": "--timeframe",
-                "regime_filter": "gate_audit_YM_30m.json (Gate R's certification target)"
-              },
-              "blocked_weekdays": [
-                2
-              ]
-            }
-          ]
-        },
         "multi_ema_cci_trend_20260910_GC_1h_VA": {
           "strat": "multi_ema_cci_trend_20260910_GC_1h_VA",
           "symbol": "GC",
           "timeframe": "1h",
           "version": "A",
           "allocation": 1,
-          "regime_filter": "Q3",
+          "regime_filter": "Q4",
           "status": "incubating",
           "path": "strategies/approved_incubator/multi_ema_cci_trend_20260910_GC_1h_VA/strat.py",
           "registered_utc": "2026-09-10T19:35:42+00:00",
@@ -3007,7 +2980,7 @@
               "timeframe": "1h",
               "version": "A",
               "allocation": 1,
-              "regime_filter": "Q3",
+              "regime_filter": "Q4",
               "status": "incubating",
               "path": "strategies/approved_incubator/multi_ema_cci_trend_20260910_GC_1h_VA/strat.py",
               "registered_utc": "2026-09-10T19:35:42+00:00",
@@ -3018,9 +2991,11 @@
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_GC_1h.json (Gate R's certification target)"
               },
-              "blocked_weekdays": []
+              "blocked_weekdays": [],
+              "certified_on": "secondary_starvation_fallback"
             }
-          ]
+          ],
+          "certified_on": "secondary_starvation_fallback"
         }
       }
     },
@@ -3810,7 +3785,7 @@
           "timeframe": "1h",
           "version": "A",
           "allocation": 1,
-          "regime_filter": "Q3",
+          "regime_filter": "Q2",
           "status": "incubating",
           "path": "strategies/approved_incubator/dual_ema_slope_scalp_20260831_PL_1h_VA/strat.py",
           "registered_utc": "2026-09-09T12:57:23+00:00",
@@ -3828,7 +3803,7 @@
               "timeframe": "1h",
               "version": "A",
               "allocation": 1,
-              "regime_filter": "Q3",
+              "regime_filter": "Q2",
               "status": "incubating",
               "path": "strategies/approved_incubator/dual_ema_slope_scalp_20260831_PL_1h_VA/strat.py",
               "registered_utc": "2026-09-09T12:57:23+00:00",
@@ -3838,9 +3813,11 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_PL_1h.json (Gate R's certification target)"
-              }
+              },
+              "certified_on": "secondary_starvation_fallback"
             }
-          ]
+          ],
+          "certified_on": "secondary_starvation_fallback"
         },
         "dual_ema_slope_scalp_20260831_RB_1h_VA": {
           "strat": "dual_ema_slope_scalp_20260831_RB_1h_VA",
@@ -4190,7 +4167,7 @@
           "timeframe": "30m",
           "version": "B",
           "allocation": 1,
-          "regime_filter": "Q3",
+          "regime_filter": "Q4",
           "status": "incubating",
           "path": "strategies/approved_incubator/keltner_trend_drift_20260901_PL_30m_VB/strat.py",
           "registered_utc": "2026-09-09T12:59:16+00:00",
@@ -4208,7 +4185,7 @@
               "timeframe": "30m",
               "version": "B",
               "allocation": 1,
-              "regime_filter": "Q3",
+              "regime_filter": "Q4",
               "status": "incubating",
               "path": "strategies/approved_incubator/keltner_trend_drift_20260901_PL_30m_VB/strat.py",
               "registered_utc": "2026-09-09T12:59:16+00:00",
@@ -4218,9 +4195,11 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_PL_30m.json (Gate R's certification target)"
-              }
+              },
+              "certified_on": "secondary_starvation_fallback"
             }
-          ]
+          ],
+          "certified_on": "secondary_starvation_fallback"
         },
         "ma_anchoring_spread_20260820_ETH_5m_VA": {
           "strat": "ma_anchoring_spread_20260820_ETH_5m_VA",
@@ -4684,7 +4663,7 @@
           "timeframe": "30m",
           "version": "A",
           "allocation": 1,
-          "regime_filter": "Q4",
+          "regime_filter": "Q1",
           "status": "incubating",
           "path": "strategies/approved_incubator/sma_momentum_crossover_20260818_PL_30m_VA/strat.py",
           "registered_utc": "2026-09-09T13:00:52+00:00",
@@ -4702,7 +4681,7 @@
               "timeframe": "30m",
               "version": "A",
               "allocation": 1,
-              "regime_filter": "Q4",
+              "regime_filter": "Q1",
               "status": "incubating",
               "path": "strategies/approved_incubator/sma_momentum_crossover_20260818_PL_30m_VA/strat.py",
               "registered_utc": "2026-09-09T13:00:52+00:00",
@@ -4712,9 +4691,11 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_PL_30m.json (Gate R's certification target)"
-              }
+              },
+              "certified_on": "secondary_starvation_fallback"
             }
-          ]
+          ],
+          "certified_on": "secondary_starvation_fallback"
         },
         "sma_momentum_crossover_20260818_PL_30m_VB": {
           "strat": "sma_momentum_crossover_20260818_PL_30m_VB",
@@ -4722,7 +4703,7 @@
           "timeframe": "30m",
           "version": "B",
           "allocation": 1,
-          "regime_filter": "Q4",
+          "regime_filter": "Q1",
           "status": "incubating",
           "path": "strategies/approved_incubator/sma_momentum_crossover_20260818_PL_30m_VB/strat.py",
           "registered_utc": "2026-09-09T13:00:55+00:00",
@@ -4740,7 +4721,7 @@
               "timeframe": "30m",
               "version": "B",
               "allocation": 1,
-              "regime_filter": "Q4",
+              "regime_filter": "Q1",
               "status": "incubating",
               "path": "strategies/approved_incubator/sma_momentum_crossover_20260818_PL_30m_VB/strat.py",
               "registered_utc": "2026-09-09T13:00:55+00:00",
@@ -4750,9 +4731,11 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_PL_30m.json (Gate R's certification target)"
-              }
+              },
+              "certified_on": "secondary_starvation_fallback"
             }
-          ]
+          ],
+          "certified_on": "secondary_starvation_fallback"
         },
         "sma_momentum_crossover_20260818_RB_1h_VA": {
           "strat": "sma_momentum_crossover_20260818_RB_1h_VA",

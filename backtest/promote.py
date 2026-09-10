@@ -1712,9 +1712,26 @@ def certified_scope(certification: Any,
             quadrant = REGIME_TO_QUADRANT.get(str(regime))
         except Exception:                                       # noqa: BLE001
             quadrant = None
+    # THE FALLBACK OVERRIDES THE TARGET. See `certified_quadrant`: when the
+    # primary quadrant starved, Gate R certified on the pre-declared secondary
+    # and the certification block goes on naming the primary. `regime_filter`
+    # is what the live supervisor gates on, so it has to name the quadrant the
+    # edge was MEASURED in or the strategy runs in the one that starved.
+    measured = certified_quadrant(meta, audit_path)
+    if measured["fallback"] and measured["quadrant"]:
+        out["regime_filter"] = measured["quadrant"]
+        out["regime"] = str(measured["regime"] or NOT_RESOLVED)
+        out["certified_on"] = measured["certified_on"]
+        src["regime_filter"] = (
+            f"gate_regime.quadrant ({measured['certified_on']}) - the primary "
+            f"{quadrant or 'target'} starved and Gate R certified on this "
+            f"secondary instead, so this is where the edge was measured")
+        return out
+
     if quadrant:
         out["regime_filter"] = str(quadrant)
         out["regime"] = str(regime or NOT_RESOLVED)
+        out["certified_on"] = measured["certified_on"]
         src["regime_filter"] = (
             f"{name} (Gate R's certification target"
             + (", read from the audit itself)"
@@ -1837,6 +1854,71 @@ def gate_regime_of(meta: dict) -> dict:
     try:
         audit = json.loads(Path(cert["audit_file"]).read_text())
     except (OSError, ValueError, KeyError, TypeError):
+        return {}
+    block = (audit.get("versions") or {}).get(str(meta.get("version"))) or {}
+    gates = ((block.get("gate_audit") or block).get("gates") or {})
+    return gates.get("gate_regime") or {}
+
+
+def certified_quadrant(meta: dict,
+                       audit_path: Path | None = None) -> dict[str, Any]:
+    """
+    The quadrant Gate R MEASURED this edge in, and whether that is the one the
+    certification aimed at.
+
+    Returns `{"quadrant", "regime", "certified_on", "fallback"}`; `quadrant` is
+    None when no gate_regime block can be read, and the caller keeps whatever
+    it had.
+
+    WHY THIS IS NOT `certification.target_quadrant`. Gate R designates a
+    PRIMARY quadrant and measures the holdout inside it. When the primary
+    starves - fewer holdout trades than the bar needs to measure it at all -
+    the audit falls back to a PRE-DECLARED SECONDARY and certifies there
+    instead. That is one test and not two, and it is legitimate. But the
+    certification block goes on naming the PRIMARY, and `regime_filter` was
+    read from it, so the routing table ended up naming a quadrant Gate R had
+    explicitly declined to judge.
+
+    The consequence is silent and it is the one CLAUDE.md names: the live
+    supervisor enables the strategy in the environment that starved and stands
+    it down in the one its edge was measured in, with every log line reading
+    correctly. On 2026-09-10 that was 14 routed rows across 8 strategies -
+    `multi_ema_cci_trend_20260910_GC_1h_VA` among them, routed Q3 on an edge
+    measured in Q4 after Q3 placed 18 holdout trades against the 30 needed.
+
+    The gate audit already says which is which: `certified_on` is
+    `secondary_starvation_fallback` and the block's own `quadrant` is where
+    the numbers came from. This reads that rather than re-deriving anything -
+    naming a quadrant from any other source would be a second best-of-four
+    pick, which is the selection Gate R exists to prevent.
+    """
+    block = gate_regime_of(meta) if audit_path is None else _gate_regime_at(
+        meta, Path(audit_path))
+    if not block:
+        return {"quadrant": None, "regime": None, "certified_on": None,
+                "fallback": False}
+    certified_on = str(block.get("certified_on") or "")
+    quadrant = block.get("quadrant")
+    regime = block.get("target_regime")
+    fallback = certified_on.startswith("secondary")
+    return {"quadrant": (str(quadrant) if quadrant else None),
+            "regime": (str(regime) if regime else None),
+            "certified_on": certified_on or None,
+            "fallback": bool(fallback)}
+
+
+def _gate_regime_at(meta: dict, audit_path: Path) -> dict:
+    """`gate_regime_of` against an EXPLICIT audit file.
+
+    At promotion time the audit being cited is passed on the command line and
+    may not be the one `meta["certification"]["audit_file"]` names yet - the
+    meta is written from this very call. Reading the file in hand rather than
+    the path recorded in a block still being assembled is the difference
+    between resolving this promotion's quadrant and the previous one's.
+    """
+    try:
+        audit = json.loads(Path(audit_path).read_text())
+    except (OSError, ValueError):
         return {}
     block = (audit.get("versions") or {}).get(str(meta.get("version"))) or {}
     gates = ((block.get("gate_audit") or block).get("gates") or {})
@@ -2138,6 +2220,13 @@ def register_portfolio(strat: str,
     # else would be a second opinion nobody measured.
     if meta is not None:
         record.update(dow_allocation_fields(meta))
+    # RECORDED WHEN IT IS A FALLBACK, absent otherwise. A row whose quadrant
+    # came from a starved primary's secondary is a different provenance from
+    # one that hit its target, and a reader comparing two allocations cannot
+    # tell them apart from the quadrant alone.
+    if scope.get("certified_on") and str(
+            scope["certified_on"]).startswith("secondary"):
+        record["certified_on"] = str(scope["certified_on"])
 
     # One entry per certified (strat, symbol, timeframe), deduplicated on that
     # triple. The top-level fields above describe THIS promotion - the most

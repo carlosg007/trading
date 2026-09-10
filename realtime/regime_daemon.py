@@ -596,8 +596,30 @@ def load_strategy_registry(config: dict,
             from_config, err = _as_quadrant(record.get("regime_filter"))
             if err:
                 problems.append(f"{pid}.strategy_allocations: {err}")
+            # THE QUADRANT GATE R MEASURED, not the one it aimed at.
+            #
+            # `certification.target_quadrant` names the PRIMARY. When the
+            # primary starves - too few holdout trades to measure it at all -
+            # Gate R certifies on a pre-declared SECONDARY and the block goes
+            # on naming the primary. `backtest/promote.py` writes
+            # `regime_filter` from the measured one since 2026-09-10, so
+            # comparing it against the target here reports a disagreement on
+            # every fallback-certified package and refuses to run 14 of them.
+            #
+            # Imported lazily, and inside the loop's own try, for the reason
+            # `backtest.specs` is at line 486: the live daemon must not carry
+            # the backtest package's import cost at start-up, and a daemon
+            # that cannot import it should report that rather than fail to
+            # boot.
+            try:
+                from backtest.promote import (                # noqa: PLC0415
+                    certified_quadrant)
+                measured = certified_quadrant(meta)
+            except Exception:                                 # noqa: BLE001
+                measured = {"quadrant": None, "fallback": False}
             from_meta, err = _as_quadrant(
-                (meta.get("certification") or {}).get("target_quadrant"))
+                measured["quadrant"] if measured.get("fallback")
+                else (meta.get("certification") or {}).get("target_quadrant"))
             if err:
                 problems.append(f"meta.json certification: {err}")
 

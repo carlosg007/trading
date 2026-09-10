@@ -108,11 +108,24 @@ EXPECTED_CONST = "EXPECTED_ASSIGNMENTS = {"
 #: ROUTING TABLE and had to be pruned by hand. Gate 3 below refuses them, so
 #: this is the second lock on a door that already has one - kept because the
 #: cost is a frozenset and the failure it prevents was paid for once already.
+#: A PRUNE THAT IS NOT ALSO A REFUSAL IS A NO-OP. Removing a row by hand only
+#: makes the package unrouted, and the next --write evaluates unrouted
+#: packages and puts it straight back - which is exactly what happened to
+#: `multi_ema_cci_trend_20260910_YM_30m_VB` on 2026-09-10, re-routed by the
+#: same command that was meant to record its removal. So this set is a GATE
+#: (see `evaluate`) and not only a sync guard.
 MUST_STAY_ABSENT = frozenset({
     "t3_braid_scalp_20260823_RB_30m_VA",
     "t3_braid_scalp_20260823_YM_30m_VA",
     "ma_anchoring_spread_20260820_ZS_1h_VA",
     "ema_deviation_scalp_20260909_NQ_30m_VB",
+    # Not negative - the four above are - but +26.04 over 62 trades is 42
+    # cents a trade on a profit factor that rounds to 1.0, which is inside the
+    # friction the run already charged. The net-P&L gate checks the SIGN, and
+    # the sign is the right side of zero here; the magnitude is what makes it
+    # not an edge, and no threshold on it would be anything but a number
+    # somebody picked. Pruned deliberately on 2026-09-10.
+    "multi_ema_cci_trend_20260910_YM_30m_VB",
 })
 
 
@@ -138,7 +151,8 @@ def basket_index(cfg: dict) -> dict[str, str]:
 # refused it, promote.py never looked, and promote.py won because it ran
 # first.
 from backtest.promote import (                                   # noqa: E402
-    dow_allocation_fields, gate_regime_of, routing_refusals,
+    ALLOCATIONS_KEY, certified_quadrant, dow_allocation_fields,
+    gate_regime_of, routing_refusals,
 )
 
 
@@ -152,6 +166,12 @@ def evaluate(package: Path, cfg: dict, baskets: dict[str, str],
     gate = gate_regime_of(meta)
     measured = gate.get("measured") or {}
     refusals: list[str] = []
+
+    if package.name in MUST_STAY_ABSENT:
+        # Named, not inferred. Each entry carries its reason at the constant.
+        refusals.append(
+            "named in MUST_STAY_ABSENT - deliberately unrouted, and a prune "
+            "that is not also a refusal is undone by the next --write")
 
     portfolio = baskets.get(symbol)
     if portfolio is None:
@@ -169,7 +189,14 @@ def evaluate(package: Path, cfg: dict, baskets: dict[str, str],
     return {
         "strategy_id": package.name, "symbol": symbol, "timeframe": tf,
         "version": meta.get("version"), "portfolio": portfolio,
-        "quadrant": (meta.get("certification") or {}).get("target_quadrant"),
+        # THE QUADRANT GATE R MEASURED, not the one it aimed at. See
+        # `promote.certified_quadrant`: a starved primary falls back to a
+        # pre-declared secondary and the certification block goes on naming
+        # the primary, so routing on it gates the strategy into the
+        # environment that starved.
+        "quadrant": (certified_quadrant(meta)["quadrant"]
+                     or (meta.get("certification") or {}).get(
+                         "target_quadrant")),
         "blocked_weekdays": list(dow.get("blocked_weekdays") or []),
         "dow_status": status, "refusals": refusals, "meta": meta,
         "path": f"strategies/approved_incubator/{package.name}/strat.py",
@@ -343,6 +370,54 @@ def sync_expected_assignments(cfg: dict, routed: list[str],
     return True, f"{path.name} synced to {len(live)} routed package(s)"
 
 
+def reconcile_regime_filters(cfg: dict, incubator: Path) -> list[dict]:
+    """
+    Correct `regime_filter` on rows ALREADY in the routing table.
+
+    THE REGISTRAR CANNOT REACH THESE ANY OTHER WAY. `main` evaluates only
+    packages not yet routed (`p.name not in routed`), which is right for
+    routing - a package is placed once - and leaves it structurally unable to
+    fix a row it wrote before the rule changed. Fourteen rows across eight
+    strategies were routed on a starved primary's quadrant, and no number of
+    `--write` runs would have touched one of them.
+
+    THIS RE-STATES A FIELD, IT NEVER RE-ROUTES. The account is not
+    reconsidered and the allocation is not resized; the only thing rewritten
+    is the quadrant, and only to the one that package's OWN gate audit says
+    the edge was measured in. A row whose package cannot be read is left
+    exactly as it is - an unreadable meta.json is a reason to look, not a
+    reason to guess.
+    """
+    changed: list[dict] = []
+    for pid, port in cfg["portfolios"].items():
+        for sid, alloc in (port.get(ALLOCATIONS_KEY) or {}).items():
+            meta_p = Path(incubator) / sid / "meta.json"
+            if not meta_p.exists():
+                continue
+            try:
+                meta = json.loads(meta_p.read_text())
+            except (OSError, ValueError):
+                continue
+            measured = certified_quadrant(meta)
+            if not measured["fallback"] or not measured["quadrant"]:
+                continue
+            was = alloc.get("regime_filter")
+            if was == measured["quadrant"]:
+                continue
+            alloc["regime_filter"] = measured["quadrant"]
+            alloc["certified_on"] = measured["certified_on"]
+            # The nested per-configuration copy moves with it, or the two
+            # halves of one record disagree about the same promotion.
+            for cfgrow in (alloc.get("configurations") or []):
+                if isinstance(cfgrow, dict) and cfgrow.get("strat") == sid:
+                    cfgrow["regime_filter"] = measured["quadrant"]
+                    cfgrow["certified_on"] = measured["certified_on"]
+            changed.append({"portfolio": pid, "strategy_id": sid,
+                            "was": was, "now": measured["quadrant"],
+                            "basis": measured["certified_on"]})
+    return changed
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("--write", action="store_true",
@@ -386,10 +461,23 @@ def main(argv: list[str] | None = None) -> int:
             for why in r["refusals"]:
                 print(f"            {why}")
 
+    # THE REPAIR PASS, BEFORE THE ROUTING AND ON EVERY RUN. It re-states
+    # `regime_filter` on rows already in the table whose Gate R certified on a
+    # fallback secondary - see `reconcile_regime_filters`. Reported in a dry
+    # run and applied under --write, like everything else here.
+    repaired = reconcile_regime_filters(cfg, Path(args.incubator))
+    if repaired:
+        print(f"\nregime_filter corrections ({len(repaired)}) - Gate R "
+              f"certified these on a fallback secondary, and the routing "
+              f"table named the primary that starved:")
+        for r in repaired:
+            print(f"  FIX     {r['strategy_id']:56s} {r['was']} -> "
+                  f"{r['now']}  ({r['portfolio']})")
+
     if not args.write:
         print("\ndry run - nothing written. Re-run with --write to apply.")
         return 0
-    if not eligible:
+    if not eligible and not repaired:
         # NOTHING TO ROUTE IS NOT NOTHING TO DO. The declaration in
         # tests/test_portfolio_config.py can be stale while this run finds no
         # new package: `backtest/promote.py` registers during Stage 5 through
@@ -413,7 +501,7 @@ def main(argv: list[str] | None = None) -> int:
     for r in eligible:
         port = cfg["portfolios"][r["portfolio"]]
         port.setdefault("active_strategies", []).append(r["strategy_id"])
-        port.setdefault("strategy_allocations",
+        port.setdefault(ALLOCATIONS_KEY,
                         collections.OrderedDict())[r["strategy_id"]] = \
             allocation_for(r)
 
@@ -429,7 +517,9 @@ def main(argv: list[str] | None = None) -> int:
               f"{path} is untouched.", file=sys.stderr)
         return 2
     os.replace(tmp, path)
-    print(f"\nregistered {len(eligible)} package(s) into {path}")
+    print(f"\nregistered {len(eligible)} package(s) into {path}"
+          + (f"; corrected {len(repaired)} regime_filter(s)" if repaired
+             else ""))
 
     # THE DECLARATION MOVES WITH THE REGISTRATION, in this function rather
     # than in the pipeline that calls it, so a hand-run --write cannot leave

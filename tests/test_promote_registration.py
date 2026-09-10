@@ -52,6 +52,7 @@ from backtest.pipeline import (                                   # noqa: E402
     strategy_id,
 )
 from backtest.promote import (                                    # noqa: E402
+    certified_quadrant, certified_scope,
     ALLOCATIONS_KEY,
     DEFAULT_ALLOCATION,
     DEFAULT_VERSION,
@@ -1387,6 +1388,95 @@ def test_a_caller_that_passes_no_meta_is_not_gated() -> None:
                              config_path=path)
     rec = read(path)["portfolios"][out["portfolio_id"]][ALLOCATIONS_KEY][STRAT]
     assert "blocked_weekdays" not in rec, rec
+
+
+
+# ==========================================================================
+# the fallback quadrant: regime_filter names where the edge was MEASURED
+# ==========================================================================
+def _meta_fallback(*, primary="Q3", measured="Q4", certified_on,
+                   net=5000.0) -> dict:
+    """A meta.json whose Gate R certified on `measured`, aiming at `primary`."""
+    audit = Path(tempfile.mkdtemp()) / "gate_audit_NQ_1h.json"
+    audit.write_text(json.dumps({"versions": {"A": {"gate_audit": {"gates": {
+        "gate_regime": {
+            "status": "PASS",
+            "quadrant": measured,
+            "primary_quadrant": primary,
+            "certified_on": certified_on,
+            "target_regime": "Low Volatility / Ranging",
+            "measured": {"profit_factor": 1.4, "trade_count": 43,
+                         "net_pnl": net}}}}}}}))
+    return {"version": "A",
+            "certification": audit_cert(audit_file=str(audit),
+                                        target_quadrant=primary),
+            "day_of_week_gate": {"status": "EVALUATED", "blocked_weekdays": []}}
+
+
+def test_a_starved_primary_routes_on_the_quadrant_gate_r_measured() -> None:
+    """
+    THE BUG THIS CLOSES. Gate R designates a primary quadrant and measures the
+    holdout inside it. When the primary starves - too few holdout trades to
+    measure it at all - the audit falls back to a pre-declared SECONDARY and
+    certifies there. The certification block goes on naming the PRIMARY, and
+    `regime_filter` was read from it.
+
+    The result was silent and is the one CLAUDE.md names: the live supervisor
+    enables the strategy in the environment that STARVED and stands it down in
+    the one its edge was measured in, with every log line reading correctly.
+    Fourteen routed rows across eight strategies were in that state on
+    2026-09-10.
+    """
+    meta = _meta_fallback(primary="Q3", measured="Q4",
+                          certified_on="secondary_starvation_fallback")
+    resolved = certified_quadrant(meta)
+    assert resolved["quadrant"] == "Q4", resolved
+    assert resolved["fallback"] is True, resolved
+
+    path = temp_config()
+    out = register_portfolio(STRAT, version="A",
+                             scope=certified_scope(meta["certification"], meta,
+                                                   None),
+                             config_path=path, meta=meta)
+    rec = read(path)["portfolios"][out["portfolio_id"]][ALLOCATIONS_KEY][STRAT]
+    assert rec["regime_filter"] == "Q4", (
+        f"routed as {rec['regime_filter']} - the quadrant that starved, not "
+        f"the one the edge was measured in")
+    # The provenance travels, so a reader can tell this row from one that hit
+    # its target without opening the audit.
+    assert rec["certified_on"] == "secondary_starvation_fallback", rec
+
+
+def test_a_primary_certification_is_left_exactly_as_it_was() -> None:
+    """The override fires ONLY on a fallback. A package that hit its declared
+    target must route on it, and must NOT pick up a certified_on marker that
+    would make it look like a fallback to the next reader."""
+    meta = _meta_fallback(primary="Q3", measured="Q3", certified_on="primary")
+    resolved = certified_quadrant(meta)
+    assert resolved["fallback"] is False, resolved
+
+    path = temp_config()
+    out = register_portfolio(STRAT, version="A",
+                             scope=certified_scope(meta["certification"], meta,
+                                                   None),
+                             config_path=path, meta=meta)
+    rec = read(path)["portfolios"][out["portfolio_id"]][ALLOCATIONS_KEY][STRAT]
+    assert rec["regime_filter"] == "Q3", rec
+    assert "certified_on" not in rec, rec
+
+
+def test_an_unreadable_audit_leaves_the_quadrant_alone() -> None:
+    """A gate_regime block that cannot be read is a reason to look, not a
+    reason to guess: the certification's own target stands."""
+    meta = {"version": "A",
+            "certification": audit_cert(audit_file="/nonexistent/gate.json",
+                                        target_quadrant="Q1"),
+            "day_of_week_gate": {"status": "EVALUATED",
+                                 "blocked_weekdays": []}}
+    resolved = certified_quadrant(meta)
+    assert resolved["quadrant"] is None and resolved["fallback"] is False
+    scope = certified_scope(meta["certification"], meta, None)
+    assert scope["regime_filter"] == "Q1", scope
 
 
 def main() -> int:
