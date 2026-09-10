@@ -1,0 +1,812 @@
+{
+  "meta": {
+    "strategy": "sma_momentum_crossover_20260818",
+    "strategy_path": "/home/cgrullon/src/trading/strategies/experimental/sma_momentum_crossover_20260818.py",
+    "params": {
+      "fast_window": 5,
+      "slow_window": 30,
+      "macro_window": 200,
+      "adx_threshold": 20.0,
+      "use_macro_anchor": true,
+      "use_adx_filter": true,
+      "use_news_filter": false,
+      "sl_atr_mult": 1.5,
+      "tp_atr_mult": 2.0,
+      "trailing": false
+    },
+    "symbol": "BTC",
+    "timeframe": "5m",
+    "bars": 550622,
+    "start": "2017-12-17 23:00:00+00:00",
+    "end": "2026-08-08 21:55:00+00:00",
+    "costs_included": true,
+    "initial_capital": 100000.0,
+    "ml_threshold": 0.48,
+    "ml_evaluated": true,
+    "ml_features": [
+      "atr_norm",
+      "adx_14",
+      "volume_z"
+    ],
+    "ml_refit": {
+      "long": {
+        "direction": "long",
+        "candidates": 2342,
+        "fits": 48,
+        "train_rows_max": 2286,
+        "refit_growth": 0.1,
+        "max_train_rows": 50000,
+        "threads": 1,
+        "elapsed_s": 1.139
+      },
+      "short": {
+        "direction": "short",
+        "candidates": 2246,
+        "fits": 47,
+        "train_rows_max": 2079,
+        "refit_growth": 0.1,
+        "max_train_rows": 50000,
+        "threads": 1,
+        "elapsed_s": 1.085
+      }
+    },
+    "logic": {
+      "concept": "A trend-continuation crossover in three layers, each removing a different way a bare crossover loses money. The crossover itself is only the timing \u2014 it says nothing about whether a trend exists \u2014 so it is wrapped in two filters, and EACH ONE IS SWITCHABLE: this run used macro anchor=True, ADX filter=True. The macro baseline, a long-horizon simple average, decides which side of the multi-session imbalance the trade is allowed to be on, which removes the counter-trend crossover \u2014 the bounce inside a downtrend that a fast average crossing up through a slow one cannot tell from a reversal. ADX decides whether there is a trend to continue at all, which removes the crossover that happens inside a range; it measures the SIZE of directional movement and not its sign, so the identical threshold governs a long and a short. Both filters can only REMOVE eligible triggers, so the edge \u2014 if there is one \u2014 is selection rather than prediction, and with both off this is a bare crossover with a stop, which is the null the idea has to beat rather than a strategy. The same reasoning runs in both directions, so the short rules are the long rules mirrored.",
+      "entry": "ONE condition always applies: the Fast SMA (5) must cross up through the Slow SMA (30) on this bar for a long, or down through it for a short. On top of it, each filter below applies ONLY IF ITS TOGGLE IS TRUE \u2014 a toggle set to False means that condition was not checked at all, not that it happened to pass. (1) use_macro_anchor=True: the close above the Macro Baseline SMA (200) for a long, below it for a short. (2) use_adx_filter=True: ADX 14 above 20.0 on the crossover bar, the same requirement on both sides. (3) use_news_filter=False: when True, a trigger whose fill bar lands within 30 minutes either side of a scheduled US macro release is dropped. Only one position is held at a time and it is never reversed on the spot \u2014 a short trigger while the long is open is ignored, and vice versa. The fill is the next bar's open.",
+      "exit": "Exit at whichever comes first, and the rules are mirrored for a short. (1) A stop 1.5 x ATR 14 away from the fill \u2014 below it on a long, above it on a short \u2014 with trailing=False, where True means it follows the best price reached since the fill (the high on a long, the low on a short) and never widens, and False means it sits fixed that far from the fill price. (2) A take-profit 2.0 x ATR 14 from the fill price \u2014 above it on a long, below it on a short \u2014 where None means NO take-profit is modelled at all. THERE IS NO THIRD EXIT: the position is not closed when the crossover reverses, not closed when the macro baseline flips, and not flattened at any session boundary, so trades are carried overnight and over weekends. Every exit fills at the NEXT bar's open, so neither the stop nor the target is a fill at its own price \u2014 both carry a one-bar lag, and on a bar that breaches both the modelled fill is neither level."
+    }
+  },
+  "comparison": {
+    "ml_evaluated": true,
+    "entries_a": 2342,
+    "entries_b": 580,
+    "entries_suppressed": 1762,
+    "sharpe_delta": 0.1393359461116493,
+    "b_beats_a": true
+  },
+  "version_a": {
+    "metrics": {
+      "ok": true,
+      "ruined": false,
+      "final_equity": 129986.9600000005,
+      "total_pnl": 29986.96000000168,
+      "gross_pnl": 280400.0,
+      "total_costs": 250413.03999999835,
+      "total_return_pct": 29.986960000000494,
+      "annualized_return_pct": 2.477072666912572,
+      "sharpe": 0.23027239400997057,
+      "sortino": 0.47489921755106085,
+      "calmar": 0.03341626385282302,
+      "metrics_basis": {
+        "frequency": "daily_close",
+        "annualization_factor": 252,
+        "risk_free_rate": 0.0,
+        "n_days": 2701
+      },
+      "max_drawdown_pct": -74.12775640695415,
+      "win_rate": 0.43330427201394944,
+      "profit_factor": 1.0145837992046434,
+      "trade_count": 4588,
+      "long_trades": 2342,
+      "short_trades": 2246,
+      "breach": {},
+      "n_days": 2701,
+      "dow_breakdown": [
+        {
+          "day": "Mon",
+          "weekday": 0,
+          "trades": 1014,
+          "net_pnl": 38555.88000000066,
+          "gross_win": 478341.1000000002,
+          "gross_loss": 439785.2199999996,
+          "win_rate": 0.44871794871794873,
+          "avg_pnl": 38.02355029585864,
+          "profit_factor": 1.087669794814843,
+          "pct_of_trades": 22.10113339145597,
+          "pct_of_net_pnl": 128.57548747855236
+        },
+        {
+          "day": "Tue",
+          "weekday": 1,
+          "trades": 917,
+          "net_pnl": -49674.85999999946,
+          "gross_win": 369725.06000000064,
+          "gross_loss": 419399.9200000001,
+          "win_rate": 0.42857142857142855,
+          "avg_pnl": -54.17105779716408,
+          "profit_factor": 0.8815572973881363,
+          "pct_of_trades": 19.986922406277245,
+          "pct_of_net_pnl": -165.65487131738823
+        },
+        {
+          "day": "Wed",
+          "weekday": 2,
+          "trades": 994,
+          "net_pnl": 13022.479999999967,
+          "gross_win": 441805.9799999998,
+          "gross_loss": 428783.4999999999,
+          "win_rate": 0.4215291750503018,
+          "avg_pnl": 13.101086519114654,
+          "profit_factor": 1.030370758203149,
+          "pct_of_trades": 21.66521360069747,
+          "pct_of_net_pnl": 43.42714299815399
+        },
+        {
+          "day": "Thu",
+          "weekday": 3,
+          "trades": 873,
+          "net_pnl": 3526.6599999996324,
+          "gross_win": 394759.21999999986,
+          "gross_loss": 391232.5600000002,
+          "win_rate": 0.44788087056128295,
+          "avg_pnl": 4.039702176402786,
+          "profit_factor": 1.009014229286028,
+          "pct_of_trades": 19.027898866608545,
+          "pct_of_net_pnl": 11.760645293819161
+        },
+        {
+          "day": "Fri",
+          "weekday": 4,
+          "trades": 780,
+          "net_pnl": 27652.600000000835,
+          "gross_win": 396231.92000000004,
+          "gross_loss": 368579.31999999913,
+          "win_rate": 0.41794871794871796,
+          "avg_pnl": 35.45205128205235,
+          "profit_factor": 1.0750248277629928,
+          "pct_of_trades": 17.000871839581517,
+          "pct_of_net_pnl": 92.21541630094976
+        },
+        {
+          "day": "Sat",
+          "weekday": 5,
+          "trades": 2,
+          "net_pnl": -2284.1599999999416,
+          "gross_win": 1420.42,
+          "gross_loss": 3704.5799999999417,
+          "win_rate": 0.5,
+          "avg_pnl": -1142.0799999999708,
+          "profit_factor": 0.3834226821933991,
+          "pct_of_trades": 0.043591979075850044,
+          "pct_of_net_pnl": -7.617177599862787
+        },
+        {
+          "day": "Sun",
+          "weekday": 6,
+          "trades": 8,
+          "net_pnl": -811.6399999999854,
+          "gross_win": 3886.2600000000148,
+          "gross_loss": 4697.9,
+          "win_rate": 0.375,
+          "avg_pnl": -101.45499999999818,
+          "profit_factor": 0.8272334447306275,
+          "pct_of_trades": 0.17436791630340018,
+          "pct_of_net_pnl": -2.7066431542241696
+        }
+      ],
+      "entry_filters": {},
+      "meta": {
+        "strategy": "sma_momentum_crossover_20260818",
+        "strategy_path": "/home/cgrullon/src/trading/strategies/experimental/sma_momentum_crossover_20260818.py",
+        "params": {
+          "fast_window": 5,
+          "slow_window": 30,
+          "macro_window": 200,
+          "adx_threshold": 20.0,
+          "use_macro_anchor": true,
+          "use_adx_filter": true,
+          "use_news_filter": false,
+          "sl_atr_mult": 1.5,
+          "tp_atr_mult": 2.0,
+          "trailing": false
+        },
+        "symbol": "BTC",
+        "timeframe": "5m",
+        "bars": 550622,
+        "start": "2017-12-17 23:00:00+00:00",
+        "end": "2026-08-08 21:55:00+00:00",
+        "costs_included": true,
+        "initial_capital": 100000.0,
+        "ml_threshold": 0.48,
+        "ml_evaluated": true,
+        "ml_features": [
+          "atr_norm",
+          "adx_14",
+          "volume_z"
+        ],
+        "ml_refit": {
+          "long": {
+            "direction": "long",
+            "candidates": 2342,
+            "fits": 48,
+            "train_rows_max": 2286,
+            "refit_growth": 0.1,
+            "max_train_rows": 50000,
+            "threads": 1,
+            "elapsed_s": 1.139
+          },
+          "short": {
+            "direction": "short",
+            "candidates": 2246,
+            "fits": 47,
+            "train_rows_max": 2079,
+            "refit_growth": 0.1,
+            "max_train_rows": 50000,
+            "threads": 1,
+            "elapsed_s": 1.085
+          }
+        },
+        "logic": {
+          "concept": "A trend-continuation crossover in three layers, each removing a different way a bare crossover loses money. The crossover itself is only the timing \u2014 it says nothing about whether a trend exists \u2014 so it is wrapped in two filters, and EACH ONE IS SWITCHABLE: this run used macro anchor=True, ADX filter=True. The macro baseline, a long-horizon simple average, decides which side of the multi-session imbalance the trade is allowed to be on, which removes the counter-trend crossover \u2014 the bounce inside a downtrend that a fast average crossing up through a slow one cannot tell from a reversal. ADX decides whether there is a trend to continue at all, which removes the crossover that happens inside a range; it measures the SIZE of directional movement and not its sign, so the identical threshold governs a long and a short. Both filters can only REMOVE eligible triggers, so the edge \u2014 if there is one \u2014 is selection rather than prediction, and with both off this is a bare crossover with a stop, which is the null the idea has to beat rather than a strategy. The same reasoning runs in both directions, so the short rules are the long rules mirrored.",
+          "entry": "ONE condition always applies: the Fast SMA (5) must cross up through the Slow SMA (30) on this bar for a long, or down through it for a short. On top of it, each filter below applies ONLY IF ITS TOGGLE IS TRUE \u2014 a toggle set to False means that condition was not checked at all, not that it happened to pass. (1) use_macro_anchor=True: the close above the Macro Baseline SMA (200) for a long, below it for a short. (2) use_adx_filter=True: ADX 14 above 20.0 on the crossover bar, the same requirement on both sides. (3) use_news_filter=False: when True, a trigger whose fill bar lands within 30 minutes either side of a scheduled US macro release is dropped. Only one position is held at a time and it is never reversed on the spot \u2014 a short trigger while the long is open is ignored, and vice versa. The fill is the next bar's open.",
+          "exit": "Exit at whichever comes first, and the rules are mirrored for a short. (1) A stop 1.5 x ATR 14 away from the fill \u2014 below it on a long, above it on a short \u2014 with trailing=False, where True means it follows the best price reached since the fill (the high on a long, the low on a short) and never widens, and False means it sits fixed that far from the fill price. (2) A take-profit 2.0 x ATR 14 from the fill price \u2014 above it on a long, below it on a short \u2014 where None means NO take-profit is modelled at all. THERE IS NO THIRD EXIT: the position is not closed when the crossover reverses, not closed when the macro baseline flips, and not flattened at any session boundary, so trades are carried overnight and over weekends. Every exit fills at the NEXT bar's open, so neither the stop nor the target is a fill at its own price \u2014 both carry a one-bar lag, and on a bar that breaches both the modelled fill is neither level."
+        }
+      }
+    },
+    "gate_audit": {
+      "version": "A",
+      "name": "sma_momentum_crossover_20260818",
+      "gates": {
+        "gate1": {
+          "name": "GATE 1 \u00b7 In-Sample",
+          "status": "FAIL",
+          "checks": [
+            {
+              "label": "Sharpe (not gated)",
+              "value": 0.23027239400997057,
+              "threshold": null,
+              "direction": "min",
+              "unit": "",
+              "status": "INFO",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Profit factor",
+              "value": 1.0145837992046434,
+              "threshold": 1.0,
+              "direction": "min",
+              "unit": "",
+              "status": "PASS",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Trades",
+              "value": 4588.0,
+              "threshold": 200.0,
+              "direction": "min",
+              "unit": "",
+              "status": "PASS",
+              "note": "10.72 years at 30 trades/yr is 322; the 200-trade cap binds",
+              "fmt": "{:,.0f}"
+            },
+            {
+              "label": "Max drawdown",
+              "value": 74.12775640695415,
+              "threshold": 12.0,
+              "direction": "max",
+              "unit": "%",
+              "status": "FAIL",
+              "note": null,
+              "fmt": "{:.2f}"
+            }
+          ]
+        },
+        "gate2": {
+          "name": "GATE 2 \u00b7 Robustness",
+          "status": "NOT EVALUATED",
+          "checks": [
+            {
+              "label": "WFO efficiency",
+              "value": null,
+              "threshold": 0.5,
+              "direction": "min",
+              "unit": "",
+              "status": "NOT EVALUATED",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Monte Carlo 95% max DD",
+              "value": null,
+              "threshold": 18.0,
+              "direction": "max",
+              "unit": "%",
+              "status": "NOT EVALUATED",
+              "note": null,
+              "fmt": "{:.2f}"
+            }
+          ]
+        },
+        "gate3": {
+          "name": "GATE 3 \u00b7 OOS Holdout",
+          "status": "NOT EVALUATED",
+          "checks": [
+            {
+              "label": "Holdout Sharpe retention",
+              "value": null,
+              "threshold": 0.8,
+              "direction": "min",
+              "unit": "x",
+              "status": "NOT EVALUATED",
+              "note": "no holdout Sharpe supplied, so Sharpe retention is undefined",
+              "fmt": "{:.2f}"
+            }
+          ]
+        }
+      },
+      "status": "FAIL",
+      "passed": false,
+      "thresholds": {
+        "gate1": {
+          "min_profit_factor": 1.0,
+          "min_trades": 100,
+          "max_required_trades": 200,
+          "min_trades_per_year": 30,
+          "max_drawdown_pct": 12.0
+        },
+        "gate2": {
+          "min_wfo_efficiency": 0.5,
+          "max_mc_drawdown_pct": 18.0
+        },
+        "gate3": {
+          "min_retention": 0.8
+        }
+      },
+      "holdout_sharpe": null,
+      "in_sample_sharpe": 0.23027239400997057,
+      "sharpe_retention": null,
+      "retention": null,
+      "retention_metric": null
+    }
+  },
+  "version_b": {
+    "metrics": {
+      "ok": true,
+      "ruined": false,
+      "final_equity": 161583.9800000002,
+      "total_pnl": 61583.98000000072,
+      "gross_pnl": 133575.0,
+      "total_costs": 71991.01999999928,
+      "total_return_pct": 61.5839800000002,
+      "annualized_return_pct": 4.578716372457126,
+      "sharpe": 0.36960834012161986,
+      "sortino": 0.64745619348746,
+      "calmar": 0.14130444599054703,
+      "metrics_basis": {
+        "frequency": "daily_close",
+        "annualization_factor": 252,
+        "risk_free_rate": 0.0,
+        "n_days": 2701
+      },
+      "max_drawdown_pct": -32.40320104834799,
+      "win_rate": 0.44806671721000757,
+      "profit_factor": 1.0887269533738453,
+      "trade_count": 1319,
+      "long_trades": 580,
+      "short_trades": 739,
+      "breach": {},
+      "n_days": 2701,
+      "dow_breakdown": [
+        {
+          "day": "Mon",
+          "weekday": 0,
+          "trades": 296,
+          "net_pnl": 27469.32000000011,
+          "gross_win": 181342.96000000028,
+          "gross_loss": 153873.6400000002,
+          "win_rate": 0.46621621621621623,
+          "avg_pnl": 92.80175675675713,
+          "profit_factor": 1.1785186858515861,
+          "pct_of_trades": 22.441243366186505,
+          "pct_of_net_pnl": 44.604652053991614
+        },
+        {
+          "day": "Tue",
+          "weekday": 1,
+          "trades": 252,
+          "net_pnl": 2095.8400000002757,
+          "gross_win": 133343.7200000004,
+          "gross_loss": 131247.88000000012,
+          "win_rate": 0.4603174603174603,
+          "avg_pnl": 8.316825396826491,
+          "profit_factor": 1.0159685626922148,
+          "pct_of_trades": 19.10538286580743,
+          "pct_of_net_pnl": 3.403222721234079
+        },
+        {
+          "day": "Wed",
+          "weekday": 2,
+          "trades": 270,
+          "net_pnl": 4388.400000000031,
+          "gross_win": 151975.40000000017,
+          "gross_loss": 147587.00000000012,
+          "win_rate": 0.4444444444444444,
+          "avg_pnl": 16.253333333333448,
+          "profit_factor": 1.0297343261940417,
+          "pct_of_trades": 20.470053070507962,
+          "pct_of_net_pnl": 7.125879165328351
+        },
+        {
+          "day": "Thu",
+          "weekday": 3,
+          "trades": 244,
+          "net_pnl": 7907.480000000063,
+          "gross_win": 122039.51999999997,
+          "gross_loss": 114132.03999999992,
+          "win_rate": 0.4344262295081967,
+          "avg_pnl": 32.40770491803305,
+          "profit_factor": 1.0692836122091576,
+          "pct_of_trades": 18.498862774829416,
+          "pct_of_net_pnl": 12.84015745653329
+        },
+        {
+          "day": "Fri",
+          "weekday": 4,
+          "trades": 256,
+          "net_pnl": 22177.52000000025,
+          "gross_win": 166966.62,
+          "gross_loss": 144789.09999999966,
+          "win_rate": 0.43359375,
+          "avg_pnl": 86.63093750000098,
+          "profit_factor": 1.1531711986606754,
+          "pct_of_trades": 19.408642911296436,
+          "pct_of_net_pnl": 36.01183294746457
+        },
+        {
+          "day": "Sun",
+          "weekday": 6,
+          "trades": 1,
+          "net_pnl": -2454.58,
+          "gross_win": 0.0,
+          "gross_loss": 2454.58,
+          "win_rate": 0.0,
+          "avg_pnl": -2454.58,
+          "profit_factor": 0.0,
+          "pct_of_trades": 0.0758150113722517,
+          "pct_of_net_pnl": -3.9857443445518967
+        }
+      ],
+      "entry_filters": {},
+      "meta": {
+        "strategy": "sma_momentum_crossover_20260818",
+        "strategy_path": "/home/cgrullon/src/trading/strategies/experimental/sma_momentum_crossover_20260818.py",
+        "params": {
+          "fast_window": 5,
+          "slow_window": 30,
+          "macro_window": 200,
+          "adx_threshold": 20.0,
+          "use_macro_anchor": true,
+          "use_adx_filter": true,
+          "use_news_filter": false,
+          "sl_atr_mult": 1.5,
+          "tp_atr_mult": 2.0,
+          "trailing": false
+        },
+        "symbol": "BTC",
+        "timeframe": "5m",
+        "bars": 550622,
+        "start": "2017-12-17 23:00:00+00:00",
+        "end": "2026-08-08 21:55:00+00:00",
+        "costs_included": true,
+        "initial_capital": 100000.0,
+        "ml_threshold": 0.48,
+        "ml_evaluated": true,
+        "ml_features": [
+          "atr_norm",
+          "adx_14",
+          "volume_z"
+        ],
+        "ml_refit": {
+          "long": {
+            "direction": "long",
+            "candidates": 2342,
+            "fits": 48,
+            "train_rows_max": 2286,
+            "refit_growth": 0.1,
+            "max_train_rows": 50000,
+            "threads": 1,
+            "elapsed_s": 1.139
+          },
+          "short": {
+            "direction": "short",
+            "candidates": 2246,
+            "fits": 47,
+            "train_rows_max": 2079,
+            "refit_growth": 0.1,
+            "max_train_rows": 50000,
+            "threads": 1,
+            "elapsed_s": 1.085
+          }
+        },
+        "logic": {
+          "concept": "A trend-continuation crossover in three layers, each removing a different way a bare crossover loses money. The crossover itself is only the timing \u2014 it says nothing about whether a trend exists \u2014 so it is wrapped in two filters, and EACH ONE IS SWITCHABLE: this run used macro anchor=True, ADX filter=True. The macro baseline, a long-horizon simple average, decides which side of the multi-session imbalance the trade is allowed to be on, which removes the counter-trend crossover \u2014 the bounce inside a downtrend that a fast average crossing up through a slow one cannot tell from a reversal. ADX decides whether there is a trend to continue at all, which removes the crossover that happens inside a range; it measures the SIZE of directional movement and not its sign, so the identical threshold governs a long and a short. Both filters can only REMOVE eligible triggers, so the edge \u2014 if there is one \u2014 is selection rather than prediction, and with both off this is a bare crossover with a stop, which is the null the idea has to beat rather than a strategy. The same reasoning runs in both directions, so the short rules are the long rules mirrored.",
+          "entry": "ONE condition always applies: the Fast SMA (5) must cross up through the Slow SMA (30) on this bar for a long, or down through it for a short. On top of it, each filter below applies ONLY IF ITS TOGGLE IS TRUE \u2014 a toggle set to False means that condition was not checked at all, not that it happened to pass. (1) use_macro_anchor=True: the close above the Macro Baseline SMA (200) for a long, below it for a short. (2) use_adx_filter=True: ADX 14 above 20.0 on the crossover bar, the same requirement on both sides. (3) use_news_filter=False: when True, a trigger whose fill bar lands within 30 minutes either side of a scheduled US macro release is dropped. Only one position is held at a time and it is never reversed on the spot \u2014 a short trigger while the long is open is ignored, and vice versa. The fill is the next bar's open.",
+          "exit": "Exit at whichever comes first, and the rules are mirrored for a short. (1) A stop 1.5 x ATR 14 away from the fill \u2014 below it on a long, above it on a short \u2014 with trailing=False, where True means it follows the best price reached since the fill (the high on a long, the low on a short) and never widens, and False means it sits fixed that far from the fill price. (2) A take-profit 2.0 x ATR 14 from the fill price \u2014 above it on a long, below it on a short \u2014 where None means NO take-profit is modelled at all. THERE IS NO THIRD EXIT: the position is not closed when the crossover reverses, not closed when the macro baseline flips, and not flattened at any session boundary, so trades are carried overnight and over weekends. Every exit fills at the NEXT bar's open, so neither the stop nor the target is a fill at its own price \u2014 both carry a one-bar lag, and on a bar that breaches both the modelled fill is neither level."
+        }
+      }
+    },
+    "gate_audit": {
+      "version": "B",
+      "name": "sma_momentum_crossover_20260818",
+      "gates": {
+        "gate1": {
+          "name": "GATE 1 \u00b7 In-Sample",
+          "status": "FAIL",
+          "checks": [
+            {
+              "label": "Sharpe (not gated)",
+              "value": 0.36960834012161986,
+              "threshold": null,
+              "direction": "min",
+              "unit": "",
+              "status": "INFO",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Profit factor",
+              "value": 1.0887269533738453,
+              "threshold": 1.0,
+              "direction": "min",
+              "unit": "",
+              "status": "PASS",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Trades",
+              "value": 1319.0,
+              "threshold": 200.0,
+              "direction": "min",
+              "unit": "",
+              "status": "PASS",
+              "note": "10.72 years at 30 trades/yr is 322; the 200-trade cap binds",
+              "fmt": "{:,.0f}"
+            },
+            {
+              "label": "Max drawdown",
+              "value": 32.40320104834799,
+              "threshold": 12.0,
+              "direction": "max",
+              "unit": "%",
+              "status": "FAIL",
+              "note": null,
+              "fmt": "{:.2f}"
+            }
+          ]
+        },
+        "gate2": {
+          "name": "GATE 2 \u00b7 Robustness",
+          "status": "NOT EVALUATED",
+          "checks": [
+            {
+              "label": "WFO efficiency",
+              "value": null,
+              "threshold": 0.5,
+              "direction": "min",
+              "unit": "",
+              "status": "NOT EVALUATED",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Monte Carlo 95% max DD",
+              "value": null,
+              "threshold": 18.0,
+              "direction": "max",
+              "unit": "%",
+              "status": "NOT EVALUATED",
+              "note": null,
+              "fmt": "{:.2f}"
+            }
+          ]
+        },
+        "gate3": {
+          "name": "GATE 3 \u00b7 OOS Holdout",
+          "status": "NOT EVALUATED",
+          "checks": [
+            {
+              "label": "Holdout Sharpe retention",
+              "value": null,
+              "threshold": 0.8,
+              "direction": "min",
+              "unit": "x",
+              "status": "NOT EVALUATED",
+              "note": "no holdout Sharpe supplied, so Sharpe retention is undefined",
+              "fmt": "{:.2f}"
+            }
+          ]
+        }
+      },
+      "status": "FAIL",
+      "passed": false,
+      "thresholds": {
+        "gate1": {
+          "min_profit_factor": 1.0,
+          "min_trades": 100,
+          "max_required_trades": 200,
+          "min_trades_per_year": 30,
+          "max_drawdown_pct": 12.0
+        },
+        "gate2": {
+          "min_wfo_efficiency": 0.5,
+          "max_mc_drawdown_pct": 18.0
+        },
+        "gate3": {
+          "min_retention": 0.8
+        }
+      },
+      "holdout_sharpe": null,
+      "in_sample_sharpe": 0.36960834012161986,
+      "sharpe_retention": null,
+      "retention": null,
+      "retention_metric": null
+    }
+  },
+  "generated_utc": "2026-09-09T08:30:38+00:00",
+  "reports": {
+    "version_a": "/mnt/backtest/artifacts/pipeline/sma_momentum_crossover_20260818/verify_20260909_083030/report_BTC_version_a.html",
+    "version_b": "/mnt/backtest/artifacts/pipeline/sma_momentum_crossover_20260818/verify_20260909_083030/report_BTC_version_b.html"
+  },
+  "cost_drag": {
+    "trades": 4588,
+    "total_costs": 250413.03999999835,
+    "gross_pnl": 280400.0,
+    "net_pnl": 29986.96000000168,
+    "cost_per_trade": 54.57999999999964,
+    "cost_share_pct": 89.30564907275263,
+    "commission": 21013.039999999994,
+    "slippage": 229399.99999999837,
+    "split_available": true,
+    "modelled_round_turn": 54.58,
+    "by_year": [
+      {
+        "year": 2017,
+        "trades": 11,
+        "gross_pnl": -750.0,
+        "costs": 600.3799999999994,
+        "net_pnl": -1350.3799999999992,
+        "cost_per_trade": 54.57999999999995,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2018,
+        "trades": 508,
+        "gross_pnl": 1575.0,
+        "costs": 27726.639999999825,
+        "net_pnl": -26151.639999999818,
+        "cost_per_trade": 54.57999999999966,
+        "cost_share_pct": 1760.421587301576
+      },
+      {
+        "year": 2019,
+        "trades": 542,
+        "gross_pnl": 25650.0,
+        "costs": 29582.359999999884,
+        "net_pnl": -3932.3599999998805,
+        "cost_per_trade": 54.579999999999785,
+        "cost_share_pct": 115.33083820662722
+      },
+      {
+        "year": 2020,
+        "trades": 565,
+        "gross_pnl": -3625.0,
+        "costs": 30837.700000000004,
+        "net_pnl": -34462.7,
+        "cost_per_trade": 54.580000000000005,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2021,
+        "trades": 556,
+        "gross_pnl": 90300.0,
+        "costs": 30346.47999999997,
+        "net_pnl": 59953.52000000003,
+        "cost_per_trade": 54.57999999999995,
+        "cost_share_pct": 33.60629014396453
+      },
+      {
+        "year": 2022,
+        "trades": 534,
+        "gross_pnl": 35625.0,
+        "costs": 29145.720000000554,
+        "net_pnl": 6479.279999999456,
+        "cost_per_trade": 54.580000000001036,
+        "cost_share_pct": 81.81254736842261
+      },
+      {
+        "year": 2023,
+        "trades": 524,
+        "gross_pnl": 375.0,
+        "costs": 28599.920000000202,
+        "net_pnl": -28224.920000000184,
+        "cost_per_trade": 54.58000000000038,
+        "cost_share_pct": 7626.645333333387
+      },
+      {
+        "year": 2024,
+        "trades": 493,
+        "gross_pnl": 98400.0,
+        "costs": 26907.939999999944,
+        "net_pnl": 71492.06000000004,
+        "cost_per_trade": 54.579999999999885,
+        "cost_share_pct": 27.34546747967474
+      },
+      {
+        "year": 2025,
+        "trades": 504,
+        "gross_pnl": 48100.0,
+        "costs": 27508.31999999735,
+        "net_pnl": 20591.68000000265,
+        "cost_per_trade": 54.57999999999475,
+        "cost_share_pct": 57.18985446984896
+      },
+      {
+        "year": 2026,
+        "trades": 351,
+        "gross_pnl": -15250.0,
+        "costs": 19157.58000000062,
+        "net_pnl": -34407.58000000061,
+        "cost_per_trade": 54.58000000000177,
+        "cost_share_pct": null
+      }
+    ]
+  },
+  "friction_by_regime": {
+    "available": true,
+    "attribution": "the quadrant of the trade's ENTRY bar",
+    "regime_source": "the labels RegimeProfiler classified for this run",
+    "attributed_trades": 4588,
+    "unplaced_trades": 0,
+    "unplaced_note": null,
+    "by_regime": [
+      {
+        "regime": "High Volatility / Trending",
+        "quadrant": "Q1",
+        "trades": 905,
+        "gross_pnl": 198725.0,
+        "costs": 49394.89999999873,
+        "net_pnl": 149330.10000000126,
+        "cost_per_trade": 54.57999999999859,
+        "cost_share_pct": 24.85590640332053
+      },
+      {
+        "regime": "High Volatility / Ranging",
+        "quadrant": "Q2",
+        "trades": 1353,
+        "gross_pnl": 41950.0,
+        "costs": 73846.73999999906,
+        "net_pnl": -31896.739999999045,
+        "cost_per_trade": 54.5799999999993,
+        "cost_share_pct": 176.03513706793578
+      },
+      {
+        "regime": "Low Volatility / Trending",
+        "quadrant": "Q3",
+        "trades": 1032,
+        "gross_pnl": 31575.0,
+        "costs": 56326.56000000042,
+        "net_pnl": -24751.560000000398,
+        "cost_per_trade": 54.5800000000004,
+        "cost_share_pct": 178.389738717341
+      },
+      {
+        "regime": "Low Volatility / Ranging",
+        "quadrant": "Q4",
+        "trades": 1298,
+        "gross_pnl": 8150.0,
+        "costs": 70844.84000000014,
+        "net_pnl": -62694.84000000013,
+        "cost_per_trade": 54.58000000000011,
+        "cost_share_pct": 869.2618404907993
+      }
+    ]
+  },
+  "slippage_model": {
+    "model": "constant_ticks",
+    "slippage_ticks": 1.0,
+    "note": "ticks x that bar's tick size / price, per bar"
+  }
+}
