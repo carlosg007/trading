@@ -1291,6 +1291,70 @@ def test_a_push_is_never_attempted_without_a_commit(tmp: Path) -> None:
           str(out.get("push")))
 
 
+
+def test_only_scopes_the_promotion_to_named_packages(tmp: Path) -> None:
+    print("\n30. --only promotes exactly the named packages and nothing else")
+    pairs = [("NQ", "15m"), ("ES", "15m"), ("CL", "15m"), ("GC", "15m")]
+    write_stage2(tmp, [s2row(sym, tf) for sym, tf in pairs])
+    write_stage3(tmp, [s3row(sym, tf, certified=True) for sym, tf in pairs])
+
+    runner = FakeRunner()
+    rc = _main_with(runner, ["--strat", STRAT, "--promote-only",
+                             "--only", f"{STRAT}_ES_15m_VA,{STRAT}_GC_15m_VA",
+                             "--out-dir", str(tmp)])
+    promos = runner.for_script("promote.py")
+    check("exits 0", rc == 0, f"rc={rc}")
+    check("exactly the two named packages are promoted",
+          sorted(flag_value(c, "--symbol") for c in promos) == ["ES", "GC"],
+          str([flag_value(c, "--symbol") for c in promos]))
+    # THE POINT. The other certified rows belong to packages that may be
+    # ROUTED AND LIVE; re-promoting one rewrites the meta.json the dispatcher
+    # reads its weekday mask from, and commits.
+    check("...and the unnamed rows are never touched",
+          not any(flag_value(c, "--symbol") in ("NQ", "CL") for c in promos),
+          str(promos))
+
+
+def test_only_refuses_an_id_it_cannot_match(tmp: Path) -> None:
+    print("\n31. A typo in --only is a hard stop, not a smaller promotion")
+    write_stage2(tmp, [s2row("NQ", "15m")])
+    write_stage3(tmp, [s3row("NQ", "15m", certified=True)])
+
+    runner = FakeRunner()
+    rc = _main_with(runner, ["--strat", STRAT, "--promote-only",
+                             "--only", f"{STRAT}_NQ_15m_VA,{STRAT}_TYPO_15m_VA",
+                             "--out-dir", str(tmp)])
+    # A subset promoted silently would look exactly like success, which is the
+    # failure this flag exists to prevent.
+    check("an unmatched id fails the run", rc != 0, f"rc={rc}")
+    check("...and NOTHING is promoted, not even the id that did match",
+          runner.for_script("promote.py") == [],
+          str(runner.for_script("promote.py")))
+
+
+def test_only_lifts_the_fan_out_bar_and_its_absence_does_not(tmp: Path) -> None:
+    print("\n32. Naming the packages IS the deliberate act the bar asks for")
+    pairs = [(s, "15m") for s in ("NQ", "ES", "CL", "GC", "YM", "RTY")]
+    write_stage2(tmp, [s2row(sym, tf) for sym, tf in pairs])
+    write_stage3(tmp, [s3row(sym, tf, certified=True) for sym, tf in pairs])
+
+    named = ",".join(f"{STRAT}_{sym}_15m_VA" for sym, _ in pairs)
+    runner = FakeRunner()
+    rc = _main_with(runner, ["--strat", STRAT, "--promote-only",
+                             "--promote-max", "2", "--only", named,
+                             "--out-dir", str(tmp)])
+    check("six named packages promote under a bar of two", rc == 0, f"rc={rc}")
+    check("...all six", len(runner.for_script("promote.py")) == 6,
+          str(len(runner.for_script("promote.py"))))
+
+    # WITHOUT --only the bar still binds. The flag scopes; it does not disarm.
+    runner = FakeRunner()
+    rc = _main_with(runner, ["--strat", STRAT, "--promote-only",
+                             "--promote-max", "2", "--out-dir", str(tmp)])
+    check("the same six unnamed are still deferred by the bar",
+          runner.for_script("promote.py") == [], str(runner.scripts()))
+
+
 def test_dow_gate_staleness_is_detected(tmp: Path) -> None:
     """
     A Stage 4.5 verdict generated BEFORE the gate audit it is attached to is
@@ -1375,6 +1439,9 @@ def main() -> int:
         test_a_branch_with_no_upstream_is_not_an_error(tmp)
         test_a_failed_push_is_loud_and_never_fatal(tmp)
         test_a_push_is_never_attempted_without_a_commit(tmp)
+        test_only_scopes_the_promotion_to_named_packages(tmp)
+        test_only_refuses_an_id_it_cannot_match(tmp)
+        test_only_lifts_the_fan_out_bar_and_its_absence_does_not(tmp)
         test_failure_reasons_are_distinguished()
         test_summary_table(tmp)
         test_dry_run_launches_nothing(tmp)

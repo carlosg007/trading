@@ -1487,6 +1487,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--auto-promote", action="store_true",
                    help="Run Stage 5 for every configuration Stage 3 recorded "
                         "as certified. Never overrides a gate.")
+    p.add_argument("--only", default=None, metavar="ID[,ID...]",
+                   help="Promote ONLY these promoted-package ids "
+                        "(<strat>_<SYM>_<TF>_V<A|B>), comma-separated. Every "
+                        "other certified row on the handoff is left "
+                        "untouched, which is what makes it safe to re-seal a "
+                        "few packages in a campaign whose others are already "
+                        "routed and live. An id that is not a certified row "
+                        "here is refused rather than skipped, and --promote-"
+                        "max does not apply: naming them is the deliberate "
+                        "act the bar asks for.")
     p.add_argument("--promote-only", action="store_true",
                    help="Skip Stages 1-4 and run Stage 5 alone against the "
                         "certifications already on the handoff. This is the "
@@ -1529,7 +1539,8 @@ def _promote_only(args: argparse.Namespace) -> int:
         f"  package re-promoted."))
 
     outcome = auto_promote(strat, out_dir=out_dir, dry_run=dry,
-                           promote_max=args.promote_max)
+                           promote_max=args.promote_max,
+                           only=_parse_only(args.only))
     rc = int(outcome["returncode"])
     rows, promotions = outcome["rows"], outcome["promotions"]
 
@@ -1795,7 +1806,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     rows: list[dict[str, Any]] = []
     if args.auto_promote:
         outcome = auto_promote(strat, out_dir=out_dir, dry_run=dry,
-                               promote_max=args.promote_max)
+                               promote_max=args.promote_max,
+                               only=_parse_only(args.only))
         rc = int(outcome["returncode"])
         promotions, rows = outcome["promotions"], outcome["rows"]
         deferred = outcome.get("deferred")
@@ -1943,9 +1955,39 @@ PORTFOLIO_TEST = "tests/test_portfolio_config.py"
 REGISTRATION_PATHS = ("config/portfolios.json", PORTFOLIO_TEST)
 
 
+def _parse_only(raw: str | None) -> set[str] | None:
+    """`--only a,b,c` as a set, or None when the flag was not passed.
+
+    None and the empty set are DIFFERENT: None means "no scope, promote every
+    certified row", and an empty set would mean "promote nothing". An empty
+    string is treated as the flag not being passed, because `--only ""` from a
+    shell variable that came back blank should not silently promote the whole
+    campaign - it returns None and the caller's other guards still apply.
+    """
+    if raw is None or not str(raw).strip():
+        return None
+    return {part.strip() for part in str(raw).split(",") if part.strip()}
+
+
+def promoted_package_id(strat: str, row: dict[str, Any]) -> str:
+    """
+    The directory name a certified row promotes to.
+
+    Built through `promote.strategy_id`, the SAME function that names the
+    directory, rather than by formatting the parts here - a second spelling of
+    an id is how `--only` comes to name something that does not exist while
+    looking exactly right.
+    """
+    from backtest.promote import strategy_id                   # noqa: PLC0415
+    return strategy_id(strat, str(row.get("symbol")),
+                       str(row.get("timeframe")),
+                       str(row.get("version") or "A"))
+
+
 def auto_promote(strat: str, *, out_dir: str | None = None,
                  dry_run: bool = False,
                  promote_max: int | None = DEFAULT_PROMOTE_MAX,
+                 only: set[str] | None = None,
                  ) -> dict[str, Any]:
     """
     Stage 5 for every configuration Stage 3 recorded as certified.
@@ -1980,6 +2022,45 @@ def auto_promote(strat: str, *, out_dir: str | None = None,
 
     rows = (summary or {}).get("results") or []
     winners = certified_rows(summary)
+
+    # --only: PROMOTE EXACTLY THESE, and nothing else.
+    #
+    # `--promote-only` promotes every certified row on the handoff, which is
+    # right when the handoff IS the campaign and wrong the moment it is not.
+    # Sealing a re-run Stage 4.5 verdict into 59 unrouted packages needs
+    # exactly those 59; without a scope it would re-promote all 34 certified
+    # rows of sma_momentum_crossover_20260818, 24 of ma_anchoring_spread and
+    # 19 of ema_crossover - rewriting the meta.json of packages that are
+    # ROUTED AND LIVE, whose weekday mask the dispatcher is reading, and
+    # producing a git commit for each.
+    #
+    # Matched on the PROMOTED PACKAGE ID - `<strat>_<SYM>_<TF>_V<A|B>`, built
+    # by `promote.strategy_id`, the same function that names the directory -
+    # rather than on a symbol or a timeframe. A pair certifies as two packages
+    # and they are separately promotable; a scope keyed on anything coarser
+    # could not name one without the other.
+    #
+    # AN UNMATCHED ID IS A HARD STOP, not a warning. The whole point is to
+    # touch a named set, so a typo that silently promoted a subset would be
+    # the failure this flag exists to prevent - and it would look like it
+    # worked.
+    if only is not None:
+        want = {str(x).strip() for x in only if str(x).strip()}
+        by_id = {promoted_package_id(strat, r): r for r in winners}
+        unknown = sorted(want - set(by_id))
+        if unknown:
+            print(f"\n  REFUSED  --only names {len(unknown)} package(s) that "
+                  f"are not certified rows on this handoff:\n"
+                  + "".join(f"             {u}\n" for u in unknown)
+                  + f"           Certified and promotable here:\n"
+                  + "".join(f"             {k}\n" for k in sorted(by_id)),
+                  file=sys.stderr, flush=True)
+            return {"returncode": 1, "promotions": [], "rows": rows,
+                    "commit": None}
+        winners = [by_id[k] for k in sorted(want)]
+        print(f"  --only: {len(winners)} package(s) named; the other "
+              f"{len(by_id) - len(winners)} certified row(s) on this handoff "
+              f"are left untouched.")
     refused = [r for r in rows if r.get("certified") is not True]
     for r in refused:
         print(f"  NOT PROMOTED  {r.get('symbol')} {r.get('timeframe')} "
@@ -2000,7 +2081,10 @@ def auto_promote(strat: str, *, out_dir: str | None = None,
     # blocking on stdin would hang a detached run rather than protect it. The
     # limit is refused LOUDLY and names the flag that lifts it, so promoting
     # forty configurations stays possible and stops being accidental.
-    if (promote_max is not None and int(promote_max) > 0
+    # NAMING THEM IS THE DELIBERATE ACT the bar exists to require, so --only
+    # lifts it. The bar refuses an unattended fan-out nobody read a card for;
+    # a caller that typed out 59 package ids has read something.
+    if (only is None and promote_max is not None and int(promote_max) > 0
             and len(winners) > int(promote_max)):
         # A DEFERRAL, NOT A FAILURE - `returncode: 0`, changed 2026-09-10.
         #
