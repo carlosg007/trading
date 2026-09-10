@@ -1,5 +1,5 @@
 """
-ema_deviation_scalp_20260909 - Version B (ML-filtered), promoted 2026-09-09.
+ema_deviation_scalp_20260909 - Version B (ML-filtered), promoted 2026-09-10.
 
 Baseline signals from `baseline.py` (SHA-256 2cdecad91b56f45cf46e80eaa130518f741ad01eac25d37fc380f8ce7469b8a7), with the causal ML
 filter applied on top. This is the pipeline, not a new idea: every entry here
