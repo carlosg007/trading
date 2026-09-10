@@ -1271,6 +1271,124 @@ def test_an_explicit_portfolio_still_beats_the_quadrant() -> None:
 
 
 # ==========================================================================
+
+# ==========================================================================
+# the routing gates, enforced where the packages actually go through
+# ==========================================================================
+def _meta_with(net, *, dow="EVALUATED", blocked=(4,), tmp=None) -> dict:
+    """A meta.json whose cited audit measures `net` in the certified quadrant."""
+    audit = Path(tempfile.mkdtemp()) / "gate_audit_NQ_1h.json"
+    audit.write_text(json.dumps({"versions": {"A": {"gate_audit": {"gates": {
+        "gate_regime": {"status": "PASS", "quadrant": "Q2",
+                        "measured": {"profit_factor": 1.0, "trade_count": 116,
+                                     "net_pnl": net}}}}}}}))
+    return {"version": "A",
+            "certification": audit_cert(audit_file=str(audit)),
+            "day_of_week_gate": {"status": dow,
+                                 "blocked_weekdays": list(blocked)}}
+
+
+def test_a_negative_net_pnl_is_refused_before_anything_is_written() -> None:
+    """
+    THE HOLE THIS CLOSES. `backtest/profiler.py` rounds the profit factor to
+    two places before Gate R compares it against `>= 1.00`, so a true factor
+    in [0.995, 1.000) passes. `ema_deviation_scalp_20260909_NQ_30m_VB` cleared
+    it on a stored 1.00 over 116 trades with net -76.28 and was routed to
+    Incubator-Odd by this module - the batch registrar refused the same
+    package, but promote.py ran first and never looked.
+
+    Refused BEFORE the write, so there is no half-registration: the id and the
+    allocation go in together or neither does.
+    """
+    path = temp_config()
+    try:
+        register_portfolio(STRAT, version="A", scope=scope(),
+                           config_path=path, meta=_meta_with(-76.28))
+    except ValueError as exc:
+        assert "net P&L is -76.28" in str(exc), str(exc)
+        assert "rounded to 2dp" in str(exc), str(exc)
+    else:
+        raise AssertionError("a negative net P&L was routed to a live account")
+
+    blob = read(path)
+    for pid, block in blob["portfolios"].items():
+        assert STRAT not in (block.get("active_strategies") or []), pid
+        assert STRAT not in (block.get(ALLOCATIONS_KEY) or {}), pid
+
+
+def test_a_gate_that_never_ran_is_refused_and_can_be_overridden() -> None:
+    """NOT EVALUATED is refused; --allow-missing-dow routes it and SAYS so."""
+    path = temp_config()
+    try:
+        register_portfolio(STRAT, version="A", scope=scope(),
+                           config_path=path,
+                           meta=_meta_with(500.0, dow="NOT EVALUATED",
+                                           blocked=()))
+    except ValueError as exc:
+        assert "not EVALUATED" in str(exc), str(exc)
+    else:
+        raise AssertionError("a package with no Stage 4.5 verdict was routed")
+
+    out = register_portfolio(STRAT, version="A", scope=scope(),
+                             config_path=path, allow_missing_dow=True,
+                             meta=_meta_with(500.0, dow="NOT EVALUATED",
+                                             blocked=()))
+    rec = read(path)["portfolios"][out["portfolio_id"]][ALLOCATIONS_KEY][STRAT]
+    # The override does not erase the distinction it steps over.
+    assert rec["blocked_weekdays"] == [], rec
+    assert rec["day_of_week_basis"] == "NOT EVALUATED", rec
+
+
+def test_the_override_does_not_lift_the_net_pnl_gate() -> None:
+    """`--allow-missing-dow` is about the weekday, not about losing money."""
+    path = temp_config()
+    try:
+        register_portfolio(STRAT, version="A", scope=scope(),
+                           config_path=path, allow_missing_dow=True,
+                           meta=_meta_with(-1.0, dow="NOT EVALUATED"))
+    except ValueError as exc:
+        assert "net P&L" in str(exc), str(exc)
+    else:
+        raise AssertionError("--allow-missing-dow lifted the net-P&L gate")
+
+
+def test_blocked_weekdays_is_written_in_one_shape_by_both_registrars() -> None:
+    """
+    116 of the 119 rows in config/portfolios.json carried no
+    `blocked_weekdays` key at all on 2026-09-10, because only the batch
+    registrar wrote one. A reader comparing two allocations could not tell a
+    strategy with no blocked session from one whose mask was never recorded.
+    """
+    path = temp_config()
+    out = register_portfolio(STRAT, version="A", scope=scope(),
+                             config_path=path, meta=_meta_with(500.0,
+                                                               blocked=(4,)))
+    rec = read(path)["portfolios"][out["portfolio_id"]][ALLOCATIONS_KEY][STRAT]
+    assert rec["blocked_weekdays"] == [4], rec
+    # EVALUATED and clear is an empty list with NO basis key - the state that
+    # says "the stage ran and every session cleared".
+    assert "day_of_week_basis" not in rec, rec
+
+    from backtest.promote import dow_allocation_fields
+    batch = dow_allocation_fields(_meta_with(500.0, blocked=(4,)))
+    assert batch["blocked_weekdays"] == rec["blocked_weekdays"], batch
+    assert set(batch) <= set(rec), (batch, sorted(rec))
+
+
+def test_a_caller_that_passes_no_meta_is_not_gated() -> None:
+    """
+    The gates are evidence-driven. A caller building a routing table directly
+    passes no meta and is not refused for lacking one - but it also gets no
+    weekday fields, rather than an empty mask that would read as a cleared
+    week.
+    """
+    path = temp_config()
+    out = register_portfolio(STRAT, version="A", scope=scope(),
+                             config_path=path)
+    rec = read(path)["portfolios"][out["portfolio_id"]][ALLOCATIONS_KEY][STRAT]
+    assert "blocked_weekdays" not in rec, rec
+
+
 def main() -> int:
     cases = [(n, f) for n, f in sorted(globals().items())
              if n.startswith("test_") and callable(f)]

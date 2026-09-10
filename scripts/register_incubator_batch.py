@@ -130,15 +130,16 @@ def basket_index(cfg: dict) -> dict[str, str]:
     return out
 
 
-def gate_regime_of(meta: dict) -> dict:
-    cert = meta.get("certification") or {}
-    try:
-        audit = json.loads(Path(cert["audit_file"]).read_text())
-    except (OSError, ValueError, KeyError):
-        return {}
-    block = (audit.get("versions") or {}).get(str(meta.get("version"))) or {}
-    gates = ((block.get("gate_audit") or block).get("gates") or {})
-    return gates.get("gate_regime") or {}
+# ONE IMPLEMENTATION OF EACH GATE, and it lives in `backtest/promote.py`
+# because that is the module the OTHER registration path goes through. This
+# script and promote.py both write config/portfolios.json, and a check that
+# existed here and not there is exactly how a package with negative net P&L in
+# its certified quadrant reached Incubator-Odd on 2026-09-10: this file
+# refused it, promote.py never looked, and promote.py won because it ran
+# first.
+from backtest.promote import (                                   # noqa: E402
+    dow_allocation_fields, gate_regime_of, routing_refusals,
+)
 
 
 def evaluate(package: Path, cfg: dict, baskets: dict[str, str],
@@ -160,25 +161,17 @@ def evaluate(package: Path, cfg: dict, baskets: dict[str, str],
     except Exception:
         refusals.append(f"no theta_vol anchor for {symbol}/{tf}")
 
-    net = measured.get("net_pnl")
-    if net is None:
-        refusals.append("Gate R recorded no net P&L for the certified quadrant")
-    elif net <= 0:
-        refusals.append(
-            f"certified quadrant net P&L is {net:,.2f} - the stored profit "
-            f"factor {measured.get('profit_factor')} is rounded to 2dp and the "
-            f"unrounded one is below 1.00")
-
+    # Gates 3 and 4 are `promote.routing_refusals`; gates 1 and 2 above need
+    # the routing table and the regime cache and stay here.
+    refusals.extend(routing_refusals(meta, allow_missing_dow=allow_missing_dow))
     status = dow.get("status")
-    if status != "EVALUATED" and not allow_missing_dow:
-        refusals.append(f"Stage 4.5 day-of-week gate is {status!r}, not EVALUATED")
 
     return {
         "strategy_id": package.name, "symbol": symbol, "timeframe": tf,
         "version": meta.get("version"), "portfolio": portfolio,
         "quadrant": (meta.get("certification") or {}).get("target_quadrant"),
         "blocked_weekdays": list(dow.get("blocked_weekdays") or []),
-        "dow_status": status, "refusals": refusals,
+        "dow_status": status, "refusals": refusals, "meta": meta,
         "path": f"strategies/approved_incubator/{package.name}/strat.py",
     }
 
@@ -194,13 +187,13 @@ def allocation_for(row: dict) -> collections.OrderedDict:
         ("status", "incubating"),
         ("path", row["path"]),
         ("registered_by", "scripts/register_incubator_batch.py"),
-        ("blocked_weekdays", row["blocked_weekdays"]),
     ])
-    # The three day-of-week states stay distinguishable IN THE FILE. An empty
-    # mask written for a gate that never ran would read as "the stage ran and
-    # every session cleared" to every later reader.
-    if row["dow_status"] != "EVALUATED":
-        alloc["day_of_week_basis"] = "NOT EVALUATED"
+    # The day-of-week half comes from `promote.dow_allocation_fields`, the
+    # same call promote.py makes, so one allocation cannot carry a shape the
+    # other does not. It keeps the three states distinguishable IN THE FILE:
+    # an empty mask written for a gate that never ran would otherwise read as
+    # "the stage ran and every session cleared" to every later reader.
+    alloc.update(dow_allocation_fields(row["meta"]))
     return alloc
 
 

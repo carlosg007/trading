@@ -1824,6 +1824,92 @@ def unrouted_packages(config_path: Path | str = PORTFOLIO_CONFIG,
     return out
 
 
+def gate_regime_of(meta: dict) -> dict:
+    """
+    Gate R's block for THIS package's version, read from the audit it cites.
+
+    Lives here rather than in `scripts/register_incubator_batch.py`, which
+    imports it, because two implementations of "what did Gate R measure" are
+    two answers waiting to disagree - and the one that disagreed silently is
+    how a negative-expectancy package reached a live account on 2026-09-10.
+    """
+    cert = meta.get("certification") or {}
+    try:
+        audit = json.loads(Path(cert["audit_file"]).read_text())
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}
+    block = (audit.get("versions") or {}).get(str(meta.get("version"))) or {}
+    gates = ((block.get("gate_audit") or block).get("gates") or {})
+    return gates.get("gate_regime") or {}
+
+
+def dow_allocation_fields(meta: dict) -> dict[str, Any]:
+    """
+    The day-of-week half of an allocation record, in ONE shape.
+
+    Both registration paths write this. They did not always: 116 of the 119
+    rows in config/portfolios.json on 2026-09-10 carried no `blocked_weekdays`
+    key at all, because only the batch registrar wrote one, and a reader
+    comparing two allocations could not tell a strategy with no blocked
+    session from one whose mask was never recorded.
+
+    `day_of_week_basis` is set ONLY when the gate did not run, which keeps the
+    three states this repository insists on apart in the file itself: no
+    `blocked_weekdays` key is a record written before this existed, `[]` is
+    "the stage ran and every session cleared", and a basis of NOT EVALUATED is
+    "no stage ran, and the empty mask beside this is not evidence".
+    """
+    dow = meta.get("day_of_week_gate") or {}
+    fields: dict[str, Any] = {
+        "blocked_weekdays": [int(d) for d in (dow.get("blocked_weekdays") or [])],
+    }
+    if dow.get("status") != "EVALUATED":
+        fields["day_of_week_basis"] = DOW_NOT_EVALUATED
+    return fields
+
+
+def routing_refusals(meta: dict, *,
+                     allow_missing_dow: bool = False) -> list[str]:
+    """
+    Why this package must NOT be routed to a live account, or an empty list.
+
+    The two gates that can be answered from the package alone. The batch
+    registrar adds the two that need the routing table and the regime cache -
+    the symbol being in a basket, and a theta_vol anchor resolving for its
+    (symbol, TIMEFRAME) - and calls this for the rest, so there is one
+    implementation of each check and not two.
+
+    THE NET P&L GATE IS THE ONE THAT EARNED THIS FUNCTION. `backtest/
+    profiler.py` rounds the profit factor to two places before Gate R compares
+    it against `>= 1.00`, so any true factor in [0.995, 1.000) passes. The net
+    P&L beside it is not rounded into ambiguity, and a negative one means the
+    unrounded factor is below the bar whatever the stored 1.00 says.
+    `ema_deviation_scalp_20260909_NQ_30m_VB` cleared Gate R on a stored 1.00
+    over 116 trades with net -76.28 and was routed to Incubator-Odd by this
+    module, because this module did not look. Three others reached the table
+    the same way before it and two had to be pruned by hand.
+    """
+    refusals: list[str] = []
+    measured = (gate_regime_of(meta) or {}).get("measured") or {}
+    net = measured.get("net_pnl")
+    if net is None:
+        refusals.append("Gate R recorded no net P&L for the certified "
+                        "quadrant, so there is nothing to check it against")
+    elif float(net) <= 0:
+        refusals.append(
+            f"certified quadrant net P&L is {float(net):,.2f} - the stored "
+            f"profit factor {measured.get('profit_factor')} is rounded to 2dp "
+            f"and the unrounded one is below 1.00")
+
+    status = (meta.get("day_of_week_gate") or {}).get("status")
+    if status != "EVALUATED" and not allow_missing_dow:
+        refusals.append(
+            f"Stage 4.5 day-of-week gate is {status!r}, not EVALUATED - an "
+            f"empty weekday mask written for a gate that never ran is "
+            f"indistinguishable from one the stage cleared")
+    return refusals
+
+
 def register_portfolio(strat: str,
                        *,
                        version: str,
@@ -1832,6 +1918,8 @@ def register_portfolio(strat: str,
                        portfolio: str | None = None,
                        status: str = ALLOCATION_STATUS,
                        config_path: Path = PORTFOLIO_CONFIG,
+                       meta: dict | None = None,
+                       allow_missing_dow: bool = False,
                        incubator: Path = INCUBATOR) -> dict[str, Any]:
     """
     Register a promoted strategy onto an incubator portfolio.
@@ -1866,6 +1954,27 @@ def register_portfolio(strat: str,
     `allocation_reconciliation` - which is where the authoritative comparison
     lives, because that is where the schema-label -> `Q1`..`Q4` mapping lives.
     """
+    # THE GATES, BEFORE ANYTHING IS WRITTEN.
+    #
+    # `meta` is this package's own meta.json. It is optional so that callers
+    # constructing a routing table directly - every case in
+    # tests/test_promote_registration.py - keep working, and the CLI below
+    # ALWAYS passes it, which is the path a promoted package actually takes.
+    # Refusing here rather than in the caller means no half-write: the
+    # allocation and the id go in together or neither does.
+    #
+    # Raised as ValueError, which `promote()`'s call site catches and reports
+    # as "the promotion stands, registration failed". That is the right
+    # division - being in approved_incubator/ is a record that a version was
+    # certified, and routing it to an account is a separate permission that
+    # this function is entitled to withhold.
+    if meta is not None:
+        refusals = routing_refusals(meta, allow_missing_dow=allow_missing_dow)
+        if refusals:
+            raise ValueError(
+                f"{strat} must not be routed to a live account:\n    - "
+                + "\n    - ".join(refusals))
+
     path = Path(config_path)
     # Creates the incubator track when it is missing rather than failing a
     # promotion that is already written and committed - see
@@ -2023,6 +2132,12 @@ def register_portfolio(strat: str,
         "routing_basis": basis,
         "resolved_from": dict(scope.get("resolved_from") or {}),
     }
+    # ONE SHAPE ACROSS BOTH REGISTRARS - see `dow_allocation_fields`. Written
+    # from the package's own meta.json, never recomputed: the weekday is Stage
+    # 4.5's verdict for THIS version, and a mask derived here from anything
+    # else would be a second opinion nobody measured.
+    if meta is not None:
+        record.update(dow_allocation_fields(meta))
 
     # One entry per certified (strat, symbol, timeframe), deduplicated on that
     # triple. The top-level fields above describe THIS promotion - the most
@@ -2494,6 +2609,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--variants-tested", type=int, default=None,
                    help="How many variants were tried to reach this result")
     p.add_argument("--notes", default="", help="Free text for meta.json")
+    p.add_argument("--allow-missing-dow", action="store_true",
+                   help="register even though Stage 4.5 never ran for this "
+                        "pair. The allocation records "
+                        "day_of_week_basis: NOT EVALUATED so the empty mask "
+                        "is not read later as a week the stage cleared. It "
+                        "does NOT lift the net-P&L gate.")
     p.add_argument("--force", action="store_true",
                    help="Promote even when the gate audit did not pass. "
                         "Recorded in meta.json.")
@@ -2682,7 +2803,8 @@ def main(argv: list[str] | None = None) -> int:
             registration = register_portfolio(
                 promoted_id, version=meta["version"], scope=scope,
                 allocation=args.allocation, portfolio=args.portfolio,
-                config_path=cfg)
+                config_path=cfg, meta=meta,
+                allow_missing_dow=args.allow_missing_dow)
         except (OSError, ValueError) as exc:
             # Reported, not raised, for git_commit's reason: the promotion is
             # written and committed, and it is not undone because the routing
