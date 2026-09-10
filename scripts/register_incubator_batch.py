@@ -490,11 +490,39 @@ def main(argv: list[str] | None = None) -> int:
               for s in (p.get("active_strategies") or [])}
 
     from realtime.regime_daemon import MasterRegimeDaemon
-    daemon = MasterRegimeDaemon()
+
+    # SCOPED TO THE PAIRS ABOUT TO BE CHECKED, and this is a bug fix rather
+    # than a tidy-up. `MasterRegimeDaemon()` defaults to
+    # `load_theta_anchors(symbols=REFERENCE_SYMBOLS, timeframes=(DEFAULT_TF,))`
+    # - three contracts at 15m - so gate 2 asked `theta_for(symbol, tf)` about
+    # pairs the daemon had never loaded and got ThetaAnchorMissing for every
+    # one of them. Measured on 2026-09-10: 65 (symbol, timeframe) pairs
+    # reported no anchor, and 56 of them had a perfectly good theta_vol sitting
+    # in the regime cache over the charter window. The refusals were real -
+    # nothing was routed that should not have been - but the REASON was wrong,
+    # and "run precompute_regimes.py" is the wrong instruction when the cache
+    # already holds the answer.
+    #
+    # The pairs come from the packages themselves rather than from a symbol
+    # list, so a contract this script has never seen is loaded the first time
+    # a package for it appears.
+    packages = [p for p in sorted(Path(args.incubator).iterdir())
+                if p.is_dir() and (p / "meta.json").exists()]
+    wanted: set[tuple[str, str]] = set()
+    for pkg in packages:
+        try:
+            meta = json.loads((pkg / "meta.json").read_text())
+        except (OSError, ValueError):
+            continue
+        sym, tf = meta.get("symbol"), meta.get("timeframe")
+        if sym and tf:
+            wanted.add((str(sym).upper(), str(tf)))
+    daemon = MasterRegimeDaemon(
+        symbols=tuple(sorted({s for s, _ in wanted})) or None,
+        timeframes=tuple(sorted({t for _, t in wanted})) or None)
 
     rows = [evaluate(p, cfg, baskets, daemon.theta_for, args.allow_missing_dow)
-            for p in sorted(Path(args.incubator).iterdir())
-            if p.is_dir() and (p / "meta.json").exists() and p.name not in routed]
+            for p in packages if p.name not in routed]
 
     eligible = [r for r in rows if not r["refusals"]]
     refused = [r for r in rows if r["refusals"]]
