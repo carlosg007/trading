@@ -9,9 +9,9 @@
   ],
   "timeframe": "30m",
   "params": {
-    "ema_fast": 50,
-    "keltner_len": 20,
-    "keltner_mult": 2.0,
+    "ema_fast": 30,
+    "keltner_len": 30,
+    "keltner_mult": 2.5,
     "session_start_et": "09:30",
     "session_end_et": "16:00",
     "allowed_days": [
@@ -26,33 +26,66 @@
     "use_time_filter": false,
     "use_day_filter": false,
     "use_news_filter": false,
-    "sl_atr_mult": 2.0,
+    "sl_atr_mult": 4.0,
     "tp_atr_mult": null,
     "trailing": true
   },
-  "params_source": "keltner_trend_drift_20260901.py DEFAULT_PARAMS",
+  "params_source": "locked from dual_metrics_BTC.json",
   "params_conflict": [],
   "risk": {
-    "sl_atr_mult": 2.0,
+    "sl_atr_mult": 4.0,
     "tp_atr_mult": null,
     "trailing": true
   },
   "day_of_week_gate": {
-    "status": "NOT EVALUATED",
-    "blocked_weekdays": [],
-    "blocked_weekday": null,
+    "status": "EVALUATED",
     "version": "A",
+    "versions_profiled": [
+      "A",
+      "B"
+    ],
+    "blocked_weekdays": [
+      1
+    ],
+    "blocked_weekday": 1,
+    "blocked_day": "Tue",
+    "blocked_day_name": "Tuesday",
+    "worst_weekday": 1,
+    "worst_day": "Tue",
+    "block_rule": "negative_expectancy",
+    "min_trades": 20,
+    "reason": "Tuesday is the weakest session (expectancy -336.35 per trade over 266 trades) and its expectancy is negative",
+    "selected_in_sample": true,
+    "note": "The weekday was chosen in-sample, on a window that spans the Stage 3 holdout. It is a live-supervision instruction, not evidence: no gate was scored on it and nothing was pruned for it.",
     "source": "/mnt/backtest/artifacts/pipeline/keltner_trend_drift_20260901/dow_gate_BTC_30m.json",
-    "reason": "dow_gate_BTC_30m.json does not exist. Stage 4.5 (backtest/dow_gate.py) was not run for this pair; no weekday is blocked and none was cleared."
+    "source_sha256": "c1502d1eefe1ce48e1416874d53914c0ff8ce0c3b881fb802109d1fdb654a7b5"
   },
   "source": "/home/cgrullon/src/trading/strategies/experimental/keltner_trend_drift_20260901.py",
   "source_sha256": "da6dcbae3ef30e00684d1435c8438eff93c2d96857e2d6cd3be96bc37f69a9e7",
   "promoted_sha256": "da6dcbae3ef30e00684d1435c8438eff93c2d96857e2d6cd3be96bc37f69a9e7",
-  "promoted_utc": "2026-09-09T03:16:49+00:00",
-  "costs_included": false,
-  "variants_tested": 54,
-  "metrics_status": "NOT RECORDED",
-  "metrics": null,
+  "promoted_utc": "2026-09-10T23:39:53+00:00",
+  "costs_included": true,
+  "variants_tested": null,
+  "metrics_status": "RECORDED \u00b7 locked from dual_metrics_BTC.json",
+  "metrics": {
+    "sharpe": 0.24346311490980768,
+    "sortino": 0.42783891237262217,
+    "calmar": 0.04802154350688507,
+    "profit_factor": 1.015516389646387,
+    "win_rate": 0.36936936936936937,
+    "max_drawdown_pct": -59.41242437799576,
+    "total_return_pct": 35.19106000000325,
+    "annualized_return_pct": 2.8530763221174427,
+    "trade_count": 1443,
+    "total_pnl": 35191.060000000565,
+    "total_costs": 78758.93999999933,
+    "final_equity": 135191.06000000326,
+    "n_days": 2701,
+    "start": "2017-12-17 23:00:00+00:00",
+    "end": "2026-08-08 21:30:00+00:00",
+    "bars": 101170,
+    "initial_capital": 100000.0
+  },
   "gate_audit_status": "PASS",
   "gate_audit": {
     "gate1": "FAIL",
@@ -64,7 +97,7 @@
   },
   "certification": {
     "audit_file": "/mnt/backtest/artifacts/pipeline/keltner_trend_drift_20260901/gate_audit_BTC_30m.json",
-    "audit_sha256": "20a0998aa00a60c3d73aba14fcb0ec41a9d8b96539a045ead464ef00a0ea212c",
+    "audit_sha256": "eac59513e501845e7264baea67c21e5452dff6cfbfba14fae35c78e3ccc7bdac",
     "audit_symbol": "BTC",
     "audit_timeframe": "30m",
     "target_quadrant": "Q3",
@@ -109,45 +142,13 @@
       "exclude_days": null
     },
     "status": "PASS",
-    "snapshot_gate_status": "NOT EVALUATED",
-    "agrees_with_snapshot": null
+    "snapshot_gate_status": "FAIL",
+    "agrees_with_snapshot": false
   },
   "gates_overridden": false,
   "oos_status": "passed_gate3",
   "audit_warnings": [
     "import from 'backtest.event_calendar' is not allowed"
   ],
-  "notes": "Stage 3 certified BTC 30m in Low Volatility / Trending; staged by backtest/audit_gates.py, not committed.",
-  "seal": {
-    "algorithm": "sha256",
-    "strategy_code": {
-      "path": "/home/cgrullon/src/trading/strategies/approved_incubator/keltner_trend_drift_20260901_BTC_30m_VA/strat.py",
-      "sha256": "da6dcbae3ef30e00684d1435c8438eff93c2d96857e2d6cd3be96bc37f69a9e7"
-    },
-    "winning_parameters": {
-      "path": "/mnt/backtest/artifacts/pipeline/keltner_trend_drift_20260901/best_params_BTC_30m.json",
-      "sha256": "3e6ed6266d208d60d6eede84d284f77ac4bfc354bf88321d3379b6da70e9d53b"
-    },
-    "gate_audit": {
-      "path": "/mnt/backtest/artifacts/pipeline/keltner_trend_drift_20260901/gate_audit_BTC_30m.json",
-      "sha256": "20a0998aa00a60c3d73aba14fcb0ec41a9d8b96539a045ead464ef00a0ea212c"
-    },
-    "metrics_handoff": {
-      "path": null,
-      "sha256": "NOT AVAILABLE"
-    },
-    "rule": "The three hashes are sealed together because they can be separated: the same code under a different winning cell is a different strategy with the same code checksum.",
-    "certified_symbol": "BTC",
-    "certified_timeframe": "30m",
-    "target_regime": "Low Volatility / Trending",
-    "target_quadrant": "Q3",
-    "params": {
-      "ema_fast": 30,
-      "keltner_len": 30,
-      "keltner_mult": 2.5,
-      "sl_atr_mult": 4.0,
-      "trailing": true
-    },
-    "params_locked": true
-  }
+  "notes": ""
 }
