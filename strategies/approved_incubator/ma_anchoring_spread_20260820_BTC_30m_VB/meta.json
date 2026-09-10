@@ -9,41 +9,74 @@
   ],
   "timeframe": "30m",
   "params": {
-    "fast_window": 21,
-    "slow_window": 200,
-    "spread_threshold": 0.015,
+    "fast_window": 10,
+    "slow_window": 100,
+    "spread_threshold": 0.01,
     "exit_revert_mult": 0.5,
     "use_macro_anchor": true,
     "use_spread_hurdle": true,
     "use_spread_expansion": true,
     "use_news_filter": false,
-    "sl_atr_mult": 1.5,
-    "tp_atr_mult": 3.0,
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": 2.0,
     "trailing": false
   },
-  "params_source": "ma_anchoring_spread_20260820.py DEFAULT_PARAMS",
+  "params_source": "locked from dual_metrics_BTC.json",
   "params_conflict": [],
   "risk": {
-    "sl_atr_mult": 1.5,
-    "tp_atr_mult": 3.0,
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": 2.0,
     "trailing": false
   },
   "day_of_week_gate": {
-    "status": "NOT EVALUATED",
-    "blocked_weekdays": [],
-    "blocked_weekday": null,
+    "status": "EVALUATED",
     "version": "B",
+    "versions_profiled": [
+      "A",
+      "B"
+    ],
+    "blocked_weekdays": [
+      4
+    ],
+    "blocked_weekday": 4,
+    "blocked_day": "Fri",
+    "blocked_day_name": "Friday",
+    "worst_weekday": 4,
+    "worst_day": "Fri",
+    "block_rule": "negative_expectancy",
+    "min_trades": 20,
+    "reason": "Friday is the weakest session (expectancy -265.84 per trade over 413 trades) and its expectancy is negative",
+    "selected_in_sample": true,
+    "note": "The weekday was chosen in-sample, on a window that spans the Stage 3 holdout. It is a live-supervision instruction, not evidence: no gate was scored on it and nothing was pruned for it.",
     "source": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/dow_gate_BTC_30m.json",
-    "reason": "dow_gate_BTC_30m.json does not exist. Stage 4.5 (backtest/dow_gate.py) was not run for this pair; no weekday is blocked and none was cleared."
+    "source_sha256": "cc6f7e8cea9d34ecba8d3dc7e633b5e55f7b2693db8687d3e7b36146bd78b3a4"
   },
   "source": "/home/cgrullon/src/trading/strategies/experimental/ma_anchoring_spread_20260820.py",
   "source_sha256": "296538f7b4199e7eb5fc5000a9b6271c2b779160e9a9d6bcce4e002d00394e4d",
-  "promoted_sha256": "76527dd4a1b5a769bd37600cc8bec6c6660763a5356a9579884d022757ca322e",
-  "promoted_utc": "2026-09-09T06:55:53+00:00",
-  "costs_included": false,
-  "variants_tested": 270,
-  "metrics_status": "NOT RECORDED",
-  "metrics": null,
+  "promoted_sha256": "54eb729589be64cf2dac05b284e306c8c2a4528990d9c9538e927fcca21aada7",
+  "promoted_utc": "2026-09-10T23:40:14+00:00",
+  "costs_included": true,
+  "variants_tested": null,
+  "metrics_status": "RECORDED \u00b7 locked from dual_metrics_BTC.json",
+  "metrics": {
+    "sharpe": -0.2819178709846479,
+    "sortino": -0.30566488335774056,
+    "calmar": null,
+    "profit_factor": 0.9593293544111803,
+    "win_rate": 0.4960134284515317,
+    "max_drawdown_pct": -119.2496246576556,
+    "total_return_pct": -148.03913999999926,
+    "annualized_return_pct": null,
+    "trade_count": 2383,
+    "total_pnl": -148039.13999999847,
+    "total_costs": 130064.13999999817,
+    "final_equity": -48039.13999999926,
+    "n_days": 2701,
+    "start": "2017-12-17 23:00:00+00:00",
+    "end": "2026-08-08 21:30:00+00:00",
+    "bars": 101170,
+    "initial_capital": 100000.0
+  },
   "gate_audit_status": "PASS",
   "gate_audit": {
     "gate1": "FAIL",
@@ -55,7 +88,7 @@
   },
   "certification": {
     "audit_file": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/gate_audit_BTC_30m.json",
-    "audit_sha256": "181961d02e491a018d4f129aa5b9893290c24e5c19642cf887502b4f4219b895",
+    "audit_sha256": "a32f3c10f016f0ca7ff4057c5a4c3bbe4d38484e0df61d736c66548c36f45856",
     "audit_symbol": "BTC",
     "audit_timeframe": "30m",
     "target_quadrant": "Q1",
@@ -101,48 +134,15 @@
       "exclude_days": null
     },
     "status": "PASS",
-    "snapshot_gate_status": "NOT EVALUATED",
-    "agrees_with_snapshot": null
+    "snapshot_gate_status": "FAIL",
+    "agrees_with_snapshot": false
   },
   "gates_overridden": false,
   "oos_status": "passed_gate3",
   "audit_warnings": [
     "import from 'backtest.event_calendar' is not allowed"
   ],
-  "notes": "Stage 3 certified BTC 30m in High Volatility / Trending; staged by backtest/audit_gates.py, not committed.",
+  "notes": "",
   "ml_threshold": 0.48,
-  "baseline": "baseline.py",
-  "seal": {
-    "algorithm": "sha256",
-    "strategy_code": {
-      "path": "/home/cgrullon/src/trading/strategies/approved_incubator/ma_anchoring_spread_20260820_BTC_30m_VB/baseline.py",
-      "sha256": "296538f7b4199e7eb5fc5000a9b6271c2b779160e9a9d6bcce4e002d00394e4d"
-    },
-    "winning_parameters": {
-      "path": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/best_params_BTC_30m.json",
-      "sha256": "a6b05a2226ce7deb75f03844c808eabfb7963eb5b73454bcfc9a38050380a2f4"
-    },
-    "gate_audit": {
-      "path": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/gate_audit_BTC_30m.json",
-      "sha256": "181961d02e491a018d4f129aa5b9893290c24e5c19642cf887502b4f4219b895"
-    },
-    "metrics_handoff": {
-      "path": null,
-      "sha256": "NOT AVAILABLE"
-    },
-    "rule": "The three hashes are sealed together because they can be separated: the same code under a different winning cell is a different strategy with the same code checksum.",
-    "certified_symbol": "BTC",
-    "certified_timeframe": "30m",
-    "target_regime": "High Volatility / Trending",
-    "target_quadrant": "Q1",
-    "params": {
-      "fast_window": 10,
-      "slow_window": 100,
-      "spread_threshold": 0.01,
-      "sl_atr_mult": 2.0,
-      "tp_atr_mult": 2.0,
-      "trailing": false
-    },
-    "params_locked": true
-  }
+  "baseline": "baseline.py"
 }
