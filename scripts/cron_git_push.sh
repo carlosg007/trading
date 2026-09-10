@@ -9,6 +9,12 @@ LOG_FILE="$REPO_DIR/logs/cron_git_push.log"
 BRANCH="vectorbt-engine"
 MAX_LOG_BYTES=$((10 * 1024 * 1024))  # 10 MiB — truncate if exceeded
 
+# --- SSH key for non-interactive cron execution ---
+# Cron runs without a login shell or desktop keyring, so SSH_AUTH_SOCK is
+# almost always unset at midnight. Pin the key explicitly so git push never
+# hangs on a missing agent or an unlocked passphrase prompt.
+export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+
 mkdir -p "$REPO_DIR/logs"
 
 # --- Log rotation ---
@@ -70,26 +76,27 @@ fi
 
 # --- Push ---
 #
-# THE STATUS HAS TO COME FROM `git push`, NOT FROM `tee`. `$?` after the
-# pipeline is the pipeline's status, which under `pipefail` is the RIGHTMOST
-# non-zero one - so a `tee` that failed on a full disk would mask git's code,
-# and a `tee` that succeeded after git failed reported tee's 0 in the original
-# `else` branch. ${PIPESTATUS[0]} is git's own.
+# THE STATUS HAS TO COME FROM `git push` ITSELF. The original piped git into
+# `tee` and read the pipeline's status: under `pipefail` that is the rightmost
+# non-zero one, so a `tee` that failed on a full disk or an unwritable log
+# reported a FAILED push on a push that had worked. Command substitution
+# removes the pipeline entirely - `$?` on the next line is git's own code and
+# there is nothing else in the chain to borrow a status from.
+#
+# The output is captured rather than streamed, so it reaches both the log and
+# stdout AFTER the status is known. A midnight cron has no terminal reading
+# stdout anyway; the log is the record.
 #
 # `set +e` around it because `errexit` would abort the script on a failed push
 # BEFORE the status could be captured and logged, which is the one outcome
-# this script exists to record. PIPESTATUS is read on the very next line: any
-# other command in between overwrites it.
+# this script exists to record.
 log "Pushing $BRANCH to origin ..."
 set +e
-git push origin "$BRANCH" 2>&1 | tee -a "$LOG_FILE"
-push_status=${PIPESTATUS[0]}
-tee_status=${PIPESTATUS[1]}
+push_out=$(git push origin "$BRANCH" 2>&1)
+push_status=$?
 set -e
-
-if (( tee_status != 0 )); then
-  log "WARNING: tee exited ${tee_status}; the push output above may be truncated"
-fi
+printf "%s\n" "$push_out" >> "$LOG_FILE"
+printf "%s\n" "$push_out"
 
 if (( push_status == 0 )); then
   log "PUSH OK"
