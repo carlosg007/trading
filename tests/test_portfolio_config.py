@@ -125,31 +125,33 @@ EXECUTION_ACCOUNTS = {"Incubator-Odd": "SimIncubator1",
 # routing comment records having made before.
 #
 # NG and RB promotions are deliberately absent: `contract_alias.MICRO_TO_PARENT`
-# has no micro for either, so NO incubator basket can reach them and moving
-# them between accounts cannot help. They need full-size contracts, which is a
-# different risk profile from these sim accounts.
+# has no micro for either, and the MICRO ACCOUNTS still cannot reach them.
 #
-# CL promotions are absent for a THIRD reason now, and the history matters if
-# anyone is tempted to put them back. NG and RB cannot be reached by any
-# basket. CL once could - Incubator-Odd held MCL and the routing worked - but
-# the DATA was missing: NinjaTrader on this box streams no CL series, so
-# /mnt/backtest/artifacts/nt8_bars carries 27 symbols and none of them is CL,
-# and the regime daemon failed every cycle with "the feed returned no 15m
-# bars". Five CL strategies sat here reading `no_regime_published` -
-# allocated, certified, permanently inert.
+# BOTH HALVES OF THAT ARE NOW OUT OF DATE FOR Incubator-FullSize, and the
+# history matters. CL was once routed through MCL on Incubator-Odd and the
+# routing worked, but the DATA was missing - NinjaTrader streamed no CL series,
+# nt8_bars carried 27 symbols and none was CL, and five CL strategies sat
+# allocated, certified and permanently inert on `no_regime_published`. The
+# comment that replaced this one said restoring CL was TWO changes, the feed
+# and then the basket.
 #
-# `724a92b portfolios: route the certified FX and Q3/Q4 packages; drop MCL`
-# then took MCL out of the basket and its `asset_metadata` entry with it, and
-# put 6E/6J in its place. So restoring CL is now TWO changes, not one: the
-# feed, and then the basket. Confirm the feed with the spool rather than with
-# this comment:
+# The feed arrived. On 2026-09-10 the spool carries 28 series including CL, NG,
+# ZW, LE and BTC, all updating live. So the basket was the second change and it
+# has been made: Incubator-FullSize admits those five DIRECTLY, at full size,
+# exactly as it already held HO, PL, RB and ETH. No micro is involved and none
+# would help - MCL and MBT are NOT in the spool, so routing through them would
+# reintroduce the inert-strategy failure this paragraph exists to record.
 #
-#     ls /mnt/backtest/artifacts/nt8_bars/ | grep '^CL'
+# Confirm the feed with the spool rather than with this comment - that
+# instruction is the durable part, and it is what showed this text had gone
+# stale:
+#
+#     ls /mnt/backtest/artifacts/nt8_bars/ | sed 's/_.*//' | sort -u
 EXPECTED_ASSIGNMENTS = {
     # --- BEGIN GENERATED STAMP (rewritten on every sync) ---
     # REGENERATED 2026-09-10 by scripts/register_incubator_batch.py --write, which now rewrites
     # this constant in the same run that registers into config/portfolios.json.
-    # This run routed 0 package(s); the book stands at 126.
+    # This run routed 0 package(s); the book stands at 135.
     #
     # THIS IS NO LONGER A HUMAN DECLARATION. It is regenerated from the config it
     # describes, so it cannot contradict it and cannot catch an assignment nobody
@@ -321,6 +323,15 @@ EXPECTED_ASSIGNMENTS = {
         "dbb_momentum_breakout_20260909_HO_30m_VB",            # 30m, HO
         "multi_ema_cci_trend_20260910_ETH_30m_VA",             # 30m, ETH
         "multi_ema_cci_trend_20260910_ETH_1h_VA",              #  1h, ETH
+        "dbb_momentum_breakout_20260909_CL_30m_VA",            # 30m, CL
+        "dbb_momentum_breakout_20260909_CL_30m_VB",            # 30m, CL
+        "dbb_momentum_breakout_20260909_LE_30m_VA",            # 30m, LE
+        "dbb_momentum_breakout_20260909_LE_30m_VB",            # 30m, LE
+        "ema_deviation_scalp_20260909_CL_1h_VA",               #  1h, CL
+        "ema_deviation_scalp_20260909_CL_1h_VB",               #  1h, CL
+        "multi_ema_cci_trend_20260910_BTC_15m_VA",             # 15m, BTC
+        "multi_ema_cci_trend_20260910_ZW_1h_VB",               #  1h, ZW
+        "semafor_ha_momentum_20260910_NG_5m_VA",               #  5m, NG
     ],
     "Eval-FullSize":     [],
     "Prop-FullSize":     [],
@@ -342,12 +353,26 @@ REQUESTED_POINT_VALUES = {"MNQ": 2.0, "MES": 5.0, "MGC": 10.0,
                           # PL and ETH are checked against the definitions
                           # under /mnt/backtest/reference/futures/.
                           "HO": 42_000.0, "RB": 42_000.0,
-                          "PL": 50.0, "ETH": 50.0}
+                          "PL": 50.0, "ETH": 50.0,
+                          # Admitted to Incubator-FullSize on 2026-09-10, at
+                          # FULL SIZE and with no micro in the path - MCL and
+                          # MBT are not in the nt8_bars spool, so routing
+                          # through them would put a strategy on a feed that
+                          # does not exist. Declared HERE in the same commit
+                          # that adds them to the basket, which is the rule
+                          # this constant enforces: an asset_metadata entry
+                          # nobody named is a multiplier nobody checked, and a
+                          # wrong one scales every P&L figure for that symbol
+                          # while the backtest still looks plausible.
+                          "CL": 1_000.0, "NG": 10_000.0,
+                          "ZW": 50.0, "LE": 400.0, "BTC": 5.0}
 REQUESTED_TICK_SIZES = {"MNQ": 0.25, "MES": 0.25, "MGC": 0.10,
                         "6E": 0.00005, "6J": 0.0000005,
                         "M2K": 0.10, "MYM": 1.0,
                         "HO": 0.0001, "RB": 0.0001,
-                        "PL": 0.10, "ETH": 0.50}
+                        "PL": 0.10, "ETH": 0.50,
+                        "CL": 0.01, "NG": 0.001,
+                        "ZW": 0.25, "LE": 0.025, "BTC": 5.00}
 
 # The repository's regime -> quadrant id map, built HERE from
 # `backtest.profiler.REGIMES` rather than imported. `REGIMES` is a tuple in

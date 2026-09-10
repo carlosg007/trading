@@ -215,15 +215,25 @@ def test_an_unknown_symbol_is_refused(resolver):
         resolver.resolve_contract("ZZZ", current_time=IN_WINDOW)
 
 
-def test_cl_is_absent_on_purpose_and_fails_loudly(resolver):
-    """There is no CL series on this box's NT8 feed and no basket carries it.
-
-    An order for one should fail at the formatter rather than resolve into a
-    contract nothing can trade.
+def test_cl_resolves_now_and_mcl_still_does_not(resolver):
     """
-    for root in ("CL", "MCL"):
-        with pytest.raises(UnknownSymbolError):
-            resolver.resolve_contract(root, current_time=IN_WINDOW)
+    CL was absent on purpose until 2026-09-10: no CL series on this box's NT8
+    feed, and no basket carried it. BOTH CHANGED - the spool carries CL and
+    Incubator-FullSize admits it at full size - so CL resolves.
+
+    MCL DID NOT CHANGE and must keep failing. It is still not in the spool, so
+    an order for one would resolve into a contract this box cannot trade,
+    which is the exact failure the original absence prevented: five CL
+    strategies once sat allocated, certified and permanently inert on
+    `no_regime_published` because the routing worked and the data did not.
+
+    The two are asserted together deliberately. "CL is tradeable" and "the
+    micro is tradeable" are different facts, and a test that relaxed both at
+    once would let the second through on the evidence for the first.
+    """
+    assert resolver.resolve_contract("CL", current_time=IN_WINDOW) == "CL OCT26"
+    with pytest.raises(UnknownSymbolError):
+        resolver.resolve_contract("MCL", current_time=IN_WINDOW)
 
 
 def test_an_empty_instrument_is_refused(resolver):
