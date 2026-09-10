@@ -1,0 +1,144 @@
+{
+  "name": "multi_ema_cci_trend_20260910_ZW_1h_VB",
+  "strategy": "multi_ema_cci_trend_20260910",
+  "symbol": "ZW",
+  "version": "B",
+  "description": "Promoted Version B (baseline + causal ML filter).",
+  "symbols": [
+    "ZW"
+  ],
+  "timeframe": "1h",
+  "params": {
+    "ribbon_step": 3,
+    "ribbon_count": 6,
+    "cci_period": 14,
+    "cci_trigger": 0.0,
+    "cci_extreme": 100.0,
+    "require_strict_stack": true,
+    "use_ribbon_exit": true,
+    "use_cci_extreme_exit": false,
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": null,
+    "trailing": false
+  },
+  "params_source": "locked from dual_metrics_ZW.json",
+  "params_conflict": [],
+  "risk": {
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": null,
+    "trailing": false
+  },
+  "day_of_week_gate": {
+    "status": "EVALUATED",
+    "version": "B",
+    "versions_profiled": [
+      "A",
+      "B"
+    ],
+    "blocked_weekdays": [
+      3
+    ],
+    "blocked_weekday": 3,
+    "blocked_day": "Thu",
+    "blocked_day_name": "Thursday",
+    "worst_weekday": 3,
+    "worst_day": "Thu",
+    "block_rule": "negative_expectancy",
+    "min_trades": 20,
+    "reason": "Thursday is the weakest session (expectancy -103.98 per trade over 63 trades) and its expectancy is negative",
+    "selected_in_sample": true,
+    "note": "The weekday was chosen in-sample, on a window that spans the Stage 3 holdout. It is a live-supervision instruction, not evidence: no gate was scored on it and nothing was pruned for it.",
+    "source": "/mnt/backtest/artifacts/pipeline/multi_ema_cci_trend_20260910/dow_gate_ZW_1h.json",
+    "source_sha256": "56c722daa1ce1a38f9d3a6cd6857d30c0b1c9b58cf9feaa957763edc818e9e96"
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/multi_ema_cci_trend_20260910.py",
+  "source_sha256": "ec7f14e2892eb32b12808a69ea4173526238711975b337c9e608416cb708a2b5",
+  "promoted_sha256": "dc40f77bc274b2313bb89c137c88db744f4e735c55853f9dad4e903e1a7ddf74",
+  "promoted_utc": "2026-09-10T19:35:43+00:00",
+  "costs_included": true,
+  "variants_tested": null,
+  "metrics_status": "RECORDED \u00b7 locked from dual_metrics_ZW.json",
+  "metrics": {
+    "sharpe": -0.0684716133293828,
+    "sortino": -0.20675309751158719,
+    "calmar": -0.02090644555273387,
+    "profit_factor": 0.9041851754072932,
+    "win_rate": 0.2814814814814815,
+    "max_drawdown_pct": -14.631840000000008,
+    "total_return_pct": -4.086600000000018,
+    "annualized_return_pct": -0.30589976629631366,
+    "trade_count": 270,
+    "total_pnl": -4086.6000000000295,
+    "total_costs": 7986.600000000033,
+    "final_equity": 95913.39999999998,
+    "n_days": 3432,
+    "start": "2013-01-02 15:00:00+00:00",
+    "end": "2026-08-07 18:00:00+00:00",
+    "bars": 63761,
+    "initial_capital": 100000.0
+  },
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "FAIL",
+    "gate2": "FAIL",
+    "gate3": "PASS",
+    "gate_regime": "PASS",
+    "gate_ruin": "PASS",
+    "gate_all_quadrants": "FAIL"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/multi_ema_cci_trend_20260910/gate_audit_ZW_1h.json",
+    "audit_sha256": "aee35b78699ca7091aab23a5744aa51f79446b4755d54f96a97c196770c8f112",
+    "audit_symbol": "ZW",
+    "audit_timeframe": "1h",
+    "target_quadrant": "Q1",
+    "target_regime": "High Volatility / Trending",
+    "audit_generated_utc": "2026-09-10T19:23:22+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "ribbon_step": 3,
+      "cci_period": 14,
+      "sl_atr_mult": 2.0,
+      "require_strict_stack": true
+    },
+    "params_source": "stage 2 winner (best_params_ZW_1h.json)",
+    "variants_tested": 36,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "FAIL",
+    "agrees_with_snapshot": false
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [],
+  "notes": "",
+  "ml_threshold": 0.48,
+  "baseline": "baseline.py"
+}
