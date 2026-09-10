@@ -1,0 +1,142 @@
+{
+  "name": "dbb_momentum_breakout_20260909_NQ_1h_VB",
+  "strategy": "dbb_momentum_breakout_20260909",
+  "symbol": "NQ",
+  "version": "B",
+  "description": "Promoted Version B (baseline + causal ML filter).",
+  "symbols": [
+    "NQ"
+  ],
+  "timeframe": "1h",
+  "params": {
+    "sma_window": 50,
+    "inner_sd": 0.5,
+    "outer_sd": 3.0,
+    "use_neutral_filter": true,
+    "use_outer_guard": true,
+    "use_baseline_exit": true,
+    "sl_atr_mult": 1.5,
+    "tp_atr_mult": null,
+    "trailing": false
+  },
+  "params_source": "locked from dual_metrics_NQ.json",
+  "params_conflict": [],
+  "risk": {
+    "sl_atr_mult": 1.5,
+    "tp_atr_mult": null,
+    "trailing": false
+  },
+  "day_of_week_gate": {
+    "status": "EVALUATED",
+    "version": "B",
+    "versions_profiled": [
+      "A",
+      "B"
+    ],
+    "blocked_weekdays": [
+      2
+    ],
+    "blocked_weekday": 2,
+    "blocked_day": "Wed",
+    "blocked_day_name": "Wednesday",
+    "worst_weekday": 2,
+    "worst_day": "Wed",
+    "block_rule": "negative_expectancy",
+    "min_trades": 20,
+    "reason": "Wednesday is the weakest session (expectancy -205.23 per trade over 54 trades) and its expectancy is negative",
+    "selected_in_sample": true,
+    "note": "The weekday was chosen in-sample, on a window that spans the Stage 3 holdout. It is a live-supervision instruction, not evidence: no gate was scored on it and nothing was pruned for it.",
+    "source": "/mnt/backtest/artifacts/pipeline/dbb_momentum_breakout_20260909/dow_gate_NQ_1h.json",
+    "source_sha256": "e5ea313c0fd7fa9e1e54f2d6d5d4c0d77101e6e70d368bc6158284fc3c634794"
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/dbb_momentum_breakout_20260909.py",
+  "source_sha256": "80b7830c3528966c36f4ad78fc875b418dcee77d1a2644db4c17d7598691b599",
+  "promoted_sha256": "217a6c0fbc9ddbfa06a239be4f3400c414c04bfe398d210ef5804148789e387e",
+  "promoted_utc": "2026-09-10T15:57:46+00:00",
+  "costs_included": true,
+  "variants_tested": null,
+  "metrics_status": "RECORDED \u00b7 locked from dual_metrics_NQ.json",
+  "metrics": {
+    "sharpe": 0.37193892930393585,
+    "sortino": 0.9545692060602672,
+    "calmar": 0.12869421973800088,
+    "profit_factor": 1.51669906805357,
+    "win_rate": 0.2792022792022792,
+    "max_drawdown_pct": -27.64131553071,
+    "total_return_pct": 79.53742000000032,
+    "annualized_return_pct": 3.557277534756609,
+    "trade_count": 351,
+    "total_pnl": 79537.42000000039,
+    "total_costs": 5117.579999999585,
+    "final_equity": 179537.42000000033,
+    "n_days": 4219,
+    "start": "2013-01-02 11:00:00+00:00",
+    "end": "2026-08-07 20:00:00+00:00",
+    "bars": 77946,
+    "initial_capital": 100000.0
+  },
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "FAIL",
+    "gate2": "FAIL",
+    "gate3": "PASS",
+    "gate_regime": "PASS",
+    "gate_ruin": "PASS",
+    "gate_all_quadrants": "FAIL"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/dbb_momentum_breakout_20260909/gate_audit_NQ_1h.json",
+    "audit_sha256": "60c68486bef5d430259a8d1e6c61fcfdc2f3c7661ba472bad0a4ea0dce60a72a",
+    "audit_symbol": "NQ",
+    "audit_timeframe": "1h",
+    "target_quadrant": "Q3",
+    "target_regime": "Low Volatility / Trending",
+    "audit_generated_utc": "2026-09-10T15:51:32+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "sma_window": 50,
+      "inner_sd": 0.5,
+      "sl_atr_mult": 1.5,
+      "use_outer_guard": true
+    },
+    "params_source": "stage 2 winner (best_params_NQ_1h.json)",
+    "variants_tested": 36,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "FAIL",
+    "agrees_with_snapshot": false
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [],
+  "notes": "",
+  "ml_threshold": 0.48,
+  "baseline": "baseline.py"
+}
