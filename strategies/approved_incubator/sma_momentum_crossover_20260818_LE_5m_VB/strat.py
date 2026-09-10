@@ -1,5 +1,5 @@
 """
-sma_momentum_crossover_20260818 - Version B (ML-filtered), promoted 2026-09-09.
+sma_momentum_crossover_20260818 - Version B (ML-filtered), promoted 2026-09-10.
 
 Baseline signals from `baseline.py` (SHA-256 fbd447f1f683fb03a1a7e1e41f90fe0e0a7e7f7ff43df8b842ed074869534c75), with the causal ML
 filter applied on top. This is the pipeline, not a new idea: every entry here
@@ -27,7 +27,7 @@ from backtest.engine import BacktestConfig
 
 TIMEFRAME = '5m'
 SYMBOLS = ['LE']
-DEFAULT_PARAMS = {'fast_window': 10, 'slow_window': 30, 'macro_window': 200, 'adx_threshold': 20.0, 'use_macro_anchor': True, 'use_adx_filter': True, 'use_news_filter': False, 'sl_atr_mult': 1.0, 'tp_atr_mult': 2.0, 'trailing': False}
+DEFAULT_PARAMS = {'fast_window': 10, 'slow_window': 50, 'macro_window': 200, 'adx_threshold': 20.0, 'use_macro_anchor': True, 'use_adx_filter': True, 'use_news_filter': False, 'sl_atr_mult': 1.5, 'tp_atr_mult': 3.0, 'trailing': False}
 ML_THRESHOLD = 0.48
 
 _BASELINE_PATH = Path(__file__).with_name("baseline.py")
