@@ -2821,7 +2821,6 @@
         "sma_momentum_crossover_20260818_RB_30m_VA",
         "ema_deviation_scalp_20260909_ETH_30m_VA",
         "dbb_momentum_breakout_20260909_ETH_15m_VA",
-        "dbb_momentum_breakout_20260909_ETH_1h_VA",
         "dbb_momentum_breakout_20260909_HO_1h_VB",
         "dbb_momentum_breakout_20260909_PL_1h_VA",
         "dbb_momentum_breakout_20260909_ETH_30m_VA",
@@ -4549,44 +4548,6 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_ETH_15m.json (Gate R's certification target)"
-              }
-            }
-          ]
-        },
-        "dbb_momentum_breakout_20260909_ETH_1h_VA": {
-          "strat": "dbb_momentum_breakout_20260909_ETH_1h_VA",
-          "symbol": "ETH",
-          "timeframe": "1h",
-          "version": "A",
-          "allocation": 1,
-          "regime_filter": "Q3",
-          "status": "incubating",
-          "path": "strategies/approved_incubator/dbb_momentum_breakout_20260909_ETH_1h_VA/strat.py",
-          "registered_utc": "2026-09-10T15:57:37+00:00",
-          "registered_by": "backtest/promote.py",
-          "routing_basis": "trades ETH; declares Q3; fewest active strategies (Incubator-FullSize=46), ties alphabetical; certified on 1h bars",
-          "resolved_from": {
-            "symbol": "--symbol",
-            "timeframe": "--timeframe",
-            "regime_filter": "gate_audit_ETH_1h.json (Gate R's certification target)"
-          },
-          "configurations": [
-            {
-              "strat": "dbb_momentum_breakout_20260909_ETH_1h_VA",
-              "symbol": "ETH",
-              "timeframe": "1h",
-              "version": "A",
-              "allocation": 1,
-              "regime_filter": "Q3",
-              "status": "incubating",
-              "path": "strategies/approved_incubator/dbb_momentum_breakout_20260909_ETH_1h_VA/strat.py",
-              "registered_utc": "2026-09-10T15:57:37+00:00",
-              "registered_by": "backtest/promote.py",
-              "routing_basis": "trades ETH; declares Q3; fewest active strategies (Incubator-FullSize=46), ties alphabetical; certified on 1h bars",
-              "resolved_from": {
-                "symbol": "--symbol",
-                "timeframe": "--timeframe",
-                "regime_filter": "gate_audit_ETH_1h.json (Gate R's certification target)"
               }
             }
           ]

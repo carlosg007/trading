@@ -148,7 +148,13 @@ EXECUTION_ACCOUNTS = {"Incubator-Odd": "SimIncubator1",
 EXPECTED_ASSIGNMENTS = {
     # REGENERATED 2026-09-10 by scripts/register_incubator_batch.py --write, which now rewrites
     # this constant in the same run that registers into config/portfolios.json.
-    # This run routed 0 package(s); the book stands at 118.
+    # This run routed 0 package(s); the book stands at 117.
+    #
+    # THIS IS NO LONGER A HUMAN DECLARATION. It is regenerated from the config it
+    # describes, so it cannot contradict it and cannot catch an assignment nobody
+    # intended - the check it replaced caught nine of those on 2026-08-27. What
+    # still binds is MUST_STAY_ABSENT in the registrar, and the four registration
+    # gates. Order matters: element-wise comparison, appended order.
     #
     # THIS IS NO LONGER A HUMAN DECLARATION. It is regenerated from the config it
     # describes, so it cannot contradict it and cannot catch an assignment nobody
@@ -304,7 +310,6 @@ EXPECTED_ASSIGNMENTS = {
         "sma_momentum_crossover_20260818_RB_30m_VA",           # 30m, RB
         "ema_deviation_scalp_20260909_ETH_30m_VA",             # 30m, ETH
         "dbb_momentum_breakout_20260909_ETH_15m_VA",           # 15m, ETH
-        "dbb_momentum_breakout_20260909_ETH_1h_VA",            #  1h, ETH
         "dbb_momentum_breakout_20260909_HO_1h_VB",             #  1h, HO
         "dbb_momentum_breakout_20260909_PL_1h_VA",             #  1h, PL
         "dbb_momentum_breakout_20260909_ETH_30m_VA",           # 30m, ETH
