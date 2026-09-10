@@ -1,0 +1,138 @@
+{
+  "name": "dbb_momentum_breakout_20260909_ETH_1h_VA",
+  "strategy": "dbb_momentum_breakout_20260909",
+  "symbol": "ETH",
+  "version": "A",
+  "description": "Promoted Version A (rule-based baseline).",
+  "symbols": [
+    "ETH"
+  ],
+  "timeframe": "1h",
+  "params": {
+    "sma_window": 50,
+    "inner_sd": 1.5,
+    "outer_sd": 3.0,
+    "use_neutral_filter": true,
+    "use_outer_guard": false,
+    "use_baseline_exit": true,
+    "sl_atr_mult": 1.5,
+    "tp_atr_mult": null,
+    "trailing": false
+  },
+  "params_source": "locked from dual_metrics_ETH.json",
+  "params_conflict": [],
+  "risk": {
+    "sl_atr_mult": 1.5,
+    "tp_atr_mult": null,
+    "trailing": false
+  },
+  "day_of_week_gate": {
+    "status": "EVALUATED",
+    "version": "A",
+    "versions_profiled": [
+      "A",
+      "B"
+    ],
+    "blocked_weekdays": [],
+    "blocked_weekday": null,
+    "blocked_day": null,
+    "blocked_day_name": null,
+    "worst_weekday": 3,
+    "worst_day": "Thu",
+    "block_rule": "negative_expectancy",
+    "min_trades": 20,
+    "reason": "Thursday is the weakest session but its expectancy is 45.82 per trade, which is not negative. Nothing is blocked: cutting a profitable session removes realised edge, and being fifth of five is not evidence against a weekday. Pass --block-worst-always to block it anyway.",
+    "selected_in_sample": true,
+    "note": "The weekday was chosen in-sample, on a window that spans the Stage 3 holdout. It is a live-supervision instruction, not evidence: no gate was scored on it and nothing was pruned for it.",
+    "source": "/mnt/backtest/artifacts/pipeline/dbb_momentum_breakout_20260909/dow_gate_ETH_1h.json",
+    "source_sha256": "40fb9e6fe160d939a70123faf5ca5df450b21617e4ff413608528c8e93ceb5f7"
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/dbb_momentum_breakout_20260909.py",
+  "source_sha256": "80b7830c3528966c36f4ad78fc875b418dcee77d1a2644db4c17d7598691b599",
+  "promoted_sha256": "80b7830c3528966c36f4ad78fc875b418dcee77d1a2644db4c17d7598691b599",
+  "promoted_utc": "2026-09-10T15:57:34+00:00",
+  "costs_included": true,
+  "variants_tested": null,
+  "metrics_status": "RECORDED \u00b7 locked from dual_metrics_ETH.json",
+  "metrics": {
+    "sharpe": 0.5766259289415597,
+    "sortino": 1.2433568857427684,
+    "calmar": 0.4639175329429286,
+    "profit_factor": 1.1231791631541304,
+    "win_rate": 0.29938444320089536,
+    "max_drawdown_pct": -34.339534755330256,
+    "total_return_pct": 174.91554000000212,
+    "annualized_return_pct": 15.930712246100764,
+    "trade_count": 1787,
+    "total_pnl": 174915.53999999957,
+    "total_costs": 90071.9600000003,
+    "final_equity": 274915.54000000213,
+    "n_days": 1724,
+    "start": "2021-02-07 23:00:00+00:00",
+    "end": "2026-08-08 22:00:00+00:00",
+    "bars": 32467,
+    "initial_capital": 100000.0
+  },
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "FAIL",
+    "gate2": "FAIL",
+    "gate3": "FAIL",
+    "gate_regime": "PASS",
+    "gate_ruin": "PASS",
+    "gate_all_quadrants": "FAIL"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/dbb_momentum_breakout_20260909/gate_audit_ETH_1h.json",
+    "audit_sha256": "3e4acef18324290fddb9276a2cd9f7406adf7ed98e4e45ef82c91f3e45b5d63f",
+    "audit_symbol": "ETH",
+    "audit_timeframe": "1h",
+    "target_quadrant": "Q3",
+    "target_regime": "Low Volatility / Trending",
+    "audit_generated_utc": "2026-09-10T15:49:13+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "sma_window": 50,
+      "inner_sd": 1.5,
+      "sl_atr_mult": 1.5,
+      "use_outer_guard": false
+    },
+    "params_source": "stage 2 winner (best_params_ETH_1h.json)",
+    "variants_tested": 36,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "FAIL",
+    "agrees_with_snapshot": false
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [],
+  "notes": ""
+}
