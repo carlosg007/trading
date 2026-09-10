@@ -148,7 +148,13 @@ EXECUTION_ACCOUNTS = {"Incubator-Odd": "SimIncubator1",
 EXPECTED_ASSIGNMENTS = {
     # REGENERATED 2026-09-10 by scripts/register_incubator_batch.py --write, which now rewrites
     # this constant in the same run that registers into config/portfolios.json.
-    # This run routed 0 package(s); the book stands at 120.
+    # This run routed 0 package(s); the book stands at 127.
+    #
+    # THIS IS NO LONGER A HUMAN DECLARATION. It is regenerated from the config it
+    # describes, so it cannot contradict it and cannot catch an assignment nobody
+    # intended - the check it replaced caught nine of those on 2026-08-27. What
+    # still binds is MUST_STAY_ABSENT in the registrar, and the four registration
+    # gates. Order matters: element-wise comparison, appended order.
     #
     # THIS IS NO LONGER A HUMAN DECLARATION. It is regenerated from the config it
     # describes, so it cannot contradict it and cannot catch an assignment nobody
@@ -233,6 +239,8 @@ EXPECTED_ASSIGNMENTS = {
         "dbb_momentum_breakout_20260909_RTY_1h_VB",            #  1h, RTY
         "semafor_ha_momentum_20260910_NQ_5m_VA",               #  5m, NQ
         "semafor_ha_momentum_20260910_NQ_5m_VB",               #  5m, NQ
+        "multi_ema_cci_trend_20260910_RTY_15m_VA",             # 15m, RTY
+        "multi_ema_cci_trend_20260910_6J_1h_VB",               #  1h, 6J
     ],
     "Eval-Odd":          [],
     "Prop-Odd":          [],
@@ -269,6 +277,9 @@ EXPECTED_ASSIGNMENTS = {
         "dbb_momentum_breakout_20260909_GC_1h_VA",             #  1h, GC
         "dbb_momentum_breakout_20260909_YM_30m_VB",            # 30m, YM
         "semafor_ha_momentum_20260910_ES_5m_VA",               #  5m, ES
+        "multi_ema_cci_trend_20260910_GC_30m_VA",              # 30m, GC
+        "multi_ema_cci_trend_20260910_YM_30m_VB",              # 30m, YM
+        "multi_ema_cci_trend_20260910_GC_1h_VA",               #  1h, GC
     ],
     "Eval-Even":         [],
     "Prop-Even":         [],
@@ -324,6 +335,8 @@ EXPECTED_ASSIGNMENTS = {
         "dbb_momentum_breakout_20260909_ETH_30m_VA",           # 30m, ETH
         "dbb_momentum_breakout_20260909_ETH_30m_VB",           # 30m, ETH
         "dbb_momentum_breakout_20260909_HO_30m_VB",            # 30m, HO
+        "multi_ema_cci_trend_20260910_ETH_30m_VA",             # 30m, ETH
+        "multi_ema_cci_trend_20260910_ETH_1h_VA",              #  1h, ETH
     ],
     "Eval-FullSize":     [],
     "Prop-FullSize":     [],
