@@ -287,9 +287,29 @@ def _split_literal(text: str) -> tuple[int, int, list[str]]:
     return start, end, body[:cut]
 
 
+#: The generated stamp is FENCED, and the fence is why. `_restamp` used to
+#: strip "the first comment paragraph", which worked until the stamp itself
+#: grew a blank `#` line in the middle: the stripper stopped at that line, the
+#: paragraph below it survived, and a fresh stamp was prepended on top of it.
+#: Every --write then added one more copy - four of them accumulated in
+#: tests/test_portfolio_config.py on 2026-09-10 before a `git status` caught
+#: it, because a growing comment block changes no behaviour and no test reads
+#: comments. A fence has one meaning and cannot be half-matched.
+STAMP_BEGIN = "    # --- BEGIN GENERATED STAMP (rewritten on every sync) ---"
+STAMP_END = "    # --- END GENERATED STAMP ---"
+
+
 def _restamp(preamble: list[str], routed: list[str], total: int) -> list[str]:
-    """Replace the leading regeneration stanza; leave every other comment."""
-    stamp = [
+    """
+    Replace the fenced regeneration stanza; leave every other comment.
+
+    IDEMPOTENT BY CONSTRUCTION: the fence is removed as a whole block before
+    the new one is written, so syncing twice with an unchanged config produces
+    a byte-identical file. `_split_literal`'s preamble may carry no fence at
+    all - the first sync after this change, or a hand-edited constant - and
+    that is handled by finding nothing to remove.
+    """
+    stamp = [STAMP_BEGIN,
         f"    # REGENERATED {_today()} by "
         f"scripts/register_incubator_batch.py --write, which now rewrites",
         f"    # this constant in the same run that registers into "
@@ -306,17 +326,46 @@ def _restamp(preamble: list[str], routed: list[str], total: int) -> list[str]:
         "    # still binds is MUST_STAY_ABSENT in the registrar, and the four "
         "registration",
         "    # gates. Order matters: element-wise comparison, appended order.",
+        STAMP_END,
         "    #",
     ]
-    # Everything from the first non-stamp paragraph onward is preserved. The
-    # old stamp is however many leading comment lines precede the first blank
-    # comment line, plus that line.
+    # Everything outside the fence is preserved verbatim - it records WHY four
+    # packages are absent and why NG, RB and CL cannot be routed at all, none
+    # of which is derivable from the config.
     rest = list(preamble)
-    while rest and rest[0].strip().startswith("#"):
-        done = rest[0].strip() == "#"
-        rest.pop(0)
-        if done:
-            break
+    if STAMP_BEGIN in rest:
+        start = rest.index(STAMP_BEGIN)
+        end = (rest.index(STAMP_END, start) + 1 if STAMP_END in rest[start:]
+               else len(rest))
+        # The blank `#` separator the previous stamp wrote after its fence.
+        if end < len(rest) and rest[end].strip() == "#":
+            end += 1
+        rest = rest[:start] + rest[end:]
+    else:
+        # PRE-FENCE FORMAT, and the duplicates it left behind. Every paragraph
+        # that is a verbatim copy of one already in the new stamp is dropped -
+        # the four accumulated blocks go, anything a human wrote stays.
+        stamp_lines = {line.strip() for line in stamp if line.strip() != "#"}
+        seen: set[str] = set()
+        pruned: list[str] = []
+        for line in rest:
+            body = line.strip()
+            if body and body != "#" and body in stamp_lines:
+                seen.add(body)
+                continue
+            pruned.append(line)
+        if seen:
+            # Collapse the runs of bare `#` the removals left facing each
+            # other, so the block does not grow blank lines instead.
+            collapsed: list[str] = []
+            for line in pruned:
+                if (line.strip() == "#" and collapsed
+                        and collapsed[-1].strip() == "#"):
+                    continue
+                collapsed.append(line)
+            rest = collapsed
+        else:
+            rest = pruned
     return stamp + rest
 
 
