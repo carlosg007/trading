@@ -111,9 +111,11 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_NQ_1h.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": []
             }
-          ]
+          ],
+          "blocked_weekdays": []
         },
         "t3_braid_scalp_20260823_NQ_1h_VB": {
           "strat": "t3_braid_scalp_20260823_NQ_1h_VB",
@@ -149,9 +151,11 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_NQ_1h.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": []
             }
-          ]
+          ],
+          "blocked_weekdays": []
         },
         "t3_braid_scalp_20260823_RTY_30m_VB": {
           "strat": "t3_braid_scalp_20260823_RTY_30m_VB",
@@ -187,8 +191,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_RTY_30m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                3
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            3
           ]
         },
         "compressed_bollinger_reversion_20260901_NQ_15m_VA": {
@@ -225,8 +235,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_NQ_15m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                1
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            1
           ]
         },
         "double_rsi_momentum_pullback_20260830_NQ_15m_VA": {
@@ -263,8 +279,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_NQ_15m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                3
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            3
           ]
         },
         "dual_ema_slope_scalp_20260831_6J_30m_VA": {
@@ -301,8 +323,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_6J_30m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                4
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            4
           ]
         },
         "dual_ema_slope_scalp_20260831_6J_30m_VB": {
@@ -339,8 +367,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_6J_30m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                0
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            0
           ]
         },
         "dual_ema_slope_scalp_20260831_NQ_1h_VA": {
@@ -377,8 +411,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_NQ_1h.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                2
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            2
           ]
         },
         "dual_ema_slope_scalp_20260831_NQ_1h_VB": {
@@ -415,9 +455,11 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_NQ_1h.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": []
             }
-          ]
+          ],
+          "blocked_weekdays": []
         },
         "dual_ema_slope_scalp_20260831_RTY_1h_VB": {
           "strat": "dual_ema_slope_scalp_20260831_RTY_1h_VB",
@@ -454,10 +496,16 @@
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_RTY_1h.json (Gate R's certification target)"
               },
-              "certified_on": "secondary_starvation_fallback"
+              "certified_on": "secondary_starvation_fallback",
+              "blocked_weekdays": [
+                0
+              ]
             }
           ],
-          "certified_on": "secondary_starvation_fallback"
+          "certified_on": "secondary_starvation_fallback",
+          "blocked_weekdays": [
+            0
+          ]
         },
         "ema_crossover_20260821_6J_5m_VA": {
           "strat": "ema_crossover_20260821_6J_5m_VA",
@@ -493,8 +541,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_6J_5m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                4
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            4
           ]
         },
         "ema_crossover_20260821_6J_5m_VB": {
@@ -531,8 +585,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_6J_5m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                4
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            4
           ]
         },
         "ema_crossover_20260821_NQ_15m_VA": {
@@ -569,8 +629,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_NQ_15m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                4
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            4
           ]
         },
         "ema_crossover_20260821_NQ_1h_VA": {
@@ -607,8 +673,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_NQ_1h.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                0
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            0
           ]
         },
         "ema_crossover_20260821_NQ_1h_VB": {
@@ -645,8 +717,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_NQ_1h.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                0
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            0
           ]
         },
         "ema_crossover_20260821_RTY_15m_VA": {
@@ -683,8 +761,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_RTY_15m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                1
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            1
           ]
         },
         "ema_crossover_20260821_RTY_15m_VB": {
@@ -721,8 +805,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_RTY_15m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                1
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            1
           ]
         },
         "energy_intraday_nonlinear_ar_20260902_NQ_15m_VA": {
@@ -759,9 +849,11 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_NQ_15m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": []
             }
-          ]
+          ],
+          "blocked_weekdays": []
         },
         "energy_intraday_nonlinear_ar_20260902_NQ_30m_VA": {
           "strat": "energy_intraday_nonlinear_ar_20260902_NQ_30m_VA",
@@ -797,8 +889,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_NQ_30m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                1
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            1
           ]
         },
         "keltner_trend_drift_20260901_6J_30m_VB": {
@@ -835,8 +933,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_6J_30m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                4
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            4
           ]
         },
         "keltner_trend_drift_20260901_NQ_30m_VA": {
@@ -874,10 +978,16 @@
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_NQ_30m.json (Gate R's certification target)"
               },
-              "certified_on": "secondary_starvation_fallback"
+              "certified_on": "secondary_starvation_fallback",
+              "blocked_weekdays": [
+                4
+              ]
             }
           ],
-          "certified_on": "secondary_starvation_fallback"
+          "certified_on": "secondary_starvation_fallback",
+          "blocked_weekdays": [
+            4
+          ]
         },
         "keltner_trend_drift_20260901_NQ_30m_VB": {
           "strat": "keltner_trend_drift_20260901_NQ_30m_VB",
@@ -914,10 +1024,16 @@
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_NQ_30m.json (Gate R's certification target)"
               },
-              "certified_on": "secondary_starvation_fallback"
+              "certified_on": "secondary_starvation_fallback",
+              "blocked_weekdays": [
+                1
+              ]
             }
           ],
-          "certified_on": "secondary_starvation_fallback"
+          "certified_on": "secondary_starvation_fallback",
+          "blocked_weekdays": [
+            1
+          ]
         },
         "ma_anchoring_spread_20260820_NQ_15m_VA": {
           "strat": "ma_anchoring_spread_20260820_NQ_15m_VA",
@@ -953,8 +1069,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_NQ_15m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                1
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            1
           ]
         },
         "ma_anchoring_spread_20260820_NQ_15m_VB": {
@@ -992,10 +1114,16 @@
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_NQ_15m.json (Gate R's certification target)"
               },
-              "certified_on": "secondary_starvation_fallback"
+              "certified_on": "secondary_starvation_fallback",
+              "blocked_weekdays": [
+                1
+              ]
             }
           ],
-          "certified_on": "secondary_starvation_fallback"
+          "certified_on": "secondary_starvation_fallback",
+          "blocked_weekdays": [
+            1
+          ]
         },
         "ma_anchoring_spread_20260820_RTY_1h_VA": {
           "strat": "ma_anchoring_spread_20260820_RTY_1h_VA",
@@ -1031,8 +1159,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_RTY_1h.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                3
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            3
           ]
         },
         "ma_anchoring_spread_20260820_RTY_1h_VB": {
@@ -1069,8 +1203,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_RTY_1h.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                3
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            3
           ]
         },
         "sma_momentum_crossover_20260818_6E_1h_VA": {
@@ -1107,8 +1247,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_6E_1h.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                4
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            4
           ]
         },
         "sma_momentum_crossover_20260818_NQ_5m_VA": {
@@ -1145,8 +1291,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_NQ_5m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                1
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            1
           ]
         },
         "sma_momentum_crossover_20260818_RTY_5m_VA": {
@@ -1183,8 +1335,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_RTY_5m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                3
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            3
           ]
         },
         "ema_deviation_scalp_20260909_NQ_30m_VA": {
@@ -1221,8 +1379,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_NQ_30m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                3
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            3
           ]
         },
         "ema_deviation_scalp_20260909_RTY_30m_VA": {
@@ -1259,8 +1423,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_RTY_30m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                2
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            2
           ]
         },
         "ema_deviation_scalp_20260909_RTY_30m_VB": {
@@ -1297,8 +1467,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_RTY_30m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                2
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            2
           ]
         },
         "ema_deviation_scalp_20260909_NQ_15m_VA": {
@@ -1335,8 +1511,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_NQ_15m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                3
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            3
           ]
         },
         "dbb_momentum_breakout_20260909_NQ_1h_VB": {
@@ -1374,10 +1556,16 @@
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_NQ_1h.json (Gate R's certification target)"
               },
-              "certified_on": "secondary_starvation_fallback"
+              "certified_on": "secondary_starvation_fallback",
+              "blocked_weekdays": [
+                2
+              ]
             }
           ],
-          "certified_on": "secondary_starvation_fallback"
+          "certified_on": "secondary_starvation_fallback",
+          "blocked_weekdays": [
+            2
+          ]
         },
         "dbb_momentum_breakout_20260909_RTY_1h_VB": {
           "strat": "dbb_momentum_breakout_20260909_RTY_1h_VB",
@@ -1413,8 +1601,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_RTY_1h.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                4
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            4
           ]
         },
         "semafor_ha_momentum_20260910_NQ_5m_VA": {
@@ -1765,8 +1959,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_GC_30m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                3
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            3
           ]
         },
         "t3_braid_scalp_20260823_GC_30m_VB": {
@@ -1803,8 +2003,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_GC_30m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                0
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            0
           ]
         },
         "compressed_bollinger_reversion_20260901_ES_15m_VA": {
@@ -1841,8 +2047,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_ES_15m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                3
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            3
           ]
         },
         "sma_momentum_crossover_20260818_YM_1h_VA": {
@@ -1907,8 +2119,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_GC_1h.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                4
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            4
           ]
         },
         "double_rsi_momentum_pullback_20260830_GC_1h_VB": {
@@ -1945,8 +2163,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_GC_1h.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                0
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            0
           ]
         },
         "double_rsi_momentum_pullback_20260830_GC_30m_VA": {
@@ -1983,8 +2207,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_GC_30m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                2
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            2
           ]
         },
         "double_rsi_momentum_pullback_20260830_YM_15m_VB": {
@@ -2021,8 +2251,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_YM_15m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                0
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            0
           ]
         },
         "dual_ema_slope_scalp_20260831_GC_1h_VA": {
@@ -2059,9 +2295,11 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_GC_1h.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": []
             }
-          ]
+          ],
+          "blocked_weekdays": []
         },
         "dual_ema_slope_scalp_20260831_GC_30m_VA": {
           "strat": "dual_ema_slope_scalp_20260831_GC_30m_VA",
@@ -2097,8 +2335,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_GC_30m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                2
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            2
           ]
         },
         "dual_ema_slope_scalp_20260831_YM_15m_VA": {
@@ -2135,8 +2379,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_YM_15m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                1
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            1
           ]
         },
         "dual_ema_slope_scalp_20260831_YM_30m_VA": {
@@ -2173,8 +2423,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_YM_30m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                1
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            1
           ]
         },
         "ema_crossover_20260821_ES_15m_VA": {
@@ -2211,8 +2467,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_ES_15m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                1
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            1
           ]
         },
         "ema_crossover_20260821_ES_30m_VA": {
@@ -2249,9 +2511,11 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_ES_30m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": []
             }
-          ]
+          ],
+          "blocked_weekdays": []
         },
         "energy_intraday_nonlinear_ar_20260902_ES_30m_VA": {
           "strat": "energy_intraday_nonlinear_ar_20260902_ES_30m_VA",
@@ -2287,8 +2551,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_ES_30m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                1
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            1
           ]
         },
         "energy_intraday_nonlinear_ar_20260902_ES_30m_VB": {
@@ -2325,8 +2595,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_ES_30m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                1
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            1
           ]
         },
         "energy_intraday_nonlinear_ar_20260902_YM_30m_VA": {
@@ -2363,8 +2639,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_YM_30m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                1
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            1
           ]
         },
         "keltner_trend_drift_20260901_GC_1h_VA": {
@@ -2402,10 +2684,12 @@
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_GC_1h.json (Gate R's certification target)"
               },
-              "certified_on": "secondary_starvation_fallback"
+              "certified_on": "secondary_starvation_fallback",
+              "blocked_weekdays": []
             }
           ],
-          "certified_on": "secondary_starvation_fallback"
+          "certified_on": "secondary_starvation_fallback",
+          "blocked_weekdays": []
         },
         "ma_anchoring_spread_20260820_GC_1h_VA": {
           "strat": "ma_anchoring_spread_20260820_GC_1h_VA",
@@ -2441,8 +2725,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_GC_1h.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                3
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            3
           ]
         },
         "ma_anchoring_spread_20260820_GC_1h_VB": {
@@ -2479,8 +2769,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_GC_1h.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                2
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            2
           ]
         },
         "sma_momentum_crossover_20260818_ES_15m_VA": {
@@ -2517,8 +2813,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_ES_15m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                1
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            1
           ]
         },
         "sma_momentum_crossover_20260818_ES_15m_VB": {
@@ -2555,8 +2857,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_ES_15m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                3
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            3
           ]
         },
         "sma_momentum_crossover_20260818_GC_1h_VA": {
@@ -2593,8 +2901,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_GC_1h.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                3
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            3
           ]
         },
         "sma_momentum_crossover_20260818_GC_1h_VB": {
@@ -2631,8 +2945,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_GC_1h.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                3
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            3
           ]
         },
         "sma_momentum_crossover_20260818_GC_5m_VA": {
@@ -2669,8 +2989,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_GC_5m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                1
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            1
           ]
         },
         "sma_momentum_crossover_20260818_YM_30m_VB": {
@@ -2707,9 +3033,11 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_YM_30m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": []
             }
-          ]
+          ],
+          "blocked_weekdays": []
         },
         "ema_deviation_scalp_20260909_YM_30m_VA": {
           "strat": "ema_deviation_scalp_20260909_YM_30m_VA",
@@ -2745,8 +3073,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_YM_30m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                4
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            4
           ]
         },
         "ema_deviation_scalp_20260909_YM_30m_VB": {
@@ -2783,8 +3117,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_YM_30m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                2
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            2
           ]
         },
         "dbb_momentum_breakout_20260909_GC_1h_VA": {
@@ -2822,10 +3162,12 @@
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_GC_1h.json (Gate R's certification target)"
               },
-              "certified_on": "secondary_starvation_fallback"
+              "certified_on": "secondary_starvation_fallback",
+              "blocked_weekdays": []
             }
           ],
-          "certified_on": "secondary_starvation_fallback"
+          "certified_on": "secondary_starvation_fallback",
+          "blocked_weekdays": []
         },
         "dbb_momentum_breakout_20260909_YM_30m_VB": {
           "strat": "dbb_momentum_breakout_20260909_YM_30m_VB",
@@ -2862,10 +3204,16 @@
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_YM_30m.json (Gate R's certification target)"
               },
-              "certified_on": "secondary_starvation_fallback"
+              "certified_on": "secondary_starvation_fallback",
+              "blocked_weekdays": [
+                2
+              ]
             }
           ],
-          "certified_on": "secondary_starvation_fallback"
+          "certified_on": "secondary_starvation_fallback",
+          "blocked_weekdays": [
+            2
+          ]
         },
         "semafor_ha_momentum_20260910_ES_5m_VA": {
           "strat": "semafor_ha_momentum_20260910_ES_5m_VA",
@@ -3191,8 +3539,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_HO_15m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                0
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            0
           ]
         },
         "t3_braid_scalp_20260823_HO_1h_VA": {
@@ -3229,8 +3583,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_HO_1h.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                3
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            3
           ]
         },
         "t3_braid_scalp_20260823_PL_1h_VA": {
@@ -3267,8 +3627,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_PL_1h.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                2
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            2
           ]
         },
         "t3_braid_scalp_20260823_ETH_1h_VA": {
@@ -3305,8 +3671,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_ETH_1h.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                1
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            1
           ]
         },
         "t3_braid_scalp_20260823_ETH_1h_VB": {
@@ -3343,8 +3715,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_ETH_1h.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                1
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            1
           ]
         },
         "compressed_bollinger_reversion_20260901_ETH_5m_VB": {
@@ -3381,9 +3759,11 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_ETH_5m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": []
             }
-          ]
+          ],
+          "blocked_weekdays": []
         },
         "intrinsic_alpha_engine_20260831_ETH_1h_VA": {
           "strat": "intrinsic_alpha_engine_20260831_ETH_1h_VA",
@@ -3419,8 +3799,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_ETH_1h.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                1
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            1
           ]
         },
         "intrinsic_alpha_engine_20260831_ETH_30m_VB": {
@@ -3457,8 +3843,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_ETH_30m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                3
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            3
           ]
         },
         "intrinsic_alpha_engine_20260831_ETH_5m_VB": {
@@ -3495,8 +3887,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_ETH_5m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                4
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            4
           ]
         },
         "sma_momentum_crossover_20260818_ETH_30m_VA": {
@@ -3547,8 +3945,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_RB_1h.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                4
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            4
           ]
         },
         "double_rsi_momentum_pullback_20260830_RB_1h_VB": {
@@ -3585,8 +3989,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_RB_1h.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                4
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            4
           ]
         },
         "dual_ema_slope_scalp_20260831_ETH_30m_VA": {
@@ -3623,8 +4033,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_ETH_30m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                3
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            3
           ]
         },
         "dual_ema_slope_scalp_20260831_HO_1h_VA": {
@@ -3661,8 +4077,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_HO_1h.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                4
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            4
           ]
         },
         "dual_ema_slope_scalp_20260831_HO_1h_VB": {
@@ -3699,8 +4121,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_HO_1h.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                4
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            4
           ]
         },
         "dual_ema_slope_scalp_20260831_HO_30m_VA": {
@@ -3737,8 +4165,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_HO_30m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                4
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            4
           ]
         },
         "dual_ema_slope_scalp_20260831_HO_5m_VB": {
@@ -3775,8 +4209,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_HO_5m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                3
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            3
           ]
         },
         "dual_ema_slope_scalp_20260831_PL_1h_VA": {
@@ -3814,10 +4254,12 @@
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_PL_1h.json (Gate R's certification target)"
               },
-              "certified_on": "secondary_starvation_fallback"
+              "certified_on": "secondary_starvation_fallback",
+              "blocked_weekdays": []
             }
           ],
-          "certified_on": "secondary_starvation_fallback"
+          "certified_on": "secondary_starvation_fallback",
+          "blocked_weekdays": []
         },
         "dual_ema_slope_scalp_20260831_RB_1h_VA": {
           "strat": "dual_ema_slope_scalp_20260831_RB_1h_VA",
@@ -3853,8 +4295,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_RB_1h.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                4
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            4
           ]
         },
         "ema_crossover_20260821_ETH_5m_VB": {
@@ -3891,8 +4339,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_ETH_5m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                3
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            3
           ]
         },
         "energy_intraday_nonlinear_ar_20260902_HO_30m_VA": {
@@ -3929,8 +4383,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_HO_30m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                0
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            0
           ]
         },
         "energy_intraday_nonlinear_ar_20260902_RB_1h_VA": {
@@ -3967,8 +4427,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_RB_1h.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                1
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            1
           ]
         },
         "energy_intraday_nonlinear_ar_20260902_RB_30m_VA": {
@@ -4005,8 +4471,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_RB_30m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                0
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            0
           ]
         },
         "energy_intraday_nonlinear_ar_20260902_RB_30m_VB": {
@@ -4043,8 +4515,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_RB_30m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                1
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            1
           ]
         },
         "energy_intraday_nonlinear_ar_20260902_RB_5m_VB": {
@@ -4081,8 +4559,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_RB_5m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                4
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            4
           ]
         },
         "keltner_trend_drift_20260901_ETH_1h_VA": {
@@ -4119,8 +4603,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_ETH_1h.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                2
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            2
           ]
         },
         "keltner_trend_drift_20260901_HO_15m_VA": {
@@ -4157,8 +4647,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_HO_15m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                4
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            4
           ]
         },
         "keltner_trend_drift_20260901_PL_30m_VB": {
@@ -4196,10 +4692,16 @@
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_PL_30m.json (Gate R's certification target)"
               },
-              "certified_on": "secondary_starvation_fallback"
+              "certified_on": "secondary_starvation_fallback",
+              "blocked_weekdays": [
+                4
+              ]
             }
           ],
-          "certified_on": "secondary_starvation_fallback"
+          "certified_on": "secondary_starvation_fallback",
+          "blocked_weekdays": [
+            4
+          ]
         },
         "ma_anchoring_spread_20260820_ETH_5m_VA": {
           "strat": "ma_anchoring_spread_20260820_ETH_5m_VA",
@@ -4235,8 +4737,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_ETH_5m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                3
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            3
           ]
         },
         "ma_anchoring_spread_20260820_PL_15m_VA": {
@@ -4273,8 +4781,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_PL_15m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                3
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            3
           ]
         },
         "ma_anchoring_spread_20260820_PL_15m_VB": {
@@ -4311,8 +4825,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_PL_15m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                0
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            0
           ]
         },
         "ma_anchoring_spread_20260820_PL_1h_VA": {
@@ -4349,8 +4869,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_PL_1h.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                0
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            0
           ]
         },
         "ma_anchoring_spread_20260820_PL_5m_VA": {
@@ -4387,9 +4913,11 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_PL_5m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": []
             }
-          ]
+          ],
+          "blocked_weekdays": []
         },
         "ma_anchoring_spread_20260820_PL_5m_VB": {
           "strat": "ma_anchoring_spread_20260820_PL_5m_VB",
@@ -4425,9 +4953,11 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_PL_5m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": []
             }
-          ]
+          ],
+          "blocked_weekdays": []
         },
         "ma_anchoring_spread_20260820_RB_1h_VA": {
           "strat": "ma_anchoring_spread_20260820_RB_1h_VA",
@@ -4463,8 +4993,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_RB_1h.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                0
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            0
           ]
         },
         "sma_momentum_crossover_20260818_HO_15m_VA": {
@@ -4501,9 +5037,11 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_HO_15m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": []
             }
-          ]
+          ],
+          "blocked_weekdays": []
         },
         "sma_momentum_crossover_20260818_HO_15m_VB": {
           "strat": "sma_momentum_crossover_20260818_HO_15m_VB",
@@ -4539,8 +5077,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_HO_15m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                4
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            4
           ]
         },
         "sma_momentum_crossover_20260818_HO_30m_VA": {
@@ -4577,8 +5121,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_HO_30m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                4
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            4
           ]
         },
         "sma_momentum_crossover_20260818_HO_30m_VB": {
@@ -4615,8 +5165,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_HO_30m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                4
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            4
           ]
         },
         "sma_momentum_crossover_20260818_HO_5m_VA": {
@@ -4653,8 +5209,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_HO_5m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                0
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            0
           ]
         },
         "sma_momentum_crossover_20260818_PL_30m_VA": {
@@ -4692,10 +5254,16 @@
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_PL_30m.json (Gate R's certification target)"
               },
-              "certified_on": "secondary_starvation_fallback"
+              "certified_on": "secondary_starvation_fallback",
+              "blocked_weekdays": [
+                0
+              ]
             }
           ],
-          "certified_on": "secondary_starvation_fallback"
+          "certified_on": "secondary_starvation_fallback",
+          "blocked_weekdays": [
+            0
+          ]
         },
         "sma_momentum_crossover_20260818_PL_30m_VB": {
           "strat": "sma_momentum_crossover_20260818_PL_30m_VB",
@@ -4732,10 +5300,16 @@
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_PL_30m.json (Gate R's certification target)"
               },
-              "certified_on": "secondary_starvation_fallback"
+              "certified_on": "secondary_starvation_fallback",
+              "blocked_weekdays": [
+                4
+              ]
             }
           ],
-          "certified_on": "secondary_starvation_fallback"
+          "certified_on": "secondary_starvation_fallback",
+          "blocked_weekdays": [
+            4
+          ]
         },
         "sma_momentum_crossover_20260818_RB_1h_VA": {
           "strat": "sma_momentum_crossover_20260818_RB_1h_VA",
@@ -4771,8 +5345,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_RB_1h.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                3
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            3
           ]
         },
         "sma_momentum_crossover_20260818_RB_30m_VA": {
@@ -4809,8 +5389,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_RB_30m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                3
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            3
           ]
         },
         "ema_deviation_scalp_20260909_ETH_30m_VA": {
@@ -4847,8 +5433,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_ETH_30m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                3
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            3
           ]
         },
         "dbb_momentum_breakout_20260909_ETH_15m_VA": {
@@ -4885,8 +5477,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_ETH_15m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                1
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            1
           ]
         },
         "dbb_momentum_breakout_20260909_HO_1h_VB": {
@@ -4923,8 +5521,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_HO_1h.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                0
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            0
           ]
         },
         "dbb_momentum_breakout_20260909_PL_1h_VA": {
@@ -4961,8 +5565,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_PL_1h.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                3
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            3
           ]
         },
         "dbb_momentum_breakout_20260909_ETH_30m_VA": {
@@ -4999,8 +5609,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_ETH_30m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                2
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            2
           ]
         },
         "dbb_momentum_breakout_20260909_ETH_30m_VB": {
@@ -5037,8 +5653,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_ETH_30m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                3
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            3
           ]
         },
         "dbb_momentum_breakout_20260909_HO_30m_VB": {
@@ -5075,8 +5697,14 @@
                 "symbol": "--symbol",
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_HO_30m.json (Gate R's certification target)"
-              }
+              },
+              "blocked_weekdays": [
+                3
+              ]
             }
+          ],
+          "blocked_weekdays": [
+            3
           ]
         },
         "multi_ema_cci_trend_20260910_ETH_30m_VA": {
