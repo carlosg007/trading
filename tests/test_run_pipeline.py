@@ -75,8 +75,22 @@ def flag_value(cmd: list[str], flag: str) -> str | None:
 
 
 def script_of(cmd: list[str]) -> str:
-    """The .py the command runs, whatever interpreter prefix it carries."""
-    return next(Path(c).name for c in cmd if str(c).endswith(".py"))
+    """
+    The .py the command runs, whatever interpreter prefix it carries.
+
+    KEYED ON THE EXECUTABLE FIRST, and only then on the script. The
+    orchestrator also shells out to `git`, and
+    `git status -- config/portfolios.json tests/test_portfolio_config.py`
+    ends in a `.py` PATHSPEC - scanning the whole argv for one filed that
+    command under the pytest suite it names, and the two became
+    indistinguishable.
+    """
+    if not cmd:
+        return ""
+    head = Path(str(cmd[0])).name
+    if not head.startswith("python"):
+        return head                      # git, and anything run directly
+    return next((Path(c).name for c in cmd if str(c).endswith(".py")), head)
 
 
 class FakeRunner:
@@ -91,15 +105,23 @@ class FakeRunner:
         self.calls: list[list[str]] = []
         self.fail_on = dict(fail_on or {})
 
-    def __call__(self, cmd, cwd=None, check=False):
+    def __call__(self, cmd, cwd=None, check=False, **kwargs):
+        # `**kwargs` because the orchestrator's git seam passes
+        # `capture_output=`/`text=`. Without it those calls raised TypeError
+        # inside `_git`, which reports a failed git read - so a stubbed run
+        # looked exactly like a repository that had lost its .git directory.
         self.calls.append([str(c) for c in cmd])
         rc = self.fail_on.get(script_of([str(c) for c in cmd]), 0)
         if rc and check:
             raise subprocess.CalledProcessError(rc, cmd)
-        return subprocess.CompletedProcess(cmd, rc)
+        return subprocess.CompletedProcess(cmd, rc, stdout="", stderr="")
 
     def scripts(self) -> list[str]:
-        return [script_of(c) for c in self.calls]
+        """The STAGE scripts, in order. Git and other bare executables are
+        recorded in `calls` but never appear here: every sequence assertion in
+        this suite is about which stages ran."""
+        return [script_of(c) for c in self.calls
+                if any(str(a).endswith(".py") for a in c)]
 
     def for_script(self, name: str) -> list[list[str]]:
         return [c for c in self.calls if script_of(c) == name]
@@ -995,6 +1017,156 @@ def test_stage6_registers_after_promotion(tmp: Path) -> None:
           rc != 0, f"rc={rc}")
 
 
+
+def test_stage6_commits_registration_atomically(tmp: Path) -> None:
+    print("\n22. Stage 6 commits the routing table and its declaration, "
+          "together or not at all")
+    write_stage2(tmp, [s2row("NQ", "15m")])
+    write_stage3(tmp, [s3row("NQ", "15m", certified=True)])
+
+    calls: list[list[str]] = []
+
+    def fake_git(*argv):
+        calls.append(list(argv))
+        class P:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        if argv[:1] == ("status",):
+            P.stdout = " M config/portfolios.json\n M tests/test_portfolio_config.py\n"
+        return P
+
+    real_git, real_head = rp._git, rp._git_head
+    rp._git, rp._git_head = fake_git, lambda: "cafe123"
+    try:
+        out = rp.commit_registration("demo")
+    finally:
+        rp._git, rp._git_head = real_git, real_head
+
+    check("it commits", out["committed"], str(out))
+    check("...and reports the hash", out["commit"] == "cafe123", str(out))
+    commit_calls = [c for c in calls if c[:1] == ["commit"]]
+    check("exactly one commit", len(commit_calls) == 1, str(commit_calls))
+    if commit_calls:
+        argv = commit_calls[0]
+        # THE PATHSPEC IS ON THE COMMIT. On `git add` it would stage those
+        # paths and then commit everything already in the index.
+        check("the pathspec is on the commit, after --",
+              argv[argv.index("--") + 1:] == list(rp.REGISTRATION_PATHS),
+              str(argv))
+        check("both files travel in ONE commit",
+              set(rp.REGISTRATION_PATHS)
+              == {"config/portfolios.json", "tests/test_portfolio_config.py"})
+    check("nothing was staged with `git add`",
+          not any(c[:1] == ["add"] for c in calls), str(calls))
+
+
+def test_stage6_refuses_to_commit_mid_operation(tmp: Path) -> None:
+    print("\n23. A half-finished merge or rebase is a HALT, not a warning")
+    import tempfile as _tf
+    for marker, word in (("MERGE_HEAD", "merge"), ("rebase-merge", "rebase"),
+                         ("CHERRY_PICK_HEAD", "cherry-pick")):
+        fake_root = Path(_tf.mkdtemp())
+        (fake_root / marker).touch()
+
+        def fake_git(*argv, _root=fake_root):
+            class P:
+                returncode = 0
+                stdout = str(_root) if argv[:2] == ("rev-parse",
+                                                    "--git-path") else ""
+                stderr = ""
+            return P
+
+        real = rp._git
+        rp._git = fake_git
+        try:
+            reason = rp.git_blocked_reason()
+        finally:
+            rp._git = real
+        check(f"a {word} in progress blocks the commit",
+              reason is not None and word in reason, f"{marker}: {reason}")
+
+    # Unmerged paths: a file with conflict markers commits perfectly happily
+    # and the markers reach the routing table the live daemon parses.
+    def conflicted(*argv):
+        class P:
+            returncode = 0
+            stdout = ("config/portfolios.json"
+                      if argv[:1] == ("diff",) else "")
+            stderr = ""
+        return P
+
+    real = rp._git
+    rp._git = conflicted
+    try:
+        reason = rp.git_blocked_reason()
+    finally:
+        rp._git = real
+    check("an unmerged path blocks the commit",
+          reason is not None and "conflict markers" in reason, str(reason))
+
+
+def test_stage6_never_commits_a_routing_table_that_failed_its_suite(
+        tmp: Path) -> None:
+    print("\n24. A red guard is left UNCOMMITTED so somebody sees it")
+    write_stage2(tmp, [s2row("NQ", "15m")])
+    write_stage3(tmp, [s3row("NQ", "15m", certified=True)])
+
+    committed: list[str] = []
+    real = rp.commit_registration
+    rp.commit_registration = lambda *a, **k: committed.append("called") or {}
+    runner = FakeRunner(fail_on={"test_portfolio_config.py": 1})
+    try:
+        rc = _main_with(runner, ["--strat", STRAT, "--tf", "15m",
+                                 "--auto-promote", "--out-dir", str(tmp)])
+    finally:
+        rp.commit_registration = real
+
+    check("a failing suite fails the run", rc != 0, f"rc={rc}")
+    # THE POINT. Committing a routing table that fails its own guard is the
+    # one thing this step must never automate: the suite is what stands
+    # between a promoted package and a live account.
+    check("...and NOTHING is committed", committed == [], str(committed))
+
+
+def test_stage6_records_its_outcome_on_the_handoff(tmp: Path) -> None:
+    print("\n25. Stage 6's outcome reaches the handoff the Discord card reads")
+    write_stage2(tmp, [s2row("NQ", "15m")])
+    write_stage3(tmp, [s3row("NQ", "15m", certified=True)])
+
+    real = rp.commit_registration
+    rp.commit_registration = lambda *a, **k: {
+        "committed": False, "commit": None, "paths": ["config/portfolios.json"],
+        "error": "a rebase is in progress"}
+    runner = FakeRunner()
+    try:
+        rc = _main_with(runner, ["--strat", STRAT, "--tf", "15m",
+                                 "--auto-promote", "--out-dir", str(tmp)])
+    finally:
+        rp.commit_registration = real
+
+    check("a commit that could not happen is a non-zero run - the file on "
+          "disk and the file in git now disagree", rc != 0, f"rc={rc}")
+    blob = json.loads((pipeline_dir(STRAT, tmp)
+                       / STAGE3_SUMMARY_FILE).read_text())
+    reg = ((blob.get("auto_promotion") or {}).get("registration")) or {}
+    check("the registration outcome is on the handoff", bool(reg), str(reg))
+    check("...naming why the commit did not happen",
+          "rebase" in str((reg.get("commit") or {}).get("error")), str(reg))
+
+    # And the card renders it, rather than the failure living only in a log.
+    import backtest.discord_reporter as dr
+    alert = dr.stage6_registration_alert(blob)
+    check("the Discord card carries the failure",
+          any("could not be" in line for line in alert), str(alert))
+    # A clean Stage 6 adds NOTHING to the card: a line on every successful
+    # run is a line nobody reads, and the failure then looks like the success.
+    clean = {"auto_promotion": {"registration": {
+        "tests": 0, "commit": {"committed": True, "error": ""}, "error": ""}}}
+    check("...and says nothing when Stage 6 was clean",
+          dr.stage6_registration_alert(clean) == [], str(clean))
+
+
 def test_dow_gate_staleness_is_detected(tmp: Path) -> None:
     """
     A Stage 4.5 verdict generated BEFORE the gate audit it is attached to is
@@ -1071,6 +1243,10 @@ def main() -> int:
         test_dow_gate_staleness_is_detected(tmp)
         test_promote_max_defers_and_never_ranks(tmp)
         test_stage6_registers_after_promotion(tmp)
+        test_stage6_commits_registration_atomically(tmp)
+        test_stage6_refuses_to_commit_mid_operation(tmp)
+        test_stage6_never_commits_a_routing_table_that_failed_its_suite(tmp)
+        test_stage6_records_its_outcome_on_the_handoff(tmp)
         test_failure_reasons_are_distinguished()
         test_summary_table(tmp)
         test_dry_run_launches_nothing(tmp)

@@ -505,6 +505,11 @@ STAGE3_PROMO_MAX_FIELDS = 4
 # already happened. Labelling a staged-but-uncommitted configuration as
 # promoted is how a strategy nobody promoted ends up believed to be in the
 # incubator.
+#: Named here rather than imported from `backtest.run_pipeline`: the reporter
+#: is run as its own script by every stage card and must not pull the
+#: orchestrator in to render a filename.
+PORTFOLIO_TEST_NAME = "tests/test_portfolio_config.py"
+
 PROMO_READY_TITLE = "\U0001F3C6 READY FOR PROMOTION / STAGED"
 PROMO_DONE_TITLE = "\U0001F680 AUTOMATICALLY PROMOTED TO INCUBATOR"
 
@@ -2988,6 +2993,14 @@ def format_stage3_promotions(strat: str, blob: dict[str, Any],
 
     pairs: list[str] = []
     lines: list[str] = []
+    # ABOVE THE ROWS, not below them. A Stage 6 failure is about the routing
+    # table as a whole rather than about any one configuration, and the row
+    # block is truncated to `max_rows` - a warning appended after it can be
+    # cut off by a campaign that promoted more packages than the card shows.
+    alert = stage6_registration_alert(blob)
+    if alert:
+        lines.extend(alert)
+        lines.append("")
     if any(not (done.get((str(r.get("symbol")), str(r.get("timeframe")),
                           str(r.get("version") or "A"))) or {}).get("promoted")
            for r in shown):
@@ -3042,6 +3055,46 @@ def format_stage3_promotions(strat: str, blob: dict[str, Any],
     while lines and not lines[-1]:
         lines.pop()
     return title, lines, pairs, len(rows) - len(shown)
+
+
+def stage6_registration_alert(blob: dict[str, Any]) -> list[str]:
+    """
+    Stage 6's failure, as card lines, or `[]` when there is nothing wrong.
+
+    ONLY RENDERS A PROBLEM. A clean Stage 6 - registered, suite green, both
+    files committed - adds nothing to the card, because a line saying so on
+    every successful run is a line nobody reads and the failure then arrives
+    looking like the success.
+
+    The two states worth waking somebody for are different failures and are
+    named separately: a routing table that FAILED its own suite is a live
+    hazard the daemon will read anyway on the next restart, and one that
+    could not be COMMITTED is a repository where the file on disk and the
+    file in git disagree - every later reader sees whichever they open.
+    """
+    reg = stage3_auto_promotion(blob).get("registration")
+    if not isinstance(reg, dict):
+        return []                       # Stage 6 did not run; not a failure.
+
+    lines: list[str] = []
+    tests = reg.get("tests")
+    if tests:
+        lines.append(f"\u26a0\ufe0f **The routing table FAILED its own suite** "
+                     f"(`{PORTFOLIO_TEST_NAME}` exited {tests}).")
+        lines.append("The registration is applied on disk and was left "
+                     "UNCOMMITTED so `git status` shows it. Read the run log "
+                     "before any restart arms anything from it.")
+    commit = reg.get("commit") or {}
+    if commit.get("error") and not tests:
+        lines.append("\u26a0\ufe0f **The registration could not be "
+                     "committed.**")
+        lines.append(f"`{commit['error']}`")
+        lines.append("The packages ARE promoted and the routing table IS "
+                     "written - only the commit is missing, so the file on "
+                     "disk and the file in git now disagree.")
+    if reg.get("error") and not lines:
+        lines.append(f"\u26a0\ufe0f **Stage 6 incomplete:** {reg['error']}")
+    return lines
 
 
 def outstanding_promotions(blob: dict[str, Any]) -> list[dict[str, Any]]:

@@ -965,6 +965,151 @@ def promotion_summary_table(rows: list[dict[str, Any]],
         empty="Stage 3 indexed no configuration - nothing reached a verdict")
 
 
+class _GitResult:
+    """What `_git` always returns, whatever the subprocess did."""
+
+    def __init__(self, returncode: int = 0, stdout: str = "",
+                 stderr: str = "") -> None:
+        self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
+
+
+def _git(*argv: str) -> _GitResult:
+    """
+    One git call, captured, and it CANNOT raise.
+
+    The same seam and the same rule as `_git_head`, for the same reason:
+    reading git must never be able to fail a pipeline that has already
+    promoted packages and written the routing table. Every exception is
+    swallowed and every field is normalised to a string, so a caller can
+    `.stdout.strip()` without checking - a `None` stdout from a stubbed runner
+    would otherwise raise here rather than at the seam somebody patched.
+
+    The DECISION is always the caller's: this reports, it never refuses.
+    """
+    try:
+        proc = subprocess.run(["git", *argv], cwd=str(REPO),
+                              capture_output=True, text=True, check=False)
+    except Exception as exc:                                      # noqa: BLE001
+        return _GitResult(1, "", f"{type(exc).__name__}: {exc}")
+    return _GitResult(int(getattr(proc, "returncode", 0) or 0),
+                      (getattr(proc, "stdout", "") or ""),
+                      (getattr(proc, "stderr", "") or ""))
+
+
+def git_blocked_reason() -> str | None:
+    """
+    Why this repository must not be committed to right now, or None.
+
+    STAGE 6 RUNS UNATTENDED AND COMMITS TO THE ROUTING TABLE, so the states it
+    has to refuse are the ones where a commit would mean something other than
+    what it says:
+
+      * not a git repository at all - nothing to commit into.
+      * a merge, rebase, cherry-pick or bisect in progress. `git commit` in
+        the middle of one CONCLUDES it, so an unattended commit here would
+        finish somebody's half-done rebase and attribute it to a promotion.
+      * unmerged paths. A file with conflict markers still in it commits
+        perfectly happily, and the markers reach the routing table the live
+        daemon parses.
+
+    Each is a HALT rather than a warning: the registration is already applied
+    to disk either way, and leaving it uncommitted is recoverable by one
+    command. Concluding a rebase is not.
+    """
+    if _git("rev-parse", "--git-dir").returncode != 0:
+        return f"{REPO} is not a git repository"
+
+    git_dir = _git("rev-parse", "--git-path", ".").stdout.strip()
+    root = Path(git_dir) if git_dir else (REPO / ".git")
+    for marker, what in (("MERGE_HEAD", "a merge"),
+                         ("rebase-merge", "a rebase"),
+                         ("rebase-apply", "a rebase"),
+                         ("CHERRY_PICK_HEAD", "a cherry-pick"),
+                         ("REVERT_HEAD", "a revert"),
+                         ("BISECT_LOG", "a bisect")):
+        if (root / marker).exists():
+            return (f"{what} is in progress ({marker} exists). `git commit` "
+                    f"would CONCLUDE it, and this run would be credited with "
+                    f"somebody else's half-finished operation.")
+
+    unmerged = _git("diff", "--name-only", "--diff-filter=U").stdout.strip()
+    if unmerged:
+        return (f"unmerged path(s) with conflict markers: "
+                f"{', '.join(unmerged.split())}. A file with markers in it "
+                f"commits happily and the markers reach the routing table.")
+    return None
+
+
+def registration_is_dirty() -> list[str]:
+    """Which of REGISTRATION_PATHS have uncommitted changes."""
+    proc = _git("status", "--porcelain", "--", *REGISTRATION_PATHS)
+    out = []
+    for line in proc.stdout.splitlines():
+        name = line[3:].strip()
+        if name:
+            out.append(name)
+    return out
+
+
+def commit_registration(strat: str, *, dry_run: bool = False
+                        ) -> dict[str, Any]:
+    """
+    Commit the routing table and its declaration, in ONE scoped commit.
+
+    Returns `{"committed", "commit", "paths", "error"}`. Called only after the
+    portfolio suite has PASSED - see `auto_register`. Committing a routing
+    table that fails its own guard is the one thing this step must never
+    automate: the suite is what stands between a promoted package and a live
+    account, and a red guard committed unattended is a red guard nobody sees
+    until a restart.
+
+    Failures are REPORTED, not raised. The registration is already applied to
+    disk and the packages are already promoted; neither is undone because git
+    had an opinion, and the operator is told the exact command.
+    """
+    out: dict[str, Any] = {"committed": False, "commit": None, "paths": [],
+                           "error": ""}
+    if dry_run:
+        print("  DRY RUN  nothing is committed.", flush=True)
+        return out
+
+    blocked = git_blocked_reason()
+    if blocked:
+        out["error"] = blocked
+        return out
+
+    dirty = registration_is_dirty()
+    out["paths"] = dirty
+    if not dirty:
+        # The ordinary case after a run that routed nothing new. Not a
+        # failure, and saying so keeps it out of the error path.
+        print("  routing table and declaration are already committed; "
+              "nothing to do.", flush=True)
+        return out
+
+    message = (f"portfolio: auto-register promoted packages for {strat} and "
+               f"sync test declarations\n\n"
+               f"Written by Stage 6 of backtest/run_pipeline.py after "
+               f"register_incubator_batch.py\n"
+               f"--write applied the registrations and "
+               f"{PORTFOLIO_TEST} passed against the\n"
+               f"result. Both files travel in ONE commit: the declaration "
+               f"exists to fail when\n"
+               f"it disagrees with the routing table, so committing either "
+               f"alone lands a\n"
+               f"repository whose own guard is red.\n")
+    commit = _git("commit", "-m", message, "--", *REGISTRATION_PATHS)
+    if commit.returncode != 0:
+        out["error"] = ((commit.stderr or commit.stdout).strip()
+                        or f"git commit exited {commit.returncode}")
+        return out
+
+    out["committed"] = True
+    out["commit"] = _git_head()
+    print(f"  committed {', '.join(dirty)} → {out['commit']}", flush=True)
+    return out
+
+
 def register_cmd(write: bool = True) -> list[str]:
     """Stage 6's registration pass."""
     cmd = _py() + [str(REGISTER_SCRIPT)]
@@ -1044,16 +1189,42 @@ def auto_register(strat: str, *, out_dir: str | None = None,
               f"routing table has been written and does NOT pass its own "
               f"checks. Read the pytest output above before any restart arms "
               f"anything from it.", file=sys.stderr, flush=True)
-    else:
-        print(f"\n  {PORTFOLIO_TEST} passes against the written table.",
-              flush=True)
+        # NOT COMMITTED, DELIBERATELY. The one thing this step must never
+        # automate is committing a routing table that fails its own guard:
+        # left dirty, the next `git status` shows it and somebody looks.
+        out["commit"] = {"committed": False, "commit": None, "paths": [],
+                         "error": (f"{PORTFOLIO_TEST} exited {trc}; the "
+                                   f"routing table is left UNCOMMITTED so the "
+                                   f"failure is visible in `git status`")}
+        print(f"     the routing table is left uncommitted for that reason.",
+              file=sys.stderr, flush=True)
+        return out
+
+    print(f"\n  {PORTFOLIO_TEST} passes against the written table.",
+          flush=True)
+    out["commit"] = commit_registration(strat, dry_run=dry_run)
+    if out["commit"].get("error"):
+        # HALT LOUDLY. The registration is on disk and the packages are
+        # promoted; what is missing is the commit, which is one command.
+        out["error"] = out["error"] or (
+            f"the registration could not be committed: "
+            f"{out['commit']['error']}")
+        print(f"\n  !! STAGE 6 COULD NOT COMMIT  {out['commit']['error']}\n"
+              f"     The registration IS applied and the packages ARE "
+              f"promoted - only the commit is missing. Run it by hand:\n"
+              f"       git commit -- {' '.join(REGISTRATION_PATHS)} \\\n"
+              f"         -m \"portfolio: auto-register promoted packages for "
+              f"{strat} and sync test declarations\"",
+              file=sys.stderr, flush=True)
     return out
 
 
 def record_auto_promotion(strat: str, out_dir: str | None,
                           promotions: list[dict[str, Any]],
                           commit: str | None,
-                          deferred: str | None = None) -> Path | None:
+                          deferred: str | None = None,
+                          registration: dict[str, Any] | None = None
+                          ) -> Path | None:
     """
     Write the auto-promotion outcome back onto Stage 3's summary.
 
@@ -1091,6 +1262,11 @@ def record_auto_promotion(strat: str, out_dir: str | None,
         "failed": sum(1 for d in promotions if not d.get("promoted")),
         "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "promotions": promotions,
+        # Stage 6's outcome: what the registrar did, whether the routing
+        # table's own suite passed against it, and whether both files reached
+        # git. `None` when Stage 6 did not run at all, which is a third state
+        # from "ran and failed".
+        "registration": registration,
     }
     return write_stage(path, 3, strat, blob)
 
@@ -1530,6 +1706,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             registration = auto_register(strat, out_dir=out_dir, dry_run=dry)
             if registration.get("tests"):
                 rc = rc or int(registration["tests"])
+            # A commit that could not happen is a non-zero run: the routing
+            # table on disk and the routing table in git now disagree, and
+            # every later reader sees whichever one they happen to open.
+            elif (registration.get("commit") or {}).get("error"):
+                rc = rc or 1
+            # Recorded on the handoff so the Stage 5 card can report it and an
+            # unattended reader is not left inferring it from `git status`.
+            record_auto_promotion(strat, out_dir, promotions,
+                                  _git_head(),
+                                  registration=registration)
         # Card 5 last, and only now: the promotion outcome is on the handoff,
         # so the card reports what was actually promoted and to which commit
         # rather than a promotion that had not happened when it was built.
@@ -1552,6 +1738,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"exited {registration['tests']}")
     elif registration.get("error"):
         tail = f" · STAGE 6 INCOMPLETE\n  {registration['error']}"
+    elif (registration.get("commit") or {}).get("committed"):
+        tail = (f"\n  routing table and declaration committed as "
+                f"{registration['commit']['commit']}")
     print(_banner("PIPELINE COMPLETE" + tail))
     return rc
 
@@ -1629,6 +1818,20 @@ DEFAULT_PROMOTE_MAX = 50
 #: promote.py's router declined but a basket can still reach.
 REGISTER_SCRIPT = REPO / "scripts" / "register_incubator_batch.py"
 PORTFOLIO_TEST = "tests/test_portfolio_config.py"
+
+#: The two files Stage 6 commits, and it commits them TOGETHER OR NOT AT ALL.
+#:
+#: `config/portfolios.json` is the routing table the live daemon reads;
+#: `tests/test_portfolio_config.py` holds the declaration that describes it.
+#: The declaration exists to fail when the two disagree, so a commit carrying
+#: one without the other lands a repository whose own guard is red - and the
+#: next person to run the suite inherits a failure they did not cause. One
+#: scoped pathspec puts both in one commit.
+#:
+#: A PATHSPEC ON `git add` DOES NOT SCOPE THE COMMIT. It stages those paths
+#: and then commits everything already staged, so anything a previous step
+#: left in the index rides along silently. The pathspec goes on `git commit`.
+REGISTRATION_PATHS = ("config/portfolios.json", PORTFOLIO_TEST)
 
 
 def auto_promote(strat: str, *, out_dir: str | None = None,
