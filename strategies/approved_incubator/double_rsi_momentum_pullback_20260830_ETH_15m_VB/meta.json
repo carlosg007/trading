@@ -9,7 +9,7 @@
   ],
   "timeframe": "15m",
   "params": {
-    "rsi_fast_len": 5,
+    "rsi_fast_len": 7,
     "rsi_slow_len": 21,
     "pullback_window": 3,
     "volume_sma_len": 20,
@@ -20,33 +20,66 @@
     "use_alpha_trigger": true,
     "use_volume_filter": true,
     "use_news_filter": false,
-    "sl_atr_mult": 1.5,
-    "tp_atr_mult": 3.0,
-    "trailing": false
+    "sl_atr_mult": 1.0,
+    "tp_atr_mult": 2.0,
+    "trailing": true
   },
-  "params_source": "double_rsi_momentum_pullback_20260830.py DEFAULT_PARAMS",
+  "params_source": "locked from dual_metrics_ETH.json",
   "params_conflict": [],
   "risk": {
-    "sl_atr_mult": 1.5,
-    "tp_atr_mult": 3.0,
-    "trailing": false
+    "sl_atr_mult": 1.0,
+    "tp_atr_mult": 2.0,
+    "trailing": true
   },
   "day_of_week_gate": {
-    "status": "NOT EVALUATED",
-    "blocked_weekdays": [],
-    "blocked_weekday": null,
+    "status": "EVALUATED",
     "version": "B",
+    "versions_profiled": [
+      "A",
+      "B"
+    ],
+    "blocked_weekdays": [
+      1
+    ],
+    "blocked_weekday": 1,
+    "blocked_day": "Tue",
+    "blocked_day_name": "Tuesday",
+    "worst_weekday": 1,
+    "worst_day": "Tue",
+    "block_rule": "negative_expectancy",
+    "min_trades": 20,
+    "reason": "Tuesday is the weakest session (expectancy -20.54 per trade over 311 trades) and its expectancy is negative",
+    "selected_in_sample": true,
+    "note": "The weekday was chosen in-sample, on a window that spans the Stage 3 holdout. It is a live-supervision instruction, not evidence: no gate was scored on it and nothing was pruned for it.",
     "source": "/mnt/backtest/artifacts/pipeline/double_rsi_momentum_pullback_20260830/dow_gate_ETH_15m.json",
-    "reason": "dow_gate_ETH_15m.json does not exist. Stage 4.5 (backtest/dow_gate.py) was not run for this pair; no weekday is blocked and none was cleared."
+    "source_sha256": "8f0957ad029053d8ba34b4870d29c71bbbe790123979e639c6f1faf382f14ecb"
   },
   "source": "/home/cgrullon/src/trading/strategies/experimental/double_rsi_momentum_pullback_20260830.py",
   "source_sha256": "d6e295b941ca9bbee04fe1ad9a100d55dbf003592a3ed926b717482c5e78b1bd",
-  "promoted_sha256": "edd3e346058ec88149b7046b7bdfc5d32614ef667581f962fc7a21be653d1131",
-  "promoted_utc": "2026-09-09T00:37:55+00:00",
-  "costs_included": false,
-  "variants_tested": 162,
-  "metrics_status": "NOT RECORDED",
-  "metrics": null,
+  "promoted_sha256": "b5597dd1dd42bb7d12d9ed7573693e7e49a763f7feda79c8acd7b74019b1204d",
+  "promoted_utc": "2026-09-10T23:38:56+00:00",
+  "costs_included": true,
+  "variants_tested": null,
+  "metrics_status": "RECORDED \u00b7 locked from dual_metrics_ETH.json",
+  "metrics": {
+    "sharpe": 0.6186167279606738,
+    "sortino": 0.9077284647067705,
+    "calmar": 0.24593448705275817,
+    "profit_factor": 1.114234662167103,
+    "win_rate": 0.4668141592920354,
+    "max_drawdown_pct": -23.950641325835143,
+    "total_return_pct": 47.927019999998045,
+    "annualized_return_pct": 5.8902886890538575,
+    "trade_count": 1356,
+    "total_pnl": 47927.01999999983,
+    "total_costs": 67510.48000000021,
+    "final_equity": 147927.01999999804,
+    "n_days": 1724,
+    "start": "2021-02-07 23:00:00+00:00",
+    "end": "2026-08-08 22:45:00+00:00",
+    "bars": 125808,
+    "initial_capital": 100000.0
+  },
   "gate_audit_status": "PASS",
   "gate_audit": {
     "gate1": "PASS",
@@ -58,7 +91,7 @@
   },
   "certification": {
     "audit_file": "/mnt/backtest/artifacts/pipeline/double_rsi_momentum_pullback_20260830/gate_audit_ETH_15m.json",
-    "audit_sha256": "08d1657f38cb220d0581776cddc4cc3f33b37f3b73b70bd0fec8d7cee1f24c45",
+    "audit_sha256": "a6464424fb0a8e996a27e955e9a291f3b27b30e46885af5071c9923b8bb37ea0",
     "audit_symbol": "ETH",
     "audit_timeframe": "15m",
     "target_quadrant": "Q1",
@@ -103,45 +136,13 @@
       "exclude_days": null
     },
     "status": "PASS",
-    "snapshot_gate_status": "NOT EVALUATED",
-    "agrees_with_snapshot": null
+    "snapshot_gate_status": "FAIL",
+    "agrees_with_snapshot": false
   },
   "gates_overridden": false,
   "oos_status": "passed_gate3",
   "audit_warnings": [],
-  "notes": "Stage 3 certified ETH 15m in High Volatility / Trending; staged by backtest/audit_gates.py, not committed.",
+  "notes": "",
   "ml_threshold": 0.48,
-  "baseline": "baseline.py",
-  "seal": {
-    "algorithm": "sha256",
-    "strategy_code": {
-      "path": "/home/cgrullon/src/trading/strategies/approved_incubator/double_rsi_momentum_pullback_20260830_ETH_15m_VB/baseline.py",
-      "sha256": "d6e295b941ca9bbee04fe1ad9a100d55dbf003592a3ed926b717482c5e78b1bd"
-    },
-    "winning_parameters": {
-      "path": "/mnt/backtest/artifacts/pipeline/double_rsi_momentum_pullback_20260830/best_params_ETH_15m.json",
-      "sha256": "a6248cd1d7e0fcd4d95587ae92a1f07221e11c1cdd7ea72876775426915191b0"
-    },
-    "gate_audit": {
-      "path": "/mnt/backtest/artifacts/pipeline/double_rsi_momentum_pullback_20260830/gate_audit_ETH_15m.json",
-      "sha256": "08d1657f38cb220d0581776cddc4cc3f33b37f3b73b70bd0fec8d7cee1f24c45"
-    },
-    "metrics_handoff": {
-      "path": null,
-      "sha256": "NOT AVAILABLE"
-    },
-    "rule": "The three hashes are sealed together because they can be separated: the same code under a different winning cell is a different strategy with the same code checksum.",
-    "certified_symbol": "ETH",
-    "certified_timeframe": "15m",
-    "target_regime": "High Volatility / Trending",
-    "target_quadrant": "Q1",
-    "params": {
-      "rsi_fast_len": 7,
-      "rsi_slow_len": 21,
-      "sl_atr_mult": 1.0,
-      "tp_atr_mult": 2.0,
-      "trailing": true
-    },
-    "params_locked": true
-  }
+  "baseline": "baseline.py"
 }
