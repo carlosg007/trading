@@ -58,7 +58,7 @@
   "source": "/home/cgrullon/src/trading/strategies/experimental/ema_deviation_scalp_20260909.py",
   "source_sha256": "2cdecad91b56f45cf46e80eaa130518f741ad01eac25d37fc380f8ce7469b8a7",
   "promoted_sha256": "2cdecad91b56f45cf46e80eaa130518f741ad01eac25d37fc380f8ce7469b8a7",
-  "promoted_utc": "2026-09-09T16:50:07+00:00",
+  "promoted_utc": "2026-09-10T13:02:25+00:00",
   "costs_included": true,
   "variants_tested": null,
   "metrics_status": "RECORDED \u00b7 locked from dual_metrics_NQ.json",
