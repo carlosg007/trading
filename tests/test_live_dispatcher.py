@@ -51,6 +51,8 @@ from realtime.contract_resolver import resolve_contract             # noqa: E402
 from realtime.position_book import (COOLDOWN_TEMPLATE,             # noqa: E402
                                     MAX_QTY)
 from realtime.live_dispatcher import (                              # noqa: E402
+    ENV_KEY,
+    ENV_URL,
     LiveDispatchError,
     LiveExecutionDispatcher,
     _is_safe_to_retry,
@@ -1162,11 +1164,25 @@ def test_an_unrecognised_error_defaults_to_not_retrying():
     assert _is_safe_to_retry({"error": "network error: Connection refused"}) is True
 
 
-def test_live_mode_refuses_to_start_without_a_webhook(tmp_path):
+def test_live_mode_refuses_to_start_without_a_webhook(tmp_path, monkeypatch):
     """
     Discovering this at the first order means every gate ran and produced
     nothing, which on a console reads exactly like a quiet market.
+
+    THE ENVIRONMENT HAS TO BE CLEARED, not just the env FILE. `resolve_
+    credentials` reads `env.get(ENV_URL) or os.environ.get(ENV_URL)` - a
+    deliberate fallback, and correct - and `mdlib.env.load_env()` puts this
+    box's real `.env` into `os.environ` at import time. So pointing the
+    dispatcher at a nonexistent env file proved nothing: it found the live
+    webhook in the process and started, and the case failed asserting a
+    refusal that had no reason to happen.
+
+    That is why this one looked order-dependent and "environmental in both
+    directions": it passed on a box with no CrossTrade credentials and failed
+    on one configured to trade.
     """
+    monkeypatch.delenv(ENV_URL, raising=False)
+    monkeypatch.delenv(ENV_KEY, raising=False)
     root = tmp_path / "strategies"
     write_strategy(root, "fixture_long", side="long")
     with pytest.raises(LiveDispatchError, match="no CrossTrade webhook URL"):
@@ -1457,11 +1473,38 @@ def test_shutdown_sleep_returns_immediately_once_requested():
     assert _time.perf_counter() - started < 1.0
 
 
-def test_basket_symbols_covers_all_four_accounts(tmp_path):
+def test_basket_symbols_covers_every_account_not_a_remembered_four(tmp_path):
+    """
+    `basket_symbols` is every contract every basket holds, deduplicated and
+    sorted - across whatever accounts the routing table currently has.
+
+    THE OLD FIXTURE HARDCODED ["MCL", "MES", "MGC", "MNQ"], the micro-only
+    four-account topology. The table has moved twice since: to nine accounts
+    across three tracks, and to full-size contracts on Incubator-FullSize -
+    which now holds HO, PL, RB, ETH, CL, NG, ZW, LE and BTC directly, no micro
+    in the path. MCL is not in any basket at all any more.
+
+    RECONCILED, NOT RESTATED. The expectation is built from the dispatcher's
+    OWN portfolios rather than retyped, because a retyped list is a second
+    copy of the routing table that goes stale silently - which is exactly what
+    happened here. What is asserted is the CONTRACT of the function: the union,
+    deduplicated, sorted, with nothing invented and nothing dropped. The
+    properties below are what a retyped list was really there to catch.
+    """
     import master_live
     d = build(tmp_path, assignments={},
               state={"MNQ": {"quadrant": PERMITTED_QUADRANT}})
-    assert master_live.basket_symbols(d) == ["MCL", "MES", "MGC", "MNQ"]
+    got = master_live.basket_symbols(d)
+
+    expected = sorted({asset for p in d.portfolios.values()
+                       for asset in p["basket"]["assets"]})
+    assert got == expected
+    assert got == sorted(set(got)), "not sorted, or carries a duplicate"
+    # Every symbol comes from a basket, and every basket is represented.
+    for pid, port in d.portfolios.items():
+        for asset in port["basket"]["assets"]:
+            assert asset in got, f"{pid} holds {asset} and it is missing"
+    assert got, "no basket holds anything"
 
 
 def test_the_strategy_tag_names_every_contributor(tmp_path):

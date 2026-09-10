@@ -46,6 +46,7 @@ if str(REPO_ROOT) not in sys.path:
 from mdlib import regimes as regime_cache                       # noqa: E402
 from portfolio.config_loader import CANONICAL_QUADRANT          # noqa: E402
 from realtime import regime_reader                              # noqa: E402
+from realtime.contract_resolver import resolve_contract         # noqa: E402
 from realtime.crosstrade_formatter import (                     # noqa: E402
     CrossTradeFormatError,
     KEY_ENV_VAR,
@@ -709,10 +710,20 @@ def test_a_model_with_no_predict_proba_is_refused(tmp_path):
 # --------------------------------------------------------------------------
 def test_plain_text_command_is_the_documented_wire_format(monkeypatch):
     monkeypatch.delenv(KEY_ENV_VAR, raising=False)
+    # A BARE ROOT IS RESOLVED TO ITS CONTRACT MONTH - `53e4a05
+    # crosstrade_formatter: resolve a root symbol to its contract month`.
+    # `MNQ` is not a NinjaTrader instrument name and the add-on refuses it;
+    # `MNQ SEP26` is.
+    #
+    # The expectation is COMPUTED rather than typed. Hardcoding "MNQ SEP26"
+    # would pin this case to one quarter and break it on every roll - which
+    # is how it came to be asserting the pre-resolver format in the first
+    # place, unnoticed inside a suite that was already red.
+    front = resolve_contract("MNQ")
     assert format_crosstrade_command(
         account="Prop-Odd", instrument="MNQ", action="buy", qty=2,
         key="SECRET") == (
-        "key=SECRET; command=place; account=Prop-Odd; instrument=MNQ; "
+        f"key=SECRET; command=place; account=Prop-Odd; instrument={front}; "
         "action=BUY; qty=2; order_type=MARKET; tif=DAY;")
 
     # Every field is present, in order, terminated by a semicolon.
@@ -731,7 +742,9 @@ def test_json_command_is_lower_cased_and_carries_the_tag():
         strategy_tag="ema_crossover_20260821") == {
             "command": "place",
             "account": "Prop-Even",
-            "instrument": "MES",
+            # Resolved, and upper-cased on the way through. Computed for the
+            # reason the text-command case above computes it.
+            "instrument": resolve_contract("MES"),
             "action": "buy",
             "qty": 3,
             "order_type": "market",
@@ -745,10 +758,20 @@ def test_json_command_is_lower_cased_and_carries_the_tag():
 def test_flatten_carries_no_side_and_no_quantity():
     """A flatten closes whatever is open. Expressing it as `sell qty=N`
     requires guessing the position, and a wrong guess opens the opposite one."""
-    out = format_flatten_command("Incubator-Odd", "MCL", key="k")
+    # A FULLY QUALIFIED INSTRUMENT, passed through unchanged. This case is
+    # about the SHAPE of a flatten - no side, no quantity - so it should not
+    # also depend on the roll calendar. The previous fixture used "MCL", which
+    # is deliberately absent from config/contracts.json because the micro is
+    # not on this box's feed, so the case failed on a refusal that was correct
+    # and had nothing to do with what it was testing.
+    out = format_flatten_command("Incubator-Odd", "MNQ 12-26", key="k")
     assert out == ("key=k; command=flatten; account=Incubator-Odd; "
-                   "instrument=MCL;")
+                   "instrument=MNQ 12-26;")
     assert "action=" not in out and "qty=" not in out
+
+    # And the resolution still happens for a bare root on this path too.
+    assert resolve_contract("MNQ") in format_flatten_command(
+        "Incubator-Odd", "MNQ", key="k")
 
 
 def test_key_falls_back_to_the_environment_and_redacts(monkeypatch):

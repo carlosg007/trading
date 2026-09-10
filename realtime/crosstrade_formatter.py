@@ -168,6 +168,36 @@ from realtime.contract_resolver import (  # noqa: E402
 )
 
 
+def _resolved(instrument: str) -> str:
+    """
+    `resolve_contract`, with its refusal translated into this module's error.
+
+    WHY THE TRANSLATION IS THE FIX AND NOT A CONVENIENCE. This module's whole
+    contract is the sentence at the top of the file: a malformed payload built
+    here is caught before it reaches the one place that can act on it. A
+    symbol that cannot be resolved is a payload that cannot be built, so it
+    belongs to the same refusal - but `ContractResolverError` is a sibling of
+    `CrossTradeFormatError` under ValueError, not a subclass, and
+    `realtime/live_dispatcher.py` catches only the latter.
+
+    So every unresolvable symbol RAISED THROUGH the handler that exists to
+    record a refused order and return it. Three ways to hit it, and the third
+    is not hypothetical: an unknown root, an empty instrument, and a symbol
+    PAST ITS ROLL DATE - which on 2026-09-10 was ES, NQ, YM, RTY and their
+    four micros, every one of them carrying live strategies. The dispatcher
+    would not have recorded "order refused"; the exception would have left the
+    per-order handler entirely.
+
+    The order is refused either way. What changes is that it is now refused
+    the way this module already documents, as one recorded error on one order,
+    instead of escaping into the caller.
+    """
+    try:
+        return resolve_contract(instrument)
+    except ContractResolverError as exc:
+        raise _reject(str(exc)) from exc
+
+
 def _clean_instrument(instrument: str) -> str:
     """
     Upper-cased and stripped, and NOT otherwise translated.
@@ -375,7 +405,7 @@ def format_crosstrade_command(account: str,
     # NinjaTrader refuses a bare root outright - "Instrument 'MNQ' not
     # found" - and `resolve_contract` is idempotent, so a caller who
     # already named the month gets exactly what they typed.
-    ins = _clean_instrument(resolve_contract(instrument))
+    ins = _clean_instrument(_resolved(instrument))
     act = _clean_action(action, allowed=PLACE_ACTIONS)
     quantity = _clean_qty(qty)
     ot = _clean_order_type(order_type)
@@ -419,7 +449,7 @@ def format_crosstrade_json(account: str,
     # NinjaTrader refuses a bare root outright - "Instrument 'MNQ' not
     # found" - and `resolve_contract` is idempotent, so a caller who
     # already named the month gets exactly what they typed.
-    ins = _clean_instrument(resolve_contract(instrument))
+    ins = _clean_instrument(_resolved(instrument))
     act = _clean_action(action, allowed=PLACE_ACTIONS)
     quantity = _clean_qty(qty)
     ot = _clean_order_type(order_type)
@@ -468,7 +498,7 @@ def format_flatten_json(account: str,
         # the flatten this dispatcher keeps on the record disagree with the
         # flatten it puts on the wire - `MNQ` against `MNQ SEP26` - about which
         # contract was closed.
-        "instrument": _clean_instrument(resolve_contract(instrument)),
+        "instrument": _clean_instrument(_resolved(instrument)),
         "strategy_tag": sanitize_strategy_tag(strategy_tag),
     }
 
@@ -504,7 +534,7 @@ def format_flatten_command(account: str,
     # NinjaTrader refuses a bare root outright - "Instrument 'MNQ' not
     # found" - and `resolve_contract` is idempotent, so a caller who
     # already named the month gets exactly what they typed.
-    ins = _clean_instrument(resolve_contract(instrument))
+    ins = _clean_instrument(_resolved(instrument))
     tag = sanitize_strategy_tag(strategy_tag)
     return (f"key={resolved_key}; command=flatten; account={acct}; "
             f"instrument={ins};"
