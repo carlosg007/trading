@@ -1,0 +1,145 @@
+{
+  "name": "semafor_ha_momentum_20260910_NQ_5m_VA",
+  "strategy": "semafor_ha_momentum_20260910",
+  "symbol": "NQ",
+  "version": "A",
+  "description": "Promoted Version A (rule-based baseline).",
+  "symbols": [
+    "NQ"
+  ],
+  "timeframe": "5m",
+  "params": {
+    "ha_period": 20,
+    "ha_smooth": 5,
+    "swing_lookback": 8,
+    "fast_ema": 9,
+    "rsi_period": 14,
+    "rsi_oversold": 30.0,
+    "rsi_overbought": 70.0,
+    "momentum_window": 10,
+    "use_macro_trend": true,
+    "use_midline_exit": true,
+    "use_rsi_zone_exit": false,
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": null,
+    "trailing": false
+  },
+  "params_source": "locked from dual_metrics_NQ.json",
+  "params_conflict": [],
+  "risk": {
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": null,
+    "trailing": false
+  },
+  "day_of_week_gate": {
+    "status": "EVALUATED",
+    "version": "A",
+    "versions_profiled": [
+      "A",
+      "B"
+    ],
+    "blocked_weekdays": [
+      2
+    ],
+    "blocked_weekday": 2,
+    "blocked_day": "Wed",
+    "blocked_day_name": "Wednesday",
+    "worst_weekday": 2,
+    "worst_day": "Wed",
+    "block_rule": "negative_expectancy",
+    "min_trades": 20,
+    "reason": "Wednesday is the weakest session (expectancy -25.15 per trade over 420 trades) and its expectancy is negative",
+    "selected_in_sample": true,
+    "note": "The weekday was chosen in-sample, on a window that spans the Stage 3 holdout. It is a live-supervision instruction, not evidence: no gate was scored on it and nothing was pruned for it.",
+    "source": "/mnt/backtest/artifacts/pipeline/semafor_ha_momentum_20260910/dow_gate_NQ_5m.json",
+    "source_sha256": "567b21c466d09a6ac3c8f9e3b1e6ce06b36248c3f917d253941c26a2d972ade6"
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/semafor_ha_momentum_20260910.py",
+  "source_sha256": "cd01e1f79c34455036bab2b9a1a35aae529b9eb5cbbe9396cc366555cd6bd88f",
+  "promoted_sha256": "cd01e1f79c34455036bab2b9a1a35aae529b9eb5cbbe9396cc366555cd6bd88f",
+  "promoted_utc": "2026-09-10T18:24:24+00:00",
+  "costs_included": true,
+  "variants_tested": null,
+  "metrics_status": "RECORDED \u00b7 locked from dual_metrics_NQ.json",
+  "metrics": {
+    "sharpe": 0.2529315312587563,
+    "sortino": 0.5767120393151363,
+    "calmar": 0.0910014949640814,
+    "profit_factor": 1.1002521396170752,
+    "win_rate": 0.2707939508506616,
+    "max_drawdown_pct": -15.721294052140655,
+    "total_return_pct": 26.848719999999872,
+    "annualized_return_pct": 1.4306612615147207,
+    "trade_count": 2116,
+    "total_pnl": 26848.719999999834,
+    "total_costs": 30851.280000000188,
+    "final_equity": 126848.71999999987,
+    "n_days": 4219,
+    "start": "2013-01-02 11:00:00+00:00",
+    "end": "2026-08-07 20:55:00+00:00",
+    "bars": 916225,
+    "initial_capital": 100000.0
+  },
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "FAIL",
+    "gate2": "FAIL",
+    "gate3": "PASS",
+    "gate_regime": "PASS",
+    "gate_ruin": "PASS",
+    "gate_all_quadrants": "FAIL"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/semafor_ha_momentum_20260910/gate_audit_NQ_5m.json",
+    "audit_sha256": "9b9dc9792167d994a8a332816ce32c0ce66b944cf3a0b48ee3ba51ddc3368956",
+    "audit_symbol": "NQ",
+    "audit_timeframe": "5m",
+    "target_quadrant": "Q1",
+    "target_regime": "High Volatility / Trending",
+    "audit_generated_utc": "2026-09-10T18:20:23+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "swing_lookback": 8,
+      "momentum_window": 10,
+      "sl_atr_mult": 2.0,
+      "use_macro_trend": true
+    },
+    "params_source": "stage 2 winner (best_params_NQ_5m.json)",
+    "variants_tested": 36,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "FAIL",
+    "agrees_with_snapshot": false
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [],
+  "notes": ""
+}
