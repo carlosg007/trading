@@ -1,5 +1,5 @@
 """
-ema_crossover_20260821 - Version B (ML-filtered), promoted 2026-09-08.
+ema_crossover_20260821 - Version B (ML-filtered), promoted 2026-09-10.
 
 Baseline signals from `baseline.py` (SHA-256 9c290bc1e02d816f675ee2752d856aac563d8ae4f7563b0452fdac597d31857b), with the causal ML
 filter applied on top. This is the pipeline, not a new idea: every entry here
@@ -27,7 +27,7 @@ from backtest.engine import BacktestConfig
 
 TIMEFRAME = '15m'
 SYMBOLS = ['CL']
-DEFAULT_PARAMS = {'fast_period': 9, 'slow_period': 21, 'sl_atr_mult': 2.0, 'tp_atr_mult': None, 'trailing': True}
+DEFAULT_PARAMS = {'fast_period': 9, 'slow_period': 21, 'sl_atr_mult': 2.0, 'tp_atr_mult': None, 'trailing': False}
 ML_THRESHOLD = 0.48
 
 _BASELINE_PATH = Path(__file__).with_name("baseline.py")
