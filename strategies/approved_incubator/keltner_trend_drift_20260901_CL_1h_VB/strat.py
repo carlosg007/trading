@@ -1,5 +1,5 @@
 """
-keltner_trend_drift_20260901 - Version B (ML-filtered), promoted 2026-09-09.
+keltner_trend_drift_20260901 - Version B (ML-filtered), promoted 2026-09-10.
 
 Baseline signals from `baseline.py` (SHA-256 da6dcbae3ef30e00684d1435c8438eff93c2d96857e2d6cd3be96bc37f69a9e7), with the causal ML
 filter applied on top. This is the pipeline, not a new idea: every entry here
@@ -27,7 +27,7 @@ from backtest.engine import BacktestConfig
 
 TIMEFRAME = '1h'
 SYMBOLS = ['CL']
-DEFAULT_PARAMS = {'ema_fast': 50, 'keltner_len': 20, 'keltner_mult': 2.0, 'session_start_et': '09:30', 'session_end_et': '16:00', 'allowed_days': (0, 1, 2, 3, 4), 'use_baseline_filter': True, 'use_alpha_trigger': True, 'use_time_filter': False, 'use_day_filter': False, 'use_news_filter': False, 'sl_atr_mult': 2.0, 'tp_atr_mult': None, 'trailing': True}
+DEFAULT_PARAMS = {'ema_fast': 50, 'keltner_len': 40, 'keltner_mult': 1.5, 'session_start_et': '09:30', 'session_end_et': '16:00', 'allowed_days': [0, 1, 2, 3, 4], 'use_baseline_filter': True, 'use_alpha_trigger': True, 'use_time_filter': False, 'use_day_filter': False, 'use_news_filter': False, 'sl_atr_mult': 3.0, 'tp_atr_mult': None, 'trailing': True}
 ML_THRESHOLD = 0.48
 
 _BASELINE_PATH = Path(__file__).with_name("baseline.py")
