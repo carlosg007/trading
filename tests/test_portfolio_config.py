@@ -148,7 +148,13 @@ EXECUTION_ACCOUNTS = {"Incubator-Odd": "SimIncubator1",
 EXPECTED_ASSIGNMENTS = {
     # REGENERATED 2026-09-10 by scripts/register_incubator_batch.py --write, which now rewrites
     # this constant in the same run that registers into config/portfolios.json.
-    # This run routed 0 package(s); the book stands at 117.
+    # This run routed 0 package(s); the book stands at 120.
+    #
+    # THIS IS NO LONGER A HUMAN DECLARATION. It is regenerated from the config it
+    # describes, so it cannot contradict it and cannot catch an assignment nobody
+    # intended - the check it replaced caught nine of those on 2026-08-27. What
+    # still binds is MUST_STAY_ABSENT in the registrar, and the four registration
+    # gates. Order matters: element-wise comparison, appended order.
     #
     # THIS IS NO LONGER A HUMAN DECLARATION. It is regenerated from the config it
     # describes, so it cannot contradict it and cannot catch an assignment nobody
@@ -225,6 +231,8 @@ EXPECTED_ASSIGNMENTS = {
         "ema_deviation_scalp_20260909_RTY_30m_VB",             # 30m, RTY
         "dbb_momentum_breakout_20260909_NQ_1h_VB",             #  1h, NQ
         "dbb_momentum_breakout_20260909_RTY_1h_VB",            #  1h, RTY
+        "semafor_ha_momentum_20260910_NQ_5m_VA",               #  5m, NQ
+        "semafor_ha_momentum_20260910_NQ_5m_VB",               #  5m, NQ
     ],
     "Eval-Odd":          [],
     "Prop-Odd":          [],
@@ -260,6 +268,7 @@ EXPECTED_ASSIGNMENTS = {
         "ema_deviation_scalp_20260909_YM_30m_VB",              # 30m, YM
         "dbb_momentum_breakout_20260909_GC_1h_VA",             #  1h, GC
         "dbb_momentum_breakout_20260909_YM_30m_VB",            # 30m, YM
+        "semafor_ha_momentum_20260910_ES_5m_VA",               #  5m, ES
     ],
     "Eval-Even":         [],
     "Prop-Even":         [],

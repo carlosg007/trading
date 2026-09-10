@@ -70,7 +70,9 @@
         "ema_deviation_scalp_20260909_RTY_30m_VA",
         "ema_deviation_scalp_20260909_RTY_30m_VB",
         "dbb_momentum_breakout_20260909_NQ_1h_VB",
-        "dbb_momentum_breakout_20260909_RTY_1h_VB"
+        "dbb_momentum_breakout_20260909_RTY_1h_VB",
+        "semafor_ha_momentum_20260910_NQ_5m_VA",
+        "semafor_ha_momentum_20260910_NQ_5m_VB"
       ],
       "strategy_allocations": {
         "t3_braid_scalp_20260823_NQ_1h_VA": {
@@ -1402,6 +1404,90 @@
               }
             }
           ]
+        },
+        "semafor_ha_momentum_20260910_NQ_5m_VA": {
+          "strat": "semafor_ha_momentum_20260910_NQ_5m_VA",
+          "symbol": "NQ",
+          "timeframe": "5m",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q1",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/semafor_ha_momentum_20260910_NQ_5m_VA/strat.py",
+          "registered_utc": "2026-09-10T18:24:26+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades NQ; declares Q1; fewest active strategies (Incubator-Odd=35), ties alphabetical; certified on 5m bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_NQ_5m.json (Gate R's certification target)"
+          },
+          "blocked_weekdays": [
+            2
+          ],
+          "configurations": [
+            {
+              "strat": "semafor_ha_momentum_20260910_NQ_5m_VA",
+              "symbol": "NQ",
+              "timeframe": "5m",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q1",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/semafor_ha_momentum_20260910_NQ_5m_VA/strat.py",
+              "registered_utc": "2026-09-10T18:24:26+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades NQ; declares Q1; fewest active strategies (Incubator-Odd=35), ties alphabetical; certified on 5m bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_NQ_5m.json (Gate R's certification target)"
+              },
+              "blocked_weekdays": [
+                2
+              ]
+            }
+          ]
+        },
+        "semafor_ha_momentum_20260910_NQ_5m_VB": {
+          "strat": "semafor_ha_momentum_20260910_NQ_5m_VB",
+          "symbol": "NQ",
+          "timeframe": "5m",
+          "version": "B",
+          "allocation": 1,
+          "regime_filter": "Q1",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/semafor_ha_momentum_20260910_NQ_5m_VB/strat.py",
+          "registered_utc": "2026-09-10T18:24:30+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades NQ; declares Q1; fewest active strategies (Incubator-Odd=36), ties alphabetical; certified on 5m bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_NQ_5m.json (Gate R's certification target)"
+          },
+          "blocked_weekdays": [],
+          "configurations": [
+            {
+              "strat": "semafor_ha_momentum_20260910_NQ_5m_VB",
+              "symbol": "NQ",
+              "timeframe": "5m",
+              "version": "B",
+              "allocation": 1,
+              "regime_filter": "Q1",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/semafor_ha_momentum_20260910_NQ_5m_VB/strat.py",
+              "registered_utc": "2026-09-10T18:24:30+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades NQ; declares Q1; fewest active strategies (Incubator-Odd=36), ties alphabetical; certified on 5m bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_NQ_5m.json (Gate R's certification target)"
+              },
+              "blocked_weekdays": []
+            }
+          ]
         }
       }
     },
@@ -1537,7 +1623,8 @@
         "ema_deviation_scalp_20260909_YM_30m_VA",
         "ema_deviation_scalp_20260909_YM_30m_VB",
         "dbb_momentum_breakout_20260909_GC_1h_VA",
-        "dbb_momentum_breakout_20260909_YM_30m_VB"
+        "dbb_momentum_breakout_20260909_YM_30m_VB",
+        "semafor_ha_momentum_20260910_ES_5m_VA"
       ],
       "strategy_allocations": {
         "t3_braid_scalp_20260823_GC_30m_VA": {
@@ -2667,6 +2754,50 @@
                 "timeframe": "--timeframe",
                 "regime_filter": "gate_audit_YM_30m.json (Gate R's certification target)"
               }
+            }
+          ]
+        },
+        "semafor_ha_momentum_20260910_ES_5m_VA": {
+          "strat": "semafor_ha_momentum_20260910_ES_5m_VA",
+          "symbol": "ES",
+          "timeframe": "5m",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q1",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/semafor_ha_momentum_20260910_ES_5m_VA/strat.py",
+          "registered_utc": "2026-09-10T18:24:19+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades ES; declares Q1; fewest active strategies (Incubator-Even=31), ties alphabetical; certified on 5m bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_ES_5m.json (Gate R's certification target)"
+          },
+          "blocked_weekdays": [
+            0
+          ],
+          "configurations": [
+            {
+              "strat": "semafor_ha_momentum_20260910_ES_5m_VA",
+              "symbol": "ES",
+              "timeframe": "5m",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q1",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/semafor_ha_momentum_20260910_ES_5m_VA/strat.py",
+              "registered_utc": "2026-09-10T18:24:19+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades ES; declares Q1; fewest active strategies (Incubator-Even=31), ties alphabetical; certified on 5m bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_ES_5m.json (Gate R's certification target)"
+              },
+              "blocked_weekdays": [
+                0
+              ]
             }
           ]
         }
