@@ -20,10 +20,13 @@ each refusal names the package rather than skipping it quietly.
      rule nobody wrote down - so the basket is the routing decision and this
      reads it rather than inventing one. A symbol in no basket is REFUSED, not
      added: adding an asset also means adding `asset_metadata`, which the
-     loader reconciles against `backtest/specs.py` on every load, and several
-     symbols here (BTC, SI, LE, the FX crosses, the grains) are UNVERIFIED in
-     that file. A guessed multiplier silently scales every P&L figure for that
-     contract and nothing downstream looks wrong.
+     loader reconciles against `backtest/specs.py` on every load. That file
+     now reconciles against the Databento definitions for every contract but
+     M2K and MYM, and ETH, LE and PL are additionally pinned against the
+     exchange specification in `tests/test_contract_specs.py` - but the
+     caution stands for anything newly added, because a guessed multiplier
+     silently scales every P&L figure for that contract and nothing
+     downstream looks wrong.
 
   2. A theta_vol ANCHOR RESOLVES for the package's (symbol, TIMEFRAME). This
      is the ETH 30m bug generalised: a registered pair the daemon cannot

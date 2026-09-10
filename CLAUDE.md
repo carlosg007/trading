@@ -231,9 +231,19 @@ strat-days   # the same tool
 
 - `mdlib/lake.py` has no `source` parameter, so the NT8 tree is unreachable
   through the reader.
-- Several symbols (PL, grains, LE, FX, crypto, micros) are UNVERIFIED in
-  `backtest/specs.py` — pull definitions before backtesting them. SI definitions
-  stop at 2016, CL at 2025-12.
+- **Only M2K and MYM are UNVERIFIED in `backtest/specs.py`** — `python -m
+  backtest.specs` reconciles every other contract against its Databento
+  definition file and reports those two alone ("no definition data
+  downloaded"). The older list here also named PL, LE, FX, crypto and the
+  grains; that was overtaken and the prose outlived it. ETH, LE and PL are
+  pinned against the exchange specification in `tests/test_contract_specs.py`,
+  which is the check that fails when one moves — a comment claiming a
+  multiplier is right guards nothing, because the failure is silent: get one
+  wrong and the equity curve, the Sharpe, the gate audit's net P&L and the
+  routing decision on top of it are all wrong together and internally
+  consistent. SI definitions stop at 2016, CL at 2025-12. **Micro Ether (MET)
+  is deliberately absent** — adding it without its definition file would put a
+  third row in that UNVERIFIED list.
 - `data_pull/coverage_summary.py` is a superseded copy of the `scripts/` version.
 - LightGBM is referenced by the Dual-Version Mandate but is not pinned.
 - `agents/` is largely scaffold; unimplemented functions raise
