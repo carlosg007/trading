@@ -10,40 +10,73 @@
   "timeframe": "1h",
   "params": {
     "fast_window": 21,
-    "slow_window": 200,
+    "slow_window": 100,
     "spread_threshold": 0.015,
     "exit_revert_mult": 0.5,
     "use_macro_anchor": true,
     "use_spread_hurdle": true,
     "use_spread_expansion": true,
     "use_news_filter": false,
-    "sl_atr_mult": 1.5,
-    "tp_atr_mult": 3.0,
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": 2.0,
     "trailing": false
   },
-  "params_source": "ma_anchoring_spread_20260820.py DEFAULT_PARAMS",
+  "params_source": "locked from dual_metrics_CL.json",
   "params_conflict": [],
   "risk": {
-    "sl_atr_mult": 1.5,
-    "tp_atr_mult": 3.0,
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": 2.0,
     "trailing": false
   },
   "day_of_week_gate": {
-    "status": "NOT EVALUATED",
-    "blocked_weekdays": [],
-    "blocked_weekday": null,
+    "status": "EVALUATED",
     "version": "A",
+    "versions_profiled": [
+      "A",
+      "B"
+    ],
+    "blocked_weekdays": [
+      3
+    ],
+    "blocked_weekday": 3,
+    "blocked_day": "Thu",
+    "blocked_day_name": "Thursday",
+    "worst_weekday": 3,
+    "worst_day": "Thu",
+    "block_rule": "negative_expectancy",
+    "min_trades": 20,
+    "reason": "Thursday is the weakest session (expectancy -132.02 per trade over 457 trades) and its expectancy is negative",
+    "selected_in_sample": true,
+    "note": "The weekday was chosen in-sample, on a window that spans the Stage 3 holdout. It is a live-supervision instruction, not evidence: no gate was scored on it and nothing was pruned for it.",
     "source": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/dow_gate_CL_1h.json",
-    "reason": "dow_gate_CL_1h.json does not exist. Stage 4.5 (backtest/dow_gate.py) was not run for this pair; no weekday is blocked and none was cleared."
+    "source_sha256": "51e22e5615d8fae4d943d4be2ef10546bac436f90f1f81e74487ea5e85f9e995"
   },
   "source": "/home/cgrullon/src/trading/strategies/experimental/ma_anchoring_spread_20260820.py",
   "source_sha256": "296538f7b4199e7eb5fc5000a9b6271c2b779160e9a9d6bcce4e002d00394e4d",
   "promoted_sha256": "296538f7b4199e7eb5fc5000a9b6271c2b779160e9a9d6bcce4e002d00394e4d",
-  "promoted_utc": "2026-09-09T07:03:17+00:00",
-  "costs_included": false,
-  "variants_tested": 270,
-  "metrics_status": "NOT RECORDED",
-  "metrics": null,
+  "promoted_utc": "2026-09-10T23:40:22+00:00",
+  "costs_included": true,
+  "variants_tested": null,
+  "metrics_status": "RECORDED \u00b7 locked from dual_metrics_CL.json",
+  "metrics": {
+    "sharpe": -0.054687719939881405,
+    "sortino": -0.08491294425769037,
+    "calmar": -0.053936219870921,
+    "profit_factor": 0.9602874915152059,
+    "win_rate": 0.48545101842870997,
+    "max_drawdown_pct": -70.06184774778595,
+    "total_return_pct": -45.03396000000226,
+    "annualized_return_pct": -3.7788712246875744,
+    "trade_count": 2062,
+    "total_pnl": -45033.96000000161,
+    "total_costs": 50683.96000000139,
+    "final_equity": 54966.03999999774,
+    "n_days": 3915,
+    "start": "2013-01-01 23:00:00+00:00",
+    "end": "2026-08-07 20:00:00+00:00",
+    "bars": 72450,
+    "initial_capital": 100000.0
+  },
   "gate_audit_status": "PASS",
   "gate_audit": {
     "gate1": "FAIL",
@@ -55,7 +88,7 @@
   },
   "certification": {
     "audit_file": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/gate_audit_CL_1h.json",
-    "audit_sha256": "1a2ed965972608ec6527c4b1ce29612eaeb8ff5e953961f9a4c29a63465fd579",
+    "audit_sha256": "ab0fd0dca6389b0b578d4671c5a51392a0552b870418e319b0e7ba50a1f26c16",
     "audit_symbol": "CL",
     "audit_timeframe": "1h",
     "target_quadrant": "Q2",
@@ -101,46 +134,13 @@
       "exclude_days": null
     },
     "status": "PASS",
-    "snapshot_gate_status": "NOT EVALUATED",
-    "agrees_with_snapshot": null
+    "snapshot_gate_status": "FAIL",
+    "agrees_with_snapshot": false
   },
   "gates_overridden": false,
   "oos_status": "passed_gate3",
   "audit_warnings": [
     "import from 'backtest.event_calendar' is not allowed"
   ],
-  "notes": "Stage 3 certified CL 1h in High Volatility / Ranging; staged by backtest/audit_gates.py, not committed.",
-  "seal": {
-    "algorithm": "sha256",
-    "strategy_code": {
-      "path": "/home/cgrullon/src/trading/strategies/approved_incubator/ma_anchoring_spread_20260820_CL_1h_VA/strat.py",
-      "sha256": "296538f7b4199e7eb5fc5000a9b6271c2b779160e9a9d6bcce4e002d00394e4d"
-    },
-    "winning_parameters": {
-      "path": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/best_params_CL_1h.json",
-      "sha256": "fb2c49e035732c74cfdac081f627f4e771d1d1315ccac0c94b34b602e5a58df7"
-    },
-    "gate_audit": {
-      "path": "/mnt/backtest/artifacts/pipeline/ma_anchoring_spread_20260820/gate_audit_CL_1h.json",
-      "sha256": "1a2ed965972608ec6527c4b1ce29612eaeb8ff5e953961f9a4c29a63465fd579"
-    },
-    "metrics_handoff": {
-      "path": null,
-      "sha256": "NOT AVAILABLE"
-    },
-    "rule": "The three hashes are sealed together because they can be separated: the same code under a different winning cell is a different strategy with the same code checksum.",
-    "certified_symbol": "CL",
-    "certified_timeframe": "1h",
-    "target_regime": "High Volatility / Ranging",
-    "target_quadrant": "Q2",
-    "params": {
-      "fast_window": 21,
-      "slow_window": 100,
-      "spread_threshold": 0.015,
-      "sl_atr_mult": 2.0,
-      "tp_atr_mult": 2.0,
-      "trailing": false
-    },
-    "params_locked": true
-  }
+  "notes": ""
 }
