@@ -146,9 +146,15 @@ EXECUTION_ACCOUNTS = {"Incubator-Odd": "SimIncubator1",
 #
 #     ls /mnt/backtest/artifacts/nt8_bars/ | grep '^CL'
 EXPECTED_ASSIGNMENTS = {
-    # REGENERATED 2026-09-09 after scripts/register_incubator_batch.py routed
-    # seven ema_deviation_scalp_20260909 packages: Odd +4, Even +2,
-    # FullSize +1, taking the book 100 -> 107.
+    # REGENERATED 2026-09-10 by scripts/register_incubator_batch.py --write, which now rewrites
+    # this constant in the same run that registers into config/portfolios.json.
+    # This run routed 0 package(s); the book stands at 118.
+    #
+    # THIS IS NO LONGER A HUMAN DECLARATION. It is regenerated from the config it
+    # describes, so it cannot contradict it and cannot catch an assignment nobody
+    # intended - the check it replaced caught nine of those on 2026-08-27. What
+    # still binds is MUST_STAY_ABSENT in the registrar, and the four registration
+    # gates. Order matters: element-wise comparison, appended order.
     #
     # ORDER MATTERS: `active_strategies` is compared element-wise, so these
     # follow the order promote.py and the registrar appended them in.
@@ -177,125 +183,136 @@ EXPECTED_ASSIGNMENTS = {
     # (symbol, TIMEFRAME), positive net P&L in the certified quadrant, and
     # Stage 4.5 EVALUATED. regime_daemon reports 107 on the switchboard with
     # zero missing anchors.
-    "Incubator-Odd":         [
-        "t3_braid_scalp_20260823_NQ_1h_VA",                   #  1h, NQ
-        "t3_braid_scalp_20260823_NQ_1h_VB",                   #  1h, NQ
-        "t3_braid_scalp_20260823_RTY_30m_VB",                 # 30m, RTY
-        "compressed_bollinger_reversion_20260901_NQ_15m_VA",  # 15m, NQ
-        "double_rsi_momentum_pullback_20260830_NQ_15m_VA",    # 15m, NQ
-        "dual_ema_slope_scalp_20260831_6J_30m_VA",            # 30m, 6J
-        "dual_ema_slope_scalp_20260831_6J_30m_VB",            # 30m, 6J
-        "dual_ema_slope_scalp_20260831_NQ_1h_VA",             #  1h, NQ
-        "dual_ema_slope_scalp_20260831_NQ_1h_VB",             #  1h, NQ
-        "dual_ema_slope_scalp_20260831_RTY_1h_VB",            #  1h, RTY
-        "ema_crossover_20260821_6J_5m_VA",                    #  5m, 6J
-        "ema_crossover_20260821_6J_5m_VB",                    #  5m, 6J
-        "ema_crossover_20260821_NQ_15m_VA",                   # 15m, NQ
-        "ema_crossover_20260821_NQ_1h_VA",                    #  1h, NQ
-        "ema_crossover_20260821_NQ_1h_VB",                    #  1h, NQ
-        "ema_crossover_20260821_RTY_15m_VA",                  # 15m, RTY
-        "ema_crossover_20260821_RTY_15m_VB",                  # 15m, RTY
-        "energy_intraday_nonlinear_ar_20260902_NQ_15m_VA",    # 15m, NQ
-        "energy_intraday_nonlinear_ar_20260902_NQ_30m_VA",    # 30m, NQ
-        "keltner_trend_drift_20260901_6J_30m_VB",             # 30m, 6J
-        "keltner_trend_drift_20260901_NQ_30m_VA",             # 30m, NQ
-        "keltner_trend_drift_20260901_NQ_30m_VB",             # 30m, NQ
-        "ma_anchoring_spread_20260820_NQ_15m_VA",             # 15m, NQ
-        "ma_anchoring_spread_20260820_NQ_15m_VB",             # 15m, NQ
-        "ma_anchoring_spread_20260820_RTY_1h_VA",             #  1h, RTY
-        "ma_anchoring_spread_20260820_RTY_1h_VB",             #  1h, RTY
-        "sma_momentum_crossover_20260818_6E_1h_VA",           #  1h, 6E
-        "sma_momentum_crossover_20260818_NQ_5m_VA",           #  5m, NQ
-        "sma_momentum_crossover_20260818_RTY_5m_VA",          #  5m, RTY
-        "ema_deviation_scalp_20260909_NQ_15m_VA",             # 15m, NQ
-        "ema_deviation_scalp_20260909_NQ_30m_VA",             # 30m, NQ
-        "ema_deviation_scalp_20260909_RTY_30m_VA",            # 30m, RTY
-        "ema_deviation_scalp_20260909_RTY_30m_VB",            # 30m, RTY
+    "Incubator-Odd":     [
+        "t3_braid_scalp_20260823_NQ_1h_VA",                    #  1h, NQ
+        "t3_braid_scalp_20260823_NQ_1h_VB",                    #  1h, NQ
+        "t3_braid_scalp_20260823_RTY_30m_VB",                  # 30m, RTY
+        "compressed_bollinger_reversion_20260901_NQ_15m_VA",   # 15m, NQ
+        "double_rsi_momentum_pullback_20260830_NQ_15m_VA",     # 15m, NQ
+        "dual_ema_slope_scalp_20260831_6J_30m_VA",             # 30m, 6J
+        "dual_ema_slope_scalp_20260831_6J_30m_VB",             # 30m, 6J
+        "dual_ema_slope_scalp_20260831_NQ_1h_VA",              #  1h, NQ
+        "dual_ema_slope_scalp_20260831_NQ_1h_VB",              #  1h, NQ
+        "dual_ema_slope_scalp_20260831_RTY_1h_VB",             #  1h, RTY
+        "ema_crossover_20260821_6J_5m_VA",                     #  5m, 6J
+        "ema_crossover_20260821_6J_5m_VB",                     #  5m, 6J
+        "ema_crossover_20260821_NQ_15m_VA",                    # 15m, NQ
+        "ema_crossover_20260821_NQ_1h_VA",                     #  1h, NQ
+        "ema_crossover_20260821_NQ_1h_VB",                     #  1h, NQ
+        "ema_crossover_20260821_RTY_15m_VA",                   # 15m, RTY
+        "ema_crossover_20260821_RTY_15m_VB",                   # 15m, RTY
+        "energy_intraday_nonlinear_ar_20260902_NQ_15m_VA",     # 15m, NQ
+        "energy_intraday_nonlinear_ar_20260902_NQ_30m_VA",     # 30m, NQ
+        "keltner_trend_drift_20260901_6J_30m_VB",              # 30m, 6J
+        "keltner_trend_drift_20260901_NQ_30m_VA",              # 30m, NQ
+        "keltner_trend_drift_20260901_NQ_30m_VB",              # 30m, NQ
+        "ma_anchoring_spread_20260820_NQ_15m_VA",              # 15m, NQ
+        "ma_anchoring_spread_20260820_NQ_15m_VB",              # 15m, NQ
+        "ma_anchoring_spread_20260820_RTY_1h_VA",              #  1h, RTY
+        "ma_anchoring_spread_20260820_RTY_1h_VB",              #  1h, RTY
+        "sma_momentum_crossover_20260818_6E_1h_VA",            #  1h, 6E
+        "sma_momentum_crossover_20260818_NQ_5m_VA",            #  5m, NQ
+        "sma_momentum_crossover_20260818_RTY_5m_VA",           #  5m, RTY
+        "ema_deviation_scalp_20260909_NQ_15m_VA",              # 15m, NQ
+        "ema_deviation_scalp_20260909_NQ_30m_VA",              # 30m, NQ
+        "ema_deviation_scalp_20260909_RTY_30m_VA",             # 30m, RTY
+        "ema_deviation_scalp_20260909_RTY_30m_VB",             # 30m, RTY
+        "dbb_momentum_breakout_20260909_NQ_1h_VB",             #  1h, NQ
+        "dbb_momentum_breakout_20260909_RTY_1h_VB",            #  1h, RTY
     ],
-    "Eval-Odd":              [],
-    "Prop-Odd":              [],
-    "Incubator-Even":        [
-        "t3_braid_scalp_20260823_GC_30m_VA",                  # 30m, GC
-        "t3_braid_scalp_20260823_GC_30m_VB",                  # 30m, GC
-        "compressed_bollinger_reversion_20260901_ES_15m_VA",  # 15m, ES
-        "sma_momentum_crossover_20260818_YM_1h_VA",           #  1h, YM
-        "sma_momentum_crossover_20260818_YM_30m_VA",          # 30m, YM
-        "sma_momentum_crossover_20260818_YM_30m_VB",          # 30m, YM
-        "double_rsi_momentum_pullback_20260830_GC_1h_VA",     #  1h, GC
-        "double_rsi_momentum_pullback_20260830_GC_1h_VB",     #  1h, GC
-        "double_rsi_momentum_pullback_20260830_GC_30m_VA",    # 30m, GC
-        "double_rsi_momentum_pullback_20260830_YM_15m_VB",    # 15m, YM
-        "dual_ema_slope_scalp_20260831_GC_1h_VA",             #  1h, GC
-        "dual_ema_slope_scalp_20260831_GC_30m_VA",            # 30m, GC
-        "dual_ema_slope_scalp_20260831_YM_15m_VA",            # 15m, YM
-        "dual_ema_slope_scalp_20260831_YM_30m_VA",            # 30m, YM
-        "ema_crossover_20260821_ES_15m_VA",                   # 15m, ES
-        "ema_crossover_20260821_ES_30m_VA",                   # 30m, ES
-        "energy_intraday_nonlinear_ar_20260902_ES_30m_VA",    # 30m, ES
-        "energy_intraday_nonlinear_ar_20260902_ES_30m_VB",    # 30m, ES
-        "energy_intraday_nonlinear_ar_20260902_YM_30m_VA",    # 30m, YM
-        "keltner_trend_drift_20260901_GC_1h_VA",              #  1h, GC
-        "ma_anchoring_spread_20260820_GC_1h_VA",              #  1h, GC
-        "ma_anchoring_spread_20260820_GC_1h_VB",              #  1h, GC
-        "sma_momentum_crossover_20260818_ES_15m_VA",          # 15m, ES
-        "sma_momentum_crossover_20260818_ES_15m_VB",          # 15m, ES
-        "sma_momentum_crossover_20260818_GC_1h_VA",           #  1h, GC
-        "sma_momentum_crossover_20260818_GC_1h_VB",           #  1h, GC
-        "sma_momentum_crossover_20260818_GC_5m_VA",           #  5m, GC
-        "ema_deviation_scalp_20260909_YM_30m_VA",             # 30m, YM
-        "ema_deviation_scalp_20260909_YM_30m_VB",             # 30m, YM
+    "Eval-Odd":          [],
+    "Prop-Odd":          [],
+    "Incubator-Even":    [
+        "t3_braid_scalp_20260823_GC_30m_VA",                   # 30m, GC
+        "t3_braid_scalp_20260823_GC_30m_VB",                   # 30m, GC
+        "compressed_bollinger_reversion_20260901_ES_15m_VA",   # 15m, ES
+        "sma_momentum_crossover_20260818_YM_1h_VA",            #  1h, YM
+        "sma_momentum_crossover_20260818_YM_30m_VA",           # 30m, YM
+        "sma_momentum_crossover_20260818_YM_30m_VB",           # 30m, YM
+        "double_rsi_momentum_pullback_20260830_GC_1h_VA",      #  1h, GC
+        "double_rsi_momentum_pullback_20260830_GC_1h_VB",      #  1h, GC
+        "double_rsi_momentum_pullback_20260830_GC_30m_VA",     # 30m, GC
+        "double_rsi_momentum_pullback_20260830_YM_15m_VB",     # 15m, YM
+        "dual_ema_slope_scalp_20260831_GC_1h_VA",              #  1h, GC
+        "dual_ema_slope_scalp_20260831_GC_30m_VA",             # 30m, GC
+        "dual_ema_slope_scalp_20260831_YM_15m_VA",             # 15m, YM
+        "dual_ema_slope_scalp_20260831_YM_30m_VA",             # 30m, YM
+        "ema_crossover_20260821_ES_15m_VA",                    # 15m, ES
+        "ema_crossover_20260821_ES_30m_VA",                    # 30m, ES
+        "energy_intraday_nonlinear_ar_20260902_ES_30m_VA",     # 30m, ES
+        "energy_intraday_nonlinear_ar_20260902_ES_30m_VB",     # 30m, ES
+        "energy_intraday_nonlinear_ar_20260902_YM_30m_VA",     # 30m, YM
+        "keltner_trend_drift_20260901_GC_1h_VA",               #  1h, GC
+        "ma_anchoring_spread_20260820_GC_1h_VA",               #  1h, GC
+        "ma_anchoring_spread_20260820_GC_1h_VB",               #  1h, GC
+        "sma_momentum_crossover_20260818_ES_15m_VA",           # 15m, ES
+        "sma_momentum_crossover_20260818_ES_15m_VB",           # 15m, ES
+        "sma_momentum_crossover_20260818_GC_1h_VA",            #  1h, GC
+        "sma_momentum_crossover_20260818_GC_1h_VB",            #  1h, GC
+        "sma_momentum_crossover_20260818_GC_5m_VA",            #  5m, GC
+        "ema_deviation_scalp_20260909_YM_30m_VA",              # 30m, YM
+        "ema_deviation_scalp_20260909_YM_30m_VB",              # 30m, YM
+        "dbb_momentum_breakout_20260909_GC_1h_VA",             #  1h, GC
+        "dbb_momentum_breakout_20260909_YM_30m_VB",            # 30m, YM
     ],
-    "Eval-Even":             [],
-    "Prop-Even":             [],
-    "Incubator-FullSize":    [
-        "t3_braid_scalp_20260823_HO_15m_VB",                  # 15m, HO
-        "t3_braid_scalp_20260823_HO_1h_VA",                   #  1h, HO
-        "t3_braid_scalp_20260823_PL_1h_VA",                   #  1h, PL
-        "t3_braid_scalp_20260823_ETH_1h_VA",                  #  1h, ETH
-        "t3_braid_scalp_20260823_ETH_1h_VB",                  #  1h, ETH
-        "compressed_bollinger_reversion_20260901_ETH_5m_VB",  #  5m, ETH
-        "intrinsic_alpha_engine_20260831_ETH_1h_VA",          #  1h, ETH
-        "intrinsic_alpha_engine_20260831_ETH_30m_VB",         # 30m, ETH
-        "intrinsic_alpha_engine_20260831_ETH_5m_VB",          #  5m, ETH
-        "sma_momentum_crossover_20260818_ETH_30m_VA",         # 30m, ETH
-        "double_rsi_momentum_pullback_20260830_RB_1h_VA",     #  1h, RB
-        "double_rsi_momentum_pullback_20260830_RB_1h_VB",     #  1h, RB
-        "dual_ema_slope_scalp_20260831_ETH_30m_VA",           # 30m, ETH
-        "dual_ema_slope_scalp_20260831_HO_1h_VA",             #  1h, HO
-        "dual_ema_slope_scalp_20260831_HO_1h_VB",             #  1h, HO
-        "dual_ema_slope_scalp_20260831_HO_30m_VA",            # 30m, HO
-        "dual_ema_slope_scalp_20260831_HO_5m_VB",             #  5m, HO
-        "dual_ema_slope_scalp_20260831_PL_1h_VA",             #  1h, PL
-        "dual_ema_slope_scalp_20260831_RB_1h_VA",             #  1h, RB
-        "ema_crossover_20260821_ETH_5m_VB",                   #  5m, ETH
-        "energy_intraday_nonlinear_ar_20260902_HO_30m_VA",    # 30m, HO
-        "energy_intraday_nonlinear_ar_20260902_RB_1h_VA",     #  1h, RB
-        "energy_intraday_nonlinear_ar_20260902_RB_30m_VA",    # 30m, RB
-        "energy_intraday_nonlinear_ar_20260902_RB_30m_VB",    # 30m, RB
-        "energy_intraday_nonlinear_ar_20260902_RB_5m_VB",     #  5m, RB
-        "keltner_trend_drift_20260901_ETH_1h_VA",             #  1h, ETH
-        "keltner_trend_drift_20260901_HO_15m_VA",             # 15m, HO
-        "keltner_trend_drift_20260901_PL_30m_VB",             # 30m, PL
-        "ma_anchoring_spread_20260820_ETH_5m_VA",             #  5m, ETH
-        "ma_anchoring_spread_20260820_PL_15m_VA",             # 15m, PL
-        "ma_anchoring_spread_20260820_PL_15m_VB",             # 15m, PL
-        "ma_anchoring_spread_20260820_PL_1h_VA",              #  1h, PL
-        "ma_anchoring_spread_20260820_PL_5m_VA",              #  5m, PL
-        "ma_anchoring_spread_20260820_PL_5m_VB",              #  5m, PL
-        "ma_anchoring_spread_20260820_RB_1h_VA",              #  1h, RB
-        "sma_momentum_crossover_20260818_HO_15m_VA",          # 15m, HO
-        "sma_momentum_crossover_20260818_HO_15m_VB",          # 15m, HO
-        "sma_momentum_crossover_20260818_HO_30m_VA",          # 30m, HO
-        "sma_momentum_crossover_20260818_HO_30m_VB",          # 30m, HO
-        "sma_momentum_crossover_20260818_HO_5m_VA",           #  5m, HO
-        "sma_momentum_crossover_20260818_PL_30m_VA",          # 30m, PL
-        "sma_momentum_crossover_20260818_PL_30m_VB",          # 30m, PL
-        "sma_momentum_crossover_20260818_RB_1h_VA",           #  1h, RB
-        "sma_momentum_crossover_20260818_RB_30m_VA",          # 30m, RB
-        "ema_deviation_scalp_20260909_ETH_30m_VA",            # 30m, ETH
+    "Eval-Even":         [],
+    "Prop-Even":         [],
+    "Incubator-FullSize":[
+        "t3_braid_scalp_20260823_HO_15m_VB",                   # 15m, HO
+        "t3_braid_scalp_20260823_HO_1h_VA",                    #  1h, HO
+        "t3_braid_scalp_20260823_PL_1h_VA",                    #  1h, PL
+        "t3_braid_scalp_20260823_ETH_1h_VA",                   #  1h, ETH
+        "t3_braid_scalp_20260823_ETH_1h_VB",                   #  1h, ETH
+        "compressed_bollinger_reversion_20260901_ETH_5m_VB",   #  5m, ETH
+        "intrinsic_alpha_engine_20260831_ETH_1h_VA",           #  1h, ETH
+        "intrinsic_alpha_engine_20260831_ETH_30m_VB",          # 30m, ETH
+        "intrinsic_alpha_engine_20260831_ETH_5m_VB",           #  5m, ETH
+        "sma_momentum_crossover_20260818_ETH_30m_VA",          # 30m, ETH
+        "double_rsi_momentum_pullback_20260830_RB_1h_VA",      #  1h, RB
+        "double_rsi_momentum_pullback_20260830_RB_1h_VB",      #  1h, RB
+        "dual_ema_slope_scalp_20260831_ETH_30m_VA",            # 30m, ETH
+        "dual_ema_slope_scalp_20260831_HO_1h_VA",              #  1h, HO
+        "dual_ema_slope_scalp_20260831_HO_1h_VB",              #  1h, HO
+        "dual_ema_slope_scalp_20260831_HO_30m_VA",             # 30m, HO
+        "dual_ema_slope_scalp_20260831_HO_5m_VB",              #  5m, HO
+        "dual_ema_slope_scalp_20260831_PL_1h_VA",              #  1h, PL
+        "dual_ema_slope_scalp_20260831_RB_1h_VA",              #  1h, RB
+        "ema_crossover_20260821_ETH_5m_VB",                    #  5m, ETH
+        "energy_intraday_nonlinear_ar_20260902_HO_30m_VA",     # 30m, HO
+        "energy_intraday_nonlinear_ar_20260902_RB_1h_VA",      #  1h, RB
+        "energy_intraday_nonlinear_ar_20260902_RB_30m_VA",     # 30m, RB
+        "energy_intraday_nonlinear_ar_20260902_RB_30m_VB",     # 30m, RB
+        "energy_intraday_nonlinear_ar_20260902_RB_5m_VB",      #  5m, RB
+        "keltner_trend_drift_20260901_ETH_1h_VA",              #  1h, ETH
+        "keltner_trend_drift_20260901_HO_15m_VA",              # 15m, HO
+        "keltner_trend_drift_20260901_PL_30m_VB",              # 30m, PL
+        "ma_anchoring_spread_20260820_ETH_5m_VA",              #  5m, ETH
+        "ma_anchoring_spread_20260820_PL_15m_VA",              # 15m, PL
+        "ma_anchoring_spread_20260820_PL_15m_VB",              # 15m, PL
+        "ma_anchoring_spread_20260820_PL_1h_VA",               #  1h, PL
+        "ma_anchoring_spread_20260820_PL_5m_VA",               #  5m, PL
+        "ma_anchoring_spread_20260820_PL_5m_VB",               #  5m, PL
+        "ma_anchoring_spread_20260820_RB_1h_VA",               #  1h, RB
+        "sma_momentum_crossover_20260818_HO_15m_VA",           # 15m, HO
+        "sma_momentum_crossover_20260818_HO_15m_VB",           # 15m, HO
+        "sma_momentum_crossover_20260818_HO_30m_VA",           # 30m, HO
+        "sma_momentum_crossover_20260818_HO_30m_VB",           # 30m, HO
+        "sma_momentum_crossover_20260818_HO_5m_VA",            #  5m, HO
+        "sma_momentum_crossover_20260818_PL_30m_VA",           # 30m, PL
+        "sma_momentum_crossover_20260818_PL_30m_VB",           # 30m, PL
+        "sma_momentum_crossover_20260818_RB_1h_VA",            #  1h, RB
+        "sma_momentum_crossover_20260818_RB_30m_VA",           # 30m, RB
+        "ema_deviation_scalp_20260909_ETH_30m_VA",             # 30m, ETH
+        "dbb_momentum_breakout_20260909_ETH_15m_VA",           # 15m, ETH
+        "dbb_momentum_breakout_20260909_ETH_1h_VA",            #  1h, ETH
+        "dbb_momentum_breakout_20260909_HO_1h_VB",             #  1h, HO
+        "dbb_momentum_breakout_20260909_PL_1h_VA",             #  1h, PL
+        "dbb_momentum_breakout_20260909_ETH_30m_VA",           # 30m, ETH
+        "dbb_momentum_breakout_20260909_ETH_30m_VB",           # 30m, ETH
+        "dbb_momentum_breakout_20260909_HO_30m_VB",            # 30m, HO
     ],
-    "Eval-FullSize":         [],
-    "Prop-FullSize":         [],
+    "Eval-FullSize":     [],
+    "Prop-FullSize":     [],
 }
 
 # M2K and MYM added 2026-09-08 to carry t3_braid_scalp_20260823's RTY and YM

@@ -68,7 +68,9 @@
         "ema_deviation_scalp_20260909_NQ_15m_VA",
         "ema_deviation_scalp_20260909_NQ_30m_VA",
         "ema_deviation_scalp_20260909_RTY_30m_VA",
-        "ema_deviation_scalp_20260909_RTY_30m_VB"
+        "ema_deviation_scalp_20260909_RTY_30m_VB",
+        "dbb_momentum_breakout_20260909_NQ_1h_VB",
+        "dbb_momentum_breakout_20260909_RTY_1h_VB"
       ],
       "strategy_allocations": {
         "t3_braid_scalp_20260823_NQ_1h_VA": {
@@ -1173,20 +1175,6 @@
             }
           ]
         },
-        "ema_deviation_scalp_20260909_NQ_15m_VA": {
-          "strat": "ema_deviation_scalp_20260909_NQ_15m_VA",
-          "symbol": "NQ",
-          "timeframe": "15m",
-          "version": "A",
-          "allocation": 1,
-          "regime_filter": "Q2",
-          "status": "incubating",
-          "path": "strategies/approved_incubator/ema_deviation_scalp_20260909_NQ_15m_VA/strat.py",
-          "registered_by": "scripts/register_incubator_batch.py",
-          "blocked_weekdays": [
-            3
-          ]
-        },
         "ema_deviation_scalp_20260909_NQ_30m_VA": {
           "strat": "ema_deviation_scalp_20260909_NQ_30m_VA",
           "symbol": "NQ",
@@ -1196,9 +1184,33 @@
           "regime_filter": "Q2",
           "status": "incubating",
           "path": "strategies/approved_incubator/ema_deviation_scalp_20260909_NQ_30m_VA/strat.py",
-          "registered_by": "scripts/register_incubator_batch.py",
-          "blocked_weekdays": [
-            3
+          "registered_utc": "2026-09-10T13:02:28+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "already registered on Incubator-Odd; a re-promotion does not move an account",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_NQ_30m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "ema_deviation_scalp_20260909_NQ_30m_VA",
+              "symbol": "NQ",
+              "timeframe": "30m",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q2",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/ema_deviation_scalp_20260909_NQ_30m_VA/strat.py",
+              "registered_utc": "2026-09-10T13:02:28+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "already registered on Incubator-Odd; a re-promotion does not move an account",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_NQ_30m.json (Gate R's certification target)"
+              }
+            }
           ]
         },
         "ema_deviation_scalp_20260909_RTY_30m_VA": {
@@ -1210,9 +1222,33 @@
           "regime_filter": "Q2",
           "status": "incubating",
           "path": "strategies/approved_incubator/ema_deviation_scalp_20260909_RTY_30m_VA/strat.py",
-          "registered_by": "scripts/register_incubator_batch.py",
-          "blocked_weekdays": [
-            2
+          "registered_utc": "2026-09-10T13:02:42+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "already registered on Incubator-Odd; a re-promotion does not move an account",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_RTY_30m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "ema_deviation_scalp_20260909_RTY_30m_VA",
+              "symbol": "RTY",
+              "timeframe": "30m",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q2",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/ema_deviation_scalp_20260909_RTY_30m_VA/strat.py",
+              "registered_utc": "2026-09-10T13:02:42+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "already registered on Incubator-Odd; a re-promotion does not move an account",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_RTY_30m.json (Gate R's certification target)"
+              }
+            }
           ]
         },
         "ema_deviation_scalp_20260909_RTY_30m_VB": {
@@ -1224,9 +1260,147 @@
           "regime_filter": "Q2",
           "status": "incubating",
           "path": "strategies/approved_incubator/ema_deviation_scalp_20260909_RTY_30m_VB/strat.py",
-          "registered_by": "scripts/register_incubator_batch.py",
-          "blocked_weekdays": [
-            2
+          "registered_utc": "2026-09-10T13:02:46+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "already registered on Incubator-Odd; a re-promotion does not move an account",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_RTY_30m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "ema_deviation_scalp_20260909_RTY_30m_VB",
+              "symbol": "RTY",
+              "timeframe": "30m",
+              "version": "B",
+              "allocation": 1,
+              "regime_filter": "Q2",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/ema_deviation_scalp_20260909_RTY_30m_VB/strat.py",
+              "registered_utc": "2026-09-10T13:02:46+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "already registered on Incubator-Odd; a re-promotion does not move an account",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_RTY_30m.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "ema_deviation_scalp_20260909_NQ_15m_VA": {
+          "strat": "ema_deviation_scalp_20260909_NQ_15m_VA",
+          "symbol": "NQ",
+          "timeframe": "15m",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q2",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/ema_deviation_scalp_20260909_NQ_15m_VA/strat.py",
+          "registered_utc": "2026-09-10T13:02:53+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "already registered on Incubator-Odd; a re-promotion does not move an account",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_NQ_15m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "ema_deviation_scalp_20260909_NQ_15m_VA",
+              "symbol": "NQ",
+              "timeframe": "15m",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q2",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/ema_deviation_scalp_20260909_NQ_15m_VA/strat.py",
+              "registered_utc": "2026-09-10T13:02:53+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "already registered on Incubator-Odd; a re-promotion does not move an account",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_NQ_15m.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "dbb_momentum_breakout_20260909_NQ_1h_VB": {
+          "strat": "dbb_momentum_breakout_20260909_NQ_1h_VB",
+          "symbol": "NQ",
+          "timeframe": "1h",
+          "version": "B",
+          "allocation": 1,
+          "regime_filter": "Q3",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/dbb_momentum_breakout_20260909_NQ_1h_VB/strat.py",
+          "registered_utc": "2026-09-10T15:57:48+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades NQ; declares Q3; fewest active strategies (Incubator-Odd=34), ties alphabetical; certified on 1h bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_NQ_1h.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "dbb_momentum_breakout_20260909_NQ_1h_VB",
+              "symbol": "NQ",
+              "timeframe": "1h",
+              "version": "B",
+              "allocation": 1,
+              "regime_filter": "Q3",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/dbb_momentum_breakout_20260909_NQ_1h_VB/strat.py",
+              "registered_utc": "2026-09-10T15:57:48+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades NQ; declares Q3; fewest active strategies (Incubator-Odd=34), ties alphabetical; certified on 1h bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_NQ_1h.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "dbb_momentum_breakout_20260909_RTY_1h_VB": {
+          "strat": "dbb_momentum_breakout_20260909_RTY_1h_VB",
+          "symbol": "RTY",
+          "timeframe": "1h",
+          "version": "B",
+          "allocation": 1,
+          "regime_filter": "Q3",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/dbb_momentum_breakout_20260909_RTY_1h_VB/strat.py",
+          "registered_utc": "2026-09-10T15:57:56+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades RTY; declares Q3; fewest active strategies (Incubator-Odd=35), ties alphabetical; certified on 1h bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_RTY_1h.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "dbb_momentum_breakout_20260909_RTY_1h_VB",
+              "symbol": "RTY",
+              "timeframe": "1h",
+              "version": "B",
+              "allocation": 1,
+              "regime_filter": "Q3",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/dbb_momentum_breakout_20260909_RTY_1h_VB/strat.py",
+              "registered_utc": "2026-09-10T15:57:56+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades RTY; declares Q3; fewest active strategies (Incubator-Odd=35), ties alphabetical; certified on 1h bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_RTY_1h.json (Gate R's certification target)"
+              }
+            }
           ]
         }
       }
@@ -1361,7 +1535,9 @@
         "sma_momentum_crossover_20260818_GC_1h_VB",
         "sma_momentum_crossover_20260818_GC_5m_VA",
         "ema_deviation_scalp_20260909_YM_30m_VA",
-        "ema_deviation_scalp_20260909_YM_30m_VB"
+        "ema_deviation_scalp_20260909_YM_30m_VB",
+        "dbb_momentum_breakout_20260909_GC_1h_VA",
+        "dbb_momentum_breakout_20260909_YM_30m_VB"
       ],
       "strategy_allocations": {
         "t3_braid_scalp_20260823_GC_30m_VA": {
@@ -2351,9 +2527,33 @@
           "regime_filter": "Q2",
           "status": "incubating",
           "path": "strategies/approved_incubator/ema_deviation_scalp_20260909_YM_30m_VA/strat.py",
-          "registered_by": "scripts/register_incubator_batch.py",
-          "blocked_weekdays": [
-            4
+          "registered_utc": "2026-09-10T13:02:35+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "already registered on Incubator-Even; a re-promotion does not move an account",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_YM_30m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "ema_deviation_scalp_20260909_YM_30m_VA",
+              "symbol": "YM",
+              "timeframe": "30m",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q2",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/ema_deviation_scalp_20260909_YM_30m_VA/strat.py",
+              "registered_utc": "2026-09-10T13:02:35+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "already registered on Incubator-Even; a re-promotion does not move an account",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_YM_30m.json (Gate R's certification target)"
+              }
+            }
           ]
         },
         "ema_deviation_scalp_20260909_YM_30m_VB": {
@@ -2365,9 +2565,109 @@
           "regime_filter": "Q2",
           "status": "incubating",
           "path": "strategies/approved_incubator/ema_deviation_scalp_20260909_YM_30m_VB/strat.py",
-          "registered_by": "scripts/register_incubator_batch.py",
-          "blocked_weekdays": [
-            2
+          "registered_utc": "2026-09-10T13:02:39+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "already registered on Incubator-Even; a re-promotion does not move an account",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_YM_30m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "ema_deviation_scalp_20260909_YM_30m_VB",
+              "symbol": "YM",
+              "timeframe": "30m",
+              "version": "B",
+              "allocation": 1,
+              "regime_filter": "Q2",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/ema_deviation_scalp_20260909_YM_30m_VB/strat.py",
+              "registered_utc": "2026-09-10T13:02:39+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "already registered on Incubator-Even; a re-promotion does not move an account",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_YM_30m.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "dbb_momentum_breakout_20260909_GC_1h_VA": {
+          "strat": "dbb_momentum_breakout_20260909_GC_1h_VA",
+          "symbol": "GC",
+          "timeframe": "1h",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q3",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/dbb_momentum_breakout_20260909_GC_1h_VA/strat.py",
+          "registered_utc": "2026-09-10T15:57:41+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades GC; declares Q3; fewest active strategies (Incubator-Even=29), ties alphabetical; certified on 1h bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_GC_1h.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "dbb_momentum_breakout_20260909_GC_1h_VA",
+              "symbol": "GC",
+              "timeframe": "1h",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q3",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/dbb_momentum_breakout_20260909_GC_1h_VA/strat.py",
+              "registered_utc": "2026-09-10T15:57:41+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades GC; declares Q3; fewest active strategies (Incubator-Even=29), ties alphabetical; certified on 1h bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_GC_1h.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "dbb_momentum_breakout_20260909_YM_30m_VB": {
+          "strat": "dbb_momentum_breakout_20260909_YM_30m_VB",
+          "symbol": "YM",
+          "timeframe": "30m",
+          "version": "B",
+          "allocation": 1,
+          "regime_filter": "Q3",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/dbb_momentum_breakout_20260909_YM_30m_VB/strat.py",
+          "registered_utc": "2026-09-10T15:58:25+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades YM; declares Q3; fewest active strategies (Incubator-Even=30), ties alphabetical; certified on 30m bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_YM_30m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "dbb_momentum_breakout_20260909_YM_30m_VB",
+              "symbol": "YM",
+              "timeframe": "30m",
+              "version": "B",
+              "allocation": 1,
+              "regime_filter": "Q3",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/dbb_momentum_breakout_20260909_YM_30m_VB/strat.py",
+              "registered_utc": "2026-09-10T15:58:25+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades YM; declares Q3; fewest active strategies (Incubator-Even=30), ties alphabetical; certified on 30m bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_YM_30m.json (Gate R's certification target)"
+              }
+            }
           ]
         }
       }
@@ -2519,7 +2819,14 @@
         "sma_momentum_crossover_20260818_PL_30m_VB",
         "sma_momentum_crossover_20260818_RB_1h_VA",
         "sma_momentum_crossover_20260818_RB_30m_VA",
-        "ema_deviation_scalp_20260909_ETH_30m_VA"
+        "ema_deviation_scalp_20260909_ETH_30m_VA",
+        "dbb_momentum_breakout_20260909_ETH_15m_VA",
+        "dbb_momentum_breakout_20260909_ETH_1h_VA",
+        "dbb_momentum_breakout_20260909_HO_1h_VB",
+        "dbb_momentum_breakout_20260909_PL_1h_VA",
+        "dbb_momentum_breakout_20260909_ETH_30m_VA",
+        "dbb_momentum_breakout_20260909_ETH_30m_VB",
+        "dbb_momentum_breakout_20260909_HO_30m_VB"
       ],
       "strategy_allocations": {
         "t3_braid_scalp_20260823_HO_15m_VB": {
@@ -4179,9 +4486,299 @@
           "regime_filter": "Q2",
           "status": "incubating",
           "path": "strategies/approved_incubator/ema_deviation_scalp_20260909_ETH_30m_VA/strat.py",
-          "registered_by": "scripts/register_incubator_batch.py",
-          "blocked_weekdays": [
-            3
+          "registered_utc": "2026-09-10T13:02:50+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "already registered on Incubator-FullSize; a re-promotion does not move an account",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_ETH_30m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "ema_deviation_scalp_20260909_ETH_30m_VA",
+              "symbol": "ETH",
+              "timeframe": "30m",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q2",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/ema_deviation_scalp_20260909_ETH_30m_VA/strat.py",
+              "registered_utc": "2026-09-10T13:02:50+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "already registered on Incubator-FullSize; a re-promotion does not move an account",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_ETH_30m.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "dbb_momentum_breakout_20260909_ETH_15m_VA": {
+          "strat": "dbb_momentum_breakout_20260909_ETH_15m_VA",
+          "symbol": "ETH",
+          "timeframe": "15m",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q1",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/dbb_momentum_breakout_20260909_ETH_15m_VA/strat.py",
+          "registered_utc": "2026-09-10T15:57:33+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades ETH; declares Q1; fewest active strategies (Incubator-FullSize=45), ties alphabetical; certified on 15m bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_ETH_15m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "dbb_momentum_breakout_20260909_ETH_15m_VA",
+              "symbol": "ETH",
+              "timeframe": "15m",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q1",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/dbb_momentum_breakout_20260909_ETH_15m_VA/strat.py",
+              "registered_utc": "2026-09-10T15:57:33+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades ETH; declares Q1; fewest active strategies (Incubator-FullSize=45), ties alphabetical; certified on 15m bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_ETH_15m.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "dbb_momentum_breakout_20260909_ETH_1h_VA": {
+          "strat": "dbb_momentum_breakout_20260909_ETH_1h_VA",
+          "symbol": "ETH",
+          "timeframe": "1h",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q3",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/dbb_momentum_breakout_20260909_ETH_1h_VA/strat.py",
+          "registered_utc": "2026-09-10T15:57:37+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades ETH; declares Q3; fewest active strategies (Incubator-FullSize=46), ties alphabetical; certified on 1h bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_ETH_1h.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "dbb_momentum_breakout_20260909_ETH_1h_VA",
+              "symbol": "ETH",
+              "timeframe": "1h",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q3",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/dbb_momentum_breakout_20260909_ETH_1h_VA/strat.py",
+              "registered_utc": "2026-09-10T15:57:37+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades ETH; declares Q3; fewest active strategies (Incubator-FullSize=46), ties alphabetical; certified on 1h bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_ETH_1h.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "dbb_momentum_breakout_20260909_HO_1h_VB": {
+          "strat": "dbb_momentum_breakout_20260909_HO_1h_VB",
+          "symbol": "HO",
+          "timeframe": "1h",
+          "version": "B",
+          "allocation": 1,
+          "regime_filter": "Q1",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/dbb_momentum_breakout_20260909_HO_1h_VB/strat.py",
+          "registered_utc": "2026-09-10T15:57:45+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades HO; declares Q1; fewest active strategies (Incubator-FullSize=47), ties alphabetical; certified on 1h bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_HO_1h.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "dbb_momentum_breakout_20260909_HO_1h_VB",
+              "symbol": "HO",
+              "timeframe": "1h",
+              "version": "B",
+              "allocation": 1,
+              "regime_filter": "Q1",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/dbb_momentum_breakout_20260909_HO_1h_VB/strat.py",
+              "registered_utc": "2026-09-10T15:57:45+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades HO; declares Q1; fewest active strategies (Incubator-FullSize=47), ties alphabetical; certified on 1h bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_HO_1h.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "dbb_momentum_breakout_20260909_PL_1h_VA": {
+          "strat": "dbb_momentum_breakout_20260909_PL_1h_VA",
+          "symbol": "PL",
+          "timeframe": "1h",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q3",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/dbb_momentum_breakout_20260909_PL_1h_VA/strat.py",
+          "registered_utc": "2026-09-10T15:57:52+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades PL; declares Q3; fewest active strategies (Incubator-FullSize=48), ties alphabetical; certified on 1h bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_PL_1h.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "dbb_momentum_breakout_20260909_PL_1h_VA",
+              "symbol": "PL",
+              "timeframe": "1h",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q3",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/dbb_momentum_breakout_20260909_PL_1h_VA/strat.py",
+              "registered_utc": "2026-09-10T15:57:52+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades PL; declares Q3; fewest active strategies (Incubator-FullSize=48), ties alphabetical; certified on 1h bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_PL_1h.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "dbb_momentum_breakout_20260909_ETH_30m_VA": {
+          "strat": "dbb_momentum_breakout_20260909_ETH_30m_VA",
+          "symbol": "ETH",
+          "timeframe": "30m",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q1",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/dbb_momentum_breakout_20260909_ETH_30m_VA/strat.py",
+          "registered_utc": "2026-09-10T15:58:07+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades ETH; declares Q1; fewest active strategies (Incubator-FullSize=49), ties alphabetical; certified on 30m bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_ETH_30m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "dbb_momentum_breakout_20260909_ETH_30m_VA",
+              "symbol": "ETH",
+              "timeframe": "30m",
+              "version": "A",
+              "allocation": 1,
+              "regime_filter": "Q1",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/dbb_momentum_breakout_20260909_ETH_30m_VA/strat.py",
+              "registered_utc": "2026-09-10T15:58:07+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades ETH; declares Q1; fewest active strategies (Incubator-FullSize=49), ties alphabetical; certified on 30m bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_ETH_30m.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "dbb_momentum_breakout_20260909_ETH_30m_VB": {
+          "strat": "dbb_momentum_breakout_20260909_ETH_30m_VB",
+          "symbol": "ETH",
+          "timeframe": "30m",
+          "version": "B",
+          "allocation": 1,
+          "regime_filter": "Q1",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/dbb_momentum_breakout_20260909_ETH_30m_VB/strat.py",
+          "registered_utc": "2026-09-10T15:58:10+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades ETH; declares Q1; fewest active strategies (Incubator-FullSize=50), ties alphabetical; certified on 30m bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_ETH_30m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "dbb_momentum_breakout_20260909_ETH_30m_VB",
+              "symbol": "ETH",
+              "timeframe": "30m",
+              "version": "B",
+              "allocation": 1,
+              "regime_filter": "Q1",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/dbb_momentum_breakout_20260909_ETH_30m_VB/strat.py",
+              "registered_utc": "2026-09-10T15:58:10+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades ETH; declares Q1; fewest active strategies (Incubator-FullSize=50), ties alphabetical; certified on 30m bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_ETH_30m.json (Gate R's certification target)"
+              }
+            }
+          ]
+        },
+        "dbb_momentum_breakout_20260909_HO_30m_VB": {
+          "strat": "dbb_momentum_breakout_20260909_HO_30m_VB",
+          "symbol": "HO",
+          "timeframe": "30m",
+          "version": "B",
+          "allocation": 1,
+          "regime_filter": "Q1",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/dbb_momentum_breakout_20260909_HO_30m_VB/strat.py",
+          "registered_utc": "2026-09-10T15:58:14+00:00",
+          "registered_by": "backtest/promote.py",
+          "routing_basis": "trades HO; declares Q1; fewest active strategies (Incubator-FullSize=51), ties alphabetical; certified on 30m bars",
+          "resolved_from": {
+            "symbol": "--symbol",
+            "timeframe": "--timeframe",
+            "regime_filter": "gate_audit_HO_30m.json (Gate R's certification target)"
+          },
+          "configurations": [
+            {
+              "strat": "dbb_momentum_breakout_20260909_HO_30m_VB",
+              "symbol": "HO",
+              "timeframe": "30m",
+              "version": "B",
+              "allocation": 1,
+              "regime_filter": "Q1",
+              "status": "incubating",
+              "path": "strategies/approved_incubator/dbb_momentum_breakout_20260909_HO_30m_VB/strat.py",
+              "registered_utc": "2026-09-10T15:58:14+00:00",
+              "registered_by": "backtest/promote.py",
+              "routing_basis": "trades HO; declares Q1; fewest active strategies (Incubator-FullSize=51), ties alphabetical; certified on 30m bars",
+              "resolved_from": {
+                "symbol": "--symbol",
+                "timeframe": "--timeframe",
+                "regime_filter": "gate_audit_HO_30m.json (Gate R's certification target)"
+              }
+            }
           ]
         }
       }
