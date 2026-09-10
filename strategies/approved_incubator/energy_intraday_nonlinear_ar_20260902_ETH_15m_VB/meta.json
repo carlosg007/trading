@@ -9,8 +9,8 @@
   ],
   "timeframe": "15m",
   "params": {
-    "sma_L_len": 20,
-    "adx_thresh": 25.0,
+    "sma_L_len": 10,
+    "adx_thresh": 30.0,
     "vol_sma_len": 20,
     "session_start_et": "09:00",
     "session_end_et": "14:30",
@@ -19,32 +19,63 @@
     "use_volume_filter": true,
     "use_news_filter": false,
     "sl_atr_mult": 1.5,
-    "tp_atr_mult": 3.0,
-    "trailing": true
+    "tp_atr_mult": 2.0,
+    "trailing": false
   },
-  "params_source": "energy_intraday_nonlinear_ar_20260902.py DEFAULT_PARAMS",
+  "params_source": "locked from dual_metrics_ETH.json",
   "params_conflict": [],
   "risk": {
     "sl_atr_mult": 1.5,
-    "tp_atr_mult": 3.0,
-    "trailing": true
+    "tp_atr_mult": 2.0,
+    "trailing": false
   },
   "day_of_week_gate": {
-    "status": "NOT EVALUATED",
+    "status": "EVALUATED",
+    "version": "B",
+    "versions_profiled": [
+      "A",
+      "B"
+    ],
     "blocked_weekdays": [],
     "blocked_weekday": null,
-    "version": "B",
+    "blocked_day": null,
+    "blocked_day_name": null,
+    "worst_weekday": 2,
+    "worst_day": "Wed",
+    "block_rule": "negative_expectancy",
+    "min_trades": 20,
+    "reason": "Wednesday is the weakest session but its expectancy is 82.27 per trade, which is not negative. Nothing is blocked: cutting a profitable session removes realised edge, and being fifth of five is not evidence against a weekday. Pass --block-worst-always to block it anyway.",
+    "selected_in_sample": true,
+    "note": "The weekday was chosen in-sample, on a window that spans the Stage 3 holdout. It is a live-supervision instruction, not evidence: no gate was scored on it and nothing was pruned for it.",
     "source": "/mnt/backtest/artifacts/pipeline/energy_intraday_nonlinear_ar_20260902/dow_gate_ETH_15m.json",
-    "reason": "dow_gate_ETH_15m.json does not exist. Stage 4.5 (backtest/dow_gate.py) was not run for this pair; no weekday is blocked and none was cleared."
+    "source_sha256": "a7aff2a65d5898c1df70b405682df5a255102828b192e067893160728e751cf9"
   },
   "source": "/home/cgrullon/src/trading/strategies/experimental/energy_intraday_nonlinear_ar_20260902.py",
   "source_sha256": "d3bf63c643b8b51664b6ec149731c082168403077873fe8c1503212603565712",
-  "promoted_sha256": "b0dfde44816093740019474a456decfca1902dbe631e2a495dfef3fad6607834",
-  "promoted_utc": "2026-09-09T02:41:59+00:00",
-  "costs_included": false,
-  "variants_tested": 135,
-  "metrics_status": "NOT RECORDED",
-  "metrics": null,
+  "promoted_sha256": "655f3ad33f89526b061d7efc40ec5c6d899f924b37ebb9f7d6f9aa254089d982",
+  "promoted_utc": "2026-09-10T23:39:43+00:00",
+  "costs_included": true,
+  "variants_tested": null,
+  "metrics_status": "RECORDED \u00b7 locked from dual_metrics_ETH.json",
+  "metrics": {
+    "sharpe": 0.8933981258725179,
+    "sortino": 1.772797804448462,
+    "calmar": 0.6692074395724217,
+    "profit_factor": 1.427287345358611,
+    "win_rate": 0.48068669527896996,
+    "max_drawdown_pct": -7.754743629239824,
+    "total_return_pct": 41.35785999999981,
+    "annualized_return_pct": 5.189532128664132,
+    "trade_count": 233,
+    "total_pnl": 41357.86000000013,
+    "total_costs": 11392.139999999874,
+    "final_equity": 141357.8599999998,
+    "n_days": 1724,
+    "start": "2021-02-07 23:00:00+00:00",
+    "end": "2026-08-08 22:45:00+00:00",
+    "bars": 125808,
+    "initial_capital": 100000.0
+  },
   "gate_audit_status": "PASS",
   "gate_audit": {
     "gate1": "PASS",
@@ -56,7 +87,7 @@
   },
   "certification": {
     "audit_file": "/mnt/backtest/artifacts/pipeline/energy_intraday_nonlinear_ar_20260902/gate_audit_ETH_15m.json",
-    "audit_sha256": "9ba33dd98ea8ff3684ef4d45a53a31223090d1e1ef9b54956c31b16136afb084",
+    "audit_sha256": "41539400272ebc9f332770657be92115b269dc0f29ab78705d78c963f3100c9a",
     "audit_symbol": "ETH",
     "audit_timeframe": "15m",
     "target_quadrant": "Q1",
@@ -102,46 +133,14 @@
     },
     "status": "PASS",
     "snapshot_gate_status": "NOT EVALUATED",
-    "agrees_with_snapshot": null
+    "agrees_with_snapshot": false
   },
   "gates_overridden": false,
   "oos_status": "passed_gate3",
   "audit_warnings": [
     "import from 'backtest.event_calendar' is not allowed"
   ],
-  "notes": "Stage 3 certified ETH 15m in High Volatility / Trending; staged by backtest/audit_gates.py, not committed.",
+  "notes": "",
   "ml_threshold": 0.48,
-  "baseline": "baseline.py",
-  "seal": {
-    "algorithm": "sha256",
-    "strategy_code": {
-      "path": "/home/cgrullon/src/trading/strategies/approved_incubator/energy_intraday_nonlinear_ar_20260902_ETH_15m_VB/baseline.py",
-      "sha256": "d3bf63c643b8b51664b6ec149731c082168403077873fe8c1503212603565712"
-    },
-    "winning_parameters": {
-      "path": "/mnt/backtest/artifacts/pipeline/energy_intraday_nonlinear_ar_20260902/best_params_ETH_15m.json",
-      "sha256": "ac4fdd78e01ef465327968045c4145e4f199e7e61da683c5e5bcb52aefcf8e60"
-    },
-    "gate_audit": {
-      "path": "/mnt/backtest/artifacts/pipeline/energy_intraday_nonlinear_ar_20260902/gate_audit_ETH_15m.json",
-      "sha256": "9ba33dd98ea8ff3684ef4d45a53a31223090d1e1ef9b54956c31b16136afb084"
-    },
-    "metrics_handoff": {
-      "path": null,
-      "sha256": "NOT AVAILABLE"
-    },
-    "rule": "The three hashes are sealed together because they can be separated: the same code under a different winning cell is a different strategy with the same code checksum.",
-    "certified_symbol": "ETH",
-    "certified_timeframe": "15m",
-    "target_regime": "High Volatility / Trending",
-    "target_quadrant": "Q1",
-    "params": {
-      "sma_L_len": 10,
-      "adx_thresh": 30.0,
-      "sl_atr_mult": 1.5,
-      "tp_atr_mult": 2.0,
-      "trailing": false
-    },
-    "params_locked": true
-  }
+  "baseline": "baseline.py"
 }

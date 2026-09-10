@@ -1,5 +1,5 @@
 """
-energy_intraday_nonlinear_ar_20260902 - Version B (ML-filtered), promoted 2026-09-09.
+energy_intraday_nonlinear_ar_20260902 - Version B (ML-filtered), promoted 2026-09-10.
 
 Baseline signals from `baseline.py` (SHA-256 d3bf63c643b8b51664b6ec149731c082168403077873fe8c1503212603565712), with the causal ML
 filter applied on top. This is the pipeline, not a new idea: every entry here
@@ -27,7 +27,7 @@ from backtest.engine import BacktestConfig
 
 TIMEFRAME = '15m'
 SYMBOLS = ['ETH']
-DEFAULT_PARAMS = {'sma_L_len': 20, 'adx_thresh': 25.0, 'vol_sma_len': 20, 'session_start_et': '09:00', 'session_end_et': '14:30', 'use_baseline_filter': True, 'use_alpha_trigger': True, 'use_volume_filter': True, 'use_news_filter': False, 'sl_atr_mult': 1.5, 'tp_atr_mult': 3.0, 'trailing': True}
+DEFAULT_PARAMS = {'sma_L_len': 10, 'adx_thresh': 30.0, 'vol_sma_len': 20, 'session_start_et': '09:00', 'session_end_et': '14:30', 'use_baseline_filter': True, 'use_alpha_trigger': True, 'use_volume_filter': True, 'use_news_filter': False, 'sl_atr_mult': 1.5, 'tp_atr_mult': 2.0, 'trailing': False}
 ML_THRESHOLD = 0.48
 
 _BASELINE_PATH = Path(__file__).with_name("baseline.py")
