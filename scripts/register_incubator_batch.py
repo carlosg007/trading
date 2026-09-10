@@ -397,7 +397,24 @@ def main(argv: list[str] | None = None) -> int:
         print("\ndry run - nothing written. Re-run with --write to apply.")
         return 0
     if not eligible:
+        # NOTHING TO ROUTE IS NOT NOTHING TO DO. The declaration in
+        # tests/test_portfolio_config.py can be stale while this run finds no
+        # new package: `backtest/promote.py` registers during Stage 5 through
+        # its own path, and a row pruned by hand moves the table too. Gating
+        # the sync on `eligible` left the guard describing a routing table
+        # that had already moved on, which is the exact drift this sync
+        # exists to remove - so it runs on every --write.
         print("\nnothing routable; config untouched.")
+        if not args.sync:
+            return 1
+        changed, message = sync_expected_assignments(cfg, [])
+        if changed:
+            print(f"  declaration synced anyway → {message}")
+            return 0
+        if message.startswith("REFUSED"):
+            print(f"  ! declaration NOT synced: {message}", file=sys.stderr)
+            return 3
+        print(f"  declaration already current: {message}")
         return 1
 
     for r in eligible:
