@@ -15,19 +15,6 @@
       "pinned_from": "mdlib.regimes.provenance('ETH','1h') - byte-exact",
       "file_note": "Pinned in-sample theta_vol anchors, per (SYMBOL, TIMEFRAME). This file WINS over the regime cache - see realtime/regime_daemon.py load_theta_anchors - because it is the deliberate act and the cache is only what happens to exist. An anchor is per TIMEFRAME: NQ's theta_vol is 7.90 at 15m and 11.33 at 30m, a 43% different boundary on the same tape. Symbols absent here resolve from the cache."
     },
-    "5m": {
-      "theta_vol": 7.642513275146484,
-      "is_start": "2013-01-01",
-      "is_end": "2022-12-31",
-      "atr_length": 14,
-      "adx_length": 14,
-      "adx_trend_threshold": 25.0,
-      "observed_first_bar": "2021-02-07 23:00:00+00:00",
-      "in_sample_bars_note": "342966 rows cached in total",
-      "coverage_note": "SAME CAVEAT AS ETH 1h, AND THE SAME REASON. CME Ether futures began 2021-02-08, so the 2013-01-01..2022-12-31 in-sample window holds bars from 2021-02-07 only - roughly a fifth of its nominal span, spanning the 2021 top and the 2022 bear market and nothing before them. Pinned because the in-sample window is CLOSED: ETH history after 2022-12-31 is holdout, and a cache rebuild folding it in would move a boundary compressed_bollinger_reversion_20260901_ETH_5m_VB was already certified against, with every log line still reading correctly. AN ANCHOR IS PER TIMEFRAME: ETH is 31.4366 at 1h and 7.6425 at 5m.",
-      "pinned_utc": "2026-09-08",
-      "pinned_from": "mdlib.regimes.provenance('ETH','5m') - byte-exact"
-    },
     "30m": {
       "theta_vol": 21.01512336730957,
       "is_start": "2013-01-01",
@@ -40,6 +27,32 @@
       "coverage_note": "SAME CAVEAT AS ETH 1h AND 5m, AND THE SAME REASON. CME Ether futures began 2021-02-08, so the 2013-01-01..2022-12-31 in-sample window holds bars from 2021-02-07 only - roughly a fifth of its nominal span, spanning the 2021 top and the 2022 bear market and nothing before them. Pinned because the in-sample window is CLOSED: ETH history after 2022-12-31 is holdout, and a cache rebuild folding it in would move a boundary intrinsic_alpha_engine_20260831_ETH_30m_VB was already certified against, with every log line still reading correctly. AN ANCHOR IS PER TIMEFRAME: ETH is 31.4366 at 1h, 21.0151 at 30m and 7.6425 at 5m. Until this was pinned the pair resolved to nothing at all - `theta_for('ETH','30m')` raised ThetaAnchorMissing and the strategy was unclassifiable, which downstream reads as 'not in the permitted quadrant' and is indistinguishable from a quiet market.",
       "pinned_utc": "2026-09-09",
       "pinned_from": "mdlib.regimes.provenance('ETH','30m') - byte-exact"
+    },
+    "15m": {
+      "theta_vol": 13.981427192687988,
+      "is_start": "2013-01-01",
+      "is_end": "2022-12-31",
+      "atr_length": 14,
+      "adx_length": 14,
+      "adx_trend_threshold": 25.0,
+      "observed_first_bar": "2021-02-07 23:00:00+00:00",
+      "in_sample_bars_note": "125,808 rows cached in total",
+      "coverage_note": "SAME CAVEAT AS ETH 1h, 30m AND 5m, AND THE SAME REASON. CME Ether futures began trading 2021-02-08, so the 2013-01-01..2022-12-31 in-sample window holds bars from 2021-02-07 only - roughly a fifth of its nominal span, spanning the 2021 top and the 2022 bear market and nothing before them. THE WINDOW LABEL IS THE CHARTER'S; THE DATA IS NOT. Pinned because the in-sample window is CLOSED: ETH history after 2022-12-31 is holdout, and a cache rebuild folding it in would move a boundary certified strategies were already measured against, with every log line still reading correctly. Until this was pinned, theta_for('ETH','15m') raised ThetaAnchorMissing and the pair was unclassifiable - which downstream reads as 'not in the permitted quadrant' and is indistinguishable from a quiet market. AN ANCHOR IS PER TIMEFRAME: ETH is 31.4366 at 1h, 21.0151 at 30m, 13.9814 at 15m and 7.6425 at 5m.",
+      "pinned_utc": "2026-09-10",
+      "pinned_from": "mdlib.regimes.provenance('ETH','15m') - byte-exact"
+    },
+    "5m": {
+      "theta_vol": 7.642513275146484,
+      "is_start": "2013-01-01",
+      "is_end": "2022-12-31",
+      "atr_length": 14,
+      "adx_length": 14,
+      "adx_trend_threshold": 25.0,
+      "observed_first_bar": "2021-02-07 23:00:00+00:00",
+      "in_sample_bars_note": "342966 rows cached in total",
+      "coverage_note": "SAME CAVEAT AS ETH 1h, AND THE SAME REASON. CME Ether futures began 2021-02-08, so the 2013-01-01..2022-12-31 in-sample window holds bars from 2021-02-07 only - roughly a fifth of its nominal span, spanning the 2021 top and the 2022 bear market and nothing before them. Pinned because the in-sample window is CLOSED: ETH history after 2022-12-31 is holdout, and a cache rebuild folding it in would move a boundary compressed_bollinger_reversion_20260901_ETH_5m_VB was already certified against, with every log line still reading correctly. AN ANCHOR IS PER TIMEFRAME: ETH is 31.4366 at 1h and 7.6425 at 5m.",
+      "pinned_utc": "2026-09-08",
+      "pinned_from": "mdlib.regimes.provenance('ETH','5m') - byte-exact"
     }
   }
 }
