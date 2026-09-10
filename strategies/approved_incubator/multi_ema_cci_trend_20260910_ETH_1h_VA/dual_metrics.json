@@ -1,0 +1,818 @@
+{
+  "meta": {
+    "strategy": "multi_ema_cci_trend_20260910",
+    "strategy_path": "/home/cgrullon/src/trading/strategies/experimental/multi_ema_cci_trend_20260910.py",
+    "params": {
+      "ribbon_step": 3,
+      "ribbon_count": 6,
+      "cci_period": 10,
+      "cci_trigger": 0.0,
+      "cci_extreme": 100.0,
+      "require_strict_stack": false,
+      "use_ribbon_exit": true,
+      "use_cci_extreme_exit": false,
+      "sl_atr_mult": 2.0,
+      "tp_atr_mult": null,
+      "trailing": false
+    },
+    "symbol": "ETH",
+    "timeframe": "1h",
+    "bars": 32467,
+    "start": "2021-02-07 23:00:00+00:00",
+    "end": "2026-08-08 22:00:00+00:00",
+    "costs_included": true,
+    "initial_capital": 100000.0,
+    "ml_threshold": 0.48,
+    "ml_evaluated": true,
+    "ml_features": [
+      "cci",
+      "spread_norm",
+      "dist_slowest_atr",
+      "dist_fastest_atr",
+      "stack_long",
+      "stack_short",
+      "norm_atr",
+      "roc_3",
+      "roc_10",
+      "range_atr",
+      "gap_3_6_atr",
+      "gap_6_9_atr",
+      "gap_9_12_atr",
+      "gap_12_15_atr",
+      "gap_15_18_atr",
+      "volume_z"
+    ],
+    "ml_refit": {
+      "long": {
+        "direction": "long",
+        "candidates": 1031,
+        "fits": 38,
+        "train_rows_max": 975,
+        "refit_growth": 0.1,
+        "max_train_rows": 50000,
+        "threads": 1,
+        "elapsed_s": 1.117
+      },
+      "short": {
+        "direction": "short",
+        "candidates": 979,
+        "fits": 38,
+        "train_rows_max": 975,
+        "refit_growth": 0.1,
+        "max_train_rows": 50000,
+        "threads": 1,
+        "elapsed_s": 1.064
+      }
+    },
+    "logic": {
+      "concept": "A trend is not one moving average but 6 of them in agreement. Six EMAs spaced 3 bars apart stack in order when every horizon sees the same direction, and a pullback into that ribbon is where the flow that missed the move re-enters. CCI(10) crossing 0.0 times it: that is the bar the pullback stops being a pullback. The ribbon is the CONDITION and the cross is the EVENT - neither trades alone. Trades are attributed by their ENTRY bar, never the exit, so a move opened in one quadrant that runs into another still scores where it opened.",
+      "entry": "LONG when CCI(10) crosses ABOVE 0.0 while the ribbon is aligned bullish; SHORT when it crosses BELOW while the ribbon is aligned bearish. Alignment is the EMAs stacked in order, or - with require_strict_stack=False - the relaxed form: Close beyond the slowest EMA with the ribbon spread on the same side of zero.",
+      "exit": "The opposite CCI cross always closes the position. With use_ribbon_exit=True a Close back through the SLOWEST EMA closes it too - that is the request's stop 'anchored just below EMA_24', and it is a SIGNAL because the engine has no stop orders. With use_cci_extreme_exit=False the opposite CCI extreme (+/-100.0) closes it as well. A protective bracket at 2.0 x ATR(14) sits underneath all of them, trailing=False; no ATR take-profit is modelled (tp_atr_mult=None)."
+    }
+  },
+  "comparison": {
+    "ml_evaluated": true,
+    "entries_a": 1031,
+    "entries_b": 229,
+    "entries_suppressed": 802,
+    "sharpe_delta": 0.2469476842736617,
+    "b_beats_a": true
+  },
+  "version_a": {
+    "metrics": {
+      "ok": true,
+      "ruined": false,
+      "final_equity": 48069.199999998185,
+      "total_pnl": -51930.80000000064,
+      "gross_pnl": 49412.5,
+      "total_costs": 101343.30000000051,
+      "total_return_pct": -51.93080000000181,
+      "annualized_return_pct": -10.154165853492692,
+      "sharpe": 0.27756252002436893,
+      "sortino": 0.5830710054212416,
+      "calmar": -0.11294966069796641,
+      "metrics_basis": {
+        "frequency": "daily_close",
+        "annualization_factor": 252,
+        "risk_free_rate": 0.0,
+        "n_days": 1724
+      },
+      "max_drawdown_pct": -89.89992347693268,
+      "win_rate": 0.2980099502487562,
+      "profit_factor": 0.971058710132942,
+      "trade_count": 2010,
+      "long_trades": 1031,
+      "short_trades": 979,
+      "breach": {},
+      "n_days": 1724,
+      "dow_breakdown": [
+        {
+          "day": "Mon",
+          "weekday": 0,
+          "trades": 357,
+          "net_pnl": 107202.43999999975,
+          "gross_win": 419419.1999999997,
+          "gross_loss": 312216.75999999995,
+          "win_rate": 0.37815126050420167,
+          "avg_pnl": 300.2869467787108,
+          "profit_factor": 1.343359017626087,
+          "pct_of_trades": 17.761194029850746,
+          "pct_of_net_pnl": 206.43325348347884
+        },
+        {
+          "day": "Tue",
+          "weekday": 1,
+          "trades": 415,
+          "net_pnl": -92175.70000000004,
+          "gross_win": 259466.24000000017,
+          "gross_loss": 351641.9400000003,
+          "win_rate": 0.29397590361445786,
+          "avg_pnl": -222.11012048192782,
+          "profit_factor": 0.7378705736864037,
+          "pct_of_trades": 20.64676616915423,
+          "pct_of_net_pnl": -177.4971693099257
+        },
+        {
+          "day": "Wed",
+          "weekday": 2,
+          "trades": 438,
+          "net_pnl": -99131.04000000062,
+          "gross_win": 324897.0599999996,
+          "gross_loss": 424028.10000000044,
+          "win_rate": 0.2694063926940639,
+          "avg_pnl": -226.32657534246718,
+          "profit_factor": 0.766215871070807,
+          "pct_of_trades": 21.791044776119403,
+          "pct_of_net_pnl": -190.89064678379572
+        },
+        {
+          "day": "Thu",
+          "weekday": 3,
+          "trades": 387,
+          "net_pnl": -48984.95999999977,
+          "gross_win": 266234.07999999996,
+          "gross_loss": 315219.0399999998,
+          "win_rate": 0.2558139534883721,
+          "avg_pnl": -126.57612403100717,
+          "profit_factor": 0.8446002500356581,
+          "pct_of_trades": 19.253731343283583,
+          "pct_of_net_pnl": -94.32737412094397
+        },
+        {
+          "day": "Fri",
+          "weekday": 4,
+          "trades": 404,
+          "net_pnl": 83599.68000000008,
+          "gross_win": 470116.2399999999,
+          "gross_loss": 386516.55999999994,
+          "win_rate": 0.30198019801980197,
+          "avg_pnl": 206.9299009900992,
+          "profit_factor": 1.2162900342484677,
+          "pct_of_trades": 20.09950248756219,
+          "pct_of_net_pnl": 160.9828464032887
+        },
+        {
+          "day": "Sat",
+          "weekday": 5,
+          "trades": 5,
+          "net_pnl": -2422.8999999999996,
+          "gross_win": 395.41999999999996,
+          "gross_loss": 2818.3199999999997,
+          "win_rate": 0.2,
+          "avg_pnl": -484.5799999999999,
+          "profit_factor": 0.1403034431860115,
+          "pct_of_trades": 0.24875621890547264,
+          "pct_of_net_pnl": -4.665631956372653
+        },
+        {
+          "day": "Sun",
+          "weekday": 6,
+          "trades": 4,
+          "net_pnl": -18.319999999985157,
+          "gross_win": 1890.8400000000147,
+          "gross_loss": 1909.1599999999999,
+          "win_rate": 0.5,
+          "avg_pnl": -4.579999999996289,
+          "profit_factor": 0.990404156801952,
+          "pct_of_trades": 0.19900497512437812,
+          "pct_of_net_pnl": -0.035277715729364716
+        }
+      ],
+      "entry_filters": {},
+      "meta": {
+        "strategy": "multi_ema_cci_trend_20260910",
+        "strategy_path": "/home/cgrullon/src/trading/strategies/experimental/multi_ema_cci_trend_20260910.py",
+        "params": {
+          "ribbon_step": 3,
+          "ribbon_count": 6,
+          "cci_period": 10,
+          "cci_trigger": 0.0,
+          "cci_extreme": 100.0,
+          "require_strict_stack": false,
+          "use_ribbon_exit": true,
+          "use_cci_extreme_exit": false,
+          "sl_atr_mult": 2.0,
+          "tp_atr_mult": null,
+          "trailing": false
+        },
+        "symbol": "ETH",
+        "timeframe": "1h",
+        "bars": 32467,
+        "start": "2021-02-07 23:00:00+00:00",
+        "end": "2026-08-08 22:00:00+00:00",
+        "costs_included": true,
+        "initial_capital": 100000.0,
+        "ml_threshold": 0.48,
+        "ml_evaluated": true,
+        "ml_features": [
+          "cci",
+          "spread_norm",
+          "dist_slowest_atr",
+          "dist_fastest_atr",
+          "stack_long",
+          "stack_short",
+          "norm_atr",
+          "roc_3",
+          "roc_10",
+          "range_atr",
+          "gap_3_6_atr",
+          "gap_6_9_atr",
+          "gap_9_12_atr",
+          "gap_12_15_atr",
+          "gap_15_18_atr",
+          "volume_z"
+        ],
+        "ml_refit": {
+          "long": {
+            "direction": "long",
+            "candidates": 1031,
+            "fits": 38,
+            "train_rows_max": 975,
+            "refit_growth": 0.1,
+            "max_train_rows": 50000,
+            "threads": 1,
+            "elapsed_s": 1.117
+          },
+          "short": {
+            "direction": "short",
+            "candidates": 979,
+            "fits": 38,
+            "train_rows_max": 975,
+            "refit_growth": 0.1,
+            "max_train_rows": 50000,
+            "threads": 1,
+            "elapsed_s": 1.064
+          }
+        },
+        "logic": {
+          "concept": "A trend is not one moving average but 6 of them in agreement. Six EMAs spaced 3 bars apart stack in order when every horizon sees the same direction, and a pullback into that ribbon is where the flow that missed the move re-enters. CCI(10) crossing 0.0 times it: that is the bar the pullback stops being a pullback. The ribbon is the CONDITION and the cross is the EVENT - neither trades alone. Trades are attributed by their ENTRY bar, never the exit, so a move opened in one quadrant that runs into another still scores where it opened.",
+          "entry": "LONG when CCI(10) crosses ABOVE 0.0 while the ribbon is aligned bullish; SHORT when it crosses BELOW while the ribbon is aligned bearish. Alignment is the EMAs stacked in order, or - with require_strict_stack=False - the relaxed form: Close beyond the slowest EMA with the ribbon spread on the same side of zero.",
+          "exit": "The opposite CCI cross always closes the position. With use_ribbon_exit=True a Close back through the SLOWEST EMA closes it too - that is the request's stop 'anchored just below EMA_24', and it is a SIGNAL because the engine has no stop orders. With use_cci_extreme_exit=False the opposite CCI extreme (+/-100.0) closes it as well. A protective bracket at 2.0 x ATR(14) sits underneath all of them, trailing=False; no ATR take-profit is modelled (tp_atr_mult=None)."
+        }
+      }
+    },
+    "gate_audit": {
+      "version": "A",
+      "name": "multi_ema_cci_trend_20260910",
+      "gates": {
+        "gate1": {
+          "name": "GATE 1 \u00b7 In-Sample",
+          "status": "FAIL",
+          "checks": [
+            {
+              "label": "Sharpe (not gated)",
+              "value": 0.27756252002436893,
+              "threshold": null,
+              "direction": "min",
+              "unit": "",
+              "status": "INFO",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Profit factor",
+              "value": 0.971058710132942,
+              "threshold": 1.0,
+              "direction": "min",
+              "unit": "",
+              "status": "FAIL",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Trades",
+              "value": 2010.0,
+              "threshold": 200.0,
+              "direction": "min",
+              "unit": "",
+              "status": "PASS",
+              "note": "6.84 years at 30 trades/yr is 205; the 200-trade cap binds",
+              "fmt": "{:,.0f}"
+            },
+            {
+              "label": "Max drawdown",
+              "value": 89.89992347693268,
+              "threshold": 12.0,
+              "direction": "max",
+              "unit": "%",
+              "status": "FAIL",
+              "note": null,
+              "fmt": "{:.2f}"
+            }
+          ]
+        },
+        "gate2": {
+          "name": "GATE 2 \u00b7 Robustness",
+          "status": "NOT EVALUATED",
+          "checks": [
+            {
+              "label": "WFO efficiency",
+              "value": null,
+              "threshold": 0.5,
+              "direction": "min",
+              "unit": "",
+              "status": "NOT EVALUATED",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Monte Carlo 95% max DD",
+              "value": null,
+              "threshold": 18.0,
+              "direction": "max",
+              "unit": "%",
+              "status": "NOT EVALUATED",
+              "note": null,
+              "fmt": "{:.2f}"
+            }
+          ]
+        },
+        "gate3": {
+          "name": "GATE 3 \u00b7 OOS Holdout",
+          "status": "NOT EVALUATED",
+          "checks": [
+            {
+              "label": "Holdout Sharpe retention",
+              "value": null,
+              "threshold": 0.8,
+              "direction": "min",
+              "unit": "x",
+              "status": "NOT EVALUATED",
+              "note": "no holdout Sharpe supplied, so Sharpe retention is undefined",
+              "fmt": "{:.2f}"
+            }
+          ]
+        }
+      },
+      "status": "FAIL",
+      "passed": false,
+      "thresholds": {
+        "gate1": {
+          "min_profit_factor": 1.0,
+          "min_trades": 100,
+          "max_required_trades": 200,
+          "min_trades_per_year": 30,
+          "max_drawdown_pct": 12.0
+        },
+        "gate2": {
+          "min_wfo_efficiency": 0.5,
+          "max_mc_drawdown_pct": 18.0
+        },
+        "gate3": {
+          "min_retention": 0.8
+        }
+      },
+      "holdout_sharpe": null,
+      "in_sample_sharpe": 0.27756252002436893,
+      "sharpe_retention": null,
+      "retention": null,
+      "retention_metric": null
+    }
+  },
+  "version_b": {
+    "metrics": {
+      "ok": true,
+      "ruined": false,
+      "final_equity": 190075.5399999995,
+      "total_pnl": 90075.53999999994,
+      "gross_pnl": 109362.5,
+      "total_costs": 19286.960000000014,
+      "total_return_pct": 90.0755399999995,
+      "annualized_return_pct": 9.842679847444135,
+      "sharpe": 0.5245102042980306,
+      "sortino": 1.1578315313897158,
+      "calmar": 0.39040566559077966,
+      "metrics_basis": {
+        "frequency": "daily_close",
+        "annualization_factor": 252,
+        "risk_free_rate": 0.0,
+        "n_days": 1724
+      },
+      "max_drawdown_pct": -25.211416521196593,
+      "win_rate": 0.3446601941747573,
+      "profit_factor": 1.2401860040461397,
+      "trade_count": 412,
+      "long_trades": 229,
+      "short_trades": 183,
+      "breach": {},
+      "n_days": 1724,
+      "dow_breakdown": [
+        {
+          "day": "Mon",
+          "weekday": 0,
+          "trades": 87,
+          "net_pnl": 17864.039999999943,
+          "gross_win": 108771.37999999989,
+          "gross_loss": 90907.33999999994,
+          "win_rate": 0.4482758620689655,
+          "avg_pnl": 205.33379310344762,
+          "profit_factor": 1.1965082247484082,
+          "pct_of_trades": 21.116504854368934,
+          "pct_of_net_pnl": 19.83228743341417
+        },
+        {
+          "day": "Tue",
+          "weekday": 1,
+          "trades": 89,
+          "net_pnl": 29292.380000000223,
+          "gross_win": 97028.44000000012,
+          "gross_loss": 67736.0599999999,
+          "win_rate": 0.3595505617977528,
+          "avg_pnl": 329.1278651685418,
+          "profit_factor": 1.4324488315381831,
+          "pct_of_trades": 21.601941747572816,
+          "pct_of_net_pnl": 32.51979394184064
+        },
+        {
+          "day": "Wed",
+          "weekday": 2,
+          "trades": 82,
+          "net_pnl": -12500.560000000154,
+          "gross_win": 72594.65999999992,
+          "gross_loss": 85095.22000000007,
+          "win_rate": 0.2804878048780488,
+          "avg_pnl": -152.44585365853845,
+          "profit_factor": 0.8530991517502375,
+          "pct_of_trades": 19.902912621359224,
+          "pct_of_net_pnl": -13.877862958135097
+        },
+        {
+          "day": "Thu",
+          "weekday": 3,
+          "trades": 66,
+          "net_pnl": 2097.719999999843,
+          "gross_win": 53972.139999999905,
+          "gross_loss": 51874.42000000007,
+          "win_rate": 0.25757575757575757,
+          "avg_pnl": 31.783636363633985,
+          "profit_factor": 1.0404384280344692,
+          "pct_of_trades": 16.019417475728154,
+          "pct_of_net_pnl": 2.328845322492482
+        },
+        {
+          "day": "Fri",
+          "weekday": 4,
+          "trades": 85,
+          "net_pnl": 55410.7000000001,
+          "gross_win": 132733.02000000002,
+          "gross_loss": 77322.3199999999,
+          "win_rate": 0.36470588235294116,
+          "avg_pnl": 651.8905882352952,
+          "profit_factor": 1.7166197289476077,
+          "pct_of_trades": 20.631067961165048,
+          "pct_of_net_pnl": 61.51581217276093
+        },
+        {
+          "day": "Sat",
+          "weekday": 5,
+          "trades": 3,
+          "net_pnl": -2088.7400000000143,
+          "gross_win": 0.0,
+          "gross_loss": 2088.7400000000143,
+          "win_rate": 0.0,
+          "avg_pnl": -696.2466666666714,
+          "profit_factor": 0.0,
+          "pct_of_trades": 0.7281553398058253,
+          "pct_of_net_pnl": -2.3188759123731213
+        }
+      ],
+      "entry_filters": {},
+      "meta": {
+        "strategy": "multi_ema_cci_trend_20260910",
+        "strategy_path": "/home/cgrullon/src/trading/strategies/experimental/multi_ema_cci_trend_20260910.py",
+        "params": {
+          "ribbon_step": 3,
+          "ribbon_count": 6,
+          "cci_period": 10,
+          "cci_trigger": 0.0,
+          "cci_extreme": 100.0,
+          "require_strict_stack": false,
+          "use_ribbon_exit": true,
+          "use_cci_extreme_exit": false,
+          "sl_atr_mult": 2.0,
+          "tp_atr_mult": null,
+          "trailing": false
+        },
+        "symbol": "ETH",
+        "timeframe": "1h",
+        "bars": 32467,
+        "start": "2021-02-07 23:00:00+00:00",
+        "end": "2026-08-08 22:00:00+00:00",
+        "costs_included": true,
+        "initial_capital": 100000.0,
+        "ml_threshold": 0.48,
+        "ml_evaluated": true,
+        "ml_features": [
+          "cci",
+          "spread_norm",
+          "dist_slowest_atr",
+          "dist_fastest_atr",
+          "stack_long",
+          "stack_short",
+          "norm_atr",
+          "roc_3",
+          "roc_10",
+          "range_atr",
+          "gap_3_6_atr",
+          "gap_6_9_atr",
+          "gap_9_12_atr",
+          "gap_12_15_atr",
+          "gap_15_18_atr",
+          "volume_z"
+        ],
+        "ml_refit": {
+          "long": {
+            "direction": "long",
+            "candidates": 1031,
+            "fits": 38,
+            "train_rows_max": 975,
+            "refit_growth": 0.1,
+            "max_train_rows": 50000,
+            "threads": 1,
+            "elapsed_s": 1.117
+          },
+          "short": {
+            "direction": "short",
+            "candidates": 979,
+            "fits": 38,
+            "train_rows_max": 975,
+            "refit_growth": 0.1,
+            "max_train_rows": 50000,
+            "threads": 1,
+            "elapsed_s": 1.064
+          }
+        },
+        "logic": {
+          "concept": "A trend is not one moving average but 6 of them in agreement. Six EMAs spaced 3 bars apart stack in order when every horizon sees the same direction, and a pullback into that ribbon is where the flow that missed the move re-enters. CCI(10) crossing 0.0 times it: that is the bar the pullback stops being a pullback. The ribbon is the CONDITION and the cross is the EVENT - neither trades alone. Trades are attributed by their ENTRY bar, never the exit, so a move opened in one quadrant that runs into another still scores where it opened.",
+          "entry": "LONG when CCI(10) crosses ABOVE 0.0 while the ribbon is aligned bullish; SHORT when it crosses BELOW while the ribbon is aligned bearish. Alignment is the EMAs stacked in order, or - with require_strict_stack=False - the relaxed form: Close beyond the slowest EMA with the ribbon spread on the same side of zero.",
+          "exit": "The opposite CCI cross always closes the position. With use_ribbon_exit=True a Close back through the SLOWEST EMA closes it too - that is the request's stop 'anchored just below EMA_24', and it is a SIGNAL because the engine has no stop orders. With use_cci_extreme_exit=False the opposite CCI extreme (+/-100.0) closes it as well. A protective bracket at 2.0 x ATR(14) sits underneath all of them, trailing=False; no ATR take-profit is modelled (tp_atr_mult=None)."
+        }
+      }
+    },
+    "gate_audit": {
+      "version": "B",
+      "name": "multi_ema_cci_trend_20260910",
+      "gates": {
+        "gate1": {
+          "name": "GATE 1 \u00b7 In-Sample",
+          "status": "FAIL",
+          "checks": [
+            {
+              "label": "Sharpe (not gated)",
+              "value": 0.5245102042980306,
+              "threshold": null,
+              "direction": "min",
+              "unit": "",
+              "status": "INFO",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Profit factor",
+              "value": 1.2401860040461397,
+              "threshold": 1.0,
+              "direction": "min",
+              "unit": "",
+              "status": "PASS",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Trades",
+              "value": 412.0,
+              "threshold": 200.0,
+              "direction": "min",
+              "unit": "",
+              "status": "PASS",
+              "note": "6.84 years at 30 trades/yr is 205; the 200-trade cap binds",
+              "fmt": "{:,.0f}"
+            },
+            {
+              "label": "Max drawdown",
+              "value": 25.211416521196593,
+              "threshold": 12.0,
+              "direction": "max",
+              "unit": "%",
+              "status": "FAIL",
+              "note": null,
+              "fmt": "{:.2f}"
+            }
+          ]
+        },
+        "gate2": {
+          "name": "GATE 2 \u00b7 Robustness",
+          "status": "NOT EVALUATED",
+          "checks": [
+            {
+              "label": "WFO efficiency",
+              "value": null,
+              "threshold": 0.5,
+              "direction": "min",
+              "unit": "",
+              "status": "NOT EVALUATED",
+              "note": null,
+              "fmt": "{:.2f}"
+            },
+            {
+              "label": "Monte Carlo 95% max DD",
+              "value": null,
+              "threshold": 18.0,
+              "direction": "max",
+              "unit": "%",
+              "status": "NOT EVALUATED",
+              "note": null,
+              "fmt": "{:.2f}"
+            }
+          ]
+        },
+        "gate3": {
+          "name": "GATE 3 \u00b7 OOS Holdout",
+          "status": "NOT EVALUATED",
+          "checks": [
+            {
+              "label": "Holdout Sharpe retention",
+              "value": null,
+              "threshold": 0.8,
+              "direction": "min",
+              "unit": "x",
+              "status": "NOT EVALUATED",
+              "note": "no holdout Sharpe supplied, so Sharpe retention is undefined",
+              "fmt": "{:.2f}"
+            }
+          ]
+        }
+      },
+      "status": "FAIL",
+      "passed": false,
+      "thresholds": {
+        "gate1": {
+          "min_profit_factor": 1.0,
+          "min_trades": 100,
+          "max_required_trades": 200,
+          "min_trades_per_year": 30,
+          "max_drawdown_pct": 12.0
+        },
+        "gate2": {
+          "min_wfo_efficiency": 0.5,
+          "max_mc_drawdown_pct": 18.0
+        },
+        "gate3": {
+          "min_retention": 0.8
+        }
+      },
+      "holdout_sharpe": null,
+      "in_sample_sharpe": 0.5245102042980306,
+      "sharpe_retention": null,
+      "retention": null,
+      "retention_metric": null
+    }
+  },
+  "generated_utc": "2026-09-10T19:30:24+00:00",
+  "reports": {
+    "version_a": "/mnt/backtest/artifacts/pipeline/multi_ema_cci_trend_20260910/verify_20260910_193015/report_ETH_version_a.html",
+    "version_b": "/mnt/backtest/artifacts/pipeline/multi_ema_cci_trend_20260910/verify_20260910_193015/report_ETH_version_b.html"
+  },
+  "cost_drag": {
+    "trades": 2010,
+    "total_costs": 101343.30000000051,
+    "gross_pnl": 49412.5,
+    "net_pnl": -51930.80000000064,
+    "cost_per_trade": 50.419552238806226,
+    "cost_share_pct": 205.0964836832796,
+    "commission": 9205.8,
+    "slippage": 92137.50000000052,
+    "split_available": true,
+    "modelled_round_turn": 54.58,
+    "by_year": [
+      {
+        "year": 2021,
+        "trades": 353,
+        "gross_pnl": -61337.5,
+        "costs": 10904.240000000042,
+        "net_pnl": -72241.74000000008,
+        "cost_per_trade": 30.890198300283405,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2022,
+        "trades": 360,
+        "gross_pnl": 108650.0,
+        "costs": 19648.800000000003,
+        "net_pnl": 89001.19999999998,
+        "cost_per_trade": 54.580000000000005,
+        "cost_share_pct": 18.0844914864243
+      },
+      {
+        "year": 2023,
+        "trades": 350,
+        "gross_pnl": 40275.0,
+        "costs": 19102.99999999986,
+        "net_pnl": 21172.000000000146,
+        "cost_per_trade": 54.57999999999961,
+        "cost_share_pct": 47.43140906269364
+      },
+      {
+        "year": 2024,
+        "trades": 358,
+        "gross_pnl": 87050.0,
+        "costs": 19539.640000000578,
+        "net_pnl": 67510.3599999994,
+        "cost_per_trade": 54.58000000000161,
+        "cost_share_pct": 22.446456059736448
+      },
+      {
+        "year": 2025,
+        "trades": 340,
+        "gross_pnl": -95500.0,
+        "costs": 18557.200000000048,
+        "net_pnl": -114057.20000000004,
+        "cost_per_trade": 54.58000000000014,
+        "cost_share_pct": null
+      },
+      {
+        "year": 2026,
+        "trades": 249,
+        "gross_pnl": -29725.0,
+        "costs": 13590.41999999998,
+        "net_pnl": -43315.41999999998,
+        "cost_per_trade": 54.57999999999992,
+        "cost_share_pct": null
+      }
+    ]
+  },
+  "friction_by_regime": {
+    "available": true,
+    "attribution": "the quadrant of the trade's ENTRY bar",
+    "regime_source": "the labels RegimeProfiler classified for this run",
+    "attributed_trades": 2009,
+    "unplaced_trades": 1,
+    "unplaced_note": "entries outside this frame, or inside the 14-bar ADX/ATR warm-up, are in no quadrant and are excluded from every row",
+    "by_regime": [
+      {
+        "regime": "High Volatility / Trending",
+        "quadrant": "Q1",
+        "trades": 354,
+        "gross_pnl": -94050.0,
+        "costs": 16696.320000000043,
+        "net_pnl": -110746.3200000001,
+        "cost_per_trade": 47.16474576271199,
+        "cost_share_pct": null
+      },
+      {
+        "regime": "High Volatility / Ranging",
+        "quadrant": "Q2",
+        "trades": 359,
+        "gross_pnl": 24287.5,
+        "costs": 16331.720000000123,
+        "net_pnl": 7955.779999999861,
+        "cost_per_trade": 45.492256267409815,
+        "cost_share_pct": 67.2433144621724
+      },
+      {
+        "regime": "Low Volatility / Trending",
+        "quadrant": "Q3",
+        "trades": 541,
+        "gross_pnl": 56525.0,
+        "costs": 28477.78000000008,
+        "net_pnl": 28047.219999999943,
+        "cost_per_trade": 52.63914972273582,
+        "cost_share_pct": 50.38085802742164
+      },
+      {
+        "regime": "Low Volatility / Ranging",
+        "quadrant": "Q4",
+        "trades": 755,
+        "gross_pnl": 62912.5,
+        "costs": 39807.90000000027,
+        "net_pnl": 23104.599999999715,
+        "cost_per_trade": 52.72569536423877,
+        "cost_share_pct": 63.27502483608229
+      }
+    ]
+  },
+  "slippage_model": {
+    "model": "constant_ticks",
+    "slippage_ticks": 1.0,
+    "note": "ticks x that bar's tick size / price, per bar"
+  }
+}
