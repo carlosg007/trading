@@ -967,7 +967,8 @@ def promotion_summary_table(rows: list[dict[str, Any]],
 
 def record_auto_promotion(strat: str, out_dir: str | None,
                           promotions: list[dict[str, Any]],
-                          commit: str | None) -> Path | None:
+                          commit: str | None,
+                          deferred: str | None = None) -> Path | None:
     """
     Write the auto-promotion outcome back onto Stage 3's summary.
 
@@ -994,6 +995,12 @@ def record_auto_promotion(strat: str, out_dir: str | None,
         return None
     blob["auto_promotion"] = {
         "ran": True,
+        # WHY the promotion loop promoted nothing, when it promoted nothing.
+        # `promoted: 0` alone is ambiguous - it reads the same for a batch the
+        # fan-out bar deferred, a batch where every promotion failed, and a
+        # Stage 3 that certified nothing. The card and any unattended reader
+        # need those apart.
+        "deferred": deferred,
         "commit": commit,
         "promoted": sum(1 for d in promotions if d.get("promoted")),
         "failed": sum(1 for d in promotions if not d.get("promoted")),
@@ -1189,7 +1196,9 @@ def _promote_only(args: argparse.Namespace) -> int:
 
     if rows:
         print("\n" + promotion_summary_table(rows, promotions))
-    print(_banner("PROMOTE ONLY COMPLETE"))
+    print(_banner("PROMOTE ONLY COMPLETE"
+                  + (f" · PROMOTION DEFERRED\n  {outcome.get('deferred')}"
+                     if outcome.get("deferred") else "")))
     return rc
 
 
@@ -1417,6 +1426,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return int(e.returncode or 1)
 
     rc = 0
+    deferred: str | None = None
     promotions: list[dict[str, Any]] = []
     rows: list[dict[str, Any]] = []
     if args.auto_promote:
@@ -1424,6 +1434,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                                promote_max=args.promote_max)
         rc = int(outcome["returncode"])
         promotions, rows = outcome["promotions"], outcome["rows"]
+        deferred = outcome.get("deferred")
         # Card 5 last, and only now: the promotion outcome is on the handoff,
         # so the card reports what was actually promoted and to which commit
         # rather than a promotion that had not happened when it was built.
@@ -1435,7 +1446,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if rows:
         print("\n" + promotion_summary_table(rows, promotions))
 
-    print(_banner("PIPELINE COMPLETE"))
+    # The banner says which of the two clean endings this was. A run whose
+    # promotion was deferred by the fan-out bar exits 0 like any other
+    # success, so the exit code alone cannot say that one step is outstanding.
+    print(_banner("PIPELINE COMPLETE"
+                  + (f" · PROMOTION DEFERRED\n  {deferred}"
+                     if deferred else "")))
     return rc
 
 
@@ -1485,7 +1501,23 @@ def render_unrouted(groups: dict[str, list[str]], width: int = 78) -> str:
     return "\n".join(lines)
 
 
-DEFAULT_PROMOTE_MAX = 5
+#: The unattended fan-out bar. RAISED FROM 5 TO 50 on 2026-09-10.
+#:
+#: 5 was set on 2026-09-07 after an audit of approved_incubator/ found 160
+#: packages on disk against the 52 the routing table actually routes, and the
+#: number chosen was small enough to stop a runaway. It was also below the
+#: legitimate yield of ONE charter-compliant campaign, which is the case it
+#: had to allow: `dbb_momentum_breakout_20260909` certified 15 configurations
+#: across 3 timeframes and 9 contracts in a single sweep, and every one of
+#: them cleared Gate R on the holdout. The bar refused the batch, promoted
+#: nothing, and left Stages 1-4.5 complete on disk with no package to show for
+#: 30 minutes of compute - a bar that fires on the ordinary case is not a
+#: guard, it is an outage.
+#:
+#: 50 sits above one campaign's realistic yield and below the runaway the
+#: audit actually found (92 certifiable pairs, 472 commits over 14 days), so
+#: the bar still binds exactly where it was designed to.
+DEFAULT_PROMOTE_MAX = 50
 
 
 def auto_promote(strat: str, *, out_dir: str | None = None,
@@ -1547,20 +1579,51 @@ def auto_promote(strat: str, *, out_dir: str | None = None,
     # forty configurations stays possible and stops being accidental.
     if (promote_max is not None and int(promote_max) > 0
             and len(winners) > int(promote_max)):
-        print(f"\n  REFUSED  Stage 3 certified {len(winners)} configurations "
-              f"and --auto-promote will not register more than "
-              f"{int(promote_max)} unattended.\n"
-              f"           Each one is a package on disk, a row in "
+        # A DEFERRAL, NOT A FAILURE - `returncode: 0`, changed 2026-09-10.
+        #
+        # Nothing went wrong when this fires. Stages 1-4.5 completed, every
+        # artifact is on disk, and 15 certifications are on the handoff; the
+        # only thing that did not happen is a decision the bar exists to keep
+        # from being made unattended. Reporting that as exit 1 tells a cron
+        # runner the campaign FAILED, and the difference between "this run
+        # broke" and "this run is waiting for you" is the whole value of an
+        # exit code to an unattended operator.
+        #
+        # WHAT THIS DELIBERATELY DOES NOT DO IS PROMOTE THE TOP N BY METRIC.
+        # It was considered and rejected on the evidence. Every certified row
+        # carries `oos_profit_factor`, so it is mechanically easy - and it
+        # would make the 3-year holdout a SELECTION set. Gate R is pass/fail
+        # against the charter; ranking the survivors by their holdout profit
+        # factor and keeping the top slice chooses on the same window that
+        # validated them, which is the curve-fit this repository exists to
+        # avoid. It also ranks backwards: on this campaign it would put
+        # ETH 30m B (PF 1.79 on 39 OOS trades) above CL 30m A (PF 1.27 on
+        # 395), because a profit factor over a thin sample is noise, so the
+        # rule would systematically prefer the configurations with the least
+        # evidence behind them. A cap that silently drops certified work by an
+        # invented ranking is worse than one that stops and says so.
+        deferral = (f"Stage 3 certified {len(winners)} configurations and "
+                    f"--auto-promote will not register more than "
+                    f"{int(promote_max)} unattended.")
+        print(f"\n  DEFERRED  {deferral}\n"
+              f"            Each one is a package on disk, a row in "
               f"config/portfolios.json and its own git commit, and no human "
               f"has read the Stage 3 card for any of them.\n"
-              f"           Read the card, then promote what you chose:\n"
-              f"             python3 backtest/run_pipeline.py --strat {strat} "
+              f"            NOTHING FAILED - every stage completed and the "
+              f"certifications are on the handoff. The promotion is the only "
+              f"step outstanding.\n"
+              f"            Read the card, then promote what you chose:\n"
+              f"              python3 backtest/run_pipeline.py --strat {strat} "
               f"--promote-only\n"
-              f"           Or lift the bar deliberately:\n"
-              f"             --promote-max {len(winners)}",
+              f"            Or lift the bar deliberately:\n"
+              f"              --promote-max {len(winners)}",
               file=sys.stderr, flush=True)
-        return {"returncode": 1, "promotions": [], "rows": rows,
-                "commit": None}
+        # Recorded on the handoff for the same reason a promotion is: an
+        # unattended reader that sees `auto_promotion: null` cannot tell a
+        # deferral from a Stage 5 that never ran at all.
+        record_auto_promotion(strat, out_dir, [], None, deferred=deferral)
+        return {"returncode": 0, "promotions": [], "rows": rows,
+                "commit": None, "deferred": deferral}
 
     try:
         source = _strategy_source(strat)

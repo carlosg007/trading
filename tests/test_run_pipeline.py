@@ -886,6 +886,55 @@ def test_stage4_runs_version_b() -> None:
           and "--tf" not in rp.stage2_cmd("demo", "a", "b"))
 
 
+
+def test_promote_max_defers_and_never_ranks(tmp: Path) -> None:
+    print("\n20. The fan-out bar defers the batch; it does not fail the run "
+          "and it does not rank")
+    # Six certified rows against a bar of three. The bar's job is to stop an
+    # unattended batch nobody read a card for - not to end the campaign.
+    pairs = [("NQ", "15m"), ("ES", "15m"), ("CL", "15m"),
+             ("GC", "15m"), ("YM", "15m"), ("RTY", "15m")]
+    write_stage2(tmp, [s2row(sym, tf) for sym, tf in pairs])
+    write_stage3(tmp, [s3row(sym, tf, certified=True) for sym, tf in pairs])
+
+    runner = FakeRunner()
+    rc = _main_with(runner, ["--strat", STRAT, "--tf", "15m", "--auto-promote",
+                             "--promote-max", "3", "--out-dir", str(tmp)])
+    check("a tripped bar exits 0, because nothing failed - every stage ran "
+          "and the certifications are on the handoff",
+          rc == 0, f"rc={rc}")
+    # THE POINT OF THE TEST. Promoting the "top 3" would choose on the same
+    # holdout that certified them, and would rank a thin sample's profit
+    # factor above a thick one's. All or none.
+    check("...and promotes NOTHING, rather than a top-N slice chosen on the "
+          "holdout that certified them",
+          runner.for_script("promote.py") == [],
+          str(runner.for_script("promote.py")))
+
+    summary_p = pipeline_dir(STRAT, tmp) / STAGE3_SUMMARY_FILE
+    blob = json.loads(summary_p.read_text())
+    auto = blob.get("auto_promotion") or {}
+    check("the deferral is recorded on the handoff, so a reader can tell it "
+          "from a Stage 5 that never ran",
+          bool(auto.get("deferred")), str(auto))
+    check("...and is not reported as a promotion", auto.get("promoted") == 0,
+          str(auto.get("promoted")))
+
+    # Under the shipped ceiling the same six rows promote without a flag.
+    check("the shipped ceiling is above one campaign's yield",
+          rp.DEFAULT_PROMOTE_MAX >= 50, str(rp.DEFAULT_PROMOTE_MAX))
+    runner = FakeRunner()
+    rc = _main_with(runner, ["--strat", STRAT, "--tf", "15m", "--auto-promote",
+                             "--out-dir", str(tmp)])
+    check("exits 0", rc == 0, f"rc={rc}")
+    check("every certified row is promoted unattended at the default bar",
+          len(runner.for_script("promote.py")) == len(pairs),
+          f"{len(runner.for_script('promote.py'))} of {len(pairs)}")
+    auto = json.loads(summary_p.read_text()).get("auto_promotion") or {}
+    check("...and that run records no deferral",
+          auto.get("deferred") is None, str(auto.get("deferred")))
+
+
 def test_dow_gate_staleness_is_detected(tmp: Path) -> None:
     """
     A Stage 4.5 verdict generated BEFORE the gate audit it is attached to is
@@ -960,6 +1009,7 @@ def main() -> int:
         test_auto_promote_every_timeframe(tmp)
         test_promote_only(tmp)
         test_dow_gate_staleness_is_detected(tmp)
+        test_promote_max_defers_and_never_ranks(tmp)
         test_failure_reasons_are_distinguished()
         test_summary_table(tmp)
         test_dry_run_launches_nothing(tmp)
