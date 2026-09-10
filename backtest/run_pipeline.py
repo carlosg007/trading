@@ -965,6 +965,91 @@ def promotion_summary_table(rows: list[dict[str, Any]],
         empty="Stage 3 indexed no configuration - nothing reached a verdict")
 
 
+def register_cmd(write: bool = True) -> list[str]:
+    """Stage 6's registration pass."""
+    cmd = _py() + [str(REGISTER_SCRIPT)]
+    if write:
+        cmd += ["--write"]
+    return cmd
+
+
+def portfolio_test_cmd() -> list[str]:
+    """
+    The routing table's own suite, run through pytest.
+
+    `tests/conftest.py` routes the collector-style suites to subprocesses and
+    must not be bypassed; this one is ASSERT-based and collects normally, so
+    naming the file is the supported invocation and not a way around it.
+    """
+    return _py() + ["-m", "pytest", PORTFOLIO_TEST, "-q"]
+
+
+def auto_register(strat: str, *, out_dir: str | None = None,
+                  dry_run: bool = False) -> dict[str, Any]:
+    """
+    STAGE 6: close the lifecycle at the routing table.
+
+    Three steps, in this order and for these reasons:
+
+      1. `register_incubator_batch.py --write` - the backstop described at
+         REGISTER_SCRIPT. Usually a no-op after Stage 5.
+      2. That script rewrites `EXPECTED_ASSIGNMENTS` in
+         `tests/test_portfolio_config.py` itself, in the same run that writes
+         the config, so the declaration cannot be left describing a routing
+         table that has moved on. The sync lives THERE and not here so a
+         hand-run `--write` gets it too.
+      3. The suite, which is what proves the config still loads, still routes,
+         and still agrees with `backtest/specs.py` on every point value.
+
+    A REGISTRATION THAT ROUTED NOTHING IS NOT A FAILURE. The script exits 1
+    when it finds nothing routable, which after a normal Stage 5 is the
+    ordinary case - everything promote.py could route, it already routed. Only
+    exit 2 (the config would not load) and exit 3 (the declaration could not
+    be synced) are real, and 3 is the one that fires when a package the
+    registrar's own gates refuse has reached the table by another path.
+    """
+    print(_banner("STAGE 6 · register_incubator_batch.py · routing table"))
+    out: dict[str, Any] = {"registered": None, "tests": None, "error": ""}
+    if dry_run:
+        print("  DRY RUN  the routing table is not read or written.")
+        return out
+
+    rc = run_step(register_cmd(write=True), "STAGE 6 · registration + "
+                  "declaration sync", check=False)
+    out["registered"] = rc
+    if rc == 1:
+        print("  nothing new to route - promote.py registered what it could "
+              "during Stage 5. Not a failure.", flush=True)
+    elif rc == 2:
+        out["error"] = ("the routing table would not load and was left "
+                        "untouched (register_incubator_batch exit 2)")
+    elif rc == 3:
+        out["error"] = ("the registration was applied but the declaration in "
+                        f"{PORTFOLIO_TEST} could not be synced "
+                        "(register_incubator_batch exit 3) - see its message "
+                        "above; a package the registration gates refuse has "
+                        "reached the table by another path")
+    if out["error"]:
+        print(f"\n  ! STAGE 6 {out['error']}", file=sys.stderr, flush=True)
+
+    trc = run_step(portfolio_test_cmd(), f"STAGE 6 · pytest {PORTFOLIO_TEST}",
+                   check=False)
+    out["tests"] = trc
+    if trc:
+        # LOUD, and never swallowed by the promotion's own exit code. This is
+        # the last thing standing between a promoted package and a live
+        # account, and a routing table that fails its suite is one the daemon
+        # will read anyway on the next restart.
+        print(f"\n  !! STAGE 6 FAILED  {PORTFOLIO_TEST} exited {trc}. The "
+              f"routing table has been written and does NOT pass its own "
+              f"checks. Read the pytest output above before any restart arms "
+              f"anything from it.", file=sys.stderr, flush=True)
+    else:
+        print(f"\n  {PORTFOLIO_TEST} passes against the written table.",
+              flush=True)
+    return out
+
+
 def record_auto_promotion(strat: str, out_dir: str | None,
                           promotions: list[dict[str, Any]],
                           commit: str | None,
@@ -1427,6 +1512,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     rc = 0
     deferred: str | None = None
+    registration: dict[str, Any] = {}
     promotions: list[dict[str, Any]] = []
     rows: list[dict[str, Any]] = []
     if args.auto_promote:
@@ -1435,6 +1521,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         rc = int(outcome["returncode"])
         promotions, rows = outcome["promotions"], outcome["rows"]
         deferred = outcome.get("deferred")
+        # STAGE 6 BEFORE THE STAGE 5 CARD, so the card is built after the
+        # routing table has settled rather than announcing a promotion whose
+        # registration had not been attempted yet. Only when something was
+        # actually promoted: a deferred batch wrote no package, and a run that
+        # promoted nothing has no reason to touch the routing table at all.
+        if not deferred and any(d.get("promoted") for d in promotions):
+            registration = auto_register(strat, out_dir=out_dir, dry_run=dry)
+            if registration.get("tests"):
+                rc = rc or int(registration["tests"])
         # Card 5 last, and only now: the promotion outcome is on the handoff,
         # so the card reports what was actually promoted and to which commit
         # rather than a promotion that had not happened when it was built.
@@ -1449,9 +1544,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     # The banner says which of the two clean endings this was. A run whose
     # promotion was deferred by the fan-out bar exits 0 like any other
     # success, so the exit code alone cannot say that one step is outstanding.
-    print(_banner("PIPELINE COMPLETE"
-                  + (f" · PROMOTION DEFERRED\n  {deferred}"
-                     if deferred else "")))
+    tail = ""
+    if deferred:
+        tail = f" · PROMOTION DEFERRED\n  {deferred}"
+    elif registration.get("tests"):
+        tail = (f" · ROUTING TABLE FAILED ITS SUITE\n  {PORTFOLIO_TEST} "
+                f"exited {registration['tests']}")
+    elif registration.get("error"):
+        tail = f" · STAGE 6 INCOMPLETE\n  {registration['error']}"
+    print(_banner("PIPELINE COMPLETE" + tail))
     return rc
 
 
@@ -1518,6 +1619,16 @@ def render_unrouted(groups: dict[str, list[str]], width: int = 78) -> str:
 #: audit actually found (92 certifiable pairs, 472 commits over 14 days), so
 #: the bar still binds exactly where it was designed to.
 DEFAULT_PROMOTE_MAX = 50
+
+#: Stage 6. `scripts/register_incubator_batch.py` is a BACKSTOP here, not the
+#: registrar: `promote.py` already calls `register_portfolio` for every
+#: package it writes, so by the time Stage 5 returns the routing table
+#: normally holds everything routable - 116 of the 119 rows in
+#: config/portfolios.json were written that way. The batch script re-checks
+#: the four registration gates over the WHOLE incubator and picks up anything
+#: promote.py's router declined but a basket can still reach.
+REGISTER_SCRIPT = REPO / "scripts" / "register_incubator_batch.py"
+PORTFOLIO_TEST = "tests/test_portfolio_config.py"
 
 
 def auto_promote(strat: str, *, out_dir: str | None = None,

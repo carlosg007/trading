@@ -86,6 +86,35 @@ PORTFOLIOS = REPO / "config" / "portfolios.json"
 PARENT = {"MNQ": "NQ", "MES": "ES", "MGC": "GC", "MYM": "YM", "M2K": "RTY"}
 INCUBATOR_RUNGS = ("Incubator-Odd", "Incubator-Even", "Incubator-FullSize")
 
+#: Where the declaration of the routing table lives, and the marker this
+#: script rewrites inside it.
+PORTFOLIO_TEST = REPO / "tests" / "test_portfolio_config.py"
+EXPECTED_CONST = "EXPECTED_ASSIGNMENTS = {"
+
+#: THE ONE PART OF THE GUARD THAT IS NOT REGENERATED.
+#:
+#: `EXPECTED_ASSIGNMENTS` used to be maintained by hand, and its whole value
+#: was that a strategy could not enter `active_strategies` without a human
+#: naming it in the same commit - it caught nine unattended assignments on
+#: 2026-08-27. That check is now regenerated from the live config on every
+#: --write, which is a deliberate trade made on 2026-09-10 to close the
+#: unattended lifecycle: a declaration rewritten from the thing it describes
+#: cannot contradict it, so it no longer detects an assignment nobody
+#: intended.
+#:
+#: These four are carved out of that trade. Each cleared Gate R on a profit
+#: factor `backtest/profiler.py` had already rounded up to 1.00 while its
+#: certified-quadrant net P&L is negative, and the first two REACHED THE LIVE
+#: ROUTING TABLE and had to be pruned by hand. Gate 3 below refuses them, so
+#: this is the second lock on a door that already has one - kept because the
+#: cost is a frozenset and the failure it prevents was paid for once already.
+MUST_STAY_ABSENT = frozenset({
+    "t3_braid_scalp_20260823_RB_30m_VA",
+    "t3_braid_scalp_20260823_YM_30m_VA",
+    "ma_anchoring_spread_20260820_ZS_1h_VA",
+    "ema_deviation_scalp_20260909_NQ_30m_VB",
+})
+
 
 def _load(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(), object_pairs_hook=collections.OrderedDict)
@@ -175,12 +204,161 @@ def allocation_for(row: dict) -> collections.OrderedDict:
     return alloc
 
 
+def render_expected_assignments(cfg: dict, preamble: str) -> str:
+    """
+    The `EXPECTED_ASSIGNMENTS` literal, rendered from the live config.
+
+    `preamble` is the comment block already inside the braces, carried through
+    verbatim apart from its regeneration stamp. Those comments record WHY four
+    packages are absent and why NG, RB and CL cannot be routed at all, and
+    none of that is derivable from the config - a regenerator that dropped
+    them would leave the next reader with a hundred names and no reasons.
+
+    Entries are emitted in the order they appear in `active_strategies`, which
+    is the order the registrar appended them in, because the assertion this
+    feeds compares element-wise.
+    """
+    lines = [EXPECTED_CONST]
+    lines.extend(preamble)
+
+    ids: list[tuple[str, list[tuple[str, str, str]]]] = []
+    width = 0
+    for pid, port in cfg["portfolios"].items():
+        entries = []
+        for sid in (port.get("active_strategies") or []):
+            alloc = ((port.get("strategy_allocations") or {}).get(sid) or {})
+            entries.append((sid, str(alloc.get("timeframe") or "?"),
+                            str(alloc.get("symbol") or "?")))
+            width = max(width, len(sid))
+        ids.append((pid, entries))
+
+    keyw = max(len(pid) for pid, _ in ids) + 3
+    for pid, entries in ids:
+        key = f'"{pid}":'.ljust(keyw)
+        if not entries:
+            lines.append(f"    {key}[],")
+            continue
+        lines.append(f"    {key}[")
+        for sid, tf, sym in entries:
+            quoted = f'"{sid}",'.ljust(width + 4)
+            lines.append(f"        {quoted}  # {tf:>3}, {sym}")
+        lines.append("    ],")
+    lines.append("}")
+    return "\n".join(lines)
+
+
+def _split_literal(text: str) -> tuple[int, int, list[str]]:
+    """`(start, end, preamble)` for the EXPECTED_ASSIGNMENTS literal."""
+    lines = text.splitlines()
+    try:
+        start = next(i for i, l in enumerate(lines)
+                     if l.startswith(EXPECTED_CONST))
+    except StopIteration:
+        raise ValueError(f"{PORTFOLIO_TEST.name} has no {EXPECTED_CONST}")
+    try:
+        end = next(i for i in range(start + 1, len(lines)) if lines[i] == "}")
+    except StopIteration:
+        raise ValueError(f"{EXPECTED_CONST} is not closed by a bare '}}'")
+    # The comment block between the brace and the first key belongs to the
+    # literal and is carried through; the first quoted key ends it.
+    body = lines[start + 1:end]
+    cut = next((i for i, l in enumerate(body) if l.lstrip().startswith('"')),
+               len(body))
+    return start, end, body[:cut]
+
+
+def _restamp(preamble: list[str], routed: list[str], total: int) -> list[str]:
+    """Replace the leading regeneration stanza; leave every other comment."""
+    stamp = [
+        f"    # REGENERATED {_today()} by "
+        f"scripts/register_incubator_batch.py --write, which now rewrites",
+        f"    # this constant in the same run that registers into "
+        f"config/portfolios.json.",
+        f"    # This run routed {len(routed)} package(s); the book stands at "
+        f"{total}.",
+        "    #",
+        "    # THIS IS NO LONGER A HUMAN DECLARATION. It is regenerated from "
+        "the config it",
+        "    # describes, so it cannot contradict it and cannot catch an "
+        "assignment nobody",
+        "    # intended - the check it replaced caught nine of those on "
+        "2026-08-27. What",
+        "    # still binds is MUST_STAY_ABSENT in the registrar, and the four "
+        "registration",
+        "    # gates. Order matters: element-wise comparison, appended order.",
+        "    #",
+    ]
+    # Everything from the first non-stamp paragraph onward is preserved. The
+    # old stamp is however many leading comment lines precede the first blank
+    # comment line, plus that line.
+    rest = list(preamble)
+    while rest and rest[0].strip().startswith("#"):
+        done = rest[0].strip() == "#"
+        rest.pop(0)
+        if done:
+            break
+    return stamp + rest
+
+
+def _today() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def sync_expected_assignments(cfg: dict, routed: list[str],
+                              path: Path = PORTFOLIO_TEST) -> tuple[bool, str]:
+    """
+    Rewrite the routing declaration to match the config just written.
+
+    Returns `(changed, message)` and RAISES NOTHING: the registration has
+    already been applied by the time this runs, and a declaration that could
+    not be rewritten must not read as a registration that did not happen. The
+    caller reports the message and exits non-zero.
+    """
+    live = {s for p in cfg["portfolios"].values()
+            for s in (p.get("active_strategies") or [])}
+    trespass = sorted(live & MUST_STAY_ABSENT)
+    if trespass:
+        return False, ("REFUSED to sync: the routing table now holds "
+                       + ", ".join(trespass)
+                       + " — each cleared Gate R on a rounded 1.00 profit "
+                         "factor with negative net P&L in its certified "
+                         "quadrant. Registration is already applied; prune "
+                         "these from config/portfolios.json.")
+    try:
+        text = path.read_text(encoding="utf-8")
+        start, end, preamble = _split_literal(text)
+    except (OSError, ValueError) as exc:
+        return False, f"could not read {path.name}: {exc}"
+
+    lines = text.splitlines()
+    rendered = render_expected_assignments(
+        cfg, _restamp(preamble, routed, len(live)))
+    updated = "\n".join(lines[:start] + rendered.splitlines()
+                         + lines[end + 1:]) + "\n"
+    if updated == text:
+        return False, f"{path.name} already matches the config"
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(updated, encoding="utf-8")
+    try:
+        compile(updated, str(path), "exec")
+    except SyntaxError as exc:
+        tmp.unlink(missing_ok=True)
+        return False, (f"the regenerated {path.name} does not parse ({exc}); "
+                       f"it is untouched")
+    os.replace(tmp, path)
+    return True, f"{path.name} synced to {len(live)} routed package(s)"
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("--write", action="store_true",
                     help="apply the registrations (default: report only)")
     ap.add_argument("--allow-missing-dow", action="store_true",
                     help="route packages whose Stage 4.5 gate never ran")
+    ap.add_argument("--no-sync", dest="sync", action="store_false",
+                    help="do not rewrite EXPECTED_ASSIGNMENTS in "
+                         "tests/test_portfolio_config.py after --write")
     ap.add_argument("--portfolios", default=str(PORTFOLIOS))
     ap.add_argument("--incubator", default=str(INCUBATOR))
     args = ap.parse_args(argv)
@@ -242,7 +420,22 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     os.replace(tmp, path)
     print(f"\nregistered {len(eligible)} package(s) into {path}")
-    return 0
+
+    # THE DECLARATION MOVES WITH THE REGISTRATION, in this function rather
+    # than in the pipeline that calls it, so a hand-run --write cannot leave
+    # the two disagreeing either. The registration above is already on disk;
+    # a sync that fails is reported and exits non-zero, and never unwinds it.
+    if not args.sync:
+        print("  --no-sync: tests/test_portfolio_config.py NOT updated; "
+              "its assertion will fail until it is.")
+        return 0
+    changed, message = sync_expected_assignments(
+        cfg, [r["strategy_id"] for r in eligible])
+    if changed:
+        print(f"  declaration synced → {message}")
+        return 0
+    print(f"  ! declaration NOT synced: {message}", file=sys.stderr)
+    return 3
 
 
 if __name__ == "__main__":

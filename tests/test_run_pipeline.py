@@ -935,6 +935,66 @@ def test_promote_max_defers_and_never_ranks(tmp: Path) -> None:
           auto.get("deferred") is None, str(auto.get("deferred")))
 
 
+
+def test_stage6_registers_after_promotion(tmp: Path) -> None:
+    print("\n21. Stage 6 closes the lifecycle at the routing table")
+    write_stage2(tmp, [s2row("NQ", "15m")])
+    write_stage3(tmp, [s3row("NQ", "15m", certified=True)])
+
+    runner = FakeRunner()
+    rc = _main_with(runner, ["--strat", STRAT, "--tf", "15m", "--auto-promote",
+                             "--out-dir", str(tmp)])
+    seq = runner.scripts()
+    check("exits 0", rc == 0, f"rc={rc}")
+    check("the registrar runs after promote.py, never before",
+          "register_incubator_batch.py" in seq
+          and seq.index("register_incubator_batch.py") > seq.index("promote.py"),
+          str(seq))
+    reg = runner.for_script("register_incubator_batch.py")
+    check("...with --write, because Stage 6 is the unattended step",
+          all("--write" in c for c in reg), str(reg))
+    check("the portfolio suite runs after the registrar",
+          "test_portfolio_config.py" in seq
+          and seq.index("test_portfolio_config.py") > seq.index(
+              "register_incubator_batch.py"), str(seq))
+    check("...through pytest, naming the file, so conftest's routing is not "
+          "bypassed",
+          all("-m" in c and "pytest" in c
+              for c in runner.for_script("test_portfolio_config.py")),
+          str(runner.for_script("test_portfolio_config.py")))
+
+    # NOTHING PROMOTED -> NOTHING REGISTERED. A run that promoted no package
+    # has no reason to write the routing table the live daemon reads.
+    write_stage3(tmp, [s3row("NQ", "15m", certified=False, status="FAIL")])
+    runner = FakeRunner()
+    rc = _main_with(runner, ["--strat", STRAT, "--tf", "15m", "--auto-promote",
+                             "--out-dir", str(tmp)])
+    check("a run that promoted nothing does not touch the routing table",
+          "register_incubator_batch.py" not in runner.scripts(),
+          str(runner.scripts()))
+    check("...and still exits 0", rc == 0, f"rc={rc}")
+
+    # A DEFERRED BATCH REGISTERS NOTHING EITHER: no package was written, so
+    # there is nothing to route and the declaration must not be rewritten.
+    write_stage3(tmp, [s3row(sym, "15m", certified=True)
+                       for sym in ("NQ", "ES", "CL", "GC")])
+    runner = FakeRunner()
+    _main_with(runner, ["--strat", STRAT, "--tf", "15m", "--auto-promote",
+                        "--promote-max", "2", "--out-dir", str(tmp)])
+    check("a deferred promotion does not register",
+          "register_incubator_batch.py" not in runner.scripts(),
+          str(runner.scripts()))
+
+    # A FAILING SUITE MUST REACH THE EXIT CODE. The routing table is written
+    # by then; a run that reported success would hide it until a restart.
+    write_stage3(tmp, [s3row("NQ", "15m", certified=True)])
+    runner = FakeRunner(fail_on={"test_portfolio_config.py": 1})
+    rc = _main_with(runner, ["--strat", STRAT, "--tf", "15m", "--auto-promote",
+                             "--out-dir", str(tmp)])
+    check("a routing table that fails its suite fails the run",
+          rc != 0, f"rc={rc}")
+
+
 def test_dow_gate_staleness_is_detected(tmp: Path) -> None:
     """
     A Stage 4.5 verdict generated BEFORE the gate audit it is attached to is
@@ -1010,6 +1070,7 @@ def main() -> int:
         test_promote_only(tmp)
         test_dow_gate_staleness_is_detected(tmp)
         test_promote_max_defers_and_never_ranks(tmp)
+        test_stage6_registers_after_promotion(tmp)
         test_failure_reasons_are_distinguished()
         test_summary_table(tmp)
         test_dry_run_launches_nothing(tmp)
