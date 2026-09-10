@@ -112,6 +112,7 @@ load_env()
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -973,7 +974,7 @@ class _GitResult:
         self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
 
 
-def _git(*argv: str) -> _GitResult:
+def _git(*argv: str, timeout: float | None = None) -> _GitResult:
     """
     One git call, captured, and it CANNOT raise.
 
@@ -984,11 +985,24 @@ def _git(*argv: str) -> _GitResult:
     `.stdout.strip()` without checking - a `None` stdout from a stubbed runner
     would otherwise raise here rather than at the seam somebody patched.
 
+    `timeout` is for the one call that talks to a network. A timeout raises
+    `TimeoutExpired`, which is an exception like any other here and comes back
+    as a non-zero result naming it.
+
+    NEVER INTERACTIVE. `GIT_TERMINAL_PROMPT=0` and an empty `GIT_ASKPASS` turn
+    a credential prompt into an immediate failure instead of a process waiting
+    on a terminal nobody is sitting at. The timeout would eventually catch it,
+    but "asked for a password and gave up after a minute" and "was refused"
+    are different findings and only one of them is worth waking somebody for.
+
     The DECISION is always the caller's: this reports, it never refuses.
     """
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "",
+           "SSH_ASKPASS": ""}
     try:
         proc = subprocess.run(["git", *argv], cwd=str(REPO),
-                              capture_output=True, text=True, check=False)
+                              capture_output=True, text=True, check=False,
+                              env=env, timeout=timeout)
     except Exception as exc:                                      # noqa: BLE001
         return _GitResult(1, "", f"{type(exc).__name__}: {exc}")
     return _GitResult(int(getattr(proc, "returncode", 0) or 0),
@@ -1110,6 +1124,73 @@ def commit_registration(strat: str, *, dry_run: bool = False
     return out
 
 
+#: How long Stage 6 waits on a network before giving up. A push that has not
+#: returned in a minute is not going to; the commit is already on disk and the
+#: operator's own `git push` is the recovery.
+PUSH_TIMEOUT_SECONDS = 60.0
+
+
+def git_push(*, dry_run: bool = False,
+             timeout: float = PUSH_TIMEOUT_SECONDS) -> dict[str, Any]:
+    """
+    Publish the branch, if it has somewhere to publish to.
+
+    Returns `{"pushed", "upstream", "error", "output"}`.
+
+    NON-FATAL IN EVERY DIRECTION, and this is the whole design. By the time
+    this runs the packages are promoted, the routing table is written and both
+    are committed - all of it durable and all of it local. A push is the one
+    step whose failure changes nothing about the work: the commit is still
+    there, and `git push` by hand is the entire recovery. Failing the run for
+    it would report a campaign as broken because a network was down.
+
+    NO UPSTREAM IS NOT AN ERROR EITHER. A branch nobody has published is a
+    normal state for a research repository, and inventing a remote to push it
+    to - guessing `origin`, guessing the branch name - is how work lands
+    somewhere nobody was looking for it. The upstream must already be
+    configured; this only uses it.
+
+    A REJECTED PUSH IS REPORTED, NEVER FORCED. A non-fast-forward means
+    somebody else pushed, and the resolution is a human deciding whether to
+    merge or rebase. `--force` is not reachable from here at all.
+    """
+    out: dict[str, Any] = {"pushed": False, "upstream": None, "error": "",
+                           "output": ""}
+    if dry_run:
+        print("  DRY RUN  nothing is pushed.", flush=True)
+        return out
+
+    upstream = _git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+    tracking = upstream.stdout.strip()
+    if upstream.returncode != 0 or not tracking:
+        out["error"] = ("this branch has no upstream, so there is nothing to "
+                        "push to. Set one with `git push -u <remote> "
+                        "<branch>` once, by hand - guessing a remote is how "
+                        "work lands somewhere nobody is looking for it.")
+        print(f"  NOT PUSHED  {out['error']}", flush=True)
+        return out
+
+    out["upstream"] = tracking
+    print(_banner(f"STAGE 6 · git push · {tracking}"))
+    proc = _git("push", timeout=timeout)
+    out["output"] = (proc.stdout + proc.stderr).strip()
+    if proc.returncode != 0:
+        out["error"] = out["output"] or f"git push exited {proc.returncode}"
+        # LOUD, and deliberately not fatal - see the docstring.
+        print(f"\n  !! PUSH FAILED  {tracking}\n"
+              f"     {out['error']}\n"
+              f"     NOTHING IS ROLLED BACK. The packages are promoted, the "
+              f"routing table is written and both are committed locally; only "
+              f"publishing them did not happen. Push by hand:\n"
+              f"       git push",
+              file=sys.stderr, flush=True)
+        return out
+
+    out["pushed"] = True
+    print(f"  pushed → {tracking}", flush=True)
+    return out
+
+
 def register_cmd(write: bool = True) -> list[str]:
     """Stage 6's registration pass."""
     cmd = _py() + [str(REGISTER_SCRIPT)]
@@ -1130,7 +1211,8 @@ def portfolio_test_cmd() -> list[str]:
 
 
 def auto_register(strat: str, *, out_dir: str | None = None,
-                  dry_run: bool = False) -> dict[str, Any]:
+                  dry_run: bool = False,
+                  push: bool = False) -> dict[str, Any]:
     """
     STAGE 6: close the lifecycle at the routing table.
 
@@ -1203,6 +1285,19 @@ def auto_register(strat: str, *, out_dir: str | None = None,
     print(f"\n  {PORTFOLIO_TEST} passes against the written table.",
           flush=True)
     out["commit"] = commit_registration(strat, dry_run=dry_run)
+    # PUSHED ONLY AFTER A COMMIT THAT HAPPENED. Publishing a branch whose
+    # registration could not be committed would put everything EXCEPT this
+    # run's routing change on the remote, which reads as a completed campaign
+    # to anybody who pulls it.
+    if push and out["commit"].get("committed"):
+        out["push"] = git_push(dry_run=dry_run)
+    elif push:
+        reason = ("the registration was not committed"
+                  if out["commit"].get("error")
+                  else "there was nothing new to commit")
+        out["push"] = {"pushed": False, "upstream": None, "output": "",
+                       "error": f"not attempted: {reason}"}
+        print(f"  NOT PUSHED  {reason}.", flush=True)
     if out["commit"].get("error"):
         # HALT LOUDLY. The registration is on disk and the packages are
         # promoted; what is missing is the commit, which is one command.
@@ -1382,6 +1477,13 @@ def build_parser() -> argparse.ArgumentParser:
                         f"dozens of pairs, and each promotion is a package on "
                         f"disk, a routing-table row and its own commit that "
                         f"nobody read a card for.")
+    p.add_argument("--push", action="store_true",
+                   help="Automatically push committed portfolio "
+                        "registrations and strategy packages to the remote "
+                        "repository after Stage 6 passes. Requires an "
+                        "upstream already configured on this branch; never "
+                        "forces, and a failed push is a warning rather than "
+                        "a failed run.")
     p.add_argument("--auto-promote", action="store_true",
                    help="Run Stage 5 for every configuration Stage 3 recorded "
                         "as certified. Never overrides a gate.")
@@ -1703,7 +1805,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         # actually promoted: a deferred batch wrote no package, and a run that
         # promoted nothing has no reason to touch the routing table at all.
         if not deferred and any(d.get("promoted") for d in promotions):
-            registration = auto_register(strat, out_dir=out_dir, dry_run=dry)
+            registration = auto_register(strat, out_dir=out_dir, dry_run=dry,
+                                         push=args.push)
             if registration.get("tests"):
                 rc = rc or int(registration["tests"])
             # A commit that could not happen is a non-zero run: the routing
@@ -1738,9 +1841,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"exited {registration['tests']}")
     elif registration.get("error"):
         tail = f" · STAGE 6 INCOMPLETE\n  {registration['error']}"
+    elif (registration.get("push") or {}).get("error"):
+        tail = (f" · NOT PUSHED\n  committed as "
+                f"{(registration.get('commit') or {}).get('commit')}; "
+                f"{registration['push']['error']}")
     elif (registration.get("commit") or {}).get("committed"):
         tail = (f"\n  routing table and declaration committed as "
-                f"{registration['commit']['commit']}")
+                f"{registration['commit']['commit']}"
+                + (f" and pushed to {registration['push']['upstream']}"
+                   if (registration.get("push") or {}).get("pushed") else ""))
     print(_banner("PIPELINE COMPLETE" + tail))
     return rc
 

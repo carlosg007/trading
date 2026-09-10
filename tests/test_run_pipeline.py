@@ -1167,6 +1167,130 @@ def test_stage6_records_its_outcome_on_the_handoff(tmp: Path) -> None:
           dr.stage6_registration_alert(clean) == [], str(clean))
 
 
+
+def test_push_is_off_by_default_and_never_forces(tmp: Path) -> None:
+    print("\n26. --push publishes Stage 6's commit, and only Stage 6's commit")
+    write_stage2(tmp, [s2row("NQ", "15m")])
+    write_stage3(tmp, [s3row("NQ", "15m", certified=True)])
+
+    # OMITTED: nothing is pushed, and git is not asked about an upstream.
+    seen: list[list[str]] = []
+
+    def spy(*argv, **kw):
+        seen.append(list(argv))
+        class P:
+            returncode = 0
+            stdout = "origin/demo" if argv[:1] == ("rev-parse",) else ""
+            stderr = ""
+        return P
+
+    real_git, real_head = rp._git, rp._git_head
+    rp._git, rp._git_head = spy, lambda: "cafe123"
+    try:
+        rp.auto_register("demo", out_dir=str(tmp), push=False)
+    finally:
+        rp._git, rp._git_head = real_git, real_head
+    check("without --push nothing is pushed",
+          not any(c[:1] == ["push"] for c in seen), str(seen))
+
+    # ENABLED: pushes once, and NEVER with --force.
+    seen.clear()
+    rp._git, rp._git_head = spy, lambda: "cafe123"
+    try:
+        out = rp.git_push()
+    finally:
+        rp._git, rp._git_head = real_git, real_head
+    pushes = [c for c in seen if c[:1] == ["push"]]
+    check("with --push it pushes once", len(pushes) == 1, str(seen))
+    check("it reports the upstream it pushed to",
+          out["upstream"] == "origin/demo" and out["pushed"], str(out))
+    check("--force is not reachable from this path",
+          not any("--force" in c or "-f" in c for c in pushes), str(pushes))
+    check("...and neither is a remote or branch this code chose",
+          all(len(c) == 1 for c in pushes), str(pushes))
+
+
+def test_a_branch_with_no_upstream_is_not_an_error(tmp: Path) -> None:
+    print("\n27. No upstream is a normal state, not a failure")
+
+    def no_upstream(*argv, **kw):
+        class P:
+            returncode = 128 if argv[:1] == ("rev-parse",) else 0
+            stdout = ""
+            stderr = "fatal: no upstream configured"
+        return P
+
+    real = rp._git
+    rp._git = no_upstream
+    try:
+        out = rp.git_push()
+    finally:
+        rp._git = real
+    check("nothing is pushed", not out["pushed"], str(out))
+    check("...and the reason names the one-off command that fixes it",
+          "git push -u" in out["error"], str(out))
+    # INVENTING A REMOTE is the failure this avoids: guessing `origin` and a
+    # branch name is how work lands somewhere nobody is looking for it.
+    check("no remote was guessed", out["upstream"] is None, str(out))
+
+
+def test_a_failed_push_is_loud_and_never_fatal(tmp: Path) -> None:
+    print("\n28. A rejected or timed-out push does not fail the run")
+    write_stage2(tmp, [s2row("NQ", "15m")])
+    write_stage3(tmp, [s3row("NQ", "15m", certified=True)])
+
+    real_commit, real_push = rp.commit_registration, rp.git_push
+    rp.commit_registration = lambda *a, **k: {
+        "committed": True, "commit": "cafe123",
+        "paths": ["config/portfolios.json"], "error": ""}
+    rp.git_push = lambda **k: {
+        "pushed": False, "upstream": "origin/demo", "output": "",
+        "error": "! [rejected] demo -> demo (non-fast-forward)"}
+    runner = FakeRunner()
+    try:
+        rc = _main_with(runner, ["--strat", STRAT, "--tf", "15m",
+                                 "--auto-promote", "--push",
+                                 "--out-dir", str(tmp)])
+    finally:
+        rp.commit_registration, rp.git_push = real_commit, real_push
+
+    # THE POINT. By here the packages are promoted, the routing table is
+    # written and both are committed - all durable and all local. A push is
+    # the one step whose failure changes nothing about the work.
+    check("a rejected push does NOT fail the run", rc == 0, f"rc={rc}")
+    blob = json.loads((pipeline_dir(STRAT, tmp)
+                       / STAGE3_SUMMARY_FILE).read_text())
+    reg = ((blob.get("auto_promotion") or {}).get("registration")) or {}
+    check("the failure is recorded on the handoff",
+          "non-fast-forward" in str((reg.get("push") or {}).get("error")),
+          str(reg.get("push")))
+
+
+def test_a_push_is_never_attempted_without_a_commit(tmp: Path) -> None:
+    print("\n29. Nothing is published when the commit did not happen")
+    write_stage2(tmp, [s2row("NQ", "15m")])
+    write_stage3(tmp, [s3row("NQ", "15m", certified=True)])
+
+    attempted: list[str] = []
+    real_commit, real_push = rp.commit_registration, rp.git_push
+    rp.commit_registration = lambda *a, **k: {
+        "committed": False, "commit": None, "paths": [],
+        "error": "a rebase is in progress"}
+    rp.git_push = lambda **k: attempted.append("called") or {}
+    try:
+        out = rp.auto_register("demo", out_dir=str(tmp), push=True)
+    finally:
+        rp.commit_registration, rp.git_push = real_commit, real_push
+
+    # Publishing a branch whose registration could not be committed puts
+    # everything EXCEPT this run's routing change on the remote, which reads
+    # as a completed campaign to anybody who pulls it.
+    check("no push is attempted", attempted == [], str(attempted))
+    check("...and the reason says so",
+          "not attempted" in str((out.get("push") or {}).get("error")),
+          str(out.get("push")))
+
+
 def test_dow_gate_staleness_is_detected(tmp: Path) -> None:
     """
     A Stage 4.5 verdict generated BEFORE the gate audit it is attached to is
@@ -1247,6 +1371,10 @@ def main() -> int:
         test_stage6_refuses_to_commit_mid_operation(tmp)
         test_stage6_never_commits_a_routing_table_that_failed_its_suite(tmp)
         test_stage6_records_its_outcome_on_the_handoff(tmp)
+        test_push_is_off_by_default_and_never_forces(tmp)
+        test_a_branch_with_no_upstream_is_not_an_error(tmp)
+        test_a_failed_push_is_loud_and_never_fatal(tmp)
+        test_a_push_is_never_attempted_without_a_commit(tmp)
         test_failure_reasons_are_distinguished()
         test_summary_table(tmp)
         test_dry_run_launches_nothing(tmp)
