@@ -1,5 +1,5 @@
 """
-double_rsi_momentum_pullback_20260830 - Version B (ML-filtered), promoted 2026-09-09.
+double_rsi_momentum_pullback_20260830 - Version B (ML-filtered), promoted 2026-09-10.
 
 Baseline signals from `baseline.py` (SHA-256 d6e295b941ca9bbee04fe1ad9a100d55dbf003592a3ed926b717482c5e78b1bd), with the causal ML
 filter applied on top. This is the pipeline, not a new idea: every entry here
@@ -27,7 +27,7 @@ from backtest.engine import BacktestConfig
 
 TIMEFRAME = '1h'
 SYMBOLS = ['CL']
-DEFAULT_PARAMS = {'rsi_fast_len': 5, 'rsi_slow_len': 21, 'pullback_window': 3, 'volume_sma_len': 20, 'volume_mult': 1.1, 'rsi_exit_long': 80.0, 'rsi_exit_short': 20.0, 'use_baseline_filter': True, 'use_alpha_trigger': True, 'use_volume_filter': True, 'use_news_filter': False, 'sl_atr_mult': 1.5, 'tp_atr_mult': 3.0, 'trailing': False}
+DEFAULT_PARAMS = {'rsi_fast_len': 3, 'rsi_slow_len': 14, 'pullback_window': 3, 'volume_sma_len': 20, 'volume_mult': 1.1, 'rsi_exit_long': 80.0, 'rsi_exit_short': 20.0, 'use_baseline_filter': True, 'use_alpha_trigger': True, 'use_volume_filter': True, 'use_news_filter': False, 'sl_atr_mult': 1.5, 'tp_atr_mult': 3.0, 'trailing': False}
 ML_THRESHOLD = 0.48
 
 _BASELINE_PATH = Path(__file__).with_name("baseline.py")
