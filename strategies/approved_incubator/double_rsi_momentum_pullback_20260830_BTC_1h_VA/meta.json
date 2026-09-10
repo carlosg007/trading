@@ -20,33 +20,66 @@
     "use_alpha_trigger": true,
     "use_volume_filter": true,
     "use_news_filter": false,
-    "sl_atr_mult": 1.5,
+    "sl_atr_mult": 2.0,
     "tp_atr_mult": 3.0,
-    "trailing": false
+    "trailing": true
   },
-  "params_source": "double_rsi_momentum_pullback_20260830.py DEFAULT_PARAMS",
+  "params_source": "locked from dual_metrics_BTC.json",
   "params_conflict": [],
   "risk": {
-    "sl_atr_mult": 1.5,
+    "sl_atr_mult": 2.0,
     "tp_atr_mult": 3.0,
-    "trailing": false
+    "trailing": true
   },
   "day_of_week_gate": {
-    "status": "NOT EVALUATED",
-    "blocked_weekdays": [],
-    "blocked_weekday": null,
+    "status": "EVALUATED",
     "version": "A",
+    "versions_profiled": [
+      "A",
+      "B"
+    ],
+    "blocked_weekdays": [
+      1
+    ],
+    "blocked_weekday": 1,
+    "blocked_day": "Tue",
+    "blocked_day_name": "Tuesday",
+    "worst_weekday": 1,
+    "worst_day": "Tue",
+    "block_rule": "negative_expectancy",
+    "min_trades": 20,
+    "reason": "Tuesday is the weakest session (expectancy -352.41 per trade over 265 trades) and its expectancy is negative",
+    "selected_in_sample": true,
+    "note": "The weekday was chosen in-sample, on a window that spans the Stage 3 holdout. It is a live-supervision instruction, not evidence: no gate was scored on it and nothing was pruned for it.",
     "source": "/mnt/backtest/artifacts/pipeline/double_rsi_momentum_pullback_20260830/dow_gate_BTC_1h.json",
-    "reason": "dow_gate_BTC_1h.json does not exist. Stage 4.5 (backtest/dow_gate.py) was not run for this pair; no weekday is blocked and none was cleared."
+    "source_sha256": "f987fb72d7a50d7da068e382c696f4dc47511fc6742644ab207a412dbec559bc"
   },
   "source": "/home/cgrullon/src/trading/strategies/experimental/double_rsi_momentum_pullback_20260830.py",
   "source_sha256": "d6e295b941ca9bbee04fe1ad9a100d55dbf003592a3ed926b717482c5e78b1bd",
   "promoted_sha256": "d6e295b941ca9bbee04fe1ad9a100d55dbf003592a3ed926b717482c5e78b1bd",
-  "promoted_utc": "2026-09-09T00:39:41+00:00",
-  "costs_included": false,
-  "variants_tested": 162,
-  "metrics_status": "NOT RECORDED",
-  "metrics": null,
+  "promoted_utc": "2026-09-10T23:38:35+00:00",
+  "costs_included": true,
+  "variants_tested": null,
+  "metrics_status": "RECORDED \u00b7 locked from dual_metrics_BTC.json",
+  "metrics": {
+    "sharpe": 0.4007774416292515,
+    "sortino": 1.747067246746002,
+    "calmar": -0.01590349522182585,
+    "profit_factor": 0.9915695742832031,
+    "win_rate": 0.47376664056382145,
+    "max_drawdown_pct": -99.21954034479383,
+    "total_return_pct": -15.673660000000178,
+    "annualized_return_pct": -1.5779374857851858,
+    "trade_count": 1277,
+    "total_pnl": -15673.659999999809,
+    "total_costs": 69698.65999999971,
+    "final_equity": 84326.33999999982,
+    "n_days": 2701,
+    "start": "2017-12-17 23:00:00+00:00",
+    "end": "2026-08-08 21:00:00+00:00",
+    "bars": 50864,
+    "initial_capital": 100000.0
+  },
   "gate_audit_status": "PASS",
   "gate_audit": {
     "gate1": "FAIL",
@@ -58,12 +91,12 @@
   },
   "certification": {
     "audit_file": "/mnt/backtest/artifacts/pipeline/double_rsi_momentum_pullback_20260830/gate_audit_BTC_1h.json",
-    "audit_sha256": "73d000908d9cddfa6229b6e5398b34ed459ffef0ac91d34b1783ec605b28b882",
+    "audit_sha256": "98fc1bbfd2da79f65fbe2aa0edb3c0506097175850cb381482e22255536d8319",
     "audit_symbol": "BTC",
     "audit_timeframe": "1h",
     "target_quadrant": "Q1",
     "target_regime": "High Volatility / Trending",
-    "audit_generated_utc": "2026-09-09T00:39:40+00:00",
+    "audit_generated_utc": "2026-09-09T00:39:41+00:00",
     "in_sample": {
       "start": "2013-01-01",
       "end": "2022-12-31"
@@ -103,43 +136,11 @@
       "exclude_days": null
     },
     "status": "PASS",
-    "snapshot_gate_status": "NOT EVALUATED",
-    "agrees_with_snapshot": null
+    "snapshot_gate_status": "FAIL",
+    "agrees_with_snapshot": false
   },
   "gates_overridden": false,
   "oos_status": "passed_gate3",
   "audit_warnings": [],
-  "notes": "Stage 3 certified BTC 1h in High Volatility / Trending; staged by backtest/audit_gates.py, not committed.",
-  "seal": {
-    "algorithm": "sha256",
-    "strategy_code": {
-      "path": "/home/cgrullon/src/trading/strategies/approved_incubator/double_rsi_momentum_pullback_20260830_BTC_1h_VA/strat.py",
-      "sha256": "d6e295b941ca9bbee04fe1ad9a100d55dbf003592a3ed926b717482c5e78b1bd"
-    },
-    "winning_parameters": {
-      "path": "/mnt/backtest/artifacts/pipeline/double_rsi_momentum_pullback_20260830/best_params_BTC_1h.json",
-      "sha256": "7e280a85909e0954ee20440260ad11a5181e90fdd6c55ffc9b71a11633b1fbc7"
-    },
-    "gate_audit": {
-      "path": "/mnt/backtest/artifacts/pipeline/double_rsi_momentum_pullback_20260830/gate_audit_BTC_1h.json",
-      "sha256": "73d000908d9cddfa6229b6e5398b34ed459ffef0ac91d34b1783ec605b28b882"
-    },
-    "metrics_handoff": {
-      "path": null,
-      "sha256": "NOT AVAILABLE"
-    },
-    "rule": "The three hashes are sealed together because they can be separated: the same code under a different winning cell is a different strategy with the same code checksum.",
-    "certified_symbol": "BTC",
-    "certified_timeframe": "1h",
-    "target_regime": "High Volatility / Trending",
-    "target_quadrant": "Q1",
-    "params": {
-      "rsi_fast_len": 5,
-      "rsi_slow_len": 21,
-      "sl_atr_mult": 2.0,
-      "tp_atr_mult": 3.0,
-      "trailing": true
-    },
-    "params_locked": true
-  }
+  "notes": ""
 }
