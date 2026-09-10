@@ -3435,9 +3435,14 @@
           "HO",
           "PL",
           "RB",
-          "ETH"
+          "ETH",
+          "CL",
+          "NG",
+          "ZW",
+          "LE",
+          "BTC"
         ],
-        "correlation_group": "FullSize_Energy_Metals_Crypto",
+        "correlation_group": "FullSize_Energy_Metals_Crypto_Ags",
         "regime_quadrants": [
           "Q1_HIGH_VOL_TREND",
           "Q2_HIGH_VOL_CHOP",
@@ -3502,7 +3507,16 @@
         "dbb_momentum_breakout_20260909_ETH_30m_VB",
         "dbb_momentum_breakout_20260909_HO_30m_VB",
         "multi_ema_cci_trend_20260910_ETH_30m_VA",
-        "multi_ema_cci_trend_20260910_ETH_1h_VA"
+        "multi_ema_cci_trend_20260910_ETH_1h_VA",
+        "dbb_momentum_breakout_20260909_CL_30m_VA",
+        "dbb_momentum_breakout_20260909_CL_30m_VB",
+        "dbb_momentum_breakout_20260909_LE_30m_VA",
+        "dbb_momentum_breakout_20260909_LE_30m_VB",
+        "ema_deviation_scalp_20260909_CL_1h_VA",
+        "ema_deviation_scalp_20260909_CL_1h_VB",
+        "multi_ema_cci_trend_20260910_BTC_15m_VA",
+        "multi_ema_cci_trend_20260910_ZW_1h_VB",
+        "semafor_ha_momentum_20260910_NG_5m_VA"
       ],
       "strategy_allocations": {
         "t3_braid_scalp_20260823_HO_15m_VB": {
@@ -5790,6 +5804,132 @@
               ]
             }
           ]
+        },
+        "dbb_momentum_breakout_20260909_CL_30m_VA": {
+          "strat": "dbb_momentum_breakout_20260909_CL_30m_VA",
+          "symbol": "CL",
+          "timeframe": "30m",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q1",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/dbb_momentum_breakout_20260909_CL_30m_VA/strat.py",
+          "registered_by": "scripts/register_incubator_batch.py",
+          "blocked_weekdays": [
+            4
+          ]
+        },
+        "dbb_momentum_breakout_20260909_CL_30m_VB": {
+          "strat": "dbb_momentum_breakout_20260909_CL_30m_VB",
+          "symbol": "CL",
+          "timeframe": "30m",
+          "version": "B",
+          "allocation": 1,
+          "regime_filter": "Q1",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/dbb_momentum_breakout_20260909_CL_30m_VB/strat.py",
+          "registered_by": "scripts/register_incubator_batch.py",
+          "blocked_weekdays": [
+            0
+          ]
+        },
+        "dbb_momentum_breakout_20260909_LE_30m_VA": {
+          "strat": "dbb_momentum_breakout_20260909_LE_30m_VA",
+          "symbol": "LE",
+          "timeframe": "30m",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q1",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/dbb_momentum_breakout_20260909_LE_30m_VA/strat.py",
+          "registered_by": "scripts/register_incubator_batch.py",
+          "blocked_weekdays": [
+            0
+          ]
+        },
+        "dbb_momentum_breakout_20260909_LE_30m_VB": {
+          "strat": "dbb_momentum_breakout_20260909_LE_30m_VB",
+          "symbol": "LE",
+          "timeframe": "30m",
+          "version": "B",
+          "allocation": 1,
+          "regime_filter": "Q2",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/dbb_momentum_breakout_20260909_LE_30m_VB/strat.py",
+          "registered_by": "scripts/register_incubator_batch.py",
+          "blocked_weekdays": [
+            4
+          ]
+        },
+        "ema_deviation_scalp_20260909_CL_1h_VA": {
+          "strat": "ema_deviation_scalp_20260909_CL_1h_VA",
+          "symbol": "CL",
+          "timeframe": "1h",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q1",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/ema_deviation_scalp_20260909_CL_1h_VA/strat.py",
+          "registered_by": "scripts/register_incubator_batch.py",
+          "blocked_weekdays": [
+            4
+          ]
+        },
+        "ema_deviation_scalp_20260909_CL_1h_VB": {
+          "strat": "ema_deviation_scalp_20260909_CL_1h_VB",
+          "symbol": "CL",
+          "timeframe": "1h",
+          "version": "B",
+          "allocation": 1,
+          "regime_filter": "Q1",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/ema_deviation_scalp_20260909_CL_1h_VB/strat.py",
+          "registered_by": "scripts/register_incubator_batch.py",
+          "blocked_weekdays": [
+            4
+          ]
+        },
+        "multi_ema_cci_trend_20260910_BTC_15m_VA": {
+          "strat": "multi_ema_cci_trend_20260910_BTC_15m_VA",
+          "symbol": "BTC",
+          "timeframe": "15m",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q3",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/multi_ema_cci_trend_20260910_BTC_15m_VA/strat.py",
+          "registered_by": "scripts/register_incubator_batch.py",
+          "blocked_weekdays": [
+            3
+          ]
+        },
+        "multi_ema_cci_trend_20260910_ZW_1h_VB": {
+          "strat": "multi_ema_cci_trend_20260910_ZW_1h_VB",
+          "symbol": "ZW",
+          "timeframe": "1h",
+          "version": "B",
+          "allocation": 1,
+          "regime_filter": "Q1",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/multi_ema_cci_trend_20260910_ZW_1h_VB/strat.py",
+          "registered_by": "scripts/register_incubator_batch.py",
+          "blocked_weekdays": [
+            3
+          ]
+        },
+        "semafor_ha_momentum_20260910_NG_5m_VA": {
+          "strat": "semafor_ha_momentum_20260910_NG_5m_VA",
+          "symbol": "NG",
+          "timeframe": "5m",
+          "version": "A",
+          "allocation": 1,
+          "regime_filter": "Q1",
+          "status": "incubating",
+          "path": "strategies/approved_incubator/semafor_ha_momentum_20260910_NG_5m_VA/strat.py",
+          "registered_by": "scripts/register_incubator_batch.py",
+          "blocked_weekdays": [
+            3
+          ]
         }
       }
     },
@@ -5920,6 +6060,31 @@
     "ETH": {
       "point_value": 50.0,
       "tick_size": 0.5,
+      "sector": "Crypto"
+    },
+    "CL": {
+      "point_value": 1000.0,
+      "tick_size": 0.01,
+      "sector": "Energy"
+    },
+    "NG": {
+      "point_value": 10000.0,
+      "tick_size": 0.001,
+      "sector": "Energy"
+    },
+    "ZW": {
+      "point_value": 50.0,
+      "tick_size": 0.25,
+      "sector": "Grains"
+    },
+    "LE": {
+      "point_value": 400.0,
+      "tick_size": 0.025,
+      "sector": "Livestock"
+    },
+    "BTC": {
+      "point_value": 5.0,
+      "tick_size": 5.0,
       "sector": "Crypto"
     }
   }
