@@ -51,7 +51,7 @@
   "source": "/home/cgrullon/src/trading/strategies/experimental/macd_zigzag_trend_20260911.py",
   "source_sha256": "8de37658707500a739b3f74b446756be8a76fbb00eac5df59d47ebbb2df8a2ca",
   "promoted_sha256": "b897436063e7fdec23dd9d09f6b6218c6b8a355daa1cb5709d8b92d67b4375b4",
-  "promoted_utc": "2026-09-11T01:06:10+00:00",
+  "promoted_utc": "2026-09-11T01:07:30+00:00",
   "costs_included": true,
   "variants_tested": null,
   "metrics_status": "RECORDED \u00b7 locked from dual_metrics_BTC.json",
