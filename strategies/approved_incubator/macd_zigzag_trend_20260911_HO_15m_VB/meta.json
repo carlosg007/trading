@@ -1,0 +1,141 @@
+{
+  "name": "macd_zigzag_trend_20260911_HO_15m_VB",
+  "strategy": "macd_zigzag_trend_20260911",
+  "symbol": "HO",
+  "version": "B",
+  "description": "Promoted Version B (baseline + causal ML filter).",
+  "symbols": [
+    "HO"
+  ],
+  "timeframe": "15m",
+  "params": {
+    "ema_period": 100,
+    "zigzag_atr_mult": 3.0,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "require_expansion": true,
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": 4.0,
+    "trailing": true,
+    "trail_step_atr": 0.5
+  },
+  "params_source": "locked from dual_metrics_HO.json",
+  "params_conflict": [],
+  "risk": {
+    "sl_atr_mult": 2.0,
+    "tp_atr_mult": 4.0,
+    "trailing": true
+  },
+  "day_of_week_gate": {
+    "status": "EVALUATED",
+    "version": "B",
+    "versions_profiled": [
+      "A",
+      "B"
+    ],
+    "blocked_weekdays": [],
+    "blocked_weekday": null,
+    "blocked_day": null,
+    "blocked_day_name": null,
+    "worst_weekday": 1,
+    "worst_day": "Tue",
+    "block_rule": "negative_expectancy",
+    "min_trades": 20,
+    "reason": "Tuesday is the weakest session but its expectancy is 3.57 per trade, which is not negative. Nothing is blocked: cutting a profitable session removes realised edge, and being fifth of five is not evidence against a weekday. Pass --block-worst-always to block it anyway.",
+    "selected_in_sample": true,
+    "note": "The weekday was chosen in-sample, on a window that spans the Stage 3 holdout. It is a live-supervision instruction, not evidence: no gate was scored on it and nothing was pruned for it.",
+    "source": "/mnt/backtest/artifacts/pipeline/macd_zigzag_trend_20260911/dow_gate_HO_15m.json",
+    "source_sha256": "1daa5fc911fa66e084345023507d0be36e812bbb340b05c961849c57edfabbb5"
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/macd_zigzag_trend_20260911.py",
+  "source_sha256": "8de37658707500a739b3f74b446756be8a76fbb00eac5df59d47ebbb2df8a2ca",
+  "promoted_sha256": "66b8e75cb7eb3bddaf61f6f446e30b50dc7010d9172a4b9b09c22a0b18565f3d",
+  "promoted_utc": "2026-09-11T01:05:33+00:00",
+  "costs_included": true,
+  "variants_tested": null,
+  "metrics_status": "RECORDED \u00b7 locked from dual_metrics_HO.json",
+  "metrics": {
+    "sharpe": 0.33955865640617594,
+    "sortino": 0.5641382531360196,
+    "calmar": 0.10911370234048093,
+    "profit_factor": 1.1058865599475451,
+    "win_rate": 0.4167741935483871,
+    "max_drawdown_pct": -16.826581698910115,
+    "total_return_pct": 35.62760000000085,
+    "annualized_return_pct": 1.8360106269026621,
+    "trade_count": 1550,
+    "total_pnl": 35627.600000001585,
+    "total_costs": 20118.999999998403,
+    "final_equity": 135627.60000000085,
+    "n_days": 4221,
+    "start": "2013-01-01 23:00:00+00:00",
+    "end": "2026-08-07 20:45:00+00:00",
+    "bars": 297693,
+    "initial_capital": 100000.0
+  },
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "FAIL",
+    "gate2": "FAIL",
+    "gate3": "FAIL",
+    "gate_regime": "PASS",
+    "gate_ruin": "PASS",
+    "gate_all_quadrants": "FAIL"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/macd_zigzag_trend_20260911/gate_audit_HO_15m.json",
+    "audit_sha256": "47eea4d6363180dbbc47b9d6792eb971967e943f29968fea601e35a38757b430",
+    "audit_symbol": "HO",
+    "audit_timeframe": "15m",
+    "target_quadrant": "Q1",
+    "target_regime": "High Volatility / Trending",
+    "audit_generated_utc": "2026-09-11T00:54:51+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "ema_period": 100,
+      "zigzag_atr_mult": 3.0,
+      "sl_atr_mult": 2.0,
+      "tp_atr_mult": 4.0
+    },
+    "params_source": "stage 2 winner (best_params_HO_15m.json)",
+    "variants_tested": 36,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "FAIL",
+    "agrees_with_snapshot": false
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [],
+  "notes": "",
+  "ml_threshold": 0.48,
+  "baseline": "baseline.py"
+}
