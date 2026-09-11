@@ -159,12 +159,29 @@ def row_for(package: Path, routes: dict[str, dict[str, Any]]
         "version": meta.get("version"),
         "portfolio": route.get("portfolio") or NOT_ROUTED,
         "execution_account": route.get("execution_account") or NOT_ROUTED,
-        # The package's own certified quadrant. `regime_filter` on the routing
-        # row is the same value and is NOT read here: if the two ever differ
-        # the package is the certification and the routing table is the bug,
-        # and a CSV that quietly preferred one would hide that.
-        "certified_regime": cert.get("target_quadrant")
-        or gate.get("quadrant"),
+        # THE QUADRANT GATE R MEASURED, which is not always the one the
+        # certification names - and this line changed on 2026-09-11 because
+        # the premise underneath it did.
+        #
+        # It used to read `certification.target_quadrant` first, with a note
+        # saying the routing row's `regime_filter` was deliberately not
+        # consulted so a divergence between them stayed visible. That was
+        # right while the two were meant to agree. They are not any more:
+        # since 09dc8f4 `regime_filter` deliberately carries the quadrant Gate
+        # R MEASURED, because when the primary starves the audit certifies on
+        # a pre-declared secondary while `target_quadrant` goes on naming the
+        # primary. Reading the certification first therefore reported, for
+        # every fallback row, the environment Gate R had explicitly declined
+        # to judge - 28 of the 218 rows on 2026-09-11.
+        #
+        # So the audit's own block wins when it says the certification was a
+        # fallback, and `certified_on` beside it says which happened. The
+        # routing row is still not read: the audit is the evidence and the
+        # routing table is a copy of it.
+        "certified_regime": (
+            gate.get("quadrant")
+            if str(gate.get("certified_on") or "").startswith("secondary")
+            else (cert.get("target_quadrant") or gate.get("quadrant"))),
         "certified_on": gate.get("certified_on") or NOT_RECORDED,
         "holdout_trades": measured.get("trade_count"),
         "holdout_pf": measured.get("profit_factor"),
