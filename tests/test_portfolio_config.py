@@ -149,9 +149,9 @@ EXECUTION_ACCOUNTS = {"Incubator-Odd": "SimIncubator1",
 #     ls /mnt/backtest/artifacts/nt8_bars/ | sed 's/_.*//' | sort -u
 EXPECTED_ASSIGNMENTS = {
     # --- BEGIN GENERATED STAMP (rewritten on every sync) ---
-    # REGENERATED 2026-09-10 by scripts/register_incubator_batch.py --write, which now rewrites
+    # REGENERATED 2026-09-11 by scripts/register_incubator_batch.py --write, which now rewrites
     # this constant in the same run that registers into config/portfolios.json.
-    # This run routed 0 package(s); the book stands at 171.
+    # This run routed 0 package(s); the book stands at 187.
     #
     # THIS IS NO LONGER A HUMAN DECLARATION. It is regenerated from the config it
     # describes, so it cannot contradict it and cannot catch an assignment nobody
@@ -228,6 +228,8 @@ EXPECTED_ASSIGNMENTS = {
         "semafor_ha_momentum_20260910_NQ_5m_VB",               #  5m, NQ
         "multi_ema_cci_trend_20260910_RTY_15m_VA",             # 15m, RTY
         "multi_ema_cci_trend_20260910_6J_1h_VB",               #  1h, 6J
+        "macd_zigzag_trend_20260911_NQ_30m_VA",                # 30m, NQ
+        "macd_zigzag_trend_20260911_RTY_30m_VA",               # 30m, RTY
     ],
     "Eval-Odd":          [],
     "Prop-Odd":          [],
@@ -266,6 +268,9 @@ EXPECTED_ASSIGNMENTS = {
         "semafor_ha_momentum_20260910_ES_5m_VA",               #  5m, ES
         "multi_ema_cci_trend_20260910_GC_30m_VA",              # 30m, GC
         "multi_ema_cci_trend_20260910_GC_1h_VA",               #  1h, GC
+        "macd_zigzag_trend_20260911_GC_15m_VA",                # 15m, GC
+        "macd_zigzag_trend_20260911_GC_1h_VA",                 #  1h, GC
+        "macd_zigzag_trend_20260911_GC_1h_VB",                 #  1h, GC
     ],
     "Eval-Even":         [],
     "Prop-Even":         [],
@@ -368,6 +373,17 @@ EXPECTED_ASSIGNMENTS = {
         "sma_momentum_crossover_20260818_CL_15m_VA",           # 15m, CL
         "sma_momentum_crossover_20260818_LE_5m_VB",            #  5m, LE
         "sma_momentum_crossover_20260818_NG_1h_VA",            #  1h, NG
+        "macd_zigzag_trend_20260911_ETH_15m_VB",               # 15m, ETH
+        "macd_zigzag_trend_20260911_HO_15m_VB",                # 15m, HO
+        "macd_zigzag_trend_20260911_LE_15m_VB",                # 15m, LE
+        "macd_zigzag_trend_20260911_PL_15m_VA",                # 15m, PL
+        "macd_zigzag_trend_20260911_BTC_30m_VA",               # 30m, BTC
+        "macd_zigzag_trend_20260911_BTC_30m_VB",               # 30m, BTC
+        "macd_zigzag_trend_20260911_RB_30m_VA",                # 30m, RB
+        "macd_zigzag_trend_20260911_BTC_1h_VA",                #  1h, BTC
+        "macd_zigzag_trend_20260911_BTC_1h_VB",                #  1h, BTC
+        "macd_zigzag_trend_20260911_CL_1h_VA",                 #  1h, CL
+        "macd_zigzag_trend_20260911_PL_1h_VA",                 #  1h, PL
     ],
     "Eval-FullSize":     [],
     "Prop-FullSize":     [],
