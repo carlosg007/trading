@@ -1,0 +1,141 @@
+{
+  "name": "macd_zigzag_trend_20260911_RB_30m_VA",
+  "strategy": "macd_zigzag_trend_20260911",
+  "symbol": "RB",
+  "version": "A",
+  "description": "Promoted Version A (rule-based baseline).",
+  "symbols": [
+    "RB"
+  ],
+  "timeframe": "30m",
+  "params": {
+    "ema_period": 100,
+    "zigzag_atr_mult": 2.0,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "require_expansion": true,
+    "sl_atr_mult": 1.5,
+    "tp_atr_mult": 4.0,
+    "trailing": true,
+    "trail_step_atr": 0.5
+  },
+  "params_source": "locked from dual_metrics_RB.json",
+  "params_conflict": [],
+  "risk": {
+    "sl_atr_mult": 1.5,
+    "tp_atr_mult": 4.0,
+    "trailing": true
+  },
+  "day_of_week_gate": {
+    "status": "EVALUATED",
+    "version": "A",
+    "versions_profiled": [
+      "A",
+      "B"
+    ],
+    "blocked_weekdays": [
+      4
+    ],
+    "blocked_weekday": 4,
+    "blocked_day": "Fri",
+    "blocked_day_name": "Friday",
+    "worst_weekday": 4,
+    "worst_day": "Fri",
+    "block_rule": "negative_expectancy",
+    "min_trades": 20,
+    "reason": "Friday is the weakest session (expectancy -33.30 per trade over 901 trades) and its expectancy is negative",
+    "selected_in_sample": true,
+    "note": "The weekday was chosen in-sample, on a window that spans the Stage 3 holdout. It is a live-supervision instruction, not evidence: no gate was scored on it and nothing was pruned for it.",
+    "source": "/mnt/backtest/artifacts/pipeline/macd_zigzag_trend_20260911/dow_gate_RB_30m.json",
+    "source_sha256": "6df421947877153d348e5a7a12d48049e10e84cb868e71c97fcff752b319d3a4"
+  },
+  "source": "/home/cgrullon/src/trading/strategies/experimental/macd_zigzag_trend_20260911.py",
+  "source_sha256": "8de37658707500a739b3f74b446756be8a76fbb00eac5df59d47ebbb2df8a2ca",
+  "promoted_sha256": "8de37658707500a739b3f74b446756be8a76fbb00eac5df59d47ebbb2df8a2ca",
+  "promoted_utc": "2026-09-11T01:05:56+00:00",
+  "costs_included": true,
+  "variants_tested": null,
+  "metrics_status": "RECORDED \u00b7 locked from dual_metrics_RB.json",
+  "metrics": {
+    "sharpe": 0.4277577054005634,
+    "sortino": 0.7039430457229763,
+    "calmar": 0.1836117562334145,
+    "profit_factor": 1.066574758815359,
+    "win_rate": 0.4473013666898309,
+    "max_drawdown_pct": -18.106789286708704,
+    "total_return_pct": 72.9473399999973,
+    "annualized_return_pct": 3.32461938068096,
+    "trade_count": 4317,
+    "total_pnl": 72947.34000000099,
+    "total_costs": 56034.65999999879,
+    "final_equity": 172947.3399999973,
+    "n_days": 4221,
+    "start": "2013-01-01 23:00:00+00:00",
+    "end": "2026-08-07 20:30:00+00:00",
+    "bars": 151716,
+    "initial_capital": 100000.0
+  },
+  "gate_audit_status": "PASS",
+  "gate_audit": {
+    "gate1": "PASS",
+    "gate2": "FAIL",
+    "gate3": "FAIL",
+    "gate_regime": "PASS",
+    "gate_ruin": "PASS",
+    "gate_all_quadrants": "FAIL"
+  },
+  "certification": {
+    "audit_file": "/mnt/backtest/artifacts/pipeline/macd_zigzag_trend_20260911/gate_audit_RB_30m.json",
+    "audit_sha256": "60b85b77f25c17447d394c043c537688b64cbb249a89c1ad6aa8b540273a4c56",
+    "audit_symbol": "RB",
+    "audit_timeframe": "30m",
+    "target_quadrant": "Q3",
+    "target_regime": "Low Volatility / Trending",
+    "audit_generated_utc": "2026-09-11T00:51:56+00:00",
+    "in_sample": {
+      "start": "2013-01-01",
+      "end": "2022-12-31"
+    },
+    "holdout": {
+      "start": "2023-01-01",
+      "end": null,
+      "end_basis": "the present - every bar the lake holds"
+    },
+    "params": {
+      "ema_period": 100,
+      "zigzag_atr_mult": 2.0,
+      "sl_atr_mult": 1.5,
+      "tp_atr_mult": 4.0
+    },
+    "params_source": "stage 2 winner (best_params_RB_30m.json)",
+    "variants_tested": 36,
+    "wfo": {
+      "train_years": 2,
+      "test_years": 1,
+      "optimized": false
+    },
+    "monte_carlo": {
+      "iterations": 1000,
+      "seed": 42
+    },
+    "entry_filters": {
+      "news_filter": false,
+      "news_window_minutes": 30.0,
+      "news_kinds": [
+        "FOMC",
+        "CPI",
+        "NFP",
+        "PPI"
+      ],
+      "exclude_days": null
+    },
+    "status": "PASS",
+    "snapshot_gate_status": "FAIL",
+    "agrees_with_snapshot": false
+  },
+  "gates_overridden": false,
+  "oos_status": "passed_gate3",
+  "audit_warnings": [],
+  "notes": ""
+}
